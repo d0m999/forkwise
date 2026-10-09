@@ -1,0 +1,52 @@
+{
+  "name": "@forkwise/backend",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.22.2"
+  },
+  "scripts": {
+    "dev": "tsx src/server.ts",
+    "build": "npm run build:canvas && tsc -p tsconfig.build.json && mkdir -p dist/drizzle dist/web && cp -R drizzle/. dist/drizzle && cp -R web/. dist/web && mkdir -p dist/src/workers && cp src/workers/*.mjs dist/src/workers/",
+    "check": "tsc --noEmit",
+    "test": "vitest run",
+    "start": "node dist/src/server.js",
+    "mcp": "tsx src/mcp.ts",
+    "openapi": "tsx scripts/openapi.ts",
+    "db:generate": "drizzle-kit generate",
+    "restore": "tsx scripts/restore.ts",
+    "build:canvas": "npm --prefix ../prototype/canvas-lab run check && npm --prefix ../prototype/canvas-lab run build && mkdir -p web/canvas && cp -R ../prototype/canvas-built/. web/canvas/"
+  },
+  "dependencies": {
+    "@forkwise/public-data-core": "file:../public-data-core",
+    "@hono/node-server": "^1.19.9",
+    "@hono/zod-openapi": "1.6.3",
+    "@modelcontextprotocol/sdk": "1.32.1",
+    "@napi-rs/canvas": "1.0.10",
+    "better-sqlite3": "13.0.3",
+    "drizzle-orm": "0.45.3",
+    "hono": "4.13.13",
+    "linkedom": "0.18.13",
+    "pdfjs-dist": "6.3.289",
+    "zod": "4.6.5"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^22.19.0",
+    "drizzle-kit": "0.31.11",
+    "prettier": "3.6.2",
+    "tsx": "4.23.15",
+    "typescript": "5.9.3",
+    "vitest": "5.0.3",
+    "yaml": "^2.8.2"
+  },
+  "overrides": {
+    "@esbuild-kit/core-utils": {
+      "esbuild": "^0.25.0"
+    }
+  },
+  "optionalDependencies": {
+    "@rolldown/binding-darwin-arm64": "1.2.13"
+  }
+}

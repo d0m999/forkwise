@@ -1,0 +1,337 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>见岔 · 本机研究工作台</title>
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <header>
+      <strong>见岔 <span>Forkwise</span></strong
+      ><small>本机研究工作台 · 本机研究数据</small><span id="connection">连接中</span>
+    </header>
+    <div id="notice" role="status" aria-live="polite"></div>
+    <button id="recover-operation" hidden>恢复上次操作</button>
+    <main>
+      <aside>
+        <h2>研究项目</h2>
+        <select id="project" aria-label="当前项目"></select>
+        <form id="new-project">
+          <input name="name" aria-label="项目名称" placeholder="新项目名称" required /><button>
+            新建项目
+          </button>
+        </form>
+        <p>研究保存在本机数据库。旧版浏览器存档可先导出，再预览迁移为新项目。</p>
+        <label
+          >迁移旧原型副本<input id="import-prototype" type="file" accept=".json,application/json"
+        /></label>
+        <button id="show-prototype-migration">查看旧版迁移记录</button>
+        <button id="export-summary">导出研究摘要 Markdown</button
+        ><button id="export">导出项目 JSON</button
+        ><label
+          >导入研究资产 JSON<input
+            id="import-archive"
+            type="file"
+            accept=".json,application/json" /></label
+        ><button id="record">记录这次判断</button><button id="grant">授权本项目给 Agent</button
+        ><button id="list-grants">查看与撤销 Agent 授权</button>
+        <div id="grant-list"></div>
+        <details id="credential" hidden>
+          <summary>本机 Agent 配置</summary>
+          <p>只在你自己的 Agent 配置中使用，请勿公开。</p>
+          <textarea readonly aria-label="Agent 环境配置"></textarea>
+        </details>
+        <details>
+          <summary>本机备份与恢复</summary>
+          <button id="create-backup">备份本机研究资产</button
+          ><button id="list-backups">查看备份</button>
+          <div id="backup-list"></div>
+          <button id="trash-project">删除当前项目</button
+          ><button id="list-trash">查看回收区</button>
+          <div id="trash-list"></div>
+          <form id="retention">
+            <label
+              >后续删除保留天数<input
+                name="days"
+                type="number"
+                min="1"
+                max="3650"
+                value="30"
+                required /></label
+            ><button>保存保留期</button>
+          </form>
+          <button id="purge-expired">清理已到期项目</button>
+          <pre id="maintenance-result"></pre>
+        </details>
+      </aside>
+      <section class="workspace">
+        <div class="toolbar">
+          <button id="open-research-entry" hidden>输入观点 / 材料</button>
+          <button id="add">新建主张</button><button id="refresh">重新读取</button
+          ><span id="revision"></span
+          ><input id="search" placeholder="搜索本项目" aria-label="搜索本项目" /><button
+            id="search-button"
+          >
+            查找
+          </button>
+        </div>
+        <div class="canvas-wrap">
+          <iframe id="native-canvas" src="/canvas/index.html" title="见岔研究画布"></iframe>
+          <section id="canvas-research-entry" hidden>
+            <strong>从一条观点开始研究</strong>
+            <p>粘贴原文或导入材料，在这里梳理论证、查找依据并继续编辑。</p>
+            <button type="button">输入观点与材料</button>
+          </section>
+        </div>
+        <div id="object-list" aria-label="研究对象列表"></div>
+        <div id="search-results"></div>
+        <form id="connect">
+          <strong>建立推导</strong
+          ><select name="from" aria-label="推导前提" required></select
+          ><span>→</span
+          ><select name="to" aria-label="推导结论" required></select
+          ><input
+            name="reason"
+            placeholder="这一推导的理由"
+            aria-label="推导理由"
+            required
+          /><button>建立</button>
+        </form>
+      </section>
+      <aside class="details">
+        <h2>研究对象</h2>
+        <div id="empty">在画布选择主张或推导。</div>
+        <form id="edit" hidden>
+          <label id="content-label">内容</label
+          ><textarea name="text" aria-labelledby="content-label" required></textarea
+          ><label
+            >改写作用范围<select name="scope">
+              <option value="">请选择作用范围</option>
+              <option value="all">全部引用</option>
+              <option value="selected">选定下游推导</option>
+            </select></label
+          >
+          <fieldset id="inference-choices" hidden><legend>改接到新主张的推导</legend></fieldset>
+          <button>保存改写</button
+          ><label
+            >个人立场<select name="stance">
+              <option value="pending">待研究</option>
+              <option value="accepted">认可</option>
+              <option value="questioned">质疑</option>
+              <option value="rejected">不认可</option>
+            </select></label
+          ><textarea
+            name="reason"
+            placeholder="立场理由（质疑或不认可时必填）"
+            aria-label="立场理由"
+          ></textarea
+          ><button id="save-stance" type="button">保存立场</button
+          ><button id="rebase-draft" type="button" hidden>核对后，以当前版本继续编辑</button>
+          <p id="draft-status" role="status"></p>
+          <button id="review-selected" type="button">复核此对象的影响建议</button>
+          <button id="history" type="button">查看修改历史</button
+          ><button id="delete" type="button" class="danger">删除对象</button>
+        </form>
+        <section id="object-results" hidden aria-label="对象查证依据与记录"></section>
+        <section id="verification-node" hidden></section>
+        <details>
+          <summary>本地未保存草稿</summary>
+          <button id="list-drafts">查看草稿</button>
+          <div id="draft-list"></div>
+        </details>
+        <details>
+          <summary>画布保存失败恢复</summary>
+          <p>
+            保存失败的操作保留在本地；若结果未知，先用“恢复上次操作”核实，再对照恢复副本继续编辑。
+          </p>
+          <button id="show-canvas-recovery">查看画布恢复草稿</button>
+          <div id="canvas-recovery-list"></div>
+        </details>
+        <div id="conditions"></div>
+        <details>
+          <summary>导入有权使用的文本</summary>
+          <form id="material">
+            <input name="title" placeholder="材料标题" required /><textarea
+              name="text"
+              placeholder="粘贴有权使用的原文"
+              required
+            ></textarea
+            ><label
+              >保存范围<select name="coverage">
+                <option value="excerpt">摘录</option>
+                <option value="full">全文（自行确认范围）</option>
+                <option value="unknown">不确定</option>
+              </select></label
+            ><label>原始地址（可留空）<input name="url" type="url" placeholder="https://" /></label
+            ><label>发布时间（可留空）<input name="publishedAt" type="datetime-local" /></label
+            ><button>保存材料版本</button>
+          </form>
+        </details>
+        <details>
+          <summary>获取目录内公开资料</summary>
+          <p>SEC 原始披露。需在启动配置中提供真实联系信息；获取资料不等于完成查证。</p>
+          <form id="fetch-sec">
+            <input
+              name="cik"
+              aria-label="SEC CIK"
+              placeholder="CIK（数字）"
+              pattern="[0-9]{1,10}"
+              required
+            /><select name="dataset" aria-label="资料类型">
+              <option value="companyfacts">XBRL companyfacts</option>
+              <option value="submissions">申报索引 submissions</option></select
+            ><button>本次获取</button>
+          </form>
+        </details>
+        <details>
+          <summary>导入与查看原文件</summary>
+          <form id="upload-material">
+            <input
+              name="file"
+              type="file"
+              accept=".pdf,.html,.htm,.png,.jpg,.jpeg"
+              aria-label="有权使用的原文件"
+              required
+            /><button>保存并解析</button>
+          </form>
+          <button id="list-materials">查看材料版本</button>
+          <div id="material-list"></div>
+        </details>
+        <details>
+          <summary>对选定材料进行研究</summary>
+          <p>使用已配置的本机模型。材料作为数据处理；AI 建议与个人判断分开保存。</p>
+          <select id="task-kind" aria-label="研究任务类型">
+            <option value="initial">首次研究：梳理并公开查证</option>
+            <option value="reconstruct">整理主张与推导</option>
+            <option value="verify">依据所选材料查证</option>
+            <option value="impact">检查新材料影响</option>
+            <option value="stance_draft">起草立场理由</option></select
+          ><button id="choose-task-materials">选择材料版本</button>
+          <div id="task-materials"></div>
+          <label
+            >只研究相关片段（可选，每行一个原文关键词）<textarea
+              id="task-queries"
+              aria-label="材料检索词"
+              placeholder="留空读取所选全文；检索没有命中会保留资料缺口"
+            ></textarea>
+          </label>
+          <label
+            >首次研究的历史查证时点（留空表示现在）<input id="research-as-of" type="datetime-local"
+          /></label>
+          <button id="run-research-task">开始本次研究任务</button>
+          <div id="task-result"></div>
+        </details>
+        <button id="open-manual-updates" type="button">手动更新与复核</button>
+        <button id="open-impact-reviews" type="button">影响建议与复核</button>
+        <h3>任务与历史</h3>
+        <div id="jobs"></div>
+        <pre id="history-content"></pre>
+      </aside>
+    </main>
+    <dialog id="research-entry" aria-label="输入观点与材料">
+      <header>
+        <strong>开始本次研究</strong><button id="entry-close" type="button">返回画布</button>
+      </header>
+      <p id="entry-feedback" role="status"></p>
+      <p id="entry-request-status" role="status"></p>
+      <button id="entry-recover" type="button" hidden>恢复原研究请求</button>
+      <button id="entry-discard-request" type="button" hidden>保留已保存材料，回到输入</button>
+      <form id="entry-form">
+        <fieldset id="entry-inputs">
+          <label
+            >观点或材料原文<textarea
+              name="text"
+              maxlength="5000000"
+              placeholder="粘贴自己或作者的观点。原文会保存为材料，研究结果仍需审阅。"
+            ></textarea>
+          </label>
+          <details>
+            <summary>材料出处与范围</summary>
+            <label>材料标题（可留空）<input name="title" maxlength="20000" /></label>
+            <label>作者 / 发布者（可留空）<input name="publisher" maxlength="1000" /></label>
+            <label>原始地址（仅记录出处，不自动读取网页）<input name="url" type="url" /></label>
+            <label>发布时间（可留空）<input name="publishedAt" type="datetime-local" /></label>
+            <label
+              >材料权限<select name="rights">
+                <option value="authorized">本人提供且有权使用</option>
+                <option value="public">公开材料</option>
+                <option value="restricted">受限材料（导出保留限制）</option>
+              </select></label
+            >
+            <label
+              >粘贴内容范围<select name="coverage">
+                <option value="excerpt">摘录</option>
+                <option value="full">全文（自行确认）</option>
+                <option value="unknown">不确定</option>
+              </select></label
+            >
+          </details>
+          <details>
+            <summary>导入原文件</summary>
+            <p>
+              支持 PDF、HTML、PNG 和 JPEG，最多 25
+              MB。先保存解析，再选择可读版本。图片与扫描页须通过原图转写入口取得文字。
+            </p>
+            <input
+              name="file"
+              type="file"
+              aria-label="本次研究原文件"
+              accept=".pdf,.html,.htm,.png,.jpg,.jpeg"
+            />
+            <button id="entry-upload" type="button">保存文件并解析</button>
+          </details>
+          <details open>
+            <summary>选择已有材料</summary>
+            <div id="entry-materials"></div>
+          </details>
+          <details>
+            <summary>研究范围（可选）</summary>
+            <label
+              >只研究相关片段，每行一个原文关键词<textarea
+                name="queries"
+                placeholder="留空读取所选全文；未命中会保留缺口"
+              ></textarea>
+            </label>
+            <label>历史查证时点<input name="asOf" type="datetime-local" /></label>
+            <p>历史研究仅使用当时已记录并取得的材料；刚粘贴或导入的内容不能冒充过去已知。</p>
+          </details>
+          <div class="entry-actions">
+            <button type="submit">保存并开始研究</button
+            ><button id="entry-clear" type="button">清空输入草稿</button>
+          </div>
+        </fieldset>
+      </form>
+      <div id="entry-jobs" aria-label="本项目研究进度"></div>
+    </dialog>
+    <dialog id="transcription-dialog">
+      <header>
+        <strong>对照原图与转写</strong><button id="close-transcription" type="button">关闭</button>
+      </header>
+      <div class="transcription-body">
+        <div>
+          <canvas id="transcription-image" aria-label="原图与转写区域"></canvas>
+          <p id="transcription-status"></p>
+        </div>
+        <form id="transcription-form">
+          <div id="transcription-blocks"></div>
+          <button id="add-transcription-block" type="button">补充一个区域</button
+          ><label>校正说明<input name="reason" required /></label
+          ><label
+            ><input
+              name="confirmed"
+              type="checkbox"
+              required
+            />我已对照原图核对本次保存的文字和区域；无法读清的部分保持标记</label
+          ><button>另存人工校正版本</button>
+        </form>
+      </div>
+    </dialog>
+    <dialog id="prototype-migration-dialog" aria-label="旧版研究迁移">
+      <button type="button" data-migration-close>关闭迁移窗口</button>
+      <p class="migration-feedback" role="alert"></p>
+      <div class="migration-content"></div>
+    </dialog>
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>

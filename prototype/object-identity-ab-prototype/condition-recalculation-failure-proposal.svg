@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1100" height="470" viewBox="0 0 1100 470">
+  <style>text{font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','Microsoft YaHei',sans-serif;fill:#273a34}.muted{fill:#65776d}</style>
+  <rect width="1100" height="470" rx="12" fill="#f6f7f3"/>
+  <text x="30" y="41" font-size="24" font-weight="600">Q16 · 自动重算失败，阈值修改是否保留？</text>
+  <text x="878" y="40" font-size="13" class="muted">A / B 对照 · 尚待选择</text>
+  <rect x="30" y="69" width="1040" height="75" rx="10" fill="#eaf3ee" stroke="#b3c9bb"/>
+  <text x="50" y="100" font-size="19" font-weight="550">将阈值从 ≥ 10% 改为 ≥ 15%，保存时触发自动重算</text>
+  <text x="50" y="127" font-size="14" class="muted">假设本地输入齐全且可比，但计算过程意外中断，没有生成新结果。</text>
+  <rect x="30" y="165" width="510" height="245" rx="12" fill="white" stroke="#d6e0d8"/>
+  <rect x="560" y="165" width="510" height="245" rx="12" fill="white" stroke="#8aaa98"/>
+  <text x="50" y="201" font-size="20" font-weight="600">A  保存与计算必须一起成功</text>
+  <text x="580" y="201" font-size="20" font-weight="600">B  保留保存结果，计算可重试</text>
+  <text x="50" y="244" font-size="23" font-weight="550">已保存阈值仍为 ≥ 10%</text>
+  <text x="580" y="244" font-size="23" font-weight="550">已保存阈值为 ≥ 15%</text>
+  <text x="50" y="277" font-size="15" class="muted">此次修改未生效，≥ 15% 留在编辑草稿</text>
+  <text x="580" y="277" font-size="15" class="muted">规则已保存；新版尚无计算结果</text>
+  <text x="50" y="309" font-size="15" style="fill:#986740">计算中断，未完成本次保存</text>
+  <text x="580" y="309" font-size="15" style="fill:#986740">计算中断，可重试计算</text>
+  <rect x="50" y="330" width="150" height="35" rx="7" fill="#eef2ed" stroke="#cbd8cd"/>
+  <text x="125" y="353" text-anchor="middle" font-size="14">重试保存与计算</text>
+  <rect x="580" y="330" width="110" height="35" rx="7" fill="#397566"/>
+  <text x="635" y="353" text-anchor="middle" font-size="14" style="fill:white">重试计算</text>
+  <text x="50" y="389" font-size="13" class="muted">旧评估仍对应原规则</text>
+  <text x="580" y="389" font-size="13" class="muted">旧评估可回查，明确标为原规则下的结果</text>
+  <text x="30" y="445" font-size="13" class="muted">虚构故障示意。只讨论阈值保存与计算的失败边界；不自动确认，不决定整链批量操作协议。</text>
+</svg>

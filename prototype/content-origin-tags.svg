@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="630" viewBox="0 0 900 630" role="img" aria-labelledby="title desc">
+<title id="title">D61／D62：内容起点固定，修改记录按需回查</title>
+<desc id="desc">三个标签位于内容起点栏，分别表示从材料整理、本人新建和AI补充候选。本人保存内容修改后起点标签保持原样，另显示我已编辑；画布不常驻版本号或修改次数。详情中的修改记录默认折叠，展开先显示最近一次改前与改后、时间和可选理由，更早修改再次折叠。原句在内部材料中按所引版本回查，仅有摘录时明确范围，外部网页需主动打开且是网站当前内容。</desc>
+<defs><style>
+text{font-family:"PingFang SC","Microsoft YaHei",sans-serif;fill:#2a4044}.title{font-size:23px;font-weight:600}.body{font-size:17px}.small{font-size:16px;fill:#677b7d}.tag{font-size:14px;font-weight:500}.green{fill:#276e68}
+</style><marker id="arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0L8 4L0 8Z" fill="#8c9d9d"/></marker></defs>
+<rect width="900" height="630" rx="14" fill="#f6f8f7"/>
+<text x="28" y="40" class="title">内容起点与按需修改记录（D61／D62）</text>
+<text x="28" y="68" class="small">不判断“改了多少才算自己的观点”；系统记录确定发生的创建和编辑操作。</text>
+<text x="28" y="103" class="body">创建时</text><text x="562" y="103" class="body">本人保存文字／推导内容修改后</text>
+
+<rect x="28" y="118" width="292" height="76" rx="8" fill="#fff" stroke="#ccd8d5"/>
+<text x="44" y="146" class="small">内容起点</text><rect x="115" y="128" width="58" height="25" rx="5" fill="#edf1ef"/><text x="130" y="146" class="tag">来源</text>
+<text x="44" y="176" class="body">从材料整理出来的卡片</text>
+<path d="M340 158H542" stroke="#8c9d9d" stroke-width="1.5" marker-end="url(#arrow)"/><text x="380" y="146" class="small">保存编辑</text>
+<rect x="562" y="118" width="310" height="76" rx="8" fill="#fff" stroke="#ccd8d5"/>
+<text x="578" y="146" class="small">内容起点</text><rect x="649" y="128" width="58" height="25" rx="5" fill="#edf1ef"/><text x="664" y="146" class="tag">来源</text><text x="757" y="146" class="tag green">我已编辑</text>
+<text x="578" y="176" class="small">当前正文由我改过 · 原句按引用回查</text>
+
+<rect x="28" y="212" width="292" height="76" rx="8" fill="#fff" stroke="#ccd8d5"/>
+<text x="44" y="240" class="small">内容起点</text><rect x="115" y="222" width="45" height="25" rx="5" fill="#edf1ef"/><text x="128" y="240" class="tag">AI</text>
+<text x="44" y="270" class="body">AI 新补出的候选内容</text>
+<path d="M340 252H542" stroke="#8c9d9d" stroke-width="1.5" marker-end="url(#arrow)"/><text x="380" y="240" class="small">保存编辑</text>
+<rect x="562" y="212" width="310" height="76" rx="8" fill="#fff" stroke="#ccd8d5"/>
+<text x="578" y="240" class="small">内容起点</text><rect x="649" y="222" width="45" height="25" rx="5" fill="#edf1ef"/><text x="662" y="240" class="tag">AI</text><text x="757" y="240" class="tag green">我已编辑</text>
+<text x="578" y="270" class="small">当前正文由我改过 · AI 基稿保留</text>
+
+<rect x="28" y="306" width="292" height="76" rx="8" fill="#fff" stroke="#ccd8d5"/>
+<text x="44" y="334" class="small">内容起点</text><rect x="115" y="316" width="58" height="25" rx="5" fill="#edf1ef"/><text x="130" y="334" class="tag">用户</text>
+<text x="44" y="364" class="body">本人新建的卡片或推导</text>
+<path d="M340 346H542" stroke="#8c9d9d" stroke-width="1.5" marker-end="url(#arrow)"/><text x="380" y="334" class="small">保存编辑</text>
+<rect x="562" y="306" width="310" height="76" rx="8" fill="#fff" stroke="#ccd8d5"/>
+<text x="578" y="334" class="small">内容起点</text><rect x="649" y="316" width="58" height="25" rx="5" fill="#edf1ef"/><text x="664" y="334" class="tag">用户</text><text x="757" y="334" class="tag green">我已编辑</text>
+<text x="578" y="364" class="small">本人起草，修改记录同样可回查</text>
+
+<line x1="28" y1="406" x2="872" y2="406" stroke="#d7e1dc"/>
+<text x="28" y="435" class="body">画布：当前正文＋“我已编辑”；不常驻版本号或修改次数。</text>
+<text x="28" y="465" class="body">详情 → 修改记录（默认折叠）</text>
+<text x="28" y="494" class="small">展开先看最近一次：改前 → 改后 · 时间 · 修改理由（选填）；更早修改再次折叠。</text>
+<text x="28" y="522" class="small">一次保存有内容变化才记一次；质疑／不认可的立场理由仍必填。</text>
+<text x="28" y="550" class="small">其他操作 → 研究记录：操作日志＋修改项入口，完整修改内容回到对象详情查看。</text>
+<text x="28" y="582" class="small">采纳、认可、质疑、查证、移动位置：不改变起点，也不算正文编辑。</text>
+<text x="28" y="610" class="small">原句默认回查内部引用版本；摘录范围如实标明，外部网页是网站当前内容（D63）。</text>
+</svg>

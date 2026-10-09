@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"/>
+<title>见岔 · 条件路径对照（按 docs/domain-model.md v0.2）</title>
+<style>
+  :root{--bg:#f6f6f3;--panel:#fff;--line:#dcdcd6;--text:#1b1b19;--muted:#8b8b80;--hi:#FAEEDA;}
+  *{box-sizing:border-box;}
+  body{margin:0;font:13px/1.5 -apple-system,"PingFang SC","Helvetica Neue",sans-serif;background:var(--bg);color:var(--text);}
+  header{display:flex;align-items:center;gap:10px;padding:0 14px;height:52px;background:var(--panel);border-bottom:3px solid var(--line);}
+  .brand{font-weight:600;} .brand span{color:var(--muted);font-weight:400;font-size:11px;margin-left:4px;}
+  .sep{width:1px;height:22px;background:var(--line);}
+  .uLabel{font-size:11px;color:var(--muted);}
+  .stab{display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 12px;border:1px solid var(--line);border-radius:8px;background:#fff;cursor:pointer;font-size:12px;}
+  .stab .dot{width:8px;height:8px;border-radius:50%;}
+  .stab.on{color:#fff;border-color:transparent;}
+  .main{display:flex;height:calc(100vh - 52px - 32px);}
+  #stage{flex:1;position:relative;overflow:hidden;}
+  #world{position:absolute;left:0;top:0;}
+  #wires{position:absolute;left:0;top:0;overflow:visible;pointer-events:none;}
+  .card{position:absolute;width:250px;min-height:68px;border-radius:10px;border:1px solid var(--line);background:#fff;padding:9px 12px;cursor:pointer;}
+  .card .k{font-size:10px;color:var(--muted);letter-spacing:.4px;}
+  .card .t{font-size:12.5px;margin-top:3px;}
+  .card.inf{border-style:double;border-width:3px;}
+  .card.dead{opacity:.72;background:repeating-linear-gradient(135deg,#fff,#fff 7px,#faf7f4 7px,#faf7f4 14px);}
+  .card.none{border-style:dashed;color:var(--muted);background:#fafaf7;}
+  .card.none .t{font-style:italic;}
+  .card.flash{animation:fl 1s ease;}
+  @keyframes fl{0%,100%{background:#fff;}25%{background:var(--hi);}}
+  .mark{position:absolute;font-size:10px;line-height:1;padding:2px 6px;border-radius:9px;border:1px solid var(--line);background:#fff;color:var(--muted);}
+  .mark.up{color:#fff;border-color:transparent;}
+  .mark.bad{color:#fff;background:#A32D2D;border-color:transparent;}
+  aside{width:428px;flex:0 0 428px;background:var(--panel);border-left:1px solid var(--line);display:flex;flex-direction:column;}
+  .tabs{display:flex;border-bottom:1px solid var(--line);}
+  .tabs div{flex:1;padding:9px 0;text-align:center;font-size:12px;cursor:pointer;color:var(--muted);border-bottom:2px solid transparent;}
+  .tabs div.on{color:var(--text);border-bottom-color:var(--text);}
+  .pane{flex:1;overflow:auto;padding:12px;}
+  table{border-collapse:collapse;width:100%;font-size:11.5px;}
+  th,td{border:0.5px solid var(--line);padding:5px 6px;text-align:left;vertical-align:top;}
+  th{background:#fafaf8;font-weight:500;font-size:11px;}
+  td.cell{cursor:pointer;} td.cell:hover{background:#f4f4ef;} td.cur{background:#f0f0ea;}
+  .ovd{display:inline-block;padding:1px 5px;border-radius:6px;color:#fff;font-size:10.5px;}
+  .bad{display:inline-block;padding:1px 5px;border-radius:6px;background:#FCEBEB;color:#A32D2D;font-size:10.5px;}
+  .inh{color:#b0b0a6;font-size:11px;}
+  .rowlab{font-size:11px;color:var(--muted);}
+  .rowlab b{font-weight:500;color:var(--text);display:block;}
+  .btn{height:30px;padding:0 12px;border:1px solid var(--line);background:#fff;border-radius:6px;cursor:pointer;font-size:12px;}
+  .btn.primary{background:var(--text);color:#fff;border-color:var(--text);}
+  .blk{border:1px solid var(--line);border-radius:8px;padding:9px 11px;margin-bottom:9px;}
+  .blk h4{margin:0 0 6px;font-size:12px;font-weight:500;}
+  .blk .r{font-size:11.5px;margin:3px 0;}
+  .hint{font-size:11px;color:var(--muted);margin:0 0 10px;line-height:1.6;}
+  footer{height:32px;display:flex;align-items:center;gap:14px;padding:0 14px;background:var(--panel);border-top:1px solid var(--line);font-size:11px;color:var(--muted);overflow:hidden;}
+  #toast{position:fixed;left:50%;bottom:48px;transform:translateX(-50%) translateY(12px);background:var(--text);color:#fff;padding:8px 14px;border-radius:16px;font-size:12px;opacity:0;transition:.2s;pointer-events:none;}
+  #toast.show{opacity:1;transform:translateX(-50%);}
+</style>
+</head>
+<body>
+<header id="hdr">
+  <div class="brand">见岔 <span>条件路径 · 局部版本与推导支持</span></div>
+  <div class="sep"></div>
+  <span class="uLabel">当前路径</span>
+  <div id="stabs" style="display:flex;gap:6px"></div>
+  <div class="sep"></div>
+  <span class="uLabel" id="statTxt"></span>
+</header>
+
+<div class="main">
+  <div id="stage"><div id="world"><svg id="wires" width="1040" height="540"></svg></div></div>
+  <aside>
+    <div class="tabs">
+      <div id="tabSheet" class="on" onclick="setPane('sheet')">局部版本索引</div>
+      <div id="tabWhy" onclick="setPane('why')">影响推理</div>
+      <div id="tabDecision" onclick="setPane('decision')">结论面板</div>
+    </div>
+    <div class="pane" id="pane"></div>
+  </aside>
+</div>
+
+<footer>
+  <span>↑ 局部版本（仅 Node 可被覆盖）</span>
+  <span>⊘ 推导步受影响（JointInference 不可覆盖，内容永不变）</span>
+  <span>← 继承主干</span>
+  <span>虚线＝失去的支持</span>
+</footer>
+<div id="toast"></div>
+
+<script>
+/* 数据按 docs/domain-model.md v0.2：
+   - Node 可被 BranchNodeOverride 覆盖（NodeVersion.scope='branch_local'）
+   - JointInference 不可被覆盖，只有"受影响/保留"两种状态（§2.4 只作用于 node_id）
+   - 路径成员由遍历导出，图共享，不产生分支独有节点（§2.8） */
+var NODES={
+  p1:{x:40, y:26,  k:'前提 Node · 作者表达', t:'新增订单能够兑现为收入'},
+  p2:{x:40, y:206, k:'前提 Node · AI 推断',  t:'资本开支强度不持续上升'},
+  p3:{x:40, y:386, k:'前提 Node · 作者表达', t:'库存下降可能释放营运资金'},
+  c1:{x:664,y:206, k:'结果 Node · 作者表达', t:'现金流可能改善'}
+};
+var INFS={
+  i1:{x:352,y:96,  k:'推导步 JointInference · joint_required', prem:['p1','p2'], concl:'c1', t:'订单兑现与资本开支共同支持'},
+  i2:{x:352,y:366, k:'推导步 JointInference · independent',    prem:['p3'],      concl:'c1', t:'营运资金释放提供独立支持'}
+};
+var PATHS={
+  A:{n:'原假设（主干）', c:'#5F5E5A', ov:{}, desc:'作者原链 + 个人草稿，未产生局部版本'},
+  B:{n:'资本开支持续上升', c:'#BA7517', ov:{p2:'资本开支强度持续上升', c1:'现金流改善仍需进一步观察'}},
+  C:{n:'订单兑现延后', c:'#185FA5', ov:{p1:'新增订单兑现时点可能延后'}},
+  D:{n:'库存下降来自跌价', c:'#534AB7', ov:{p3:'库存下降可能来自跌价或转销'}}
+};
+var ORDER=['A','B','C','D'];
+var CUR='A', PREV='A', PANE='sheet', WHY=['A','B'], cleared=null;
+
+function covered(id,p){ return !!PATHS[p].ov[id]; }
+function hit(id,p){ for(var i=0;i<INFS[id].prem.length;i++) if(covered(INFS[id].prem[i],p)) return true; return false; }
+function nodeText(id,p){ return covered(id,p)?PATHS[p].ov[id]:NODES[id].t; }
+function nodeState(id,p){
+  if(id==='c1'&&cleared===p) return 'none';
+  return covered(id,p)?'override':'inherit';
+}
+function infState(id,p){ return hit(id,p)?'dead':'keep'; }
+
+function render(flash){
+  var world=document.getElementById('world');
+  world.querySelectorAll('.card,.mark').forEach(function(n){ n.remove(); });
+  var col=PATHS[CUR].c, w='';
+
+  for(var id in INFS){
+    var f=INFS[id], dead=(infState(id,CUR)==='dead');
+    for(var j=0;j<f.prem.length;j++){
+      var a=NODES[f.prem[j]], x1=a.x+250, y1=a.y+34, x2=f.x, y2=f.y+34, mx=(x1+x2)/2;
+      w+='<path d="M '+x1+' '+y1+' C '+mx+' '+y1+', '+mx+' '+y2+', '+x2+' '+y2+'" fill="none" stroke="#c9c9c2" stroke-width="1.2" marker-end="url(#mg)"/>';
+    }
+    var b=NODES[f.concl], cx1=f.x+250, cy1=f.y+34, cx2=b.x, cy2=b.y+34, cmx=(cx1+cx2)/2;
+    w+='<path d="M '+cx1+' '+cy1+' C '+cmx+' '+cy1+', '+cmx+' '+cy2+', '+cx2+' '+cy2+'" fill="none" stroke="'+(dead?'#E24B4A':'#c9c9c2')+'" stroke-width="'+(dead?1.8:1.2)+'" stroke-dasharray="'+(dead?'5 4':'')+'" marker-end="url(#m'+(dead?'r':'g')+')"/>';
+  }
+  document.getElementById('wires').innerHTML=
+    '<defs><marker id="mg" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M2 1L8 5L2 9" fill="none" stroke="#c9c9c2" stroke-width="1.5" stroke-linecap="round"/></marker>'+
+    '<marker id="mr" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M2 1L8 5L2 9" fill="none" stroke="#E24B4A" stroke-width="1.8" stroke-linecap="round"/></marker></defs>'+w;
+
+  for(var nid in NODES){
+    var n=NODES[nid], st=nodeState(nid,CUR), ov=(st==='override'), none=(st==='none');
+    var chg = flash && nodeText(nid,CUR)!==nodeText(nid,PREV);
+    var d=document.createElement('div');
+    d.className='card'+(ov?' ':'')+(none?' none':'')+(chg?' flash':'');
+    d.id=nid; d.style.left=n.x+'px'; d.style.top=n.y+'px';
+    if(ov) d.style.borderColor=col;
+    d.innerHTML='<div class="k">'+(none?'无有效版本 · §2.4 第 3 条':n.k)+'</div>'+
+      '<div class="t">'+(none?'该研究时点无内容，不回退到任意一版':nodeText(nid,CUR))+'</div>';
+    d.setAttribute('onclick','flash(\''+nid+'\')');
+    world.appendChild(d);
+    var m=document.createElement('div');
+    m.className='mark'+(ov?' up':'');
+    m.id=nid+'-mark';
+    if(ov){ m.style.background=col; m.textContent='↑ 局部版本'; } else { m.textContent='← 继承主干'; }
+    m.style.left=(n.x+250-62)+'px'; m.style.top=(n.y-9)+'px';
+    world.appendChild(m);
+  }
+
+  for(var fid in INFS){
+    var f=INFS[fid], state=infState(fid,CUR), dead=(state==='dead');
+    var dd=document.createElement('div');
+    dd.className='card inf'+(dead?' dead':'');
+    dd.id=fid; dd.style.left=f.x+'px'; dd.style.top=f.y+'px';
+    dd.innerHTML='<div class="k">'+f.k+'<br>前提 {'+f.prem.join(', ')+'} → '+f.concl+'</div>'+
+      '<div class="t">'+f.t+'</div>';
+    dd.setAttribute('onclick','flash(\''+fid+'\')');
+    world.appendChild(dd);
+    var dm=document.createElement('div');
+    dm.className='mark'+(dead?' bad':'');
+    dm.id=fid+'-mark';
+    dm.textContent=dead?'⊘ 受影响 · 支持失效':'✓ 支持保留';
+    dm.style.left=(f.x+250-70)+'px'; dm.style.top=(f.y-9)+'px';
+    world.appendChild(dm);
+  }
+
+  ORDER.forEach(function(p){
+    var bb=document.getElementById('stab'+p);
+    bb.classList.toggle('on',p===CUR);
+    bb.style.background=(p===CUR)?PATHS[p].c:'#fff';
+    bb.style.borderColor=(p===CUR)?'transparent':'var(--line)';
+  });
+  document.getElementById('hdr').style.borderBottomColor=col;
+  var nc=0; for(var k in PATHS[CUR].ov) nc++;
+  var nd=0; for(var k2 in INFS) if(infState(k2,CUR)==='dead') nd++;
+  document.getElementById('statTxt').textContent='局部版本 '+nc+' 处 · 受影响的推导步 '+nd+' 步';
+  renderPane();
+}
+
+function setPane(p){ PANE=p; ['sheet','why','decision'].forEach(function(x){ document.getElementById('tab'+({'sheet':'Sheet','why':'Why','decision':'Decision'})[x]).classList.toggle('on',x===p); }); renderPane(); }
+function setCur(p){ if(p===CUR) return; PREV=CUR; CUR=p; render(true); toast('切到「'+PATHS[p].n+'」'); }
+function renderPane(){ document.getElementById('pane').innerHTML = PANE==='sheet'?sheetHTML():(PANE==='why'?whyHTML():decisionHTML()); }
+
+function sheetHTML(){
+  var h='<p class="hint">行＝推理图谱对象，列＝条件路径。Node 行只会出现 ↑ 局部版本或 ← 继承；推导步行只有 ⊘ 受影响或 ✓ 保留——因为 <b>BranchNodeOverride 只作用于 Node</b>（§2.4），JointInference 的内容不可改写。点格子切换路径。</p>';
+  h+='<table><tr><th style="width:104px">对象</th>';
+  ORDER.forEach(function(p){ h+='<th'+(p===CUR?' style="background:#f0f0ea"':'')+'>'+p+' · '+PATHS[p].n+'</th>'; });
+  h+='</tr>';
+  for(var id in NODES){
+    h+='<tr><td class="rowlab"><b>'+id+'</b>'+NODES[id].k.replace(' Node ','')+'</td>';
+    ORDER.forEach(function(p){
+      var st=nodeState(id,p);
+      var cellHtml = (st==='override')
+        ? '<span class="ovd" style="background:'+PATHS[p].c+'">↑ '+PATHS[p].ov[id].slice(0,10)+'</span>'
+        : (st==='none' ? '<span class="inh">该研究时点无内容</span>' : '<span class="inh">←</span>');
+      h+='<td class="cell'+(p===CUR?' cur':'')+'" onclick="go(\''+p+'\')">'+cellHtml+'</td>';
+    });
+    h+='</tr>';
+  }
+  for(var fid in INFS){
+    var f=INFS[fid];
+    h+='<tr><td class="rowlab"><b>'+fid+'</b>'+(f.k.indexOf('joint_required')>=0?'共同依赖':'独立支持')+'</td>';
+    ORDER.forEach(function(p){
+      var dead=hit(fid,p);
+      h+='<td class="cell'+(p===CUR?' cur':'')+'" onclick="go(\''+p+'\')">'+
+        (dead?'<span class="bad">⊘ 支持失效</span>':'<span class="inh">✓ 保留</span>')+'</td>';
+    });
+    h+='</tr>';
+  }
+  h+='</table>';
+  h+='<div style="margin-top:12px;display:flex;gap:6px"><button class="btn" onclick="setCur(\'A\')">回到主干</button>'+
+     '<button class="btn" onclick="toggleNone()">'+(cleared===null?'演示：清空 c1 版本':'恢复 c1 版本')+'</button></div>';
+  return h;
+}
+function toggleNone(){ cleared = (cleared===null)?CUR:null; render(false); toast(cleared===null?'已恢复':'c1 在当前路径已无有效版本，界面不回退到旧文案（§2.4 第 3 条）'); }
+
+function whyHTML(){
+  var a=WHY[0], b=WHY[1];
+  var h='<p class="hint">对照两条路径：改了哪些 Node（局部版本＝因），哪些推导步因此失效（果），<b>哪些支持仍然保留</b>（ADR 0007 的核心问题）。</p>';
+  h+='<div style="display:flex;gap:6px;margin-bottom:10px"><select id="wA" onchange="setWhy(0,this.value)">'+opt(a)+'</select>'+
+     '<span style="color:var(--muted);line-height:30px">对照</span><select id="wB" onchange="setWhy(1,this.value)">'+opt(b)+'</select></div>';
+  var ovn=[], keepn=[];
+  for(var id in NODES){ (covered(id,b)?ovn:keepn).push(id); }
+  var dead=[], keep=[];
+  for(var fid in INFS){ (hit(fid,b)?dead:keep).push(fid); }
+
+  h+='<div class="blk"><h4>被改写的 Node（因）</h4>';
+  if(!ovn.length) h+='<div class="r" style="color:var(--muted)">未产生任何局部版本</div>';
+  ovn.forEach(function(id){
+    h+='<div class="r"><b>'+id+'</b> '+NODES[id].t+' → <span style="background:'+PATHS[b].c+';color:#fff;padding:1px 5px;border-radius:6px">'+PATHS[b].ov[id]+'</span></div>';
+  });
+  h+='</div>';
+
+  h+='<div class="blk"><h4>受影响的推导步（果）</h4>';
+  if(!dead.length) h+='<div class="r" style="color:var(--muted)">无</div>';
+  dead.forEach(function(fid){
+    var f=INFS[fid], why=[];
+    f.prem.forEach(function(x){ if(covered(x,b)) why.push(x); });
+    h+='<div class="r"><b>'+fid+'</b> 前提 {'+f.prem.join(', ')+'} 中 <b>'+why.join('、')+'</b> 已被本路径覆盖 → 该'+(f.k.indexOf('joint_required')>=0?'组联合支持失效（不表示结论已被证伪，§2.5）':'条独立支持的依据已变')+'</div>';
+  });
+  h+='</div>';
+
+  h+='<div class="blk"><h4>仍然保留的支持</h4>';
+  if(!keep.length) h+='<div class="r" style="color:var(--muted)">无（此情景下所有支持均受影响）</div>';
+  keep.forEach(function(fid){
+    h+='<div class="r"><b>'+fid+'</b> '+INFS[fid].t+' → '+(hit(fid,a)?'主干本来有效，此情景下未受影响':'仍保留 · 支持 '+INFS[fid].concl)+'</div>';
+  });
+  h+='</div>';
+
+  h+='<div class="blk"><h4>未被改写的 Node（继承主干）</h4><div class="r">'+(keepn.length?keepn.map(function(i){return i+' '+NODES[i].t;}).join(' ／ '):'无')+'</div></div>';
+  h+='<button class="btn" onclick="setCur(\''+b+'\')">切到路径 '+b+'</button>';
+  return h;
+}
+function opt(sel){ var s=''; ORDER.forEach(function(p){ s+='<option value="'+p+'"'+(p===sel?' selected':'')+'>'+p+' · '+PATHS[p].n+'</option>'; }); return s; }
+function setWhy(i,v){ WHY[i]=v; if(WHY[0]===WHY[1]) WHY[1]=(v==='A')?'B':'A'; renderPane(); }
+
+var META={
+  A:{ovP:'—（主干）', watch:'资本开支占收入比连续两期 ≤ 15%', concl:'现金流可能改善（继承主干）', sup:'i1 共同依赖有效 · i2 独立支持有效', ev:'模拟季度报告（前期）', gap:'库存现金影响的勾稽资料'},
+  B:{ovP:'p2 → 资本开支强度持续上升', watch:'资本开支占收入比连续两期 > 15%', concl:'本人另行改写：改善仍需进一步观察', sup:'i1 这组联合支持失效 · i2 独立支持仍保留', ev:'模拟经营报告（前期）', gap:'后续季度数据尚未提供'},
+  C:{ovP:'p1 → 新增订单兑现时点可能延后', watch:'订单转收入的周期是否超过 2 个季度', concl:'继承主干（结论未被改写）', sup:'i1 这组联合支持失效 · i2 独立支持仍保留', ev:'模拟季度报告 · 订单段落', gap:'合同负债与预收款明细'},
+  D:{ovP:'p3 → 库存下降可能来自跌价或转销', watch:'存货附注是否出现跌价、转销科目', concl:'继承主干（结论未被改写）', sup:'i2 依据已变 · i1 共同依赖仍保留', ev:'模拟存货附注', gap:'跌价与转销的明细披露'}
+};
+var DROWS=[['局部版本（因）','ovP'],['成立需观察（阈值）','watch'],['结论 node 内容','concl'],['受影响与保留的支持','sup'],['依据材料','ev'],['待查证缺口','gap']];
+function decisionHTML(){
+  var h='<p class="hint">可带走的交付物。按项目规则，此处不给出情景概率，也不给出任何投资建议。</p>';
+  h+='<table><tr><th style="width:88px">项目</th>';
+  ORDER.forEach(function(p){ h+='<th'+(p===CUR?' style="background:#f0f0ea"':'')+'><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:'+PATHS[p].c+';margin-right:4px"></span>'+p+'</th>'; });
+  h+='</tr>';
+  DROWS.forEach(function(r){
+    h+='<tr><td class="rowlab">'+r[0]+'</td>';
+    ORDER.forEach(function(p){ h+='<td'+(p===CUR?' class="cur"':'')+'>'+META[p][r[1]]+'</td>'; });
+    h+='</tr>';
+  });
+  h+='<tr><td class="rowlab">当前个人立场</td>';
+  ORDER.forEach(function(p){ h+='<td'+(p===CUR?' class="cur"':'')+'><span class="inh">待研究</span></td>'; });
+  h+='</tr></table>';
+  h+='<div class="blk" style="margin-top:10px"><h4>为什么这张图始终是同一张</h4><div class="r">路径成员由遍历导出，「共享、可汇合，不是独立树」（§2.8）；Branch 不拥有自己的节点，只拥有对节点<b>内容版本</b>的覆盖（BranchNodeOverride）。所以条件路径之间不存在拓扑差异。</div></div>';
+  h+='<button class="btn primary" onclick="carry()">带走这份表（演示）</button>';
+  return h;
+}
+function carry(){ toast('演示：导出各路径的局部版本、受影响的支持与待查证缺口'); }
+function go(p){ PREV=CUR; CUR=p; render(true); }
+function flash(id){ var n=document.getElementById(id); if(!n) return; n.classList.remove('flash'); void n.offsetWidth; n.classList.add('flash'); }
+function toast(m){ var t=document.getElementById('toast'); t.textContent=m; t.classList.add('show'); clearTimeout(t._h); t._h=setTimeout(function(){t.classList.remove('show');},2600); }
+
+(function(){
+  var s='';
+  ORDER.forEach(function(p){ s+='<button class="stab" id="stab'+p+'" onclick="setCur(\''+p+'\')"><i class="dot" style="background:'+PATHS[p].c+'"></i>'+p+' · '+PATHS[p].n+'</button>'; });
+  document.getElementById('stabs').innerHTML=s;
+  var vp=document.getElementById('stage'), world=document.getElementById('world');
+  var tx=0,ty=0,drag=false,sx=0,sy=0;
+  vp.addEventListener('mousedown',function(e){ if(e.target.closest('.card')) return; drag=true; sx=e.clientX; sy=e.clientY; });
+  window.addEventListener('mousemove',function(e){ if(!drag) return; tx+=e.clientX-sx; ty+=e.clientY-sy; sx=e.clientX; sy=e.clientY; world.style.transform='translate('+tx+'px,'+ty+'px)'; });
+  window.addEventListener('mouseup',function(){ drag=false; });
+  render(false);
+  toast('改 Node 是本路径的局部版本；推导步内容不可改写，只会标记为受影响');
+})();
+</script>
+</body>
+</html>

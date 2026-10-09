@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1100" height="430" viewBox="0 0 1100 430">
+  <style>text{font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','Microsoft YaHei',sans-serif;fill:#273a34}.muted{fill:#65776d}</style>
+  <rect width="1100" height="430" rx="12" fill="#f6f7f3"/>
+  <text x="30" y="41" font-size="24" font-weight="600">Q15 · 调高阈值，何时重新计算？</text>
+  <text x="878" y="40" font-size="13" class="muted">A / B 对照 · 尚待选择</text>
+  <rect x="30" y="69" width="1040" height="84" rx="10" fill="#eaf3ee" stroke="#b3c9bb"/>
+  <text x="50" y="102" font-size="19" font-weight="550">两季营收同比均 ≥ 10%  →  改为 ≥ 15%</text>
+  <text x="50" y="131" font-size="14" class="muted">本地资料已齐、口径一致：第 1 季度 12%，第 2 季度 11%。仅修改阈值。</text>
+  <rect x="30" y="174" width="510" height="198" rx="12" fill="white" stroke="#d6e0d8"/>
+  <rect x="560" y="174" width="510" height="198" rx="12" fill="white" stroke="#d6e0d8"/>
+  <text x="50" y="210" font-size="20" font-weight="600">A  保存后自动重算</text>
+  <text x="580" y="210" font-size="20" font-weight="600">B  本人主动触发重算</text>
+  <text x="50" y="243" font-size="13" class="muted">新版规则 ≥ 15% · 生成新的计算记录</text>
+  <text x="50" y="285" font-size="24" font-weight="550">计算结果：未满足</text>
+  <text x="50" y="317" font-size="15" class="muted">待本人确认；保留所用规则和材料版本</text>
+  <text x="50" y="348" font-size="13" class="muted">旧版 ≥ 10% 的“满足”记录仍可回查</text>
+  <text x="580" y="243" font-size="13" class="muted">新版规则 ≥ 15% · 暂不生成计算记录</text>
+  <text x="580" y="285" font-size="24" font-weight="550">尚未评估</text>
+  <rect x="580" y="303" width="110" height="35" rx="7" fill="#397566"/>
+  <text x="635" y="326" text-anchor="middle" font-size="14" style="fill:white">重新计算</text>
+  <text x="707" y="326" font-size="13" class="muted">点击后生成计算记录</text>
+  <text x="580" y="356" font-size="13" class="muted">旧版评估同样保留</text>
+  <text x="30" y="408" font-size="13" class="muted">虚构示例。两种方案均保留历史；本题只讨论确定性重算，不获取新资料、不调用模型、不自动确认。</text>
+</svg>

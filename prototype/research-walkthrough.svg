@@ -1,0 +1,135 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="880" height="1510" viewBox="0 0 880 1510" role="img" aria-labelledby="title desc">
+  <title id="title">见岔原型第一次使用：点哪里，看到什么</title>
+  <desc id="desc">八步操作引导：使用模拟案例、模拟梳理查证、查看主张来源、查看线上推导详情、收录为待研究的个人草稿、自行判断或改写、临时假设前提不成立，以及自由编辑、对照原版和研究撤销。来源默认打开内部保存的引用版本并定位；全文、摘录与范围不确定分别标明，原始网页需主动打开新标签。文字修改理由选填，质疑与不认可的立场理由必填。修改记录在对象详情折叠查看，全局研究记录位于其他操作中。</desc>
+  <defs>
+    <marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+      <path d="M0 0 L8 4 L0 8" fill="none" stroke="#257269" stroke-width="1.5"/>
+    </marker>
+    <style>
+      text{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;fill:#263c3b}
+      .title{font-size:32px;font-weight:650}
+      .subtitle{font-size:20px;fill:#617370}
+      .heading{font-size:23px;font-weight:650}
+      .body{font-size:20px}
+      .small{font-size:18px;fill:#617370}
+      .label{font-size:19px;font-weight:600;fill:#257269}
+      .number{font-size:21px;font-weight:650;fill:#fff;text-anchor:middle}
+      .button{fill:#e8f2ee;stroke:#b8d5cd;stroke-width:1.3}
+      .button-text{font-size:19px;font-weight:600;fill:#257269;text-anchor:middle}
+      .separator{stroke:#d9e1dc;stroke-width:1}
+      .guide-line{stroke:#c3d8cf;stroke-width:2}
+    </style>
+  </defs>
+  <rect width="880" height="1510" fill="#f7f8f4"/>
+  <rect x="40" y="38" width="6" height="72" rx="3" fill="#257269"/>
+  <text class="title" x="64" y="68">第一次用见岔，跟着这 8 步走</text>
+  <text class="subtitle" x="64" y="106">先体验一条完整研究流程，再开始自由编辑。</text>
+  <text class="small" x="64" y="142">案例与查证结果均为模拟数据；每一步只需完成一个动作。</text>
+  <text class="label" x="136" y="184">点哪里</text>
+  <text class="label" x="468" y="184">看到什么</text>
+  <line class="guide-line" x1="79" y1="219" x2="79" y2="1320"/>
+
+  <g id="step-1">
+    <circle cx="79" cy="227" r="23" fill="#257269"/>
+    <text class="number" x="79" y="234">1</text>
+    <text class="heading" x="136" y="230">载入一份材料</text>
+    <rect class="button" x="136" y="254" width="218" height="44" rx="8"/>
+    <text class="button-text" x="245" y="282">使用模拟案例</text>
+    <text class="body" x="468" y="265">材料区出现示例观点。</text>
+    <text class="small" x="468" y="297">从这里开始，无需先准备材料。</text>
+    <line class="separator" x1="136" y1="321" x2="824" y2="321"/>
+  </g>
+
+  <g id="step-2">
+    <circle cx="79" cy="368" r="23" fill="#257269"/>
+    <text class="number" x="79" y="375">2</text>
+    <text class="heading" x="136" y="371">生成可研究的链条</text>
+    <rect class="button" x="136" y="395" width="258" height="44" rx="8"/>
+    <text class="button-text" x="265" y="423">梳理并查证（模拟）</text>
+    <text class="body" x="468" y="406">主张卡与推导连线进入画布。</text>
+    <text class="small" x="468" y="438">查证结果帮助研究，结论仍待判断。</text>
+    <line class="separator" x1="136" y1="462" x2="824" y2="462"/>
+  </g>
+
+  <g id="step-3">
+    <circle cx="79" cy="509" r="23" fill="#257269"/>
+    <text class="number" x="79" y="516">3</text>
+    <text class="heading" x="136" y="512">回到主张的依据</text>
+    <text class="small" x="136" y="546">主张卡 → 来源 → 阅读入口</text>
+    <rect class="button" x="136" y="560" width="106" height="38" rx="8"/>
+    <text class="button-text" x="189" y="585">来源</text>
+    <rect class="button" x="252" y="560" width="106" height="38" rx="8"/>
+    <text class="button-text" x="305" y="585">查证</text>
+    <text class="body" x="468" y="547">内部材料显示所引版本并定位。</text>
+    <text class="small" x="468" y="579">摘录明确标明；网页另开新标签。</text>
+    <text class="small" x="468" y="605">放大／还原；返回画布保留原卡。</text>
+    <line class="separator" x1="136" y1="613" x2="824" y2="613"/>
+  </g>
+
+  <g id="step-4">
+    <circle cx="79" cy="660" r="23" fill="#257269"/>
+    <text class="number" x="79" y="667">4</text>
+    <text class="heading" x="136" y="663">理解这一步凭什么成立</text>
+    <text class="body" x="136" y="701">点击线上推导的「详情」</text>
+    <text class="body" x="468" y="701">查看理由、前提组合与依据。</text>
+    <rect x="136" y="724" width="126" height="49" rx="6" fill="#fff" stroke="#c9d5cd"/>
+    <text class="body" x="160" y="755">前提主张</text>
+    <line x1="262" y1="749" x2="680" y2="749" stroke="#257269" stroke-width="2" marker-end="url(#arrow)"/>
+    <text class="label" x="334" y="738">推导理由附在线上</text>
+    <text class="small" x="391" y="778">理由 · 详情</text>
+    <rect x="690" y="724" width="134" height="49" rx="6" fill="#fff" stroke="#c9d5cd"/>
+    <text class="body" x="717" y="755">结论主张</text>
+    <line class="separator" x1="136" y1="802" x2="824" y2="802"/>
+  </g>
+
+  <g id="step-5">
+    <circle cx="79" cy="848" r="23" fill="#257269"/>
+    <text class="number" x="79" y="855">5</text>
+    <text class="heading" x="136" y="851">明确进入自己的研究</text>
+    <rect class="button" x="136" y="875" width="258" height="44" rx="8"/>
+    <text class="button-text" x="265" y="903">收录为个人草稿</text>
+    <text class="body" x="468" y="886">产生可编辑的个人版本。</text>
+    <text class="small" x="468" y="918">默认「待研究」；收录不代表认可。</text>
+    <line class="separator" x1="136" y1="943" x2="824" y2="943"/>
+  </g>
+
+  <g id="step-6">
+    <circle cx="79" cy="989" r="23" fill="#257269"/>
+    <text class="number" x="79" y="996">6</text>
+    <text class="heading" x="136" y="992">自己判断，或动手改写</text>
+    <text class="small" x="136" y="1027">选中主张卡或线上推导</text>
+    <rect class="button" x="136" y="1042" width="106" height="38" rx="8"/>
+    <text class="button-text" x="189" y="1067">判断</text>
+    <rect class="button" x="252" y="1042" width="106" height="38" rx="8"/>
+    <text class="button-text" x="305" y="1067">改写</text>
+    <text class="body" x="468" y="1027">立场由你选择，也可继续待研究。</text>
+    <text class="small" x="468" y="1059">改写理由选填；质疑／不认可须理由。</text>
+    <line class="separator" x1="136" y1="1094" x2="824" y2="1094"/>
+  </g>
+
+  <g id="step-7">
+    <circle cx="79" cy="1140" r="23" fill="#257269"/>
+    <text class="number" x="79" y="1147">7</text>
+    <text class="heading" x="136" y="1143">用一个反例检查链条</text>
+    <text class="small" x="136" y="1178">选中一个前提，再点击</text>
+    <rect class="button" x="136" y="1193" width="258" height="44" rx="8"/>
+    <text class="button-text" x="265" y="1221">假设它不成立</text>
+    <text class="body" x="468" y="1178">预览哪些支持与下游可能受影响。</text>
+    <text class="small" x="468" y="1210">这是临时试验，不会代你改立场。</text>
+    <line class="separator" x1="136" y1="1260" x2="824" y2="1260"/>
+  </g>
+
+  <g id="step-8">
+    <circle cx="79" cy="1306" r="23" fill="#257269"/>
+    <text class="number" x="79" y="1313">8</text>
+    <text class="heading" x="136" y="1309">开始自由研究</text>
+    <text class="small" x="136" y="1344">详情 → 修改记录</text>
+    <text class="label" x="136" y="1377">自由编辑 · 对照原版 · 研究撤销</text>
+    <text class="body" x="468" y="1344">展开先看最近一次，更早记录折叠。</text>
+    <text class="small" x="468" y="1376">全局入口：其他操作 → 研究记录</text>
+    <line class="separator" x1="136" y1="1411" x2="824" y2="1411"/>
+  </g>
+
+  <text class="body" x="64" y="1453">记住：卡片说「主张是什么」，线上理由说「凭什么」。</text>
+  <text class="small" x="64" y="1484">画布显示当前内容与“我已编辑”；每次保存有内容变化才记一次修改。</text>
+</svg>

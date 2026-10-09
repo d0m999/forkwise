@@ -1,0 +1,17 @@
+# 本机运行数据、凭据和可重建产物
+.DS_Store
+.workbuddy/
+**/node_modules/
+backend/dist/
+backend/web/canvas/
+prototype/canvas-built/
+backend/artifacts/
+**/.data/
+**/.env
+**/.env.*
+**/*.sqlite
+**/*.sqlite-*
+**/*.db
+**/*.key
+**/local-access.json
+**/__pycache__/

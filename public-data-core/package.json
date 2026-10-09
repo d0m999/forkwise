@@ -1,0 +1,10 @@
+{
+  "name": "@forkwise/public-data-core",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22.22.2" },
+  "exports": { ".": { "types": "./src/index.d.ts", "import": "./src/index.js" } },
+  "bin": { "forkwise-data": "./src/cli.js" },
+  "scripts": { "test": "node --test tests/*.test.js" }
+}

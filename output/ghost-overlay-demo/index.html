@@ -1,0 +1,509 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>幽灵叠加 · 平行宇宙对照演示</title>
+<style>
+  :root{
+    --bg:#FFFFFF; --surface:#F5F4EF; --card:#FFFFFF;
+    --border:rgba(0,0,0,.15); --border-strong:rgba(0,0,0,.4);
+    --text:#2C2C2A; --muted:#888780; --faint:#B4B2A9;
+    --teal:#0F6E56; --teal-bg:#E1F5EE; --teal-mid:#5DCAA5;
+    --amber:#854F0B; --amber-bg:#FAEEDA; --amber-mid:#FAC775;
+    --blue:#185FA5; --blue-bg:#E6F1FB;
+    --gray-bg:#F1EFE8; --gray:#5F5E5A;
+  }
+  *{box-sizing:border-box; margin:0; padding:0;}
+  html,body{height:100%;}
+  body{
+    font-family:-apple-system,"PingFang SC","Helvetica Neue",sans-serif;
+    color:var(--text); background:var(--bg);
+    display:flex; flex-direction:column; overflow:hidden;
+  }
+  /* ---------- 顶栏 ---------- */
+  header{
+    display:flex; align-items:center; gap:14px; flex-wrap:wrap;
+    padding:10px 16px; border-bottom:0.5px solid var(--border); background:var(--bg);
+    z-index:20;
+  }
+  .brand{font-size:14px; font-weight:500;}
+  .brand small{display:block; font-weight:400; font-size:11px; color:var(--muted);}
+  .sep{width:0.5px; height:26px; background:var(--border);}
+  .uni-label{font-size:12px; color:var(--muted);}
+  button{font-family:inherit; cursor:pointer;}
+  .uni-btn{
+    border:0.5px solid var(--border-strong); border-radius:8px;
+    padding:6px 12px; font-size:13px; background:transparent; color:var(--muted);
+  }
+  .uni-btn.on{background:var(--blue-bg); color:var(--blue); border-color:var(--blue);}
+  .ghost-chip{
+    border:0.5px solid var(--border-strong); border-radius:99px;
+    padding:6px 14px; font-size:13px; background:transparent; color:var(--muted);
+  }
+  .ghost-chip.on{background:var(--blue-bg); color:var(--blue); border-color:var(--blue);}
+  .ghost-chip .dot{
+    display:inline-block; width:8px; height:8px; border-radius:50%;
+    margin-right:6px; vertical-align:1px; background:var(--faint);
+  }
+  .ghost-chip.on .dot{background:var(--blue);}
+  /* ---------- 画布 ---------- */
+  main{
+    flex:1; position:relative; overflow:hidden;
+    background:var(--surface); cursor:grab; touch-action:none;
+  }
+  main.dragging{cursor:grabbing;}
+  #world{position:absolute; width:780px; height:700px; transform-origin:0 0;}
+  #edges{position:absolute; inset:0; pointer-events:none;}
+  .card{
+    position:absolute; width:230px; border-radius:10px;
+    background:var(--card); border:0.5px solid var(--border);
+    padding:10px 14px; user-select:none;
+  }
+  .card .t1{font-size:13px; font-weight:500; line-height:1.45;}
+  .card .t2{font-size:11px; color:var(--muted); margin-top:3px; line-height:1.4;}
+  .card.shared{background:var(--gray-bg); border-color:var(--gray);}
+  .card.current-A{background:var(--teal-bg); border-color:var(--teal);}
+  .card.current-B{background:var(--amber-bg); border-color:var(--amber);}
+  .card.ghost-B{background:var(--amber-bg); border:1px dashed var(--amber); opacity:.62; cursor:pointer;}
+  .card.ghost-A{background:var(--teal-bg); border:1px dashed var(--teal); opacity:.62; cursor:pointer;}
+  .card.ghost-B .t1,.card.ghost-A .t1{color:inherit;}
+  .card.ghost-B{color:var(--amber);}
+  .card.ghost-A{color:var(--teal);}
+  .card.ghost-B .t2,.card.ghost-A .t2{color:var(--muted);}
+  .echo{
+    position:absolute; width:230px; height:62px; border-radius:10px;
+    border:1px dashed var(--blue); background:transparent;
+    opacity:.6; pointer-events:none; z-index:0;
+  }
+  .card.current-C{background:var(--blue-bg); border-color:var(--blue);}
+  .card.ghost-C{background:var(--blue-bg); border:1px dashed var(--blue); opacity:.62; cursor:pointer; color:var(--blue);}
+  .card.ghost-C .t2{color:var(--muted);}
+  #compSel{
+    border:0.5px solid var(--border-strong); border-radius:8px;
+    padding:5px 8px; font-size:13px; background:var(--card); color:var(--text);
+    font-family:inherit;
+  }
+  .ver-pop{width:270px;}
+  .ver-pop .vh{font-size:12px; color:var(--muted); margin-bottom:4px;}
+  .ver-item{padding:8px 6px; border-top:0.5px solid var(--border); cursor:pointer; border-radius:6px;}
+  .ver-item:first-of-type{border-top:none;}
+  .ver-item:hover{background:var(--surface);}
+  .ver-item.on{background:var(--blue-bg);}
+  .ver-item b{display:block; font-size:13px; font-weight:500;}
+  .ver-item span{font-size:11px; color:var(--muted);}
+  .card.hl{outline:2px solid var(--blue); outline-offset:2px;}
+  .card.pulse{animation:pulse 1s ease 2;}
+  @keyframes pulse{0%,100%{outline:0 solid transparent;} 50%{outline:3px solid var(--blue); outline-offset:2px;}}
+  .card.preview{border:1px solid var(--border-strong); box-shadow:0 0 0 3px var(--blue-bg);}
+  .badge{
+    position:absolute; z-index:5; background:var(--card);
+    border:0.5px solid var(--border-strong); border-radius:99px;
+    padding:2px 10px; font-size:12px; color:var(--text); cursor:pointer;
+  }
+  .preview-bar{
+    display:flex; gap:8px; margin-top:8px; padding-top:8px;
+    border-top:0.5px dashed var(--border-strong);
+  }
+  .preview-bar button{
+    flex:1; border:0.5px solid var(--border-strong); border-radius:7px;
+    padding:4px 6px; font-size:12px; background:transparent; color:var(--text);
+  }
+  .preview-bar button.adopt{background:var(--blue-bg); color:var(--blue); border-color:var(--blue);}
+  .ghost-head{position:absolute; font-size:11px; color:var(--amber); width:230px;}
+  .ghost-head.teal{color:var(--teal);}
+  /* ---------- 透视抽屉 ---------- */
+  #peek{
+    position:fixed; top:0; right:-330px; width:320px; height:100%;
+    background:var(--bg); border-left:0.5px solid var(--border);
+    z-index:40; transition:right .25s ease; display:flex; flex-direction:column;
+    box-shadow:-8px 0 24px rgba(0,0,0,.06);
+  }
+  #peek.open{right:0;}
+  #peek .pk-head{
+    display:flex; align-items:center; justify-content:space-between;
+    padding:14px 16px; border-bottom:0.5px solid var(--border);
+  }
+  #peek .pk-head b{font-size:14px; font-weight:500;}
+  #peek .pk-close{
+    border:none; background:none; font-size:16px; color:var(--muted); padding:4px 8px;
+  }
+  #peek .pk-body{flex:1; overflow-y:auto; padding:16px;}
+  .pk-card{
+    border-radius:9px; padding:9px 13px; margin-bottom:0;
+    background:var(--surface); border:0.5px solid var(--border);
+    cursor:pointer;
+  }
+  .pk-card .t1{font-size:13px; font-weight:500;}
+  .pk-card .t2{font-size:11px; color:var(--muted); margin-top:2px;}
+  .pk-card.pk-div{background:var(--blue-bg); border-color:var(--blue); color:var(--blue);}
+  .pk-arrow{width:0; height:18px; border-left:1.5px solid var(--border-strong); margin-left:24px;}
+  .pk-note{font-size:12px; color:var(--muted); line-height:1.6; margin:14px 0;}
+  #peek .pk-foot{padding:12px 16px; border-top:0.5px solid var(--border); display:flex; gap:8px;}
+  #peek .pk-foot button{
+    flex:1; border-radius:8px; padding:8px 10px; font-size:13px;
+    border:0.5px solid var(--border-strong); background:transparent; color:var(--text);
+  }
+  #peek .pk-foot button.primary{background:var(--blue); color:#fff; border-color:var(--blue);}
+  /* ---------- 图例 / 提示 ---------- */
+  footer{
+    display:flex; align-items:center; gap:16px; flex-wrap:wrap;
+    padding:8px 16px; border-top:0.5px solid var(--border);
+    font-size:12px; color:var(--muted); background:var(--bg);
+  }
+  .lg{display:flex; align-items:center; gap:6px;}
+  .lg-solid{width:22px; height:14px; border-radius:4px; background:var(--teal-bg); border:0.5px solid var(--teal);}
+  .lg-ghost{width:22px; height:14px; border-radius:4px; background:var(--amber-bg); border:1px dashed var(--amber); opacity:.7;}
+  .lg-shared{width:22px; height:14px; border-radius:4px; background:var(--gray-bg); border:0.5px solid var(--gray);}
+  #toast{
+    position:fixed; left:50%; bottom:56px; transform:translateX(-50%) translateY(10px);
+    background:var(--text); color:#fff; font-size:13px;
+    padding:9px 18px; border-radius:99px; opacity:0; pointer-events:none;
+    transition:all .25s ease; z-index:60; max-width:80vw;
+  }
+  #toast.show{opacity:.95; transform:translateX(-50%) translateY(0);}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand">幽灵叠加对照 · 概念演示<small>见岔（Forkwise）路径对照交互 — 数据为虚构示意</small></div>
+  <div class="sep"></div>
+  <span class="uni-label">当前宇宙</span>
+  <button class="uni-btn on" id="btnA" onclick="setUniverse('A')">A · 良率达标</button>
+  <button class="uni-btn" id="btnB" onclick="setUniverse('B')">B · 若良率未达标</button>
+  <button class="uni-btn" id="btnC" onclick="setUniverse('C')">C · 认证延后</button>
+  <div class="sep"></div>
+  <span class="uni-label">对照</span>
+  <select id="compSel" onchange="setComp(this.value)"></select>
+  <button class="ghost-chip on" id="ghostChip" onclick="toggleGhost()"><span class="dot"></span><span id="ghostChipText"></span></button>
+</header>
+
+<main id="viewport">
+  <div id="world">
+    <svg id="edges" width="780" height="700">
+      <defs>
+        <marker id="mGray" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M2 1L8 5L2 9" fill="none" stroke="#5F5E5A" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+        </marker>
+        <marker id="mTeal" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M2 1L8 5L2 9" fill="none" stroke="#0F6E56" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+        </marker>
+        <marker id="mAmber" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M2 1L8 5L2 9" fill="none" stroke="#854F0B" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+        </marker>
+        <marker id="mBlue" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M2 1L8 5L2 9" fill="none" stroke="#185FA5" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+        </marker>
+      </defs>
+    </svg>
+  </div>
+</main>
+
+<aside id="peek">
+  <div class="pk-head"><b id="pkTitle"></b><button class="pk-close" onclick="closePeek()">✕</button></div>
+  <div class="pk-body" id="pkBody"></div>
+  <div class="pk-foot">
+    <button onclick="closePeek()">收起</button>
+    <button class="primary" id="pkSwitch" onclick="switchTo()">切换到此路径</button>
+  </div>
+</aside>
+
+<footer>
+  <span class="lg"><span class="lg-solid"></span>实体卡 = 当前宇宙（可编辑）</span>
+  <span class="lg"><span class="lg-ghost"></span>虚线幽灵 = 平行宇宙投影（只读）</span>
+  <span class="lg"><span class="lg-shared"></span>灰卡 = 共享前提（两宇宙同一对象）</span>
+  <span class="lg">⇄ N 版 = 节点版本组，点徽标选版本预览</span>
+  <span class="lg">虚线空框 = 该节点的其他版本轮廓</span>
+  <span class="lg">拖动空白平移 · 点幽灵卡看透视段</span>
+</footer>
+
+<div id="toast"></div>
+
+<script>
+/* ============ 数据：三个宇宙 ============
+   shared   : 两路径引用的同一批卡对象（分歧点之前）
+   div      : 分歧点改写对应（岔出时记录 replaced-by）
+   chains   : 各宇宙分歧点之后的独有发展
+*/
+var DATA = {
+  shared: [
+    {id:'S1', x:60, y:30,  t:'2026 Q3 资本开支上调', s:'材料锚点 · 共享前提'},
+    {id:'S2', x:60, y:130, t:'先进封装产能持续紧张', s:'材料锚点 · 共享前提'}
+  ],
+  div: {
+    A: {id:'DA', t:'量产与良率达标',            s:'条件 · 分歧点'},
+    B: {id:'DB', t:'若良率迟迟未达标',          s:'条件 · 分歧点（你的改写）'},
+    C: {id:'DC', t:'良率部分达标，客户认证延后', s:'条件 · 分歧点（第三情景）'}
+  },
+  chains: {
+    A: [
+      {id:'A1', t:'订单有望落地',       s:'个人论证'},
+      {id:'A2', t:'上调出货指引',       s:'个人论证 · 待查证'}
+    ],
+    B: [
+      {id:'B1', t:'订单可能延后',       s:'个人论证'},
+      {id:'B2', t:'关注库存减值风险',   s:'独有新增 · 本宇宙无对应卡'},
+      {id:'B3', t:'下修 H2 毛利率假设', s:'个人论证 · 待查证'}
+    ],
+    C: []
+  }
+};
+var UNAME = {A:'良率达标', B:'若良率未达标', C:'认证延后'};
+var UCOL  = {A:'teal', B:'amber', C:'blue'};
+var CW = 230, CH = 62;          /* 卡宽高 */
+var DIV_X = 60, DIV_Y = 232;    /* 分歧卡位置 */
+var CHAIN_X = 60, CHAIN_Y = 350, CHAIN_STEP = 96;
+var GHOST_X = 430, GHOST_Y = 250;
+
+var U = 'A';            /* 当前宇宙 */
+var ghostOn = true;     /* 幽灵层开关 */
+var flipped = null;     /* 正在预览的版本（null = 未预览） */
+var peekSide = null;    /* 透视的宇宙 */
+var compTarget = 'B';   /* 幽灵投影的对照路径 */
+var verPopOpen = false; /* 版本选择器开关 */
+
+function other(){ return U === 'A' ? 'B' : 'A'; } /* 已废弃，由 comp() 取代 */
+function comp(){
+  var ks = Object.keys(DATA.chains).filter(function(k){ return k !== U; });
+  if(!ks.length) return null;
+  if(!compTarget || compTarget === U) compTarget = ks[0];
+  return compTarget;
+}
+
+/* ============ 渲染 ============ */
+function render(){
+  var world = document.getElementById('world');
+  var svg = document.getElementById('edges');
+  /* 清空（保留 defs） */
+  world.querySelectorAll('.card,.badge,.ghost-head,.echo').forEach(function(n){ n.remove(); });
+  svg.querySelectorAll('path.edge').forEach(function(n){ n.remove(); });
+
+  frag.length = 0; /* 复用全局构建数组（含 pushCard 辅助） */
+  var paths = '';
+
+  /* 共享卡 */
+  DATA.shared.forEach(function(c){
+    frag.pushCard(c, 'shared', c.t, c.s);
+  });
+
+  /* 分歧卡：实体 + 背后无字版本组轮廓（echo）+ 徽标 */
+  var cur = DATA.div[U];
+  if(ghostOn && comp()){
+    var echo = document.createElement('div');
+    echo.className = 'echo';
+    echo.id = 'DIV-echo';
+    echo.style.left = (DIV_X + 12) + 'px';
+    echo.style.top  = (DIV_Y + 12) + 'px';
+    frag.push(echo);
+  }
+  frag.pushCard({id:cur.id, x:DIV_X, y:DIV_Y}, 'current-'+U + (flipped ? ' preview' : ''),
+    flipped ? DATA.div[flipped].t : cur.t,
+    flipped ? '正在预览「路径 ' + flipped + ' · ' + UNAME[flipped] + '」· 只读' : cur.s);
+  /* 翻面徽标 + 预览操作条 */
+  var badge = document.createElement('button');
+  badge.className = 'badge';
+  badge.style.left = (DIV_X + CW - 52) + 'px';
+  badge.style.top  = (DIV_Y - 12) + 'px';
+  badge.textContent = '⇄ ' + Object.keys(DATA.div).length + ' 版';
+  badge.onclick = function(){ openVerPop(); };
+  frag.push(badge);
+  if(verPopOpen){
+    var pop = document.createElement('div');
+    pop.className = 'ver-pop card';
+    pop.style.cssText = 'left:' + (DIV_X + CW + 14) + 'px; top:' + DIV_Y + 'px; z-index:8;';
+    var ph = '<div class="vh">该节点的版本组（' + Object.keys(DATA.div).length + ' 条情景）· 点选预览</div>';
+    Object.keys(DATA.div).forEach(function(k){
+      var mark = k === U ? '当前宇宙' : (k === flipped ? '预览中' : '路径 ' + k + ' · ' + UNAME[k]);
+      ph += '<div class="ver-item' + (k === flipped ? ' on' : '') + '" onclick="previewVer(\'' + k + '\')">'
+          + '<b>' + DATA.div[k].t + '</b><span>' + mark + '</span></div>';
+    });
+    pop.innerHTML = ph;
+    frag.push(pop);
+  }
+  if(flipped){
+    var bar = document.createElement('div');
+    bar.className = 'preview-bar card';
+    bar.style.cssText = 'left:'+DIV_X+'px; top:'+(DIV_Y+CH+10)+'px; width:'+CW+'px; z-index:6;';
+    bar.innerHTML = '<button class="adopt" onclick="adopt()">采用此版（演示）</button><button onclick="peek(flipped)">透视此路径</button><button onclick="flipToggle()">翻回</button>';
+    frag.push(bar);
+  }
+
+  /* 当前链 */
+  var chain = DATA.chains[U];
+  chain.forEach(function(c, i){
+    frag.pushCard({id:c.id, x:CHAIN_X, y:CHAIN_Y + i*CHAIN_STEP}, 'current-'+U, c.t, c.s);
+  });
+
+  /* 幽灵链（对方宇宙） */
+  if(ghostOn && comp()){
+    var o = comp(), gchain = DATA.chains[o];
+    var head = document.createElement('div');
+    head.className = 'ghost-head';
+    head.style.color = 'var(--' + UCOL[o] + ')';
+    head.style.left = GHOST_X + 'px';
+    head.style.top  = (GHOST_Y - 24) + 'px';
+    head.textContent = '平行宇宙 · 路径 ' + o + '（点卡片看透视段）';
+    frag.push(head);
+    gchain.forEach(function(c, i){
+      frag.pushCard({id:c.id+'-g', x:GHOST_X, y:GHOST_Y + i*CHAIN_STEP}, 'ghost-'+o,
+        c.t, c.s, 'peek(\''+o+'\')', c.id);
+    });
+  }
+
+  /* 连线：共享 → 分歧 */
+  paths += vline(DATA.shared[0], DATA.shared[1], false, 'mGray');
+  paths += vline(DATA.shared[1], {x:DIV_X, y:DIV_Y}, false, 'mGray');
+  if(chain.length) paths += vline({x:DIV_X, y:DIV_Y}, {x:CHAIN_X, y:CHAIN_Y}, false, 'mGray');
+  for(var i=0; i<chain.length-1; i++){
+    paths += vline({x:CHAIN_X, y:CHAIN_Y+i*CHAIN_STEP}, {x:CHAIN_X, y:CHAIN_Y+(i+1)*CHAIN_STEP}, false, 'mGray');
+  }
+  /* 分歧 → 幽灵链首卡（肘形虚线）+ 幽灵链内部 */
+  if(ghostOn && comp() && DATA.chains[comp()].length){
+    var o = comp(), gchain = DATA.chains[o], gy = GHOST_Y;
+    var sx = DIV_X + CW, sy = DIV_Y + CH/2;
+    var c2 = 'var(--' + UCOL[o] + ')';
+    var m2 = 'url(#m' + UCOL[o].charAt(0).toUpperCase() + UCOL[o].slice(1) + ')';
+    paths += '<path class="edge" d="M '+sx+' '+sy+' C '+(sx+80)+' '+sy+', '+(GHOST_X-80)+' '+(gy+CH/2)+', '+GHOST_X+' '+(gy+CH/2)+'" fill="none" stroke="'+c2+'" stroke-dasharray="5 4" stroke-width="1.2" marker-end="'+m2+'"/>';
+    for(var j=0; j<gchain.length-1; j++){
+      var y1 = GHOST_Y + j*CHAIN_STEP, y2 = y1 + CHAIN_STEP;
+      paths += '<path class="edge" d="M '+(GHOST_X+CW/2)+' '+(y1+CH)+' L '+(GHOST_X+CW/2)+' '+y2+'" fill="none" stroke="'+c2+'" stroke-dasharray="5 4" stroke-width="1.2" marker-end="'+m2+'"/>';
+    }
+  }
+  svg.insertAdjacentHTML('beforeend', paths);
+
+  /* 空数组构建完，逐个挂到画布 */
+  frag.forEach(function(el){ world.appendChild(el); });
+  ['A','B','C'].forEach(function(k){
+    document.getElementById('btn'+k).classList.toggle('on', U===k);
+  });
+  updateChip();
+}
+
+/* 用数组代替 DocumentFragment 的辅助 */
+var frag = [];
+frag.pushCard = function(pos, cls, t, s, onclick, corrId){
+  var el = document.createElement('div');
+  el.className = 'card ' + cls;
+  el.style.left = pos.x + 'px';
+  el.style.top  = pos.y + 'px';
+  el.innerHTML = '<div class="t1">'+t+'</div><div class="t2">'+s+'</div>';
+  if(onclick) el.setAttribute('onclick', onclick);
+  if(corrId) el.setAttribute('data-corr', corrId);
+  el.addEventListener('mouseenter', function(){ hoverCorr(corrId, true); });
+  el.addEventListener('mouseleave', function(){ hoverCorr(corrId, false); });
+  this.push(el);
+};
+function vline(a, b, dashed, marker){
+  return '<path class="edge" d="M '+(a.x+CW/2)+' '+(a.y+CH)+' L '+(b.x+CW/2)+' '+b.y+'" fill="none" stroke="#5F5E5A" stroke-width="1.2" marker-end="url(#'+marker+')"/>';
+}
+function hoverCorr(corrId, on){
+  if(!corrId) return;
+  var t = document.getElementById(corrId) || document.querySelector('[data-id="'+corrId+'"]');
+  if(t) t.classList.toggle('hl', on);
+}
+
+/* ============ 交互 ============ */
+function setUniverse(u){
+  if(u === U && !flipped) return;
+  U = u; flipped = null; verPopOpen = false;
+  if(compTarget === u) compTarget = null;
+  closePeek(); render();
+  toast('已切换到路径 ' + u + ' · ' + UNAME[u] + '。其他路径以幽灵投影对照');
+}
+function toggleGhost(){
+  ghostOn = !ghostOn;
+  closePeek(); render();
+  toast(ghostOn ? '幽灵层已开启：对方宇宙差异投影到画布' : '幽灵层已关闭：只看当前宇宙');
+}
+function flipToggle(){
+  flipped = null; verPopOpen = false; render();
+}
+function setComp(v){ compTarget = v; closePeek(); render(); }
+function openVerPop(){ verPopOpen = !verPopOpen; render(); }
+function previewVer(k){
+  flipped = (flipped === k) ? null : k; verPopOpen = false; render();
+  if(flipped) toast('预览「路径 ' + k + ' · ' + UNAME[k] + '」· 只读。「采用此版」才写入当前路径');
+}
+function adopt(){
+  toast('演示：采用会写入当前路径，并把另一版本记入局部版本出处（对应 ADR 0006）');
+}
+function peek(side){
+  peekSide = side;
+  document.getElementById('pkTitle').textContent = '透视「路径 ' + side + ' · ' + UNAME[side] + '」';
+  var body = document.getElementById('pkBody');
+  var d = DATA.div[side];
+  var html = '<div class="pk-card pk-div" onclick="flash(\'DIV-echo\')"><div class="t1">'+d.t+'</div><div class="t2">分歧点 · 版本组 ' + Object.keys(DATA.div).length + ' 版之一</div></div><div class="pk-arrow"></div>';
+  if(!DATA.chains[side].length){
+    html += '<div class="pk-note">该路径刚从分歧点岔出，还没有发展下游推导。</div>';
+  }
+  DATA.chains[side].forEach(function(c){
+    html += '<div class="pk-card" onclick="flash(\''+c.id+'-g\')"><div class="t1">'+c.t+'</div><div class="t2">'+c.s+'</div></div>';
+    if(c !== DATA.chains[side][DATA.chains[side].length-1]) html += '<div class="pk-arrow"></div>';
+  });
+  html += '<div class="pk-note">透视显示该路径<b>当前状态</b>（非岔出快照）。虚线幽灵卡与实体卡的对应关系由岔出时的记录决定：改写对应翻面可读，独有卡无对应、全幽灵显示。点列表卡片可在画布上闪烁定位。</div>';
+  body.innerHTML = html;
+  document.getElementById('pkSwitch').textContent = '切换到路径 ' + side;
+  document.getElementById('peek').classList.add('open');
+}
+function closePeek(){ document.getElementById('peek').classList.remove('open'); peekSide = null; }
+function switchTo(){ if(peekSide) setUniverse(peekSide); }
+function flash(id){
+  var el = document.getElementById(id);
+  if(!el) return;
+  el.classList.remove('pulse'); void el.offsetWidth; el.classList.add('pulse');
+}
+function updateChip(){
+  var o = comp();
+  var sel = document.getElementById('compSel');
+  var ks = Object.keys(DATA.chains).filter(function(k){ return k !== U; });
+  sel.innerHTML = ks.map(function(k){
+    return '<option value="' + k + '"' + (k === o ? ' selected' : '') + '>路径 ' + k + ' · ' + UNAME[k] + '</option>';
+  }).join('');
+  var chip = document.getElementById('ghostChip');
+  if(o){
+    document.getElementById('ghostChipText').textContent =
+      '对照：路径 ' + o + '（1 处改写 + ' + DATA.chains[o].length + ' 张独有卡）';
+    chip.style.display = '';
+  } else {
+    document.getElementById('ghostChipText').textContent = '无其他路径';
+    chip.style.display = 'none';
+  }
+  chip.classList.toggle('on', ghostOn);
+}
+var toastTimer = null;
+function toast(msg){
+  var t = document.getElementById('toast');
+  t.textContent = msg; t.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(function(){ t.classList.remove('show'); }, 2600);
+}
+
+/* ============ 平移 ============ */
+(function(){
+  var vp = document.getElementById('viewport');
+  var world = document.getElementById('world');
+  var tx = 0, ty = 0, sx = 0, sy = 0, down = false, moved = false;
+  vp.addEventListener('pointerdown', function(e){
+    if(e.target.closest('.card, .badge, .preview-bar')) return;
+    down = true; moved = false; sx = e.clientX - tx; sy = e.clientY - ty;
+    vp.classList.add('dragging');
+  });
+  window.addEventListener('pointermove', function(e){
+    if(!down) return;
+    moved = true;
+    var vx = vp.clientWidth, vy = vp.clientHeight;
+    tx = Math.min(0, Math.max(vx - 780, e.clientX - sx));
+    ty = Math.min(0, Math.max(vy - 700, e.clientY - sy));
+    world.style.transform = 'translate(' + tx + 'px,' + ty + 'px)';
+  });
+  window.addEventListener('pointerup', function(){
+    down = false; vp.classList.remove('dragging');
+  });
+})();
+
+render();
+toast('当前宇宙：路径 A。试试 ⇄ 徽标、点幽灵卡、切换宇宙');
+</script>
+</body>
+</html>

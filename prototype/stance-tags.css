@@ -1,0 +1,68 @@
+:root {
+  --stance-pending-fg: #596777;
+  --stance-pending-bg: #edf1f5;
+  --stance-pending-border: #cbd5e1;
+  --stance-accepted-fg: #1b6a4a;
+  --stance-accepted-bg: #e9f6ef;
+  --stance-accepted-border: #acd4bc;
+  --stance-questioned-fg: #8a5a00;
+  --stance-questioned-bg: #fff4d8;
+  --stance-questioned-border: #e8c476;
+  --stance-rejected-fg: #9e303b;
+  --stance-rejected-bg: #fdecef;
+  --stance-rejected-border: #e6b5bd;
+}
+[data-stance-token="pending"] {
+  --stance-fg: var(--stance-pending-fg);
+  --stance-bg: var(--stance-pending-bg);
+  --stance-border: var(--stance-pending-border);
+}
+[data-stance-token="accepted"] {
+  --stance-fg: var(--stance-accepted-fg);
+  --stance-bg: var(--stance-accepted-bg);
+  --stance-border: var(--stance-accepted-border);
+}
+[data-stance-token="questioned"] {
+  --stance-fg: var(--stance-questioned-fg);
+  --stance-bg: var(--stance-questioned-bg);
+  --stance-border: var(--stance-questioned-border);
+}
+[data-stance-token="rejected"] {
+  --stance-fg: var(--stance-rejected-fg);
+  --stance-bg: var(--stance-rejected-bg);
+  --stance-border: var(--stance-rejected-border);
+}
+.fw-stance-tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border: 1px solid var(--stance-border);
+  border-radius: 5px;
+  background: var(--stance-bg);
+  color: var(--stance-fg);
+  font-size: 12px;
+  line-height: 18px;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+.fw-stance-choices button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 44px;
+  background: #fff;
+  border: 1px solid #d5dde3;
+}
+.fw-stance-choices button.active {
+  border-color: var(--stance-fg);
+  background: var(--stance-bg);
+  color: var(--stance-fg);
+  box-shadow: inset 0 0 0 1px var(--stance-fg);
+}
+.fw-stance-choice-mark { visibility: hidden; }
+.fw-stance-choices button.active .fw-stance-choice-mark { visibility: visible; }
+.fw-stance-reason { margin-top: 18px; }
+.fw-stance-reason textarea { min-height: 94px; }
+.fw-stance-reason summary { color: var(--accent, #276e68); cursor: pointer; }
+.fw-stance-actions { justify-content: flex-end; margin-top: 18px; }

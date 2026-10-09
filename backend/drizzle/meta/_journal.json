@@ -1,0 +1,55 @@
+{
+  "version": "7",
+  "dialect": "sqlite",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "6",
+      "when": 1791454548481,
+      "tag": "0000_smart_kitty_pryde",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1791455545752,
+      "tag": "0001_massive_nekra",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1791458952588,
+      "tag": "0002_charming_pixie",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1791463151250,
+      "tag": "0003_tricky_dorian_gray",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1791481274689,
+      "tag": "0004_early_colossus",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1791482560751,
+      "tag": "0005_gigantic_living_lightning",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1791489086447,
+      "tag": "0006_research_results_index",
+      "breakpoints": true
+    }
+  ]
+}
