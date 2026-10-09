@@ -49,7 +49,7 @@ export function readImpactReviews(
         .prepare(
           `SELECT j.id, j.updated_at AS at, CAST(p.key AS INTEGER) AS idx
       FROM jobs j, json_each(j.output,'$.result.proposals') p
-      WHERE j.project_id=? AND j.kind='research.impact' AND j.state='succeeded'
+      WHERE j.project_id=? AND j.kind='research.impact' AND j.state IN ('succeeded','partial')
       ${page.targetId ? "AND json_extract(p.value,'$.target.id')=?" : ''}
       ${page.jobId ? 'AND j.id=?' : ''}
       ${cursor ? 'AND (j.updated_at,j.id,CAST(p.key AS INTEGER)) < (?,?,?)' : ''}

@@ -57,6 +57,13 @@
       "when": 1791547200000,
       "tag": "0007_agent_delegation",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1791547200001,
+      "tag": "0008_partial_research_results",
+      "breakpoints": true
     }
   ]
 }

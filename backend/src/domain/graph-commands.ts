@@ -199,7 +199,7 @@ export function applyGraph(c: WriteContext, command: CommandInput): boolean {
         const p = command.stance.reasonProvenance;
         const row = c.repo.db
           .prepare(
-            "SELECT output FROM jobs WHERE project_id=? AND id=? AND kind='research.stance_draft' AND state='succeeded'",
+            "SELECT output FROM jobs WHERE project_id=? AND id=? AND kind='research.stance_draft' AND state IN ('succeeded','partial')",
           )
           .get(c.projectId, p.jobId) as { output: string } | undefined;
         requireThat(row, 'DRAFT_NOT_FOUND', 'AI 理由草稿不属于当前项目或尚未完成');

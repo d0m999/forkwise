@@ -62,6 +62,7 @@ export class ExternalResearchService {
           {
             condition,
             evidence,
+            sourceVersionIds: [...new Set(evidence.map((e) => e.data.citation.sourceVersionId))],
             metrics: this.evaluation.metrics(),
             targets,
             context,
@@ -108,6 +109,13 @@ export class ExternalResearchService {
       .transaction(() => {
         const { job, scope } = this.owned(projectId, actor, id);
         requireThat(job.state === 'queued', 'TASK_CLOSED', '此研究已结束', 409);
+        // 旧评估记录未保存材料集合，仍以任务固定的证据派生范围。
+        if (job.kind === 'condition.agent' && !scope.sourceVersionIds)
+          scope.sourceVersionIds = [
+            ...new Set(
+              (job.input as EvaluationInput).evidence.map((e) => e.data.citation.sourceVersionId),
+            ),
+          ];
         requireThat(
           scope.sourceVersionIds?.includes(read.sourceVersionId),
           'MATERIAL_OUTSIDE_TASK',

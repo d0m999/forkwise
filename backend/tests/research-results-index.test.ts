@@ -9,6 +9,7 @@ import { rebuildResearchResults } from '../src/repositories/research-results-ind
 import { BackupService, researchFingerprint } from '../src/services/backup.js';
 import { openDatabase } from '../src/repositories/database.js';
 import { ResearchRepository } from '../src/repositories/research.js';
+import { JobRepository } from '../src/repositories/jobs.js';
 import { join } from 'node:path';
 import Database from 'better-sqlite3';
 import { readFileSync } from 'node:fs';
@@ -154,6 +155,78 @@ it('已有六次迁移的任务在升级及重开后可读取，索引重建不�
   }
 });
 
+it('已有 succeeded-only 索引的数据库升级后读出原 partial 分项，重开不改任务与研究指纹', () => {
+  const f = initialResearchFixture();
+  let reopened: Database.Database | undefined;
+  try {
+    f.app.write.execute(f.p.id, human, 'partial-upgrade-target', {
+      expected: {},
+      commands: [statement('partial_target')],
+    });
+    const target = f.app.repo.snapshot(f.p.id).objects.find((e) => e.id === 'partial_target')!;
+    const job = f.app.externalResearch.request(f.p.id, human, 'partial-upgrade-request', {
+      kind: 'verify',
+      sourceVersionIds: ['sv'],
+      targetIds: ['partial_target'],
+    });
+    f.app.externalResearch.submit(f.p.id, human, 'partial-upgrade-submit', job.id, {
+      state: 'partial',
+      gaps: ['资料仍有缺口'],
+      result: {
+        checks: [
+          {
+            target: { id: target.id, versionId: target.contentVersionId },
+            relation: 'insufficient',
+            explanation: '已有分项说明资料不足',
+            citations: [],
+            gaps: ['资料不足'],
+          },
+        ],
+        gaps: [],
+      },
+    });
+    const saved = f.app.jobs.get(f.p.id, job.id),
+      fingerprint = researchFingerprint(f.app.db);
+    // 恢复上一版视图与触发器，保留原始任务，模拟升级前真实数据库。
+    f.app.db.exec(`DROP TRIGGER research_results_insert; DROP TRIGGER research_results_update;
+      DROP TRIGGER research_results_delete; DROP VIEW research_check_source;
+      DROP VIEW research_result_job_source;
+      DELETE FROM __drizzle_migrations WHERE created_at>1791547200000;`);
+    const previous = readFileSync(
+      new URL('../drizzle/0006_research_results_index.sql', import.meta.url),
+      'utf8',
+    );
+    f.app.db.exec(previous.slice(previous.indexOf('CREATE VIEW')));
+    rebuildResearchResults(f.app.db);
+    expect(readObjectResearchResults(f.app.repo, f.p.id, target.id, {}).checks).toHaveLength(0);
+    f.app.db.close();
+    reopened = openDatabase(join(f.directory, 'test.sqlite'));
+    const upgraded = readObjectResearchResults(
+      new ResearchRepository(reopened),
+      f.p.id,
+      target.id,
+      {},
+    );
+    expect(upgraded.checks).toHaveLength(1);
+    expect(upgraded.checks[0]).toMatchObject({
+      jobId: job.id,
+      applicability: 'current',
+      taskGaps: ['资料仍有缺口'],
+    });
+    expect(new JobRepository(reopened).get(f.p.id, job.id)).toEqual(saved);
+    expect(researchFingerprint(reopened)).toBe(fingerprint);
+    reopened.close();
+    reopened = openDatabase(join(f.directory, 'test.sqlite'));
+    expect(
+      readObjectResearchResults(new ResearchRepository(reopened), f.p.id, target.id, {}),
+    ).toEqual(upgraded);
+    expect(researchFingerprint(reopened)).toBe(fingerprint);
+    expect(new JobRepository(reopened).get(f.p.id, job.id)).toEqual(saved);
+  } finally {
+    reopened?.close();
+    f.close();
+  }
+});
 it('索引落盘失败与任务结果及候选整批回滚，显式重试后只保存一份当前记录', async () => {
   const f = initialResearchFixture();
   try {

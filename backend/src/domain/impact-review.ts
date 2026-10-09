@@ -16,7 +16,7 @@ export function resolveImpactProposal(
   index: number,
 ) {
   requireThat(
-    job?.kind === 'research.impact' && job.state === 'succeeded',
+    job?.kind === 'research.impact' && ['succeeded', 'partial'].includes(job.state),
     'PROPOSAL_NOT_FOUND',
     '影响建议不属于当前项目或尚未完成',
     404,

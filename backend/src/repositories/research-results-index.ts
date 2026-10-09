@@ -1,6 +1,6 @@
 import type Database from 'better-sqlite3';
 
-/** These tables are disposable. Views and triggers in migration 0006 are the
+/** These tables are disposable. Views and triggers in migrations 0006/0008 are the
  * single projection definition; no task, graph, version or judgment is changed. */
 export function rebuildResearchResults(db: Database.Database): void {
   db.transaction(() => {

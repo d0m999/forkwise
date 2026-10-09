@@ -13,6 +13,12 @@ import { ArchiveService } from '../src/services/archive.js';
 import { BackupService, researchFingerprint } from '../src/services/backup.js';
 import { readLayout } from '../src/repositories/layout.js';
 import { createCanvas } from '@napi-rs/canvas';
+import {
+  readResearchOverview,
+  readObjectResearchResults,
+} from '../src/services/research-results.js';
+import { rebuildResearchResults } from '../src/repositories/research-results-index.js';
+import { readImpactReviews } from '../src/services/impact-reviews.js';
 const origin = 'http://127.0.0.1:8787';
 function scannedPdf() {
   const canvas = createCanvas(300, 100),
@@ -163,6 +169,208 @@ it('外部记录固定输入，后台不会领取；提交与原键回查共用�
     const evidence = f.state().objects.filter((e) => e.kind === 'evidence_link');
     expect(evidence).toHaveLength(1);
     expect(evidence[0]!.data).toMatchObject({ origin: 'ai', participation: 'candidate' });
+  } finally {
+    f.app.db.close();
+  }
+});
+it('partial 查证的已完成分项进入对象详情和画布摘要，重建及新记录重试保留原结果', () => {
+  const f = fixture();
+  try {
+    const job = f.job('verify', ['a', 'b']);
+    f.submit(job.id, f.verify(), 'partial', ['b 尚待核对']);
+    const detail = readObjectResearchResults(f.app.repo, f.project.id, 'a', {});
+    expect(detail.checks).toHaveLength(1);
+    expect(detail.checks[0]).toMatchObject({
+      jobId: job.id,
+      applicability: 'current',
+      check: { relation: 'supports' },
+      taskGaps: ['b 尚待核对'],
+    });
+    const overview = readResearchOverview(f.app.repo, f.project.id);
+    expect(overview.targets.find((t) => t.target.id === 'a')).toMatchObject({
+      checks: { current: 1 },
+      evidence: { candidate: 1 },
+    });
+    expect(overview.targets.find((t) => t.target.id === 'b')?.checks.current).toBe(0);
+    rebuildResearchResults(f.app.db);
+    expect(readObjectResearchResults(f.app.repo, f.project.id, 'a', {})).toEqual(detail);
+    f.app.externalResearch.action(f.project.id, f.principal.actor, randomUUID(), job.id, 'retry');
+    expect(readObjectResearchResults(f.app.repo, f.project.id, 'a', {})).toEqual(detail);
+    expect(f.app.jobs.get(f.project.id, job.id).state).toBe('partial');
+  } finally {
+    f.app.db.close();
+  }
+});
+it('partial 查证通过 HTTP 详情同时保留顶层与结果缺口，资产恢复后仍完整可读', async () => {
+  const f = fixture(),
+    other = createApplication({ database: ':memory:', origin });
+  try {
+    const job = f.job('verify', ['a', 'b']),
+      result = { ...f.verify(), gaps: ['已核对的 a 仍缺成本材料'] };
+    f.submit(job.id, result, 'partial', ['b 尚未核对']);
+    const response = await f.app.app.request(
+      `${origin}/api/v1/projects/${f.project.id}/objects/a/research-results`,
+      { headers: { Authorization: `Bearer ${f.token}` } },
+    );
+    expect(response.status).toBe(200);
+    const detail = (await response.json()).data;
+    expect(detail.checks[0].taskGaps).toEqual(['b 尚未核对', '已核对的 a 仍缺成本材料']);
+    new ArchiveService(other.write, other.search).import(
+      human,
+      randomUUID(),
+      new AssetService(f.app.repo, f.app.write).export(f.project.id),
+    );
+    expect(readObjectResearchResults(other.repo, f.project.id, 'a', {})).toEqual(detail);
+    expect(other.jobs.get(f.project.id, job.id).output).toEqual(
+      f.app.jobs.get(f.project.id, job.id).output,
+    );
+  } finally {
+    f.app.db.close();
+    other.db.close();
+  }
+});
+it('partial 立场草稿允许本人采用已完成理由，仍校验分项和修改标记并保留 AI 来历', () => {
+  const f = fixture();
+  try {
+    const target = f.get('a'),
+      job = f.job('stance_draft', ['a', 'b']),
+      reason = 'AI 起草：收入增长但成本尚待核对';
+    f.submit(
+      job.id,
+      {
+        proposals: [
+          {
+            target: { id: 'a', versionId: target.contentVersionId },
+            reason,
+            citations: [],
+            gaps: [],
+          },
+        ],
+        gaps: ['b 尚待分析'],
+      },
+      'partial',
+      ['b 尚待分析'],
+    );
+    expect(f.get('a')).toEqual(target);
+    const stance = {
+      value: 'questioned',
+      reason,
+      reasonProvenance: { jobId: job.id, proposalIndex: 0, modified: false },
+    };
+    const adopt = (value = stance) =>
+      f.app.write.execute(f.project.id, human, randomUUID(), {
+        expected: { a: 1 },
+        commands: [{ op: 'stance.set', id: 'a', stance: value }],
+      });
+    expect(() => adopt({ ...stance, reason: '改写却未标记' })).toThrow('修改标记');
+    expect(() =>
+      adopt({
+        ...stance,
+        reasonProvenance: {
+          ...stance.reasonProvenance,
+          proposalIndex: 1,
+        },
+      }),
+    ).toThrow('当前内容版本');
+    expect(f.get('a')).toEqual(target);
+    adopt();
+    expect(f.get('a').data).toMatchObject({ origin: 'user', stance });
+    const other = createApplication({ database: ':memory:', origin });
+    try {
+      new ArchiveService(other.write, other.search).import(
+        human,
+        randomUUID(),
+        new AssetService(f.app.repo, f.app.write).export(f.project.id),
+      );
+      expect(other.repo.snapshot(f.project.id)).toEqual(f.state());
+      expect(other.jobs.get(f.project.id, job.id).state).toBe('partial');
+    } finally {
+      other.db.close();
+    }
+  } finally {
+    f.app.db.close();
+  }
+});
+it('partial 影响建议的已完成分项可以复核和采用，列表与 JSON 恢复保留 AI 来历', () => {
+  const f = fixture();
+  try {
+    const target = f.get('a'),
+      job = f.job('impact', ['a', 'b']),
+      proposedText = '依据新材料补充成本限制';
+    f.submit(
+      job.id,
+      {
+        proposals: [
+          {
+            target: { id: 'a', versionId: target.contentVersionId },
+            proposedText,
+            reason: 'AI 建议',
+            citations: [],
+            gaps: [],
+          },
+        ],
+        gaps: ['b 尚待分析'],
+      },
+      'partial',
+      ['b 尚待分析'],
+    );
+    expect(f.get('a')).toEqual(target);
+    f.app.write.execute(f.project.id, human, randomUUID(), {
+      expected: { a: 1 },
+      commands: [
+        {
+          op: 'impact.review',
+          id: 'review',
+          jobId: job.id,
+          proposalIndex: 0,
+          target: { id: 'a', versionId: target.versionId },
+          context: [],
+          disposition: 'maintained',
+          reason: '本人核对后维持原判断',
+        },
+      ],
+    });
+    expect(readImpactReviews(f.app.repo, f.project.id, {}).items).toMatchObject([
+      { jobId: job.id, proposalIndex: 0, reviewState: 'completed', proposalState: 'current' },
+    ]);
+    f.app.write.execute(f.project.id, human, randomUUID(), {
+      expected: { a: 1, i: 1 },
+      commands: [
+        {
+          op: 'impact.adopt',
+          id: 'a',
+          jobId: job.id,
+          proposalIndex: 0,
+          text: proposedText,
+          scope: 'all',
+          inferenceIds: [],
+        },
+      ],
+    });
+    expect(f.get('a').data).toMatchObject({
+      text: proposedText,
+      origin: 'user',
+      editProvenance: {
+        jobId: job.id,
+        proposalIndex: 0,
+        modified: false,
+        previous: { id: 'a', versionId: target.versionId },
+      },
+    });
+    const other = createApplication({ database: ':memory:', origin });
+    try {
+      new ArchiveService(other.write, other.search).import(
+        human,
+        randomUUID(),
+        new AssetService(f.app.repo, f.app.write).export(f.project.id),
+      );
+      expect(other.repo.snapshot(f.project.id)).toEqual(f.state());
+      expect(readImpactReviews(other.repo, f.project.id, {}).items).toEqual(
+        readImpactReviews(f.app.repo, f.project.id, {}).items,
+      );
+    } finally {
+      other.db.close();
+    }
   } finally {
     f.app.db.close();
   }
@@ -698,6 +906,160 @@ it('重启不调用模型；SQLite 备份恢复保留外部结果、绘图与委
     f.app.db.close();
     restored?.db.close();
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+it('外部评估可带 jobId 回读固定证据的文本和原图，范围去重并拒绝范围外材料', async () => {
+  const f = fixture();
+  try {
+    const uploaded = f.app.controller.importFile(f.principal, f.project.id, randomUUID(), {
+      source: { title: '评估原图夹具', publisher: '', rights: 'authorized' },
+      file: {
+        name: 'pixel.png',
+        mime: 'image/png',
+        publishedAt: null,
+        base64:
+          'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jNioAAAAASUVORK5CYII=',
+      },
+    });
+    await f.app.files.drain();
+    const imageId = (
+      f.app.jobs.get(f.project.id, uploaded.job.id).output as {
+        sourceVersionId: string;
+      }
+    ).sourceVersionId;
+    const citation = { sourceVersionId: 'sv', start: 0, end: 5, quote: '收入增长。' };
+    f.app.write.execute(f.project.id, human, randomUUID(), {
+      expected: {},
+      commands: [
+        {
+          op: 'condition.create',
+          id: 'c',
+          data: {
+            description: '定性评估',
+            mode: 'qualitative',
+            targetIds: [],
+          },
+        },
+        { op: 'evidence.create', id: 'text_ev', data: { citation } },
+        { op: 'evidence.create', id: 'duplicate_ev', data: { citation } },
+        {
+          op: 'evidence.create',
+          id: 'image_ev',
+          data: {
+            citation: {
+              kind: 'image',
+              sourceVersionId: imageId,
+              fileId: uploaded.fileId,
+              page: 1,
+              imageWidth: 1,
+              imageHeight: 1,
+              region: { x: 0, y: 0, width: 1, height: 1 },
+            },
+          },
+        },
+      ],
+    });
+    const request = (evidenceIds: string[]) =>
+      f.app.externalResearch.requestEvaluation(f.project.id, f.principal.actor, randomUUID(), {
+        conditionId: 'c',
+        ruleVersionId: f.get('c').contentVersionId,
+        evidenceIds,
+      });
+    const job = request(['text_ev', 'duplicate_ev', 'image_ev']);
+    const read = (version: string, endpoint: string, jobId = job.id) =>
+      f.app.app.request(
+        `${origin}/api/v1/projects/${f.project.id}/materials/${version}/${endpoint}?jobId=${jobId}`,
+        { headers: { Authorization: `Bearer ${f.token}` } },
+      );
+    const text = await read('sv', 'segments');
+    expect(text.status).toBe(200);
+    expect((await text.json()).data.text).toBe('收入增长。😀 下一段。');
+    const image = await read(imageId, 'image-data');
+    expect(image.status).toBe(200);
+    expect((await image.json()).data).toMatchObject({
+      fileHash: uploaded.hash,
+      width: 1,
+      height: 1,
+    });
+    expect(f.app.jobs.get(f.project.id, job.id).input).toMatchObject({
+      sourceVersionIds: ['sv', imageId],
+      external: {
+        serverReads: [
+          { sourceVersionId: 'sv', kind: 'text', start: 0, end: 12 },
+          { sourceVersionId: imageId, kind: 'image', page: 1, fileHash: uploaded.hash },
+        ],
+      },
+    });
+    const unbound = request([]);
+    for (const [version, endpoint] of [
+      ['sv', 'segments'],
+      [imageId, 'image-data'],
+    ]) {
+      const rejected = await read(version!, endpoint!, unbound.id);
+      expect(rejected.status).toBe(403);
+      expect((await rejected.json()).code).toBe('MATERIAL_OUTSIDE_TASK');
+    }
+    expect(f.app.jobs.get(f.project.id, unbound.id).input).toMatchObject({
+      external: { serverReads: [] },
+    });
+  } finally {
+    f.app.db.close();
+  }
+});
+it('旧外部评估输入恢复并显式重试后从固定证据回读材料并保存读取范围', async () => {
+  const f = fixture(),
+    other = createApplication({ database: ':memory:', origin });
+  try {
+    f.app.write.execute(f.project.id, human, randomUUID(), {
+      expected: {},
+      commands: [
+        {
+          op: 'condition.create',
+          id: 'c',
+          data: {
+            description: '旧评估',
+            mode: 'qualitative',
+            targetIds: [],
+          },
+        },
+        {
+          op: 'evidence.create',
+          id: 'ev',
+          data: {
+            citation: {
+              sourceVersionId: 'sv',
+              start: 0,
+              end: 5,
+              quote: '收入增长。',
+            },
+          },
+        },
+      ],
+    });
+    const job = f.app.externalResearch.requestEvaluation(
+      f.project.id,
+      f.principal.actor,
+      randomUUID(),
+      { conditionId: 'c', ruleVersionId: f.get('c').contentVersionId, evidenceIds: ['ev'] },
+    );
+    const archive = new AssetService(f.app.repo, f.app.write).export(f.project.id);
+    const legacy = archive.tasks.find((t) => t.id === job.id)!;
+    delete (legacy.input as { sourceVersionIds?: string[] }).sourceVersionIds;
+    new ArchiveService(other.write, other.search).import(human, randomUUID(), archive);
+    const retry = other.externalResearch.action(f.project.id, human, randomUUID(), job.id, 'retry');
+    const token = other.access.issue('human', ['*']);
+    const response = await other.app.request(
+      `${origin}/api/v1/projects/${f.project.id}/materials/sv/segments?jobId=${retry.id}`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    );
+    expect(response.status).toBe(200);
+    expect(other.jobs.get(f.project.id, retry.id).input).toMatchObject({
+      sourceVersionIds: ['sv'],
+      external: { serverReads: [{ sourceVersionId: 'sv', kind: 'text' }] },
+    });
+  } finally {
+    f.app.db.close();
+    other.db.close();
   }
 });
 it('外部混合评估由确定性工具算数值，仅明确共同满足才合并；旧规则结果不写当前', () => {
