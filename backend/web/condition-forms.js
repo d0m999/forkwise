@@ -82,6 +82,7 @@ export function ruleDraft(condition, selected) {
   return {
     description: data?.description ?? '',
     mode: data?.mode ?? 'qualitative',
+    mixedCombination: data?.mixedCombination ?? 'unspecified',
     targetIds: data?.targetIds ?? (selected ? [selected] : []),
     scope: (data?.targetIds.length ?? 0) > 1 ? '' : 'all',
     rule: data?.rule
@@ -105,6 +106,14 @@ export function ruleForm(parent, condition, objects, values, keep, save) {
   const description = field(form, 'description', '判断标准', values.description, 'textarea');
   description.required = true;
   const mode = field(form, 'mode', '评估方式', values.mode, 'text', modes);
+  const combination = field(
+    form,
+    'mixedCombination',
+    '混合标准组合',
+    values.mixedCombination ?? 'unspecified',
+    'text',
+    { unspecified: '保存分项与 Agent 总体意见', joint_required: '数值与定性须共同满足' },
+  );
   const numeric = element(form, 'fieldset');
   element(numeric, 'legend', '数值要求：指定期间均须满足；指标白名单由本人配置');
   const fields = {};
@@ -181,6 +190,7 @@ export function ruleForm(parent, condition, objects, values, keep, save) {
     return {
       description: description.value,
       mode: mode.value,
+      ...(mode.value === 'mixed' ? { mixedCombination: combination.value } : {}),
       scope: scope?.value ?? 'all',
       targetIds: selectTargets(),
       rule: {
@@ -205,6 +215,9 @@ export function conditionData(values, lineage) {
   const data = {
     description: values.description.trim(),
     mode: values.mode,
+    ...(values.mode === 'mixed'
+      ? { mixedCombination: values.mixedCombination ?? 'unspecified' }
+      : {}),
     targetIds: values.targetIds,
     ...(lineage ? { lineage } : {}),
   };

@@ -15,7 +15,7 @@ export const FileInput = z
     sourceId: Id,
     expectedSourceVersion: z.number().int().positive(),
     name: z.string().min(1).max(255),
-    mime: z.enum(['application/pdf', 'text/html', 'image/png', 'image/jpeg']),
+    mime: z.enum(['application/pdf', 'text/html', 'text/plain', 'image/png', 'image/jpeg']),
     base64: z.string().min(1).max(34_000_000),
     publishedAt: Time.nullable(),
   })
@@ -298,6 +298,14 @@ export class MaterialFileService {
     try {
       file = this.file(projectId, fileId);
       if (file.mime === 'application/pdf') artifact = await parsePdf(file.bytes, abort.signal);
+      else if (file.mime === 'text/plain')
+        artifact = {
+          text: new TextDecoder('utf-8', { fatal: true }).decode(file.bytes),
+          normalizerVersion: 'plain-text@1',
+          regions: [],
+          status: 'complete',
+          gaps: [],
+        };
       else if (file.mime === 'text/html')
         artifact = parseHtml(new TextDecoder('utf-8', { fatal: true }).decode(file.bytes));
       else
@@ -346,7 +354,7 @@ export class MaterialFileService {
                   textOrigin:
                     file.mime === 'application/pdf'
                       ? 'pdf_text'
-                      : file.mime === 'text/html'
+                      : ['text/html', 'text/plain'].includes(file.mime)
                         ? 'html_body'
                         : 'image_original',
                 },

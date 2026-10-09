@@ -117,6 +117,7 @@ export const Condition = z
   .object({
     description: Text,
     mode: z.enum(['numeric', 'qualitative', 'mixed']),
+    mixedCombination: z.enum(['joint_required', 'unspecified']).optional(),
     rule: NumericRule.optional(),
     targetIds: z
       .array(Id)
@@ -318,10 +319,21 @@ export interface Project {
   createdAt: string;
   deletedAt: string | null;
 }
-export interface Actor {
-  id: string;
-  type: 'human' | 'agent' | 'system';
-}
+export const ActorSchema = z
+  .object({
+    id: Id,
+    type: z.enum(['human', 'agent', 'system']),
+    delegation: z
+      .object({
+        projectId: Id,
+        capability: z.literal('personal_record'),
+        issuedBy: z.literal('local-owner'),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict();
+export type Actor = z.infer<typeof ActorSchema>;
 export interface ChangeSet {
   history?: ActionHistoryStatus;
   projectId: string;

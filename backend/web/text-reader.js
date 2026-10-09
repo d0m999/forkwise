@@ -48,41 +48,87 @@ export function attachTextReader({ api, getState }) {
     close();
     if (saved && getState()?.project.id === saved.projectId) saved.returnSource?.();
   };
-  function render(start, focus = false) {
-    if (!context || context.text === null) return;
-    const { text, citation } = context;
-    start = boundary(text, Math.max(0, Math.min(start, Math.max(0, text.length - pageSize))), -1);
-    const end = boundary(text, Math.min(text.length, start + pageSize), 1);
-    context.start = start;
-    context.end = end;
-    const pre = $('[data-text]');
-    pre.replaceChildren();
-    if (citation && citation.start < end && citation.end > start) {
-      const left = Math.max(start, citation.start),
-        right = Math.min(end, citation.end),
-        mark = document.createElement('mark');
-      mark.textContent = text.slice(left, right);
-      pre.append(
-        document.createTextNode(text.slice(start, left)),
-        mark,
-        document.createTextNode(text.slice(right, end)),
+  let readSequence = 0;
+  async function render(requested, focus = false) {
+    if (!context) return;
+    const saved = context,
+      sequence = ++readSequence,
+      token = generation;
+    const start = Math.max(
+      0,
+      Math.min(requested, Math.max(0, saved.version.data.textLength - pageSize)),
+    );
+    try {
+      const page = await api(
+        `/projects/${encodeURIComponent(saved.projectId)}/materials/${encodeURIComponent(saved.versionId)}/segments?start=${start}&limit=${pageSize}`,
       );
-    } else pre.textContent = text.slice(start, end);
-    $('[data-range]').textContent = text.length
-      ? `显示保存文本第 ${start + 1}–${end} 位，共 ${text.length} 位。${citation ? '引用位置 ' + (citation.start + 1) + '–' + citation.end + '。' : ''}`
-      : '此版本没有可读文本，请查看原文件和解析缺口。';
-    $('[data-previous]').hidden = start === 0;
-    $('[data-next]').hidden = end === text.length;
-    $('[data-anchor]').hidden = !citation;
-    if (focus) {
-      pre.focus({ preventScroll: true });
-      const mark = pre.querySelector('mark');
-      pre.scrollTop = mark ? Math.max(0, mark.offsetTop - pre.clientHeight / 2) : 0;
-      dialog.scrollTop = 0;
+      const hash = Array.from(
+        new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(page.text))),
+        (b) => b.toString(16).padStart(2, '0'),
+      ).join('');
+      if (
+        token !== generation ||
+        sequence !== readSequence ||
+        context !== saved ||
+        !dialog.open ||
+        getState()?.project.id !== saved.projectId
+      )
+        return;
+      if (
+        page.sourceVersionId !== saved.versionId ||
+        page.hash !== saved.version.data.contentHash ||
+        page.totalLength !== saved.version.data.textLength ||
+        page.text.length !== page.end - page.start ||
+        hash !== page.segmentHash
+      )
+        throw new Error('材料分段与保存指纹不符');
+      const { text } = page,
+        citation = saved.citation;
+      saved.start = page.start;
+      saved.end = page.end;
+      const pre = $('[data-text]');
+      pre.replaceChildren();
+      if (citation && citation.start < page.end && citation.end > page.start) {
+        const left = Math.max(page.start, citation.start),
+          right = Math.min(page.end, citation.end);
+        if (
+          text.slice(left - page.start, right - page.start) !==
+          citation.quote.slice(left - citation.start, right - citation.start)
+        )
+          throw new Error('引用位置与原句不符，未自动改用其他位置或版本。');
+        const mark = document.createElement('mark');
+        mark.textContent = text.slice(left - page.start, right - page.start);
+        pre.append(
+          document.createTextNode(text.slice(0, left - page.start)),
+          mark,
+          document.createTextNode(text.slice(right - page.start)),
+        );
+      } else pre.textContent = text;
+      $('[data-range]').textContent = page.totalLength
+        ? `显示保存文本第 ${page.start + 1}–${page.end} 位，共 ${page.totalLength} 位。${citation ? '引用位置 ' + (citation.start + 1) + '–' + citation.end + '。' : ''}`
+        : '此版本没有可读文本，请查看原文件和解析缺口。';
+      $('[data-previous]').hidden = page.start === 0;
+      $('[data-next]').hidden = page.nextStart === null;
+      $('[data-anchor]').hidden = !citation;
+      $('[data-feedback]').textContent = citation
+        ? '已定位保存原句。阅读与高亮不表示采用或认可。'
+        : '当前仅阅读已保存文本，不改变研究判断。';
+      $('[data-quote]').hidden = true;
+      $('nav').hidden = false;
+      if (focus) {
+        pre.focus({ preventScroll: true });
+        const mark = pre.querySelector('mark');
+        pre.scrollTop = mark ? Math.max(0, mark.offsetTop - pre.clientHeight / 2) : 0;
+        dialog.scrollTop = 0;
+      }
+    } catch (error) {
+      if (context === saved && token === generation)
+        $('[data-feedback]').textContent = `无法复核：${error.message}`;
     }
   }
   const anchor = () => {
-    if (context) render(context.citation ? Math.max(0, context.citation.start - 2000) : 0, true);
+    if (context)
+      return render(context.citation ? Math.max(0, context.citation.start - 2000) : 0, true);
   };
   $('[data-previous]').onclick = () => {
     if (context) render(context.start - pageSize, true);
@@ -105,6 +151,7 @@ export function attachTextReader({ api, getState }) {
     context = {
       projectId,
       versionId,
+      version,
       citation,
       text: null,
       start: 0,
@@ -144,41 +191,37 @@ export function attachTextReader({ api, getState }) {
             ? '原文受权限限制，此副本不含可复核文本。'
             : '此副本缺少引用原文。',
         );
-      const material = await api(
-        `/projects/${encodeURIComponent(projectId)}/materials/${encodeURIComponent(versionId)}`,
-      );
-      const bytes = new TextEncoder().encode(material.text);
-      const hash = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)), (b) =>
-        b.toString(16).padStart(2, '0'),
-      ).join('');
-      if (token !== generation || !dialog.open || getState()?.project.id !== projectId) return;
-      if (
-        material.id !== versionId ||
-        typeof material.text !== 'string' ||
-        material.text.length !== version.data.textLength ||
-        hash !== version.data.contentHash
-      )
-        throw new Error('材料内容与保存的指纹不符，无法复核此引用。');
-      if (
-        citation &&
-        (!Number.isInteger(citation.start) ||
+      if (citation) {
+        if (
+          !Number.isInteger(citation.start) ||
           !Number.isInteger(citation.end) ||
           citation.start < 0 ||
           citation.end <= citation.start ||
-          citation.end > material.text.length ||
-          typeof citation.quote !== 'string' ||
-          material.text.slice(citation.start, citation.end) !== citation.quote ||
-          boundary(material.text, citation.start, -1) !== citation.start ||
-          boundary(material.text, citation.end, 1) !== citation.end)
-      )
-        throw new Error('引用位置与原句不符，未自动改用其他位置或版本。');
-      context.text = material.text;
-      $('[data-feedback]').textContent = citation
-        ? '已定位保存原句。阅读与高亮不表示采用或认可。'
-        : '当前仅阅读已保存文本，不改变研究判断。';
-      $('[data-quote]').hidden = true;
-      $('nav').hidden = false;
-      anchor();
+          citation.end > version.data.textLength ||
+          citation.end - citation.start > 20000 ||
+          typeof citation.quote !== 'string'
+        )
+          throw new Error('引用位置与原句不符，未自动改用其他位置或版本。');
+        const cited = await api(
+          `/projects/${encodeURIComponent(projectId)}/materials/${encodeURIComponent(versionId)}/segments?start=${citation.start}&limit=${citation.end - citation.start}`,
+        );
+        if (token !== generation || !dialog.open || getState()?.project.id !== projectId) return;
+        const citedHash = Array.from(
+          new Uint8Array(
+            await crypto.subtle.digest('SHA-256', new TextEncoder().encode(cited.text)),
+          ),
+          (b) => b.toString(16).padStart(2, '0'),
+        ).join('');
+        if (cited.segmentHash !== citedHash) throw new Error('材料分段与保存指纹不符');
+        if (
+          cited.start !== citation.start ||
+          cited.end !== citation.end ||
+          cited.text !== citation.quote ||
+          cited.hash !== version.data.contentHash
+        )
+          throw new Error('引用位置与原句不符，未自动改用其他位置或版本。');
+      }
+      await anchor();
     } catch (error) {
       if (token !== generation || !dialog.open) return;
       $('[data-feedback]').textContent = `无法复核：${error.message}`;

@@ -1,4 +1,5 @@
 import type { ManualUpdateService } from '../services/manual-updates.js';
+import type { ExternalResearchService } from '../services/external-research.js';
 import type { TranscriptionService } from '../services/transcription.js';
 import type { Principal, AccessService } from '../services/access.js';
 import type { ResearchRepository } from '../repositories/research.js';
@@ -31,6 +32,8 @@ export class ResearchController {
     readonly initialResearch: InitialResearchService,
     readonly filings: SecFilingService,
     readonly manualUpdates: ManualUpdateService,
+    readonly externalResearch: ExternalResearchService,
+    readonly importRoots: Record<string, string[]>,
   ) {}
   projects(p: Principal) {
     return this.repo
@@ -133,6 +136,8 @@ export class ResearchController {
   jobAction(p: Principal, projectId: string, key: string, id: string, action: 'cancel' | 'retry') {
     this.access.project(p, projectId);
     this.repo.project(projectId);
+    if ((this.evaluation.jobs.get(projectId, id).input as { external?: unknown }).external)
+      return this.externalResearch.action(projectId, p.actor, key, id, action);
     return this.write.idempotent(p.actor, projectId, key, { op: `job.${action}`, id }, () =>
       this.publicJob(
         action === 'cancel'
@@ -141,7 +146,7 @@ export class ResearchController {
       ),
     );
   }
-  grant(p: Principal, key: string, projectIds: string[]) {
+  grant(p: Principal, key: string, projectIds: string[], personalRecordProjects: string[] = []) {
     this.access.human(p);
     requireThat(projectIds.length > 0, 'PROJECT_REQUIRED', '必须选择授权的项目');
     for (const id of projectIds) {
@@ -154,10 +159,16 @@ export class ResearchController {
       p.actor,
       '__grants__',
       key,
-      { op: 'grant', projectIds },
+      { op: 'grant', projectIds, personalRecordProjects },
       () => {
-        this.access.issue('agent', projectIds, 30 * 24 * 60 * 60 * 1000, token);
-        return { projectIds };
+        this.access.issue(
+          'agent',
+          projectIds,
+          30 * 24 * 60 * 60 * 1000,
+          token,
+          personalRecordProjects,
+        );
+        return { projectIds, personalRecordProjects };
       },
     );
     return { ...result, token };

@@ -77,6 +77,7 @@ export class GraphWriteService {
     key: string,
     raw: unknown,
     workflowId?: string,
+    controlledResult = false,
   ): ChangeSet {
     const input = WriteRequest.parse(raw);
     this.repo.project(projectId);
@@ -97,7 +98,14 @@ export class GraphWriteService {
         }
         const project = this.repo.project(projectId);
         const oldLayout = readLayout(this.repo, projectId);
-        const context = new WriteContext(this.repo, projectId, actor, input.expected, this.clock());
+        const context = new WriteContext(
+          this.repo,
+          projectId,
+          actor,
+          input.expected,
+          this.clock(),
+          controlledResult,
+        );
         for (const command of input.commands)
           if (!applyGraph(context, command)) applyResearch(context, command);
         assertGraph(context.objects);

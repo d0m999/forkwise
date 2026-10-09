@@ -27,6 +27,7 @@ export class WriteContext {
     readonly actor: Actor,
     readonly expected: Record<string, number>,
     readonly now: string,
+    readonly controlledResult = false,
   ) {
     this.original = new Map(repo.objects(projectId).map((e) => [e.id, e]));
     this.objects = new Map(structuredClone([...this.original]));
@@ -71,6 +72,29 @@ export class WriteContext {
       '此操作需要本人确认，Agent 不能代替研究者判断',
       403,
     );
+  }
+  personalRecord(): void {
+    if (this.actor.type === 'human') return;
+    const rows = this.repo.db
+      .prepare(
+        "SELECT projects,capabilities FROM sessions WHERE actor_id=? AND type='agent' AND expires_at>?",
+      )
+      .all(this.actor.id, this.now) as { projects: string; capabilities: string }[];
+    requireThat(
+      rows.some(
+        (r) =>
+          JSON.parse(r.projects).includes(this.projectId) &&
+          (JSON.parse(r.capabilities).personalRecordProjects ?? []).includes(this.projectId),
+      ),
+      'HUMAN_REQUIRED',
+      '需要本人签发当前项目的个人记录委托',
+      403,
+    );
+    this.actor.delegation = {
+      projectId: this.projectId,
+      capability: 'personal_record',
+      issuedBy: 'local-owner',
+    };
   }
   get(id: string): AnyEntity {
     const e = this.objects.get(id);

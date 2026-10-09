@@ -669,6 +669,11 @@ components:
                     - numeric
                     - qualitative
                     - mixed
+                mixedCombination:
+                  type: string
+                  enum:
+                    - joint_required
+                    - unspecified
                 rule:
                   type: object
                   properties:
@@ -3709,6 +3714,11 @@ components:
                     - numeric
                     - qualitative
                     - mixed
+                mixedCombination:
+                  type: string
+                  enum:
+                    - joint_required
+                    - unspecified
                 rule:
                   type: object
                   properties:
@@ -4654,6 +4664,11 @@ components:
                     - numeric
                     - qualitative
                     - mixed
+                mixedCombination:
+                  type: string
+                  enum:
+                    - joint_required
+                    - unspecified
                 rule:
                   type: object
                   properties:
@@ -4794,6 +4809,11 @@ components:
                     - numeric
                     - qualitative
                     - mixed
+                mixedCombination:
+                  type: string
+                  enum:
+                    - joint_required
+                    - unspecified
                 rule:
                   type: object
                   properties:
@@ -5252,6 +5272,307 @@ components:
               maxItems: 100
             tentative:
               type: boolean
+            components:
+              type: object
+              properties:
+                numeric:
+                  type: object
+                  properties:
+                    verdict:
+                      type: string
+                      enum:
+                        - satisfied
+                        - not_satisfied
+                        - awaiting_observation
+                        - unknown
+                        - not_comparable
+                    reason:
+                      type: string
+                      minLength: 1
+                      maxLength: 100000
+                    evidenceIds:
+                      type: array
+                      items:
+                        type: string
+                        minLength: 1
+                        maxLength: 96
+                        pattern: ^[A-Za-z0-9_-]+$
+                      maxItems: 100
+                    citations:
+                      type: array
+                      items:
+                        anyOf:
+                          - type: object
+                            properties:
+                              sourceVersionId:
+                                type: string
+                                minLength: 1
+                                maxLength: 96
+                                pattern: ^[A-Za-z0-9_-]+$
+                              start:
+                                type: integer
+                                minimum: 0
+                              end:
+                                type: integer
+                                minimum: 0
+                                exclusiveMinimum: true
+                              quote:
+                                type: string
+                                maxLength: 20000
+                              unavailableReason:
+                                type: string
+                                enum:
+                                  - rights
+                                  - missing
+                              visualRegionId:
+                                type: string
+                                minLength: 1
+                                maxLength: 96
+                                pattern: ^[A-Za-z0-9_-]+$
+                            required:
+                              - sourceVersionId
+                              - start
+                              - end
+                              - quote
+                            additionalProperties: false
+                          - type: object
+                            properties:
+                              kind:
+                                type: string
+                                enum:
+                                  - image
+                              sourceVersionId:
+                                type: string
+                                minLength: 1
+                                maxLength: 96
+                                pattern: ^[A-Za-z0-9_-]+$
+                              fileId:
+                                type: string
+                                minLength: 1
+                                maxLength: 96
+                                pattern: ^[A-Za-z0-9_-]+$
+                              page:
+                                type: number
+                                enum:
+                                  - 1
+                              imageWidth:
+                                type: integer
+                                minimum: 0
+                                exclusiveMinimum: true
+                              imageHeight:
+                                type: integer
+                                minimum: 0
+                                exclusiveMinimum: true
+                              region:
+                                type: object
+                                properties:
+                                  x:
+                                    type: number
+                                    minimum: 0
+                                    maximum: 1
+                                  y:
+                                    type: number
+                                    minimum: 0
+                                    maximum: 1
+                                  width:
+                                    type: number
+                                    minimum: 0
+                                    exclusiveMinimum: true
+                                    maximum: 1
+                                  height:
+                                    type: number
+                                    minimum: 0
+                                    exclusiveMinimum: true
+                                    maximum: 1
+                                required:
+                                  - x
+                                  - y
+                                  - width
+                                  - height
+                                additionalProperties: false
+                              unavailableReason:
+                                type: string
+                                enum:
+                                  - rights
+                                  - missing
+                            required:
+                              - kind
+                              - sourceVersionId
+                              - fileId
+                              - page
+                              - imageWidth
+                              - imageHeight
+                              - region
+                            additionalProperties: false
+                      maxItems: 100
+                    missing:
+                      type: array
+                      items:
+                        type: string
+                        minLength: 1
+                        maxLength: 100000
+                      maxItems: 100
+                    tentative:
+                      type: boolean
+                  required:
+                    - verdict
+                    - reason
+                    - evidenceIds
+                    - citations
+                    - missing
+                    - tentative
+                  additionalProperties: false
+                qualitative:
+                  type: object
+                  properties:
+                    verdict:
+                      type: string
+                      enum:
+                        - satisfied
+                        - not_satisfied
+                        - awaiting_observation
+                        - unknown
+                        - not_comparable
+                    reason:
+                      type: string
+                      minLength: 1
+                      maxLength: 100000
+                    evidenceIds:
+                      type: array
+                      items:
+                        type: string
+                        minLength: 1
+                        maxLength: 96
+                        pattern: ^[A-Za-z0-9_-]+$
+                      maxItems: 100
+                    citations:
+                      type: array
+                      items:
+                        anyOf:
+                          - type: object
+                            properties:
+                              sourceVersionId:
+                                type: string
+                                minLength: 1
+                                maxLength: 96
+                                pattern: ^[A-Za-z0-9_-]+$
+                              start:
+                                type: integer
+                                minimum: 0
+                              end:
+                                type: integer
+                                minimum: 0
+                                exclusiveMinimum: true
+                              quote:
+                                type: string
+                                maxLength: 20000
+                              unavailableReason:
+                                type: string
+                                enum:
+                                  - rights
+                                  - missing
+                              visualRegionId:
+                                type: string
+                                minLength: 1
+                                maxLength: 96
+                                pattern: ^[A-Za-z0-9_-]+$
+                            required:
+                              - sourceVersionId
+                              - start
+                              - end
+                              - quote
+                            additionalProperties: false
+                          - type: object
+                            properties:
+                              kind:
+                                type: string
+                                enum:
+                                  - image
+                              sourceVersionId:
+                                type: string
+                                minLength: 1
+                                maxLength: 96
+                                pattern: ^[A-Za-z0-9_-]+$
+                              fileId:
+                                type: string
+                                minLength: 1
+                                maxLength: 96
+                                pattern: ^[A-Za-z0-9_-]+$
+                              page:
+                                type: number
+                                enum:
+                                  - 1
+                              imageWidth:
+                                type: integer
+                                minimum: 0
+                                exclusiveMinimum: true
+                              imageHeight:
+                                type: integer
+                                minimum: 0
+                                exclusiveMinimum: true
+                              region:
+                                type: object
+                                properties:
+                                  x:
+                                    type: number
+                                    minimum: 0
+                                    maximum: 1
+                                  y:
+                                    type: number
+                                    minimum: 0
+                                    maximum: 1
+                                  width:
+                                    type: number
+                                    minimum: 0
+                                    exclusiveMinimum: true
+                                    maximum: 1
+                                  height:
+                                    type: number
+                                    minimum: 0
+                                    exclusiveMinimum: true
+                                    maximum: 1
+                                required:
+                                  - x
+                                  - y
+                                  - width
+                                  - height
+                                additionalProperties: false
+                              unavailableReason:
+                                type: string
+                                enum:
+                                  - rights
+                                  - missing
+                            required:
+                              - kind
+                              - sourceVersionId
+                              - fileId
+                              - page
+                              - imageWidth
+                              - imageHeight
+                              - region
+                            additionalProperties: false
+                      maxItems: 100
+                    missing:
+                      type: array
+                      items:
+                        type: string
+                        minLength: 1
+                        maxLength: 100000
+                      maxItems: 100
+                    tentative:
+                      type: boolean
+                  required:
+                    - verdict
+                    - reason
+                    - evidenceIds
+                    - citations
+                    - missing
+                    - tentative
+                  additionalProperties: false
+              required:
+                - numeric
+                - qualitative
+              additionalProperties: false
           required:
             - op
             - id
@@ -5561,6 +5882,9 @@ components:
             - id
             - versionId
           additionalProperties: false
+        executor:
+          type: string
+          nullable: true
       required:
         - id
         - projectId
@@ -6824,6 +7148,27 @@ components:
                       - human
                       - agent
                       - system
+                  delegation:
+                    type: object
+                    properties:
+                      projectId:
+                        type: string
+                        minLength: 1
+                        maxLength: 96
+                        pattern: ^[A-Za-z0-9_-]+$
+                      capability:
+                        type: string
+                        enum:
+                          - personal_record
+                      issuedBy:
+                        type: string
+                        enum:
+                          - local-owner
+                    required:
+                      - projectId
+                      - capability
+                      - issuedBy
+                    additionalProperties: false
                 required:
                   - id
                   - type
@@ -7317,6 +7662,27 @@ components:
                           - human
                           - agent
                           - system
+                      delegation:
+                        type: object
+                        properties:
+                          projectId:
+                            type: string
+                            minLength: 1
+                            maxLength: 96
+                            pattern: ^[A-Za-z0-9_-]+$
+                          capability:
+                            type: string
+                            enum:
+                              - personal_record
+                          issuedBy:
+                            type: string
+                            enum:
+                              - local-owner
+                        required:
+                          - projectId
+                          - capability
+                          - issuedBy
+                        additionalProperties: false
                     required:
                       - id
                       - type
@@ -9992,11 +10358,19 @@ paths:
                           format: date-time
                         expired:
                           type: boolean
+                        personalRecordProjects:
+                          type: array
+                          items:
+                            type: string
+                            minLength: 1
+                            maxLength: 96
+                            pattern: ^[A-Za-z0-9_-]+$
                       required:
                         - id
                         - projects
                         - expiresAt
                         - expired
+                        - personalRecordProjects
                   message:
                     type: string
                 required:
@@ -10076,6 +10450,15 @@ paths:
                     pattern: ^[A-Za-z0-9_-]+$
                   minItems: 1
                   maxItems: 100
+                personalRecordProjects:
+                  type: array
+                  items:
+                    type: string
+                    minLength: 1
+                    maxLength: 96
+                    pattern: ^[A-Za-z0-9_-]+$
+                  maxItems: 100
+                  default: []
               required:
                 - projectIds
               additionalProperties: false
@@ -10103,9 +10486,17 @@ paths:
                           minLength: 1
                           maxLength: 96
                           pattern: ^[A-Za-z0-9_-]+$
+                      personalRecordProjects:
+                        type: array
+                        items:
+                          type: string
+                          minLength: 1
+                          maxLength: 96
+                          pattern: ^[A-Za-z0-9_-]+$
                     required:
                       - token
                       - projectIds
+                      - personalRecordProjects
                   message:
                     type: string
                 required:
@@ -11705,6 +12096,1944 @@ paths:
               schema:
                 type: string
                 format: binary
+  /api/v1/projects/{projectId}/external-evaluations:
+    post:
+      parameters:
+        - schema:
+            type: string
+            minLength: 1
+            maxLength: 96
+            pattern: ^[A-Za-z0-9_-]+$
+          required: true
+          name: projectId
+          in: path
+        - schema:
+            type: string
+            minLength: 8
+            maxLength: 128
+          required: true
+          name: Idempotency-Key
+          in: header
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                conditionId:
+                  type: string
+                  minLength: 1
+                  maxLength: 96
+                  pattern: ^[A-Za-z0-9_-]+$
+                ruleVersionId:
+                  type: string
+                  minLength: 1
+                  maxLength: 96
+                  pattern: ^[A-Za-z0-9_-]+$
+                evidenceIds:
+                  type: array
+                  items:
+                    type: string
+                    minLength: 1
+                    maxLength: 96
+                    pattern: ^[A-Za-z0-9_-]+$
+                  maxItems: 100
+              required:
+                - conditionId
+                - ruleVersionId
+                - evidenceIds
+              additionalProperties: false
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  code:
+                    type: string
+                    enum:
+                      - OK
+                  data:
+                    $ref: "#/components/schemas/Job"
+                  message:
+                    type: string
+                required:
+                  - code
+                  - data
+                  - message
+        "400":
+          description: 业务错误
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: 业务错误
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: 业务错误
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: 业务错误
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: 业务错误
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "413":
+          description: 业务错误
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: 业务错误
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "503":
+          description: 业务错误
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/v1/projects/{projectId}/external-research:
+    post:
+      parameters:
+        - schema:
+            type: string
+            minLength: 1
+            maxLength: 96
+            pattern: ^[A-Za-z0-9_-]+$
+          required: true
+          name: projectId
+          in: path
+        - schema:
+            type: string
+            minLength: 8
+            maxLength: 128
+          required: true
+          name: Idempotency-Key
+          in: header
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                kind:
+                  type: string
+                  enum:
+                    - reconstruct
+                    - verify
+                    - impact
+                    - stance_draft
+                sourceVersionIds:
+                  type: array
+                  items:
+                    type: string
+                    minLength: 1
+                    maxLength: 96
+                    pattern: ^[A-Za-z0-9_-]+$
+                  minItems: 1
+                  maxItems: 30
+                targetIds:
+                  type: array
+                  items:
+                    type: string
+                    minLength: 1
+                    maxLength: 96
+                    pattern: ^[A-Za-z0-9_-]+$
+                  maxItems: 100
+                retrieval:
+                  type: object
+                  properties:
+                    queries:
+                      type: array
+                      items:
+                        type: string
+                        minLength: 1
+                        maxLength: 200
+                      minItems: 1
+                      maxItems: 8
+                    maxCharacters:
+                      type: integer
+                      minimum: 20000
+                      maximum: 200000
+                      default: 80000
+                  required:
+                    - queries
+                  additionalProperties: false
+              required:
+                - kind
+                - sourceVersionIds
+                - targetIds
+              additionalProperties: false
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  code:
+                    type: string
+                    enum:
+                      - OK
+                  data:
+                    $ref: "#/components/schemas/Job"
+                  message:
+                    type: string
+                required:
+                  - code
+                  - data
+                  - message
+        "400":
+          description: 业务错误
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: 业务错误
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: 业务错误
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: 业务错误
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: 业务错误
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "413":
+          description: 业务错误
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: 业务错误
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "503":
+          description: 业务错误
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/v1/projects/{projectId}/external-research/{id}/submit:
+    post:
+      parameters:
+        - schema:
+            type: string
+            minLength: 1
+            maxLength: 96
+            pattern: ^[A-Za-z0-9_-]+$
+          required: true
+          name: projectId
+          in: path
+        - schema:
+            type: string
+            minLength: 1
+            maxLength: 96
+            pattern: ^[A-Za-z0-9_-]+$
+          required: true
+          name: id
+          in: path
+        - schema:
+            type: string
+            minLength: 8
+            maxLength: 128
+          required: true
+          name: Idempotency-Key
+          in: header
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                state:
+                  type: string
+                  enum:
+                    - succeeded
+                    - partial
+                    - failed
+                result:
+                  anyOf:
+                    - type: object
+                      properties:
+                        statements:
+                          type: array
+                          items:
+                            type: object
+                            properties:
+                              key:
+                                type: string
+                                minLength: 1
+                                maxLength: 96
+                                pattern: ^[A-Za-z0-9_-]+$
+                              text:
+                                type: string
+                                minLength: 1
+                                maxLength: 100000
+                              origin:
+                                type: string
+                                enum:
+                                  - author
+                                  - ai
+                              citations:
+                                type: array
+                                items:
+                                  type: object
+                                  properties:
+                                    sourceVersionId:
+                                      type: string
+                                      minLength: 1
+                                      maxLength: 96
+                                      pattern: ^[A-Za-z0-9_-]+$
+                                    start:
+                                      type: integer
+                                      minimum: 0
+                                    end:
+                                      type: integer
+                                      minimum: 0
+                                      exclusiveMinimum: true
+                                    quote:
+                                      type: string
+                                      maxLength: 20000
+                                    unavailableReason:
+                                      type: string
+                                      enum:
+                                        - rights
+                                        - missing
+                                    visualRegionId:
+                                      type: string
+                                      minLength: 1
+                                      maxLength: 96
+                                      pattern: ^[A-Za-z0-9_-]+$
+                                  required:
+                                    - sourceVersionId
+                                    - start
+                                    - end
+                                    - quote
+                                  additionalProperties: false
+                                maxItems: 30
+                              gaps:
+                                type: array
+                                items:
+                                  type: string
+                                  minLength: 1
+                                  maxLength: 100000
+                                maxItems: 30
+                            required:
+                              - key
+                              - text
+                              - origin
+                              - citations
+                              - gaps
+                            additionalProperties: false
+                          maxItems: 100
+                        inferences:
+                          type: array
+                          items:
+                            type: object
+                            properties:
+                              key:
+                                type: string
+                                minLength: 1
+                                maxLength: 96
+                                pattern: ^[A-Za-z0-9_-]+$
+                              premiseKeys:
+                                type: array
+                                items:
+                                  type: string
+                                  minLength: 1
+                                  maxLength: 96
+                                  pattern: ^[A-Za-z0-9_-]+$
+                                minItems: 1
+                                maxItems: 30
+                              conclusionKey:
+                                type: string
+                                minLength: 1
+                                maxLength: 96
+                                pattern: ^[A-Za-z0-9_-]+$
+                              reason:
+                                type: string
+                                minLength: 1
+                                maxLength: 100000
+                              combination:
+                                type: string
+                                enum:
+                                  - independent
+                                  - joint_required
+                                  - unspecified
+                              origin:
+                                type: string
+                                enum:
+                                  - author
+                                  - ai
+                              citations:
+                                type: array
+                                items:
+                                  type: object
+                                  properties:
+                                    sourceVersionId:
+                                      type: string
+                                      minLength: 1
+                                      maxLength: 96
+                                      pattern: ^[A-Za-z0-9_-]+$
+                                    start:
+                                      type: integer
+                                      minimum: 0
+                                    end:
+                                      type: integer
+                                      minimum: 0
+                                      exclusiveMinimum: true
+                                    quote:
+                                      type: string
+                                      maxLength: 20000
+                                    unavailableReason:
+                                      type: string
+                                      enum:
+                                        - rights
+                                        - missing
+                                    visualRegionId:
+                                      type: string
+                                      minLength: 1
+                                      maxLength: 96
+                                      pattern: ^[A-Za-z0-9_-]+$
+                                  required:
+                                    - sourceVersionId
+                                    - start
+                                    - end
+                                    - quote
+                                  additionalProperties: false
+                                maxItems: 30
+                              gaps:
+                                type: array
+                                items:
+                                  type: string
+                                  minLength: 1
+                                  maxLength: 100000
+                                maxItems: 30
+                            required:
+                              - key
+                              - premiseKeys
+                              - conclusionKey
+                              - reason
+                              - combination
+                              - origin
+                              - citations
+                              - gaps
+                            additionalProperties: false
+                          maxItems: 100
+                        gaps:
+                          type: array
+                          items:
+                            type: string
+                            minLength: 1
+                            maxLength: 100000
+                          maxItems: 100
+                      required:
+                        - statements
+                        - inferences
+                        - gaps
+                      additionalProperties: false
+                    - type: object
+                      properties:
+                        checks:
+                          type: array
+                          items:
+                            type: object
+                            properties:
+                              target:
+                                type: object
+                                properties:
+                                  id:
+                                    type: string
+                                    minLength: 1
+                                    maxLength: 96
+                                    pattern: ^[A-Za-z0-9_-]+$
+                                  versionId:
+                                    type: string
+                                    minLength: 1
+                                    maxLength: 96
+                                    pattern: ^[A-Za-z0-9_-]+$
+                                required:
+                                  - id
+                                  - versionId
+                                additionalProperties: false
+                              relation:
+                                type: string
+                                enum:
+                                  - supports
+                                  - opposes
+                                  - qualifies
+                                  - background
+                                  - insufficient
+                              explanation:
+                                type: string
+                                minLength: 1
+                                maxLength: 100000
+                              aspect:
+                                type: string
+                                enum:
+                                  - reported_fact
+                                  - current_basis
+                                  - inference_basis
+                              citations:
+                                type: array
+                                items:
+                                  type: object
+                                  properties:
+                                    sourceVersionId:
+                                      type: string
+                                      minLength: 1
+                                      maxLength: 96
+                                      pattern: ^[A-Za-z0-9_-]+$
+                                    start:
+                                      type: integer
+                                      minimum: 0
+                                    end:
+                                      type: integer
+                                      minimum: 0
+                                      exclusiveMinimum: true
+                                    quote:
+                                      type: string
+                                      maxLength: 20000
+                                    unavailableReason:
+                                      type: string
+                                      enum:
+                                        - rights
+                                        - missing
+                                    visualRegionId:
+                                      type: string
+                                      minLength: 1
+                                      maxLength: 96
+                                      pattern: ^[A-Za-z0-9_-]+$
+                                  required:
+                                    - sourceVersionId
+                                    - start
+                                    - end
+                                    - quote
+                                  additionalProperties: false
+                                maxItems: 30
+                              gaps:
+                                type: array
+                                items:
+                                  type: string
+                                  minLength: 1
+                                  maxLength: 100000
+                                maxItems: 30
+                            required:
+                              - target
+                              - relation
+                              - explanation
+                              - citations
+                              - gaps
+                            additionalProperties: false
+                          maxItems: 100
+                        gaps:
+                          type: array
+                          items:
+                            type: string
+                            minLength: 1
+                            maxLength: 100000
+                          maxItems: 100
+                      required:
+                        - checks
+                        - gaps
+                      additionalProperties: false
+                    - type: object
+                      properties:
+                        proposals:
+                          type: array
+                          items:
+                            type: object
+                            properties:
+                              target:
+                                type: object
+                                properties:
+                                  id:
+                                    type: string
+                                    minLength: 1
+                                    maxLength: 96
+                                    pattern: ^[A-Za-z0-9_-]+$
+                                  versionId:
+                                    type: string
+                                    minLength: 1
+                                    maxLength: 96
+                                    pattern: ^[A-Za-z0-9_-]+$
+                                required:
+                                  - id
+                                  - versionId
+                                additionalProperties: false
+                              proposedText:
+                                type: string
+                                minLength: 1
+                                maxLength: 100000
+                              reason:
+                                type: string
+                                minLength: 1
+                                maxLength: 100000
+                              citations:
+                                type: array
+                                items:
+                                  type: object
+                                  properties:
+                                    sourceVersionId:
+                                      type: string
+                                      minLength: 1
+                                      maxLength: 96
+                                      pattern: ^[A-Za-z0-9_-]+$
+                                    start:
+                                      type: integer
+                                      minimum: 0
+                                    end:
+                                      type: integer
+                                      minimum: 0
+                                      exclusiveMinimum: true
+                                    quote:
+                                      type: string
+                                      maxLength: 20000
+                                    unavailableReason:
+                                      type: string
+                                      enum:
+                                        - rights
+                                        - missing
+                                    visualRegionId:
+                                      type: string
+                                      minLength: 1
+                                      maxLength: 96
+                                      pattern: ^[A-Za-z0-9_-]+$
+                                  required:
+                                    - sourceVersionId
+                                    - start
+                                    - end
+                                    - quote
+                                  additionalProperties: false
+                                maxItems: 30
+                              gaps:
+                                type: array
+                                items:
+                                  type: string
+                                  minLength: 1
+                                  maxLength: 100000
+                                maxItems: 30
+                            required:
+                              - target
+                              - proposedText
+                              - reason
+                              - citations
+                              - gaps
+                            additionalProperties: false
+                          maxItems: 100
+                        gaps:
+                          type: array
+                          items:
+                            type: string
+                            minLength: 1
+                            maxLength: 100000
+                          maxItems: 100
+                      required:
+                        - proposals
+                        - gaps
+                      additionalProperties: false
+                    - type: object
+                      properties:
+                        proposals:
+                          type: array
+                          items:
+                            type: object
+                            properties:
+                              target:
+                                type: object
+                                properties:
+                                  id:
+                                    type: string
+                                    minLength: 1
+                                    maxLength: 96
+                                    pattern: ^[A-Za-z0-9_-]+$
+                                  versionId:
+                                    type: string
+                                    minLength: 1
+                                    maxLength: 96
+                                    pattern: ^[A-Za-z0-9_-]+$
+                                required:
+                                  - id
+                                  - versionId
+                                additionalProperties: false
+                              reason:
+                                type: string
+                                minLength: 1
+                                maxLength: 100000
+                              citations:
+                                type: array
+                                items:
+                                  type: object
+                                  properties:
+                                    sourceVersionId:
+                                      type: string
+                                      minLength: 1
+                                      maxLength: 96
+                                      pattern: ^[A-Za-z0-9_-]+$
+                                    start:
+                                      type: integer
+                                      minimum: 0
+                                    end:
+                                      type: integer
+                                      minimum: 0
+                                      exclusiveMinimum: true
+                                    quote:
+                                      type: string
+                                      maxLength: 20000
+                                    unavailableReason:
+                                      type: string
+                                      enum:
+                                        - rights
+                                        - missing
+                                    visualRegionId:
+                                      type: string
+                                      minLength: 1
+                                      maxLength: 96
+                                      pattern: ^[A-Za-z0-9_-]+$
+                                  required:
+                                    - sourceVersionId
+                                    - start
+                                    - end
+                                    - quote
+                                  additionalProperties: false
+                                maxItems: 30
+                              gaps:
+                                type: array
+                                items:
+                                  type: string
+                                  minLength: 1
+                                  maxLength: 100000
+                                maxItems: 30
+                            required:
+                              - target
+                              - reason
+                              - citations
+                              - gaps
+                            additionalProperties: false
+                          maxItems: 100
+                        gaps:
+                          type: array
+                          items:
+                            type: string
+                            minLength: 1
+                            maxLength: 100000
+                          maxItems: 100
+                      required:
+                        - proposals
+                        - gaps
+                      additionalProperties: false
+                    - type: object
+                      properties:
+                        verdict:
+                          type: string
+                          enum:
+                            - satisfied
+                            - not_satisfied
+                            - awaiting_observation
+                            - unknown
+                            - not_comparable
+                        reason:
+                          type: string
+                          minLength: 1
+                          maxLength: 100000
+                        evidenceIds:
+                          type: array
+                          items:
+                            type: string
+                            minLength: 1
+                            maxLength: 96
+                            pattern: ^[A-Za-z0-9_-]+$
+                          maxItems: 100
+                        citations:
+                          type: array
+                          items:
+                            anyOf:
+                              - type: object
+                                properties:
+                                  sourceVersionId:
+                                    type: string
+                                    minLength: 1
+                                    maxLength: 96
+                                    pattern: ^[A-Za-z0-9_-]+$
+                                  start:
+                                    type: integer
+                                    minimum: 0
+                                  end:
+                                    type: integer
+                                    minimum: 0
+                                    exclusiveMinimum: true
+                                  quote:
+                                    type: string
+                                    maxLength: 20000
+                                  unavailableReason:
+                                    type: string
+                                    enum:
+                                      - rights
+                                      - missing
+                                  visualRegionId:
+                                    type: string
+                                    minLength: 1
+                                    maxLength: 96
+                                    pattern: ^[A-Za-z0-9_-]+$
+                                required:
+                                  - sourceVersionId
+                                  - start
+                                  - end
+                                  - quote
+                                additionalProperties: false
+                              - type: object
+                                properties:
+                                  kind:
+                                    type: string
+                                    enum:
+                                      - image
+                                  sourceVersionId:
+                                    type: string
+                                    minLength: 1
+                                    maxLength: 96
+                                    pattern: ^[A-Za-z0-9_-]+$
+                                  fileId:
+                                    type: string
+                                    minLength: 1
+                                    maxLength: 96
+                                    pattern: ^[A-Za-z0-9_-]+$
+                                  page:
+                                    type: number
+                                    enum:
+                                      - 1
+                                  imageWidth:
+                                    type: integer
+                                    minimum: 0
+                                    exclusiveMinimum: true
+                                  imageHeight:
+                                    type: integer
+                                    minimum: 0
+                                    exclusiveMinimum: true
+                                  region:
+                                    type: object
+                                    properties:
+                                      x:
+                                        type: number
+                                        minimum: 0
+                                        maximum: 1
+                                      y:
+                                        type: number
+                                        minimum: 0
+                                        maximum: 1
+                                      width:
+                                        type: number
+                                        minimum: 0
+                                        exclusiveMinimum: true
+                                        maximum: 1
+                                      height:
+                                        type: number
+                                        minimum: 0
+                                        exclusiveMinimum: true
+                                        maximum: 1
+                                    required:
+                                      - x
+                                      - y
+                                      - width
+                                      - height
+                                    additionalProperties: false
+                                  unavailableReason:
+                                    type: string
+                                    enum:
+                                      - rights
+                                      - missing
+                                required:
+                                  - kind
+                                  - sourceVersionId
+                                  - fileId
+                                  - page
+                                  - imageWidth
+                                  - imageHeight
+                                  - region
+                                additionalProperties: false
+                          maxItems: 100
+                        missing:
+                          type: array
+                          items:
+                            type: string
+                            minLength: 1
+                            maxLength: 100000
+                          maxItems: 100
+                        tentative:
+                          type: boolean
+                      required:
+                        - verdict
+                        - reason
+                        - evidenceIds
+                        - citations
+                        - missing
+                        - tentative
+                      additionalProperties: false
+                error:
+                  type: string
+                  minLength: 1
+                  maxLength: 100000
+                gaps:
+                  type: array
+                  items:
+                    type: string
+                    minLength: 1
+                    maxLength: 100000
+                  maxItems: 100
+                agentCoverage:
+                  type: object
+                  additionalProperties:
+                    nullable: true
+                  default: {}
+                agentUsage:
+                  type: object
+                  nullable: true
+                  additionalProperties:
+                    nullable: true
+                  default: null
+              required:
+                - state
+                - gaps
+              additionalProperties: false
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  code:
+                    type: string
+                    enum:
+                      - OK
+                  data:
+                    $ref: "#/components/schemas/Job"
+                  message:
+                    type: string
+                required:
+                  - code
+                  - data
+                  - message
+        "400":
+          description: 业务错误
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: 业务错误
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: 业务错误
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: 业务错误
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: 业务错误
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "413":
+          description: 业务错误
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: 业务错误
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "503":
+          description: 业务错误
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/v1/projects/{projectId}/external-research/{id}/cancel:
+    post:
+      parameters:
+        - schema:
+            type: string
+            minLength: 1
+            maxLength: 96
+            pattern: ^[A-Za-z0-9_-]+$
+          required: true
+          name: projectId
+          in: path
+        - schema:
+            type: string
+            minLength: 1
+            maxLength: 96
+            pattern: ^[A-Za-z0-9_-]+$
+          required: true
+          name: id
+          in: path
+        - schema:
+            type: string
+            minLength: 8
+            maxLength: 128
+          required: true
+          name: Idempotency-Key
+          in: header
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  code:
+                    type: string
+                    enum:
+                      - OK
+                  data:
+                    $ref: "#/components/schemas/Job"
+                  message:
+                    type: string
+                required:
+                  - code
+                  - data
+                  - message
+        "400":
+          description: 业务错误
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: 业务错误
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: 业务错误
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: 业务错误
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: 业务错误
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "413":
+          description: 业务错误
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: 业务错误
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "503":
+          description: 业务错误
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/v1/projects/{projectId}/external-research/{id}/retry:
+    post:
+      parameters:
+        - schema:
+            type: string
+            minLength: 1
+            maxLength: 96
+            pattern: ^[A-Za-z0-9_-]+$
+          required: true
+          name: projectId
+          in: path
+        - schema:
+            type: string
+            minLength: 1
+            maxLength: 96
+            pattern: ^[A-Za-z0-9_-]+$
+          required: true
+          name: id
+          in: path
+        - schema:
+            type: string
+            minLength: 8
+            maxLength: 128
+          required: true
+          name: Idempotency-Key
+          in: header
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  code:
+                    type: string
+                    enum:
+                      - OK
+                  data:
+                    $ref: "#/components/schemas/Job"
+                  message:
+                    type: string
+                required:
+                  - code
+                  - data
+                  - message
+        "400":
+          description: 业务错误
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: 业务错误
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: 业务错误
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: 业务错误
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: 业务错误
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "413":
+          description: 业务错误
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: 业务错误
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "503":
+          description: 业务错误
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/v1/projects/{projectId}/files/import-path:
+    post:
+      parameters:
+        - schema:
+            type: string
+            minLength: 1
+            maxLength: 96
+            pattern: ^[A-Za-z0-9_-]+$
+          required: true
+          name: projectId
+          in: path
+        - schema:
+            type: string
+            minLength: 8
+            maxLength: 128
+          required: true
+          name: Idempotency-Key
+          in: header
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                source:
+                  type: object
+                  properties:
+                    title:
+                      type: string
+                      minLength: 1
+                      maxLength: 100000
+                    publisher:
+                      type: string
+                      maxLength: 1000
+                    url:
+                      type: string
+                      format: uri
+                    rights:
+                      type: string
+                      enum:
+                        - public
+                        - authorized
+                        - restricted
+                    reprintOf:
+                      type: string
+                      minLength: 1
+                      maxLength: 96
+                      pattern: ^[A-Za-z0-9_-]+$
+                  required:
+                    - title
+                    - publisher
+                    - rights
+                  additionalProperties: false
+                path:
+                  type: string
+                  minLength: 1
+                  maxLength: 4096
+                mime:
+                  type: string
+                  enum:
+                    - application/pdf
+                    - text/html
+                    - text/plain
+                    - image/png
+                    - image/jpeg
+                publishedAt:
+                  type: string
+                  nullable: true
+                  format: date-time
+              required:
+                - source
+                - path
+                - mime
+                - publishedAt
+              additionalProperties: false
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  code:
+                    type: string
+                    enum:
+                      - OK
+                  data:
+                    nullable: true
+                  message:
+                    type: string
+                required:
+                  - code
+                  - message
+        "400":
+          description: 业务错误
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: 业务错误
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: 业务错误
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: 业务错误
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: 业务错误
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "413":
+          description: 业务错误
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: 业务错误
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "503":
+          description: 业务错误
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/v1/projects/{projectId}/materials/{id}/segments:
+    get:
+      parameters:
+        - schema:
+            type: string
+            minLength: 1
+            maxLength: 96
+            pattern: ^[A-Za-z0-9_-]+$
+          required: true
+          name: projectId
+          in: path
+        - schema:
+            type: string
+            minLength: 1
+            maxLength: 96
+            pattern: ^[A-Za-z0-9_-]+$
+          required: true
+          name: id
+          in: path
+        - schema:
+            type: integer
+            nullable: true
+            minimum: 0
+            default: 0
+          required: false
+          name: start
+          in: query
+        - schema:
+            type: integer
+            minimum: 1
+            maximum: 20000
+            default: 12000
+          required: false
+          name: limit
+          in: query
+        - schema:
+            type: string
+            minLength: 1
+            maxLength: 96
+            pattern: ^[A-Za-z0-9_-]+$
+          required: false
+          name: jobId
+          in: query
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  code:
+                    type: string
+                    enum:
+                      - OK
+                  data:
+                    nullable: true
+                  message:
+                    type: string
+                required:
+                  - code
+                  - message
+        "400":
+          description: 业务错误
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: 业务错误
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: 业务错误
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: 业务错误
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: 业务错误
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "413":
+          description: 业务错误
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: 业务错误
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "503":
+          description: 业务错误
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/v1/projects/{projectId}/materials/{id}/image-data:
+    get:
+      parameters:
+        - schema:
+            type: string
+            minLength: 1
+            maxLength: 96
+            pattern: ^[A-Za-z0-9_-]+$
+          required: true
+          name: projectId
+          in: path
+        - schema:
+            type: string
+            minLength: 1
+            maxLength: 96
+            pattern: ^[A-Za-z0-9_-]+$
+          required: true
+          name: id
+          in: path
+        - schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+            default: 1
+          required: false
+          name: page
+          in: query
+        - schema:
+            type: string
+            minLength: 1
+            maxLength: 96
+            pattern: ^[A-Za-z0-9_-]+$
+          required: false
+          name: jobId
+          in: query
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  code:
+                    type: string
+                    enum:
+                      - OK
+                  data:
+                    nullable: true
+                  message:
+                    type: string
+                required:
+                  - code
+                  - message
+        "400":
+          description: 业务错误
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: 业务错误
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: 业务错误
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: 业务错误
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: 业务错误
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "413":
+          description: 业务错误
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: 业务错误
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "503":
+          description: 业务错误
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/v1/projects/{projectId}/external-transcriptions:
+    post:
+      parameters:
+        - schema:
+            type: string
+            minLength: 1
+            maxLength: 96
+            pattern: ^[A-Za-z0-9_-]+$
+          required: true
+          name: projectId
+          in: path
+        - schema:
+            type: string
+            minLength: 8
+            maxLength: 128
+          required: true
+          name: Idempotency-Key
+          in: header
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                sourceVersionId:
+                  type: string
+                  minLength: 1
+                  maxLength: 96
+                  pattern: ^[A-Za-z0-9_-]+$
+                page:
+                  type: integer
+                  minimum: 1
+                  maximum: 1000
+                  default: 1
+                fileHash:
+                  type: string
+                  pattern: ^[a-f0-9]{64}$
+                result:
+                  type: object
+                  properties:
+                    blocks:
+                      type: array
+                      items:
+                        type: object
+                        properties:
+                          text:
+                            type: string
+                            minLength: 1
+                            maxLength: 100000
+                          region:
+                            type: object
+                            properties:
+                              x:
+                                type: number
+                                minimum: 0
+                                maximum: 1
+                              y:
+                                type: number
+                                minimum: 0
+                                maximum: 1
+                              width:
+                                type: number
+                                minimum: 0
+                                exclusiveMinimum: true
+                                maximum: 1
+                              height:
+                                type: number
+                                minimum: 0
+                                exclusiveMinimum: true
+                                maximum: 1
+                            required:
+                              - x
+                              - y
+                              - width
+                              - height
+                            additionalProperties: false
+                          uncertain:
+                            type: boolean
+                        required:
+                          - text
+                          - region
+                          - uncertain
+                        additionalProperties: false
+                      maxItems: 1000
+                    gaps:
+                      type: array
+                      items:
+                        type: string
+                        minLength: 1
+                        maxLength: 100000
+                      maxItems: 100
+                  required:
+                    - blocks
+                    - gaps
+                  additionalProperties: false
+              required:
+                - sourceVersionId
+                - fileHash
+                - result
+              additionalProperties: false
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  code:
+                    type: string
+                    enum:
+                      - OK
+                  data:
+                    nullable: true
+                  message:
+                    type: string
+                required:
+                  - code
+                  - message
+        "400":
+          description: 业务错误
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: 业务错误
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: 业务错误
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: 业务错误
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: 业务错误
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "413":
+          description: 业务错误
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: 业务错误
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "503":
+          description: 业务错误
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/v1/projects/{projectId}/drawing-operations:
+    post:
+      parameters:
+        - schema:
+            type: string
+            minLength: 1
+            maxLength: 96
+            pattern: ^[A-Za-z0-9_-]+$
+          required: true
+          name: projectId
+          in: path
+        - schema:
+            type: string
+            minLength: 8
+            maxLength: 128
+          required: true
+          name: Idempotency-Key
+          in: header
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                expectedVersion:
+                  type: integer
+                  minimum: 0
+                commands:
+                  type: array
+                  items:
+                    oneOf:
+                      - type: object
+                        properties:
+                          op:
+                            type: string
+                            enum:
+                              - drawing.put
+                          drawing:
+                            type: object
+                            properties:
+                              id:
+                                type: string
+                                minLength: 1
+                                maxLength: 96
+                                pattern: ^[A-Za-z0-9_-]+$
+                              type:
+                                type: string
+                                enum:
+                                  - rectangle
+                                  - ellipse
+                                  - diamond
+                                  - text
+                                  - line
+                                  - arrow
+                                  - freedraw
+                                  - image
+                              x:
+                                type: number
+                              y:
+                                type: number
+                              width:
+                                type: number
+                                minimum: 0
+                                maximum: 100000
+                              height:
+                                type: number
+                                minimum: 0
+                                maximum: 100000
+                              text:
+                                type: string
+                                maxLength: 10000
+                                default: ""
+                              color:
+                                type: string
+                                pattern: ^#[a-fA-F0-9]{6}$
+                                default: "#63776d"
+                              points:
+                                type: array
+                                items:
+                                  type: array
+                                  items:
+                                    type: number
+                                minItems: 2
+                                maxItems: 10000
+                              fileId:
+                                type: string
+                                minLength: 1
+                                maxLength: 96
+                                pattern: ^[A-Za-z0-9_-]+$
+                            required:
+                              - id
+                              - type
+                              - x
+                              - y
+                              - width
+                              - height
+                            additionalProperties: false
+                        required:
+                          - op
+                          - drawing
+                        additionalProperties: false
+                      - type: object
+                        properties:
+                          op:
+                            type: string
+                            enum:
+                              - drawing.delete
+                          id:
+                            type: string
+                            minLength: 1
+                            maxLength: 96
+                            pattern: ^[A-Za-z0-9_-]+$
+                        required:
+                          - op
+                          - id
+                        additionalProperties: false
+                      - type: object
+                        properties:
+                          op:
+                            type: string
+                            enum:
+                              - object.position
+                          id:
+                            type: string
+                            minLength: 1
+                            maxLength: 96
+                            pattern: ^[A-Za-z0-9_-]+$
+                          x:
+                            type: number
+                          y:
+                            type: number
+                          width:
+                            type: number
+                            minimum: 0
+                            exclusiveMinimum: true
+                          height:
+                            type: number
+                            minimum: 0
+                            exclusiveMinimum: true
+                        required:
+                          - op
+                          - id
+                          - x
+                          - y
+                        additionalProperties: false
+                  minItems: 1
+                  maxItems: 100
+              required:
+                - expectedVersion
+                - commands
+              additionalProperties: false
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  code:
+                    type: string
+                    enum:
+                      - OK
+                  data:
+                    $ref: "#/components/schemas/ChangeSet"
+                  message:
+                    type: string
+                required:
+                  - code
+                  - data
+                  - message
+        "400":
+          description: 业务错误
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: 业务错误
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: 业务错误
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: 业务错误
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: 业务错误
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "413":
+          description: 业务错误
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: 业务错误
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "503":
+          description: 业务错误
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
   /api/v1/projects/{projectId}/layout:
     get:
       parameters:
@@ -15618,6 +17947,7 @@ paths:
                       enum:
                         - application/pdf
                         - text/html
+                        - text/plain
                         - image/png
                         - image/jpeg
                     base64:
@@ -15769,6 +18099,7 @@ paths:
                   enum:
                     - application/pdf
                     - text/html
+                    - text/plain
                     - image/png
                     - image/jpeg
                 base64:

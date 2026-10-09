@@ -202,6 +202,7 @@ export const sessions = sqliteTable('sessions', {
   type: text('type').notNull(),
   projects: text('projects', { mode: 'json' }).notNull(),
   expiresAt: text('expires_at').notNull(),
+  capabilities: text('capabilities', { mode: 'json' }).notNull().default('{}'),
 });
 export const searchChunks = sqliteTable(
   'search_chunks',

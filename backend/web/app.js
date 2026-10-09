@@ -383,6 +383,7 @@ async function jobs() {
           : '';
     item.textContent = `${job.kind === 'workflow.initial' ? '首次研究' : job.kind}：${job.state}${job.error ? ' · ' + job.error : ''}${historyNote}`;
     if (
+      job.executor === 'external' ||
       job.kind.startsWith('research.') ||
       job.kind === 'workflow.initial' ||
       ['source.sec-filing', 'source.sec-history'].includes(job.kind)
@@ -406,7 +407,14 @@ async function jobs() {
       button.textContent = action === 'retry' ? '重试' : '取消';
       button.onclick = () =>
         run(async () => {
-          await api(route(`/jobs/${job.id}/${action}`), 'POST', undefined, uid());
+          await api(
+            route(
+              `/${job.executor === 'external' ? 'external-research' : 'jobs'}/${job.id}/${action}`,
+            ),
+            'POST',
+            undefined,
+            uid(),
+          );
           await jobs();
         });
       item.append(button);
@@ -709,7 +717,7 @@ $('#list-grants').onclick = () =>
     box.replaceChildren();
     for (const grant of await api('/agent-grants')) {
       const row = document.createElement('p');
-      row.textContent = `${grant.id.slice(0, 20)} · ${grant.expired ? '已过期' : new Date(grant.expiresAt).toLocaleString()} `;
+      row.textContent = `${grant.id.slice(0, 20)} · ${grant.expired ? '已过期' : new Date(grant.expiresAt).toLocaleString()} · ${grant.personalRecordProjects?.length ? '含个人记录委托' : '候选研究权限'} `;
       const button = document.createElement('button');
       button.textContent = '撤销';
       button.onclick = () =>
@@ -724,7 +732,15 @@ $('#list-grants').onclick = () =>
   });
 $('#grant').onclick = () =>
   run(async () => {
-    const result = await api('/agent-grants', 'POST', { projectIds: [state.project.id] }, uid());
+    const result = await api(
+      '/agent-grants',
+      'POST',
+      {
+        projectIds: [state.project.id],
+        personalRecordProjects: $('#personal-record-grant').checked ? [state.project.id] : [],
+      },
+      uid(),
+    );
     $('#credential').hidden = false;
     $('#credential').open = true;
     $('#credential textarea').value =

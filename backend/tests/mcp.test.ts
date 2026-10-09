@@ -34,6 +34,75 @@ it('MCP SDK 协议真实往返并复用 API 的项目权限、幂等和人工确
     const tools = await client.listTools();
     expect(tools.tools.some((t) => t.name === 'forkwise_apply_operations')).toBe(true);
     expect(tools.tools.some((t) => t.name === 'forkwise_initial_research')).toBe(true);
+    const drawingTool = tools.tools.find((t) => t.name === 'forkwise_edit_drawings');
+    expect(drawingTool).toBeDefined();
+    // Codex accepts homogeneous array items; tuple-style items arrays can hide a tool.
+    const inspectSchema = (value: unknown): void => {
+      if (!value || typeof value !== 'object') return;
+      expect(Array.isArray((value as { items?: unknown }).items)).toBe(false);
+      for (const child of Object.values(value)) {
+        if (Array.isArray(child)) child.forEach(inspectSchema);
+        else inspectSchema(child);
+      }
+    };
+    inspectSchema(drawingTool!.inputSchema);
+    const drawingRequest = {
+      expectedVersion: 0,
+      commands: [
+        {
+          op: 'drawing.put',
+          drawing: {
+            id: 'mcp_arrow',
+            type: 'arrow',
+            x: 10,
+            y: 20,
+            width: 100,
+            height: 20,
+            points: [
+              [0, 0],
+              [100, 20],
+            ],
+          },
+        },
+      ],
+    };
+    const drawing = await client.callTool({
+      name: 'forkwise_edit_drawings',
+      arguments: {
+        projectId: project.id,
+        idempotencyKey: 'mcp-drawing-key',
+        request: drawingRequest,
+      },
+    });
+    expect(drawing.isError).not.toBe(true);
+    expect(drawing.structuredContent).toMatchObject({
+      response: {
+        data: {
+          layout: {
+            version: 1,
+            data: { canvas: { annotations: { elements: [{ id: 'mcp_arrow', type: 'arrow' }] } } },
+          },
+        },
+      },
+    });
+    const badPoint = await client.callTool({
+      name: 'forkwise_edit_drawings',
+      arguments: {
+        projectId: project.id,
+        idempotencyKey: 'mcp-invalid-point',
+        request: {
+          ...drawingRequest,
+          expectedVersion: 1,
+          commands: [
+            {
+              op: 'drawing.put',
+              drawing: { ...drawingRequest.commands[0]!.drawing, points: [[1], [3, 4]] },
+            },
+          ],
+        },
+      },
+    });
+    expect(badPoint.isError).toBe(true);
     const request = {
       expected: {},
       commands: [

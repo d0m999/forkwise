@@ -98,7 +98,24 @@ export class SearchRepository {
     asOf?: string,
     vector?: { model: string; values: number[] },
   ) {
-    const allowed = new Set(this.repo.snapshot(projectId, asOf).objects.map((e) => e.versionId));
+    const objects = this.repo.snapshot(projectId, asOf).objects;
+    const restrictedSources = new Set(
+      objects.filter((e) => e.kind === 'source' && e.data.rights === 'restricted').map((e) => e.id),
+    );
+    const restrictedMaterials = new Set(
+      objects
+        .filter((e) => e.kind === 'source_version' && restrictedSources.has(e.data.sourceId))
+        .map((e) => e.id),
+    );
+    const allowed = new Set(
+      objects
+        .filter(
+          (e) =>
+            !(e.kind === 'source_version' && restrictedMaterials.has(e.id)) &&
+            !(e.kind === 'evidence' && restrictedMaterials.has(e.data.citation.sourceVersionId)),
+        )
+        .map((e) => e.versionId),
+    );
     const term = query.trim();
     requireThat(term.length > 0 && term.length <= 2000, 'INVALID_QUERY', '请输入有效查询');
     const columns =

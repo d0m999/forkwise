@@ -41,7 +41,13 @@ export interface StructuredModel {
     signal: AbortSignal,
   ): Promise<{ result: z.infer<S>; usage: unknown }>;
 }
-interface TaskScope {
+export interface TaskScope {
+  external?: {
+    executor: 'external';
+    createdBy: string;
+    retryOf: string | null;
+    serverReads: unknown[];
+  };
   update?: UpdateScope;
   workflow?: WorkflowContext;
   trigger?: CorrectionTrigger;
@@ -85,6 +91,7 @@ export class ResearchTaskService {
     trigger?: CorrectionTrigger,
     workflow?: WorkflowContext,
     update?: UpdateScope,
+    external?: TaskScope['external'],
   ) {
     const input = ResearchTaskInput.parse(raw);
     this.write.repo.project(projectId);
@@ -98,6 +105,7 @@ export class ResearchTaskService {
         ...(update ? { update } : {}),
         ...(trigger ? { trigger } : {}),
         ...(workflow ? { workflow } : {}),
+        ...(external ? { external } : {}),
       },
       () => {
         this.jobs.assertCapacity(projectId);
@@ -129,9 +137,9 @@ export class ResearchTaskService {
         const selected = input.retrieval
           ? selectMaterialContext(projectId, originals, this.search, input.retrieval)
           : undefined;
-        const materials = selected?.materials ?? originals;
+        const materials: TaskMaterial[] = selected?.materials ?? originals;
         requireThat(
-          materials.reduce((n, m) => n + m.text.length, 0) <= 1_000_000,
+          external || materials.reduce((n, m) => n + m.text.length, 0) <= 1_000_000,
           'TASK_INPUT_TOO_LARGE',
           '本次选择超过模型输入边界，请缩小材料范围；未静默截断',
           413,
@@ -152,9 +160,17 @@ export class ResearchTaskService {
         );
         const context = state.objects.filter((e) => endpoints.has(e.id));
         const scope: TaskScope = {
+          ...(external ? { external } : {}),
           ...(update ? { update } : {}),
           kind: input.kind,
-          materials,
+          materials: external
+            ? materials.map((m) => ({
+                ...m,
+                text: '',
+                start: m.start ?? 0,
+                end: m.end ?? m.text.length,
+              }))
+            : materials,
           sourceVersionIds: input.sourceVersionIds,
           ...(selected ? { retrieval: selected.coverage } : {}),
           targets,
@@ -166,7 +182,7 @@ export class ResearchTaskService {
           projectId,
           `research.${input.kind}`,
           scope,
-          digest({ kind: input.kind, scope }),
+          digest({ kind: input.kind, scope, ...(external ? { key, actorId: actor.id } : {}) }),
         );
         if (workflow && workflowGroup(this.write.repo.db, projectId, workflow.owner))
           linkWorkflowTask(this.write.repo.db, projectId, workflow.owner, job.id);
@@ -403,7 +419,7 @@ export class ResearchTaskService {
     }
     return this.jobs.get(projectId, id);
   }
-  private validateCitations(result: unknown, scope: TaskScope) {
+  validateCitations(result: unknown, scope: TaskScope, projectId?: string) {
     const inspect = (value: unknown): void => {
       if (!value || typeof value !== 'object') return;
       if ('sourceVersionId' in value && 'quote' in value) {
@@ -414,11 +430,22 @@ export class ResearchTaskService {
               c.start >= (x.start ?? 0) &&
               c.end <= (x.end ?? x.text.length),
           );
+        const original =
+          m && scope.external && projectId ? this.write.repo.material(projectId, m.id) : undefined;
+        if (m && scope.external && projectId)
+          requireThat(
+            digest(this.write.repo.version(projectId, m.id, m.version.versionId)) ===
+              digest(m.version),
+            'MATERIAL_SCOPE_MISMATCH',
+            '固定材料版本与研究输入不同',
+          );
         requireThat(
           m &&
             !c.unavailableReason &&
             c.start < c.end &&
-            m.text.slice(c.start - (m.start ?? 0), c.end - (m.start ?? 0)) === c.quote &&
+            (original !== undefined
+              ? original.slice(c.start, c.end)
+              : m.text.slice(c.start - (m.start ?? 0), c.end - (m.start ?? 0))) === c.quote &&
             (!scope.trigger || c.sourceVersionId === scope.trigger.correctedSourceVersionId),
           'INVALID_CITATION',
           '模型引用未命中本次所选材料的原文',
@@ -435,7 +462,12 @@ export class ResearchTaskService {
     };
     inspect(result);
   }
-  private reconstruct(projectId: string, jobId: string, result: z.infer<typeof Reconstruction>) {
+  reconstruct(
+    projectId: string,
+    jobId: string,
+    result: z.infer<typeof Reconstruction>,
+    actor: Actor = { id: `job_${jobId}`, type: 'system' },
+  ) {
     const id = (key: string) =>
       'candidate_' + createHash('sha256').update(`${jobId}:${key}`).digest('hex');
     const allKeys = [...result.statements, ...result.inferences].map((x) => x.key);
@@ -487,18 +519,19 @@ export class ResearchTaskService {
     return commands.length
       ? this.write.execute(
           projectId,
-          { id: `job_${jobId}`, type: 'system' },
+          actor,
           `candidates_${jobId}`,
           { expected: {}, commands },
           taskWorkflow(this.write.repo.db, projectId, jobId)?.id,
         )
       : null;
   }
-  private verification(
+  verification(
     projectId: string,
     jobId: string,
     result: z.infer<typeof Verification>,
     scope: TaskScope,
+    actor: Actor = { id: `job_${jobId}`, type: 'system' },
   ) {
     const commands: CommandInput[] = [];
     const expected: Record<string, number> = {};
@@ -546,7 +579,7 @@ export class ResearchTaskService {
     return commands.length
       ? this.write.execute(
           projectId,
-          { id: `job_${jobId}`, type: 'system' },
+          actor,
           `verification_${jobId}`,
           { expected, commands },
           taskWorkflow(this.write.repo.db, projectId, jobId)?.id,
@@ -568,7 +601,7 @@ export class ResearchTaskService {
   async drain() {
     const pending = this.write.repo.db
       .prepare(
-        "SELECT project_id,id FROM jobs WHERE kind LIKE 'research.%' AND state='queued' ORDER BY created_at,id",
+        "SELECT project_id,id FROM jobs WHERE kind LIKE 'research.%' AND state='queued' AND json_extract(input,'$.external.executor') IS NULL ORDER BY created_at,id",
       )
       .all() as { project_id: string; id: string }[];
     for (const job of pending) {

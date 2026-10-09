@@ -162,17 +162,17 @@ const { chromium } = require(
     await dialog.getByRole('button', { name: '返回画布', exact: true }).click();
     assert.deepEqual((await api(path + '/state')).objects, baseline);
     // A mismatched response must not silently relocate or substitute the newer version.
-    await page.route('**/materials/old', async (route) => {
+    await page.route('**/materials/old/segments?*', async (route) => {
       const response = await route.fetch(),
         body = await response.json();
       body.data.text = '被替换的内容';
       await route.fulfill({ response, json: body });
     });
     await open();
-    await dialog.getByText('材料内容与保存的指纹不符', { exact: false }).waitFor();
+    await dialog.getByText('材料分段与保存指纹不符', { exact: false }).waitFor();
     assert.equal(await dialog.locator('mark').count(), 0);
     await dialog.getByRole('button', { name: '返回画布', exact: true }).click();
-    await page.unroute('**/materials/old');
+    await page.unroute('**/materials/old/segments?*');
     assert.deepEqual((await api(path + '/state')).objects, baseline);
     // An invalid anchor with an otherwise intact material is reported separately.
     await page.route('**/workspace', async (route) => {
@@ -199,7 +199,7 @@ const { chromium } = require(
       seen = new Promise((resolve) => {
         entered = resolve;
       });
-    await page.route('**/materials/old', async (route) => {
+    await page.route('**/materials/old/segments?*', async (route) => {
       entered();
       await gate;
       await route.continue();
@@ -207,10 +207,10 @@ const { chromium } = require(
     await open();
     await seen;
     await dialog.getByRole('button', { name: '返回画布', exact: true }).click();
-    const complete = page.waitForResponse('**/materials/old');
+    const complete = page.waitForResponse('**/materials/old/segments?*');
     release();
     await complete;
-    await page.unroute('**/materials/old');
+    await page.unroute('**/materials/old/segments?*');
     assert.equal(await dialog.isVisible(), false);
     await open();
     await dialog.locator('mark').waitFor();

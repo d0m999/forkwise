@@ -7,6 +7,7 @@ import {
   TranscriptionInput,
   CorrectionInput,
   TranscriptionResult,
+  ExternalTranscriptionInput,
 } from '../contracts/transcription.js';
 import type { Actor, Entity } from '../contracts/entities.js';
 import type { GraphWriteService } from './graph-write.js';
@@ -134,6 +135,49 @@ export class TranscriptionService {
       },
     );
   }
+  async submitExternal(projectId: string, actor: Actor, key: string, raw: unknown) {
+    const input = ExternalTranscriptionInput.parse(raw),
+      prior = this.version(projectId, input.sourceVersionId);
+    const file = this.files.file(projectId, prior.data.fileId!);
+    requireThat(
+      file.hash === input.fileHash,
+      'FILE_VERSION_CONFLICT',
+      '转写绑定的原文件指纹不一致',
+      409,
+    );
+    const image = await this.image(projectId, prior.id, input.page, new AbortController().signal);
+    return this.write.idempotent(
+      actor,
+      projectId,
+      key,
+      { op: 'transcription.external', input },
+      () => {
+        const output = this.persist(
+          projectId,
+          actor,
+          randomUUID(),
+          prior,
+          input.page,
+          input.result,
+          false,
+          '外部 Agent 转写，未人工核验',
+          image.pageCount,
+          true,
+        );
+        const artifact = {
+          ...output.artifact,
+          normalizerVersion: 'external-vision@1',
+          fileHash: file.hash,
+          executor: 'external',
+          createdBy: actor.id,
+        };
+        this.write.repo.db
+          .prepare('UPDATE parsed_artifacts SET data=? WHERE project_id=? AND source_version_id=?')
+          .run(JSON.stringify(artifact), projectId, output.sourceVersionId);
+        return { ...output, artifact };
+      },
+    );
+  }
   private persist(
     projectId: string,
     actor: Actor,
@@ -144,6 +188,7 @@ export class TranscriptionService {
     verified: boolean,
     reason: string,
     pageCount: number,
+    controlledResult = false,
   ) {
     const file = this.files.file(projectId, prior.data.fileId!),
       source = this.write.repo
@@ -180,30 +225,41 @@ export class TranscriptionService {
       regions,
       page,
       pageCount,
-      normalizerVersion: verified ? 'human-transcription@1' : 'vision-transcription@1',
+      normalizerVersion: verified
+        ? 'human-transcription@1'
+        : controlledResult
+          ? 'external-vision@1'
+          : 'vision-transcription@1',
       status,
       gaps,
       verified,
       reason,
       derivedFrom: prior.id,
     };
-    const changes = this.write.execute(projectId, actor, `transcribe_${key}`, {
-      expected: { [source.id]: source.version, [prior.id]: prior.version },
-      commands: [
-        {
-          op: 'source.parse',
-          id,
-          sourceId: source.id,
-          fileId: file.id,
-          text,
-          status,
-          message: gaps.join('；').slice(0, 2000),
-          normalizerVersion: artifact.normalizerVersion,
-          textOrigin: verified ? 'human_correction' : 'ocr',
-          derivedFrom: prior.id,
-        },
-      ],
-    });
+    const changes = this.write.execute(
+      projectId,
+      actor,
+      `transcribe_${key}`,
+      {
+        expected: { [source.id]: source.version, [prior.id]: prior.version },
+        commands: [
+          {
+            op: 'source.parse',
+            id,
+            sourceId: source.id,
+            fileId: file.id,
+            text,
+            status,
+            message: gaps.join('；').slice(0, 2000),
+            normalizerVersion: artifact.normalizerVersion,
+            textOrigin: verified ? 'human_correction' : 'ocr',
+            derivedFrom: prior.id,
+          },
+        ],
+      },
+      undefined,
+      controlledResult,
+    );
     this.write.repo.db
       .prepare(
         'INSERT INTO parsed_artifacts(project_id,source_version_id,file_id,data) VALUES(?,?,?,?)',

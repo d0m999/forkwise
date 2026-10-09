@@ -21,7 +21,10 @@ const rule: NonNullable<Bodies['condition']['rule']> = {
   periodKind: 'single',
   periods: [{ start: '2025-01-01', end: '2025-03-31' }],
 };
-function fixture(mode: 'numeric' | 'qualitative' | 'mixed' = 'numeric', evaluator?: AgentEvaluator) {
+function fixture(
+  mode: 'numeric' | 'qualitative' | 'mixed' = 'numeric',
+  evaluator?: AgentEvaluator,
+) {
   const t = setup();
   const jobs = new JobRepository(t.db);
   const evaluations = new EvaluationService(t.repo, jobs, () => ['测试增长率'], evaluator);
@@ -66,6 +69,7 @@ function fixture(mode: 'numeric' | 'qualitative' | 'mixed' = 'numeric', evaluato
       data: {
         description: '测试条件',
         mode,
+        ...(mode === 'mixed' ? { mixedCombination: 'joint_required' as const } : {}),
         targetIds: [],
         ...(mode !== 'qualitative' ? { rule } : {}),
       },
@@ -76,38 +80,75 @@ function fixture(mode: 'numeric' | 'qualitative' | 'mixed' = 'numeric', evaluato
 describe('条件评估、保存与任务故障', () => {
   it('混合条件的数值部分由代码计算，AI 满足意见不能覆盖不满足的阈值', async () => {
     let received: unknown;
-    const t = fixture('mixed', { async evaluate(input) {
-      received = input;
-      return { assessment: { verdict: 'satisfied', reason: '合成渠道材料支持定性要求', evidenceIds: [], citations: [], missing: [], tentative: false }, usage: null };
-    } });
+    const t = fixture('mixed', {
+      async evaluate(input) {
+        received = input;
+        return {
+          assessment: {
+            verdict: 'satisfied',
+            reason: '合成渠道材料支持定性要求',
+            evidenceIds: [],
+            citations: [],
+            missing: [],
+            tentative: false,
+          },
+          usage: null,
+        };
+      },
+    });
     try {
       const old = t.get('c') as Entity<'condition'>;
-      t.write([{ op: 'condition.edit', id: 'c', scope: 'all', data: { ...old.data, rule: { ...rule, threshold: 15 } } }]);
+      t.write([
+        {
+          op: 'condition.edit',
+          id: 'c',
+          scope: 'all',
+          data: { ...old.data, rule: { ...rule, threshold: 15 } },
+        },
+      ]);
       const c = t.get('c');
       const job = t.evaluations.request(t.project.id, c.id, ['e'], c.contentVersionId);
-      expect(t.jobs.summaries(t.project.id)[0]).toMatchObject({ condition: { id: c.id, versionId: c.contentVersionId } });
+      expect(t.jobs.summaries(t.project.id)[0]).toMatchObject({
+        condition: { id: c.id, versionId: c.contentVersionId },
+      });
       expect(t.jobs.summaries(t.project.id)[0]).not.toHaveProperty('input');
       expect((await t.evaluations.run(t.project.id, job.id)).state).toBe('succeeded');
       expect(received).toMatchObject({ numericAssessment: { verdict: 'not_satisfied' } });
-      const result = t.repo.snapshot(t.project.id).objects.find(e => e.kind === 'evaluation') as Entity<'evaluation'>;
+      const result = t.repo
+        .snapshot(t.project.id)
+        .objects.find((e) => e.kind === 'evaluation') as Entity<'evaluation'>;
       expect(result.data.verdict).toBe('not_satisfied');
-      expect(result.data).toMatchObject({ components: { numeric: { verdict: 'not_satisfied', evidenceIds: ['e'] }, qualitative: { verdict: 'satisfied' } } });
+      expect(result.data).toMatchObject({
+        components: {
+          numeric: { verdict: 'not_satisfied', evidenceIds: ['e'] },
+          qualitative: { verdict: 'satisfied' },
+        },
+      });
       expect(result.data.evaluator).toBe('ai');
       const incomplete = t.evaluations.request(t.project.id, c.id, [], c.contentVersionId);
       await t.evaluations.run(t.project.id, incomplete.id);
-      const last = t.repo.snapshot(t.project.id).objects.filter(e => e.kind === 'evaluation').at(-1) as Entity<'evaluation'>;
+      const last = t.repo
+        .snapshot(t.project.id)
+        .objects.filter((e) => e.kind === 'evaluation')
+        .at(-1) as Entity<'evaluation'>;
       expect(last.data.verdict).toBe('unknown');
       expect(last.data.components?.qualitative.verdict).toBe('satisfied');
       const restored = createApplication({ database: ':memory:', origin: 'http://127.0.0.1:8787' });
       try {
         const archive = new AssetService(t.repo, t.service).export(t.project.id);
         new ArchiveService(restored.write, restored.search).import(human, randomUUID(), archive);
-        expect(restored.repo.snapshot(t.project.id).objects.find(e => e.id === result.id)?.data).toEqual(result.data);
+        expect(
+          restored.repo.snapshot(t.project.id).objects.find((e) => e.id === result.id)?.data,
+        ).toEqual(result.data);
         const markdown = new AssetService(t.repo, t.service).summary(t.project.id);
         expect(markdown).toContain('确定性数值结果');
         expect(markdown).toContain('合成渠道材料支持定性要求');
-      } finally { restored.db.close(); }
-    } finally { t.db.close(); }
+      } finally {
+        restored.db.close();
+      }
+    } finally {
+      t.db.close();
+    }
   });
   it('修改阈值自动入队，新结果待本人确认，旧规则评估保留', async () => {
     const t = fixture();

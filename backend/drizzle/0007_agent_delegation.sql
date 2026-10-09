@@ -1,0 +1,1 @@
+ALTER TABLE sessions ADD COLUMN capabilities TEXT NOT NULL DEFAULT '{}';

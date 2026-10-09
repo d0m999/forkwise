@@ -86,6 +86,7 @@ export class JobRepository {
     const rows = this.db
       .prepare(
         `SELECT j.id,j.project_id AS projectId,j.kind,j.state,j.error,j.attempt,j.created_at AS createdAt,j.updated_at AS updatedAt,j.usage,
+        json_extract(j.input,'$.external.executor') AS executor,
         CASE WHEN j.kind IN ('condition.rule','condition.agent') THEN
           json_object('id',json_extract(j.input,'$.condition.id'),'versionId',json_extract(j.input,'$.condition.contentVersionId'))
         ELSE NULL END AS condition,
@@ -97,6 +98,7 @@ export class JobRepository {
       .all(projectId) as (Omit<Job, 'input' | 'output' | 'runToken' | 'usage' | 'historyState'> & {
       usage: string | null;
       condition: string | null;
+      executor: string | null;
       historyState: WorkflowHistoryState | null;
     })[];
     return rows.map((row) => {
@@ -119,6 +121,8 @@ export class JobRepository {
   claim(projectId: string, id: string): Job | null {
     return this.db
       .transaction(() => {
+        const input = this.get(projectId, id).input as { external?: { executor?: string } };
+        if (input.external?.executor === 'external') return null;
         const group = taskWorkflow(this.db, projectId, id);
         if (group && (!group.applied || group.stopped)) return null;
         const runToken = randomUUID();
@@ -202,6 +206,12 @@ export class JobRepository {
     return this.db
       .transaction(() => {
         const job = this.get(projectId, id);
+        requireThat(
+          !(job.input as { external?: unknown }).external,
+          'EXTERNAL_RETRY_REQUIRED',
+          '外部研究重试必须创建新记录',
+          409,
+        );
         requireThat(
           !job.historyState || job.historyState === 'applied',
           'WORKFLOW_WITHDRAWN',

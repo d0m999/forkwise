@@ -37,6 +37,19 @@ if (!existsSync(secretPath))
 const secret = readFileSync(secretPath);
 if (secret.length !== 32) throw new Error('本机会话密钥损坏');
 const metricsPath = join(directory, 'metrics.json');
+const importRootsPath = join(directory, 'import-roots.json');
+const importRoots: Record<string, string[]> = existsSync(importRootsPath)
+  ? JSON.parse(readFileSync(importRootsPath, 'utf8'))
+  : {};
+if (
+  !importRoots ||
+  Array.isArray(importRoots) ||
+  typeof importRoots !== 'object' ||
+  !Object.values(importRoots).every(
+    (v) => Array.isArray(v) && v.every((p) => typeof p === 'string' && p.startsWith('/')),
+  )
+)
+  throw new Error('import-roots.json 应按项目 ID 列出绝对目录');
 const metrics: string[] = existsSync(metricsPath)
   ? JSON.parse(readFileSync(metricsPath, 'utf8'))
   : [];
@@ -59,6 +72,7 @@ const core = createApplication({
   origin,
   secret,
   metrics,
+  importRoots,
   ...(visionModel ? { visionModel } : {}),
   ...(agent ? { agent } : {}),
   ...(researchModel ? { researchModel } : {}),

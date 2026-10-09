@@ -1,6 +1,6 @@
 import { ActionJournal, WorkflowGroupArchive } from './action-history.js';
 import { z } from '@hono/zod-openapi';
-import { Id, Time, Text } from './entities.js';
+import { Id, Time, Text, ActorSchema } from './entities.js';
 import { EntitySchema, ProjectSchema, JobSchema } from './responses.js';
 
 import { LayoutSchema } from './layout.js';
@@ -47,7 +47,7 @@ export const ArchiveSchema = z
         z
           .object({
             snapshot: EntitySchema,
-            actor: z.object({ id: Id, type: z.enum(['human', 'agent', 'system']) }).strict(),
+            actor: ActorSchema,
           })
           .strict(),
       )

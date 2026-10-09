@@ -69,6 +69,7 @@ export function applyResearch(c: WriteContext, command: CommandInput): void {
       const content =
         e.data.description !== command.data.description ||
         e.data.mode !== command.data.mode ||
+        e.data.mixedCombination !== command.data.mixedCombination ||
         JSON.stringify(e.data.rule) !== JSON.stringify(command.data.rule);
       c.change(e, command.data, content);
       break;
@@ -144,6 +145,10 @@ export function applyResearch(c: WriteContext, command: CommandInput): void {
     case 'source.parse': {
       requireThat(
         c.actor.type === 'system' ||
+          (c.controlledResult &&
+            c.actor.type === 'agent' &&
+            command.textOrigin === 'ocr' &&
+            Boolean(command.derivedFrom)) ||
           (c.actor.type === 'human' &&
             command.textOrigin === 'human_correction' &&
             Boolean(command.derivedFrom)),
@@ -256,6 +261,13 @@ export function applyResearch(c: WriteContext, command: CommandInput): void {
     }
     case 'evaluation.propose':
     case 'evaluation.confirm': {
+      if (command.op === 'evaluation.propose' && command.components)
+        requireThat(
+          c.controlledResult,
+          'CONTROLLED_EVALUATION_REQUIRED',
+          '数值分项必须由确定性工具生成',
+          403,
+        );
       const condition = c.read(command.condition.id, 'condition');
       requireThat(
         condition.contentVersionId === command.condition.versionId,
@@ -263,7 +275,7 @@ export function applyResearch(c: WriteContext, command: CommandInput): void {
         '规则已改变，请基于当前规则重新评估',
         409,
       );
-      if (command.op === 'evaluation.confirm') c.human();
+      if (command.op === 'evaluation.confirm') c.personalRecord();
       for (const id of command.evidenceIds) c.read(id, 'evidence');
       for (const citation of command.citations) c.citation(citation);
       let basedOn;
@@ -294,6 +306,9 @@ export function applyResearch(c: WriteContext, command: CommandInput): void {
         evaluatedAt: c.now,
         tentative: command.op === 'evaluation.propose' && command.tentative,
         ...(basedOn ? { basedOn } : {}),
+        ...(command.op === 'evaluation.propose' && command.components
+          ? { components: command.components }
+          : {}),
       });
       break;
     }

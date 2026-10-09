@@ -137,7 +137,8 @@ it('已有六次迁移的任务在升级及重开后可读取，索引重建不�
     f.app.db.exec(`DROP TRIGGER research_results_insert; DROP TRIGGER research_results_update;
       DROP TRIGGER research_results_delete; DROP VIEW research_check_source;
       DROP VIEW research_result_job_source; DROP TABLE research_checks; DROP TABLE research_result_jobs;
-      DELETE FROM __drizzle_migrations WHERE created_at=(SELECT max(created_at) FROM __drizzle_migrations);`);
+      ALTER TABLE sessions DROP COLUMN capabilities;
+      DELETE FROM __drizzle_migrations WHERE created_at>=1791489086447;`);
     f.app.db.close();
     reopened = openDatabase(join(f.directory, 'test.sqlite'));
     expect(readResearchOverview(new ResearchRepository(reopened), f.p.id)).toEqual(expected);

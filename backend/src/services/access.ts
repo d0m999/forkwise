@@ -19,8 +19,15 @@ export class AccessService {
     projects: string[],
     lifetimeMs = 8 * 60 * 60 * 1000,
     token = randomBytes(32).toString('base64url'),
+    personalRecordProjects: string[] = [],
   ): string {
     const hash = this.hash(token);
+    requireThat(
+      personalRecordProjects.every((id) => projects.includes(id)),
+      'INVALID_SCOPE',
+      '委托必须属于授权项目',
+      403,
+    );
     requireThat(
       type === 'human' || !projects.includes('*'),
       'INVALID_SCOPE',
@@ -29,7 +36,7 @@ export class AccessService {
     );
     this.db
       .prepare(
-        'INSERT INTO sessions(token_hash,actor_id,type,projects,expires_at) VALUES(?,?,?,?,?)',
+        'INSERT INTO sessions(token_hash,actor_id,type,projects,expires_at,capabilities) VALUES(?,?,?,?,?,?)',
       )
       .run(
         hash,
@@ -37,6 +44,7 @@ export class AccessService {
         type,
         JSON.stringify(projects),
         new Date(this.clock() + lifetimeMs).toISOString(),
+        JSON.stringify({ personalRecordProjects }),
       );
     return token;
   }
@@ -77,12 +85,13 @@ export class AccessService {
   grants() {
     const rows = this.db
       .prepare(
-        "SELECT actor_id AS id,projects,expires_at AS expiresAt FROM sessions WHERE type='agent' ORDER BY expires_at DESC",
+        "SELECT actor_id AS id,projects,expires_at AS expiresAt,capabilities FROM sessions WHERE type='agent' ORDER BY expires_at DESC",
       )
-      .all() as { id: string; projects: string; expiresAt: string }[];
+      .all() as { id: string; projects: string; expiresAt: string; capabilities: string }[];
     return rows.map((row) => ({
       ...row,
       projects: JSON.parse(row.projects) as string[],
+      personalRecordProjects: JSON.parse(row.capabilities).personalRecordProjects ?? [],
       expired: Date.parse(row.expiresAt) <= this.clock(),
     }));
   }

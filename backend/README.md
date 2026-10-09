@@ -27,7 +27,7 @@ npm start
 | `FORKWISE_OLLAMA_VISION_MODEL` | 用于截图和 PDF 页转写的本机多模态模型，同样要求明确标签                      |
 | `SEC_USER_AGENT`               | SEC 请求所需的真实应用名称与联系邮箱，格式见 `../public-data-core/README.md` |
 
-Ollama 只连接 `127.0.0.1:11434`，代码不安装或拉取模型。未配置时任务明确失败并保留输入，不调用外部替代模型。模型真实能力、供应商资质、识别质量和真实 SEC 访问仍需分别验证。`metrics.json` 是数据目录中的已启用确定性指标名称数组；默认空，示例指标不自动进入白名单。
+Ollama 只连接 `127.0.0.1:11434`，代码不安装或拉取模型。未配置时任务明确失败并保留输入，不调用外部替代模型。模型真实能力、供应商资质和识别质量仍需分别验证；本次真实 SEC 取数范围见交付证据。`metrics.json` 是数据目录中的已启用确定性指标名称数组；默认空，示例指标不自动进入白名单。
 
 ## 操作与同步契约
 
@@ -77,15 +77,15 @@ SQLite 及 JSON 保存最近栈、游标和独立的 `workflowGroups` 归属/停
 }
 ```
 
-先运行后端服务。MCP 只代理 HTTP 业务接口，不直写数据库，也不拥有人工确认能力。可读取图谱、历史和材料，提交候选与业务操作，调整布局，检索、获取目录内公开资料、发起评估/研究/转写任务、查询及取消任务。授权默认 30 天，可在工作台列出并撤销；本机会话默认 8 小时。备份不携带访问令牌，恢复后重新授权。
+先运行后端服务。MCP 只代理 HTTP 业务接口，不直写数据库。默认没有个人记录能力；只有本人显式签发的项目委托才可代录规定操作，执行者始终保留为 Agent。可读取图谱、历史和材料，提交候选与业务操作，调整布局，检索、获取目录内公开资料、发起评估/研究/转写任务、查询及取消任务。授权默认 30 天，可在工作台列出并撤销；本机会话默认 8 小时。备份不携带访问令牌，恢复后重新授权。
 
 ## 材料与模型任务
 
 工作台“判断条件”支持定性、数值、混合规则及多个观察期间，能引用同一条件、修改全部引用或仅对选定引用派生新条件。数值字段无默认阈值；未知值不能填零。编辑草稿保存在浏览器，保存时检查条件及相关对象版本，冲突保留草稿并要求明确复核。引用调整保持规则内容版本与原评估，局部派生的新条件不继承原人工确认。
 
-条件评估先明确选择证据，支持独立记录本人判断及根据候选填写判断。改判须补充本人理由，沿用理由保留候选来历。条件下显示当前规则任务的状态、失败和重试；条件保存与计算状态分别报告。旧规则下的确认仅出现在历史。混合任务由代码计算数值要求、模型评估定性要求，保存两部分结果，按共同满足组合为候选；不支持从任意自然语言自动执行布尔逻辑，也不以模型意见覆盖数值缺口。公开接口的任务摘要 `condition` 引用仅含条件 ID 和内容版本。
+条件评估先明确选择证据，支持独立记录本人判断及根据候选填写判断。改判须补充本人理由，沿用理由保留候选来历。条件下显示当前规则任务的状态、失败和重试；条件保存与计算状态分别报告。旧规则下的确认仅出现在历史。混合任务由代码计算数值要求、模型评估定性要求，保存两部分结果；仅规则明确 `mixedCombination: joint_required` 时按共同满足组合为候选，其他标准保留分项及总体意见；不支持从任意自然语言自动执行布尔逻辑，也不以模型意见覆盖数值缺口。公开接口的任务摘要 `condition` 引用仅含条件 ID 和内容版本。
 
-原文件以 BLOB 存在 SQLite，与文本及定位产物分别保存。PDF 文本提取和页图渲染在受时间/内存边界约束的 worker 中运行；HTML 不执行脚本、不加载外部资源。单原文件上限 25 MB，正文上限 500 万字符；研究任务一次最多选择 30 份材料；首次研究的初始观点输入仍最多 20 份。全文模式总计上限 100 万字符，包含对象等上下文的序列化输入上限 120 万字符；超限明确拒绝，不静默截断。
+原文件以 BLOB 存在 SQLite，与文本及定位产物分别保存。PDF 文本提取和页图渲染在受时间/内存边界约束的 worker 中运行；HTML 不执行脚本、不加载外部资源。单原文件上限 25 MB，正文上限 500 万字符；研究任务一次最多选择 30 份材料；首次研究的初始观点输入仍最多 20 份。内部模型全文模式总计上限 100 万字符，包含对象等上下文的序列化输入上限 120 万字符；超限明确拒绝，不静默截断。外部任务固定范围而不随创建传全文，Agent 使用分段接口按需读取。
 
 研究接口及 MCP 支持可选 `retrieval: { queries: ["原文关键词"], maxCharacters: 80000 }`，只在明确选择的材料版本内检索，不扩展到其他材料或项目。关键词最多 8 个，字符预算为 2–20 万，默认 8 万；当前按原文关键词做全文检索，不伪称语义召回。各来源均分字符预算，记录实际片段、原文绝对位置、覆盖字符数、候选及预算上限。模型只能引用实际提供的连续片段；引用超出范围即使原文确有其句也会拒绝。没有命中时不调用模型，返回资料不足而非否定主张。工作台可查看片段、未覆盖说明和完整原文；原始材料保留，重试使用固定片段，任务与资产导出带相同范围。
 
@@ -101,7 +101,7 @@ SEC `submissions` 按同一行绑定所有列式申报字段，连同主体和�
 
 入口与原文件/研究面板共用可恢复请求：发送前保存到本机 IndexedDB，刷新后先查原回执，再用原键恢复尚未完成的步骤。结果未知时保留原请求，不生成新键重做。明确拒绝可回到输入，已保存文字可直接选用；不能将恢复存储失败冒充后端没有保存。浏览器草稿和未完成上传请求不包含在服务端项目备份中；本机存储不可用时该入口停止新请求，图谱其余功能继续可用。
 
-`POST /projects/{projectId}/files/import`（MCP：`forkwise_import_file`）接受 `{source: {title, publisher, rights, url?}, file: {name, mime, base64, publishedAt}}`。来源、原文件及解析任务原子保存，返回 `{fileId, hash, job, deduplicated, changes}`；同键恢复不会重复创建。格式/大小或任务容量校验失败全部回滚；后续解析失败保留合法原文件。既有 `/files` 保留向已存在来源上传版本的能力。文件上限和类型沿用 25 MB、PDF/HTML/PNG/JPEG，Agent 仍受项目授权，接口不读取任意本机路径。
+`POST /projects/{projectId}/files/import`（MCP：`forkwise_import_file`）接受 `{source: {title, publisher, rights, url?}, file: {name, mime, base64, publishedAt}}`。来源、原文件及解析任务原子保存，返回 `{fileId, hash, job, deduplicated, changes}`；同键恢复不会重复创建。格式/大小或任务容量校验失败全部回滚；后续解析失败保留合法原文件。既有 `/files` 保留向已存在来源上传版本的能力。文件上限和类型沿用 25 MB、PDF/HTML/PNG/JPEG，Agent 仍受项目授权，受限路径入口见下文；普通字节接口不读取路径。
 
 `POST /projects/{projectId}/initial-research`（MCP：`forkwise_initial_research`）接受 `{ "sourceVersionIds": ["已保存的观点材料版本"] }`。工作台“对选定材料进行研究”默认提供该入口。流程依次执行论证重建、目录内来源规划、SEC 数据集获取与逐项目标查证；固定目标和推导端点的内容版本。来源规划由已配置模型产生，当前只允许 SEC `companyfacts` / `submissions`，每次最多 10 个不同数据集；不确定 CIK 或目录不覆盖时应返回缺口。模型对主体和期间的识别质量仍待真实案例验证，索引文件不等于实际财报内容。
 
@@ -111,7 +111,7 @@ SEC `submissions` 按同一行绑定所有列式申报字段，连同主体和�
 
 父任务保存阶段、目录版本、子任务身份、材料覆盖和缺口。各阶段仍复用已有业务服务；来源失败不撤回重建，显式重试复用成功阶段，新取得材料会产生新的查证任务并保留先前结果。正文任务同样纳入持久研究历史分组，恢复时核对固定输入、原结果及文件/文本指纹。取消父任务同时取消其未完成子任务，晚到结果不能入库。预测查证强制使用 `current_basis`，推导使用 `inference_basis`，已披露事实使用 `reported_fact`；这些字段限定分析范围，不保证模型判断正确。未来验证事件保存为独立 AI 节点候选，须通过本人确认操作才形成本人安排。
 
-可选 `asOf` 使用完整 ISO 时间，界面按本机时区输入后转换。历史模式要求原始材料当时已记录且已取得，公开依据也仅复用符合该时点的本机快照；已知发布时间不能晚于该时点。缺少历史快照时保留 `not_known`，不会获取当前报告并冒充过去已知。首次研究的来源计划会提供检索词，计划有检索词时使用上述局部检索；材料总量超过 8 万字符却没有检索词时保留资料并说明补充方式。初始观点材料也可显式指定 `retrieval` 缩小重建范围。超过 500 万字符的原始 SEC 数据仍未接入正文库；结构化记录的期间缺失、口径未确认等仍须保留为缺口。财务字段白名单及口径规则不因文字检索扩张，真实模型/SEC 联调仍未完成，不能据此宣称 D48 完整可用性已验收。
+可选 `asOf` 使用完整 ISO 时间，界面按本机时区输入后转换。历史模式要求原始材料当时已记录且已取得，公开依据也仅复用符合该时点的本机快照；已知发布时间不能晚于该时点。缺少历史快照时保留 `not_known`，不会获取当前报告并冒充过去已知。首次研究的来源计划会提供检索词，计划有检索词时使用上述局部检索；材料总量超过 8 万字符却没有检索词时保留资料并说明补充方式。初始观点材料也可显式指定 `retrieval` 缩小重建范围。超过 500 万字符的原始 SEC 数据仍未接入正文库；结构化记录的期间缺失、口径未确认等仍须保留为缺口。财务字段白名单及口径规则不因文字检索扩张，内部模型真实研究质量与完整 SEC 申报链路仍未验收；本次 submissions 实时取数见交付证据，不能据此宣称 D48 完整可用性已验收。
 
 `verification.propose` / `verification.confirm` 通过已有 `POST /projects/{projectId}/operations` 与 MCP `forkwise_apply_operations` 使用同一契约。请求带 `target: {id, versionId}`、按 ID 排序的直接上下文 `context: [{id, versionId}]` 和 `details: {event, goal, period, date}`；其中 versionId 是内容版本，主张的 context 为空，推导列出全部直接前提与结论。外层 `expected` 仍是目标、上下文与已有节点的写入版本。候选还带 `gaps`；内部 `sourceTask` 仅受控系统能填写。
 
@@ -155,7 +155,7 @@ MCP 对应 `forkwise_preview_update`、`forkwise_submit_update`、`forkwise_read
 
 ## 备份、恢复、删除
 
-文字来源可在材料浮窗按固定版本阅读、高亮引用、前后分段、放大/还原并返回原画布。引用位置或保存指纹不匹配时明确拒绝定位，不改读最新版本。任务片段、查证引用和条件评估依据共用此入口。粘贴文本默认按摘录保存，可选全文或范围不确定，并可记录原始 URL（不会自动抓取）。`source.import` 的可选 `coverage` 与来源版本共用 `full/excerpt/unknown`，旧记录按未知显示；API/MCP、JSON 恢复和 Markdown 保留该标注。当前约 12000 字符的分段是浏览器呈现范围，材料接口仍读取保存全文。
+文字来源可在材料浮窗按固定版本阅读、高亮引用、前后分段、放大/还原并返回原画布。引用位置或保存指纹不匹配时明确拒绝定位，不改读最新版本。任务片段、查证引用和条件评估依据共用此入口。粘贴文本默认按摘录保存，可选全文或范围不确定，并可记录原始 URL（不会自动抓取）。`source.import` 的可选 `coverage` 与来源版本共用 `full/excerpt/unknown`，旧记录按未知显示；API/MCP、JSON 恢复和 Markdown 保留该标注。浏览器使用约 12000 字符的分段接口，返回固定版本、全文和段指纹；既有全文接口保留兼容。
 
 旧原型工作区可在左侧“迁移旧原型副本”选择 JSON、选择项目、预览转换结果，再确认创建新项目。预览不会保存数据；旧数据库和已有项目不被覆盖。迁入当前主张/推导、个人立场、材料及有效引用、画布位置/样式/批注/图片；“查看旧版迁移记录”可回看作者原版、初始对照、旧历史，复制旧草稿，下载单项目原型恢复副本。旧模拟查证和旧撤销栈保留为只读记录，不冒充新后端结果；新版本从导入时建立 v1。工作区文件上限 80 MiB，浏览器先按项目隔离上传，单项目上限 25 MB；原有正文 500 万字符及画布 12 MB 限制仍适用。
 
@@ -194,7 +194,7 @@ node scripts/browser-smoke.cjs
 
 “原图框选证据”支持拖动框选、数字坐标、暂不判断/支持/反对/限定/背景、修改关系及解除关联。保存固定原图和内容版本，重复保存同一区域复用；推导前提改变后必须重新核对。动图按第一帧，PDF 手工区域引用尚未接通。原图材料未识别文字时不进入全文索引；文本评估器明确拒绝未读取的图像依据。
 
-接口为 `POST /api/v1/projects/{projectId}/canvas-materials`（本人），请求包含 `targetId`、`expectedTargetVersion`、`imageId`、`expectedLayoutVersion` 和 `Idempotency-Key`。常规业务命令新增 `material.attach`、`material.hide`、`evidence.relate`，共享 API/MCP 契约及本人权限边界。`evidence.link` 新关联记录直接上下文，调用方须提供推导端点写入版本。图片引用使用 `kind: image`、`sourceVersionId`、`fileId`、`page: 1`、`imageWidth/imageHeight`、`region`，文字引用继续使用原契约。没有新增或发布 MCP 原图读取工具；外部客户端真实联调仍待验收。
+接口为 `POST /api/v1/projects/{projectId}/canvas-materials`（本人），请求包含 `targetId`、`expectedTargetVersion`、`imageId`、`expectedLayoutVersion` 和 `Idempotency-Key`。常规业务命令新增 `material.attach`、`material.hide`、`evidence.relate`，共享 API/MCP 契约及本人权限边界。`evidence.link` 新关联记录直接上下文，调用方须提供推导端点写入版本。图片引用使用 `kind: image`、`sourceVersionId`、`fileId`、`page: 1`、`imageWidth/imageHeight`、`region`，文字引用继续使用原契约。本次已补 MCP 原图读取及外部转写；真实客户端验收范围见文末 D149 交付证据。
 
 
 ### SEC 申报正文与历史索引（D143 / D144 / D145）
@@ -206,3 +206,49 @@ node scripts/browser-smoke.cjs
 目前支持原索引中的 UTF-8/ASCII HTML 主文件，原文件上限 25 MB、当前 HTML 解析上限 500 万字符，超过解析边界时保留原件及失败。附件、图片识别及完整表格财务口径核验仍待接通。真实网络仍要求本人 `SEC_USER_AGENT`；合成 API/MCP/浏览器验证不代表真实来源或模型质量。
 
 `POST /api/v1/projects/{projectId}/public-data/history-index` 与 MCP `forkwise_fetch_sec_history` 接受 `{indexSourceVersionId, fileName}`，沿用项目权限和 `Idempotency-Key`。`source.sec-history` 任务只取得固定根索引目录中的同主体分片，不接受任意 URL。材料来源版本保存 `provenance.indexParent`（父版本 ID 与快照 hash）；原始 JSON 保持顶层列式结构和原文定位。获取、全文/片段查证及恢复都核对父目录、材料和固定范围。数量或有效披露日期偏离固定目录时拒绝，需重新取得目录后新建任务；403 不自动重试。任务纳入取消、研究撤销、JSON 恢复及显式续跑，`asOf` 仅用当时已记录且已取得的本机分片。SDK 细节见 `../public-data-core/README.md`，真实历史 JSON 兼容性仍待验收。
+
+
+## D149：外部 Agent 本机交付
+
+本阶段不要求配置 Forkwise 内部模型。数值条件仍走确定性工具，Agent 梳理论证、阅读材料及提交定性候选。已有内部模型接口作为兼容能力保留，未配置时不会替代外部执行。
+
+Codex 使用 stdio MCP，令牌通过进程环境转交。将以下非秘密配置加入 Codex 的 `config.toml`，启动 Codex 的进程提供 `FORKWISE_AGENT_TOKEN` 和可选 `FORKWISE_URL`：
+
+```toml
+[mcp_servers.forkwise]
+command = "node"
+args = ["/Users/d0m999/Desktop/forkwise/backend/dist/src/mcp.js"]
+env_vars = ["FORKWISE_AGENT_TOKEN", "FORKWISE_URL"]
+```
+
+格式及环境变量转交方式已核对 [OpenAI 官方 MCP 文档](https://learn.chatgpt.com/docs/extend/mcp?surface=cli)。不要将令牌写入源码或可分享配置。工作台“授权本项目给 Agent”的复选框默认关闭个人记录委托；开启后仅允许当前项目的立场、理由、对象采用、笔记和条件确认。撤销立即失效，旧凭据无新能力。管理、恢复、项目删除、人工转写核验仍须本人会话。记录中的 `actor.type` 仍为 `agent`，`actor.delegation` 保留授权范围；AI 内容的 `origin` 不变。授权不是逐句本人审核证明。
+
+| MCP 工具 | 共用 HTTP 操作 | 作用 |
+| --- | --- | --- |
+| `forkwise_begin_external_research` | `POST /projects/{id}/external-research` | `{kind, sourceVersionIds, targetIds, retrieval?}` 固定输入；不把全文随创建结果传输 |
+| `forkwise_begin_external_evaluation` | `POST /projects/{id}/external-evaluations` | `{conditionId,ruleVersionId,evidenceIds}` 固定条件与证据；不调用模型 |
+| `forkwise_submit_external_research` | `POST /projects/{id}/external-research/{job}/submit` | `{state,result?,error?,gaps,agentCoverage?,agentUsage?}`；研究结果结构沿用 reconstruct／verify／impact／stance_draft，评估结果沿用 AssessmentResult |
+| `forkwise_cancel_external_research`／`forkwise_retry_external_research` | `POST …/{job}/cancel`／`retry` | 取消拒绝晚到，重试另建记录并保留 `input.external.retryOf` |
+| `forkwise_import_local_file` | `POST /projects/{id}/files/import-path` | 指定目录内单文件路径导入；文字支持 UTF-8 `text/plain` |
+| `forkwise_read_material_segment` | `GET /projects/{id}/materials/{version}/segments` | start／limit；最多 20,000 UTF-16 单位，字符边界、固定及分段指纹、解析锚点 |
+| `forkwise_read_material_image` | `GET …/materials/{version}/image-data` | 指定页，MCP 返回实际图像及原文件指纹 |
+| `forkwise_submit_external_transcription` | `POST /projects/{id}/external-transcriptions` | `{sourceVersionId,page,fileHash,result:{blocks,gaps}}`；区域归一化，独立未核验文字版本 |
+| `forkwise_edit_drawings` | `POST /projects/{id}/drawing-operations` | `{expectedVersion,commands}`；drawing.put／drawing.delete／object.position |
+
+接口完整前缀为 `/api/v1`。写操作须幂等键；先用原 `/operations/{key}` 回查，再以原键原内容恢复。外部任务 `input.external` 记录 `executor: external`、`createdBy`、`retryOf` 和 `serverReads`。文本／图像读取带 `jobId` 时记录服务端实际提供的范围，这不证明 Agent 理解了内容；`agentCoverage`／`agentUsage` 仅为自报。过时目标或直接上下文的结果继续保存在任务里，`output.stale=true`，不改当前图谱。失败和部分完成保留缺口；重启保持外部待执行状态，不交给模型。外部结果提交限创建执行者或本人，项目内另一 Agent 不能冒名提交。
+
+路径导入默认关闭。本人在服务数据目录创建 `import-roots.json`，示例：
+
+```json
+{"项目ID": ["/Users/d0m999/Documents/我的授权材料"]}
+```
+
+重启服务生效。目录授权与项目授权同时约束读取；拒绝越界、符号链接、非普通文件与读取期间变化。一次只读单文件，不扫描目录。原件仍存 SQLite BLOB 并进入备份；保留字节导入兼容接口。JSON／SQLite 备份保留任务输入、结果、材料、图形与记录者审计，恢复不会恢复会话令牌或重新授予委托。
+
+全文检索不返回 `rights: restricted` 的材料正文及对应证据引文，项目隔离与历史时点过滤同时生效。
+
+基础图形规范数据在 `canvas.annotations` 中只保存一份，工作台原 Excalidraw 显示和回写同一数据；旧 `drawings` 和原场景原样保留。`drawing.put` 的 drawing 包含 `{id,type,x,y,width,height,text?,color?,points?,fileId?}`，image 必须引用本项目原图；普通 arrow 不建立推导，研究位置写入 positions，均按布局版本原子保存。正式引擎仍遵循 ADR 0011。
+
+混合条件需明确 `mixedCombination: joint_required` 才共同满足；未指定或 unspecified 时仅保留分项和 Agent 总体意见。工具执行了数值规则不证明财务输入已核验。
+
+验收脚本：`npm test`、`node scripts/text-reader-smoke.cjs`、`node scripts/browser-smoke.cjs`、`npx tsx scripts/codex-live-acceptance.ts`、`SEC_USER_AGENT=… npx tsx scripts/sec-live-acceptance.ts`；真实 Codex 通过后运行 `npx tsx scripts/verify-codex-recovery.ts` 和 `node scripts/local-delivery-ui.cjs`。Codex 脚本使用隔离演示数据和临时配置，真实会话不等于真实投资研究质量验收；SEC脚本则实际取数和恢复，不使用网络夹具。最终证据及版本见 `../docs/plans/local-delivery-2026-10-09.md`。

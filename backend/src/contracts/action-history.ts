@@ -1,5 +1,5 @@
 import { z } from '@hono/zod-openapi';
-import { Id, Time } from './entities.js';
+import { Id, Time, ActorSchema } from './entities.js';
 import { LayoutData } from './layout.js';
 
 const summary = z.object({ id: Id, label: z.string().min(1).max(200) }).strict();
@@ -28,7 +28,7 @@ export const ActionJournal = z
           .extend({
             at: Time,
             workflowId: Id.optional(),
-            actor: z.object({ id: Id, type: z.enum(['human', 'agent', 'system']) }).strict(),
+            actor: ActorSchema,
             objects: z
               .array(z.object({ id: Id, before: Id.nullable(), after: Id }).strict())
               .max(100_000),

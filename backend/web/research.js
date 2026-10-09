@@ -274,8 +274,32 @@ export function attachResearch({
       return;
     }
     const label = document.createElement('p');
-    label.textContent = `${output.stale ? '对应旧内容版本；' : '当前任务结果；'}所选材料：${output.coverage.sourceVersionIds.length} 个版本。${output.coverage.networkQueries.length === 0 ? '本任务未执行联网查询。' : ''}`;
+    label.textContent = `${output.stale ? '对应旧内容版本；' : '当前任务结果；'}所选材料：${output.coverage?.sourceVersionIds?.length ?? 0} 个版本。${job.input?.external ? '外部 Agent 执行；覆盖与用量为 Agent 自报，服务端提供范围独立记录。' : (output.coverage?.networkQueries ?? []).length === 0 ? '本任务未执行联网查询。' : ''}`;
     box.append(label);
+    if (job.input?.external) {
+      const details = document.createElement('details'),
+        summary = document.createElement('summary'),
+        pre = document.createElement('pre');
+      summary.textContent = '读取记录、Agent 自报与缺口';
+      pre.textContent = JSON.stringify(
+        {
+          serverReads: output.coverage?.serverReads,
+          agentReported: output.coverage?.agentReported,
+          gaps: output.gaps,
+          usage: job.usage,
+        },
+        null,
+        2,
+      );
+      details.append(summary, pre);
+      box.append(details);
+      if (job.kind === 'condition.agent') {
+        const p = document.createElement('p');
+        p.textContent = output.result.reason;
+        box.append(p);
+        return;
+      }
+    }
     if (output.coverage.retrieval) {
       const coverage = output.coverage.retrieval,
         note = document.createElement('p');

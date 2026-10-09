@@ -67,6 +67,15 @@ const net = require('node:net');
         process.env.CHROME_PATH || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
     });
     page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
+    await page.addInitScript(() => {
+      window.forkwiseSmokeMessages=[];
+      window.addEventListener('message',event=>{
+        if(!event.data?.channel?.startsWith('forkwise-'))return;
+        const d=event.data;
+        window.forkwiseSmokeMessages.push({channel:d.channel,type:d.type,project:d.projectId??d.snapshot?.projectId,session:d.session??d.snapshot?.session,event:d.event?.type,selected:d.snapshot?.selected});
+        window.forkwiseSmokeMessages=window.forkwiseSmokeMessages.slice(-40);
+      });
+    });
     page.on('response', async (response) => {
       if (response.url().endsWith('/operations')) {
         try {
@@ -630,6 +639,7 @@ const net = require('node:net');
             }),
           ),
         );
+      if(frame)console.error('Canvas messages:',await frame.evaluate(()=>window.forkwiseSmokeMessages));
     }
     console.error(
       'Recent writes:',

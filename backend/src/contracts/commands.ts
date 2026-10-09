@@ -14,6 +14,7 @@ import {
   Time,
   Period,
   Verdict,
+  AssessmentResult,
   Citation,
   Ref,
   DataProvenance,
@@ -168,6 +169,10 @@ export const Command = z
         citations: z.array(Citation).max(100),
         missing: z.array(Text).max(100),
         tentative: z.boolean(),
+        components: z
+          .object({ numeric: AssessmentResult, qualitative: AssessmentResult })
+          .strict()
+          .optional(),
       })
       .strict(),
     z

@@ -141,7 +141,13 @@ export class EvaluationService {
           const qualitative = AssessmentResult.parse(result.assessment);
           usage = result.usage;
           components = { numeric, qualitative };
-          assessment = combineMixed(numeric, qualitative);
+          assessment =
+            input.condition.data.mixedCombination === 'joint_required'
+              ? combineMixed(numeric, qualitative)
+              : {
+                  ...qualitative,
+                  reason: '未指定共同满足；保留 Agent 总体意见与分项。' + qualitative.reason,
+                };
         } else ({ assessment, usage } = await this.agent.evaluate(input, abort.signal));
       }
       this.repo.db
@@ -240,7 +246,7 @@ export class EvaluationService {
   async drain(): Promise<void> {
     const queued = this.repo.db
       .prepare(
-        "SELECT project_id,id FROM jobs WHERE state='queued' AND kind IN ('condition.rule','condition.agent') ORDER BY created_at,id",
+        "SELECT project_id,id FROM jobs WHERE state='queued' AND json_extract(input,'$.external.executor') IS NULL AND kind IN ('condition.rule','condition.agent') ORDER BY created_at,id",
       )
       .all() as { project_id: string; id: string }[];
     for (const job of queued) {

@@ -1,4 +1,5 @@
 import { registerManualUpdates } from './manual-updates.js';
+import { registerLocalDelivery } from './local-delivery.js';
 import { ActionHistoryStatus, HistoryTravel } from '../contracts/action-history.js';
 import { WorkspaceSchema, SyncSchema, JobSummarySchema } from '../contracts/responses.js';
 import { registerTranscription } from './transcription.js';
@@ -362,13 +363,26 @@ export function createApi(
           ),
         ),
     );
-  const grant = z.object({ projectIds: z.array(Id).min(1).max(100) }).strict();
+  const grant = z
+    .object({
+      projectIds: z.array(Id).min(1).max(100),
+      personalRecordProjects: z.array(Id).max(100).default([]),
+    })
+    .strict();
   app.openapi(
     createRoute({
       method: 'get',
       path: `${p}/agent-grants`,
       responses: output(
-        z.array(z.object({ id: Id, projects: z.array(Id), expiresAt: Time, expired: z.boolean() })),
+        z.array(
+          z.object({
+            id: Id,
+            projects: z.array(Id),
+            expiresAt: Time,
+            expired: z.boolean(),
+            personalRecordProjects: z.array(Id),
+          }),
+        ),
       ),
     }),
     (c) => {
@@ -405,7 +419,13 @@ export function createApi(
       method: 'post',
       path: `${p}/agent-grants`,
       request: { headers, body: json(grant) },
-      responses: output(z.object({ token: z.string(), projectIds: z.array(Id) })),
+      responses: output(
+        z.object({
+          token: z.string(),
+          projectIds: z.array(Id),
+          personalRecordProjects: z.array(Id),
+        }),
+      ),
     }),
     (c) =>
       c.json(
@@ -414,6 +434,7 @@ export function createApi(
             c.get('principal'),
             c.req.header('Idempotency-Key')!,
             grant.parse(c.req.valid('json')).projectIds,
+            grant.parse(c.req.valid('json')).personalRecordProjects,
           ),
         ),
       ),
@@ -479,6 +500,7 @@ export function createApi(
   );
   registerManualUpdates(app, controller);
   registerTranscription(app, controller);
+  registerLocalDelivery(app, controller);
   registerAssets(app, controller);
   registerPrototypeMigration(app, controller);
   registerMaintenance(app, controller, maintenance);

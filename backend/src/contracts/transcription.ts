@@ -16,3 +16,7 @@ export const CorrectionInput = TranscriptionInput.extend({
   reason: Text,
   confirmedAgainstImage: z.literal(true),
 }).strict();
+export const ExternalTranscriptionInput = TranscriptionInput.extend({
+  fileHash: z.string().regex(/^[a-f0-9]{64}$/),
+  result: TranscriptionResult,
+}).strict();

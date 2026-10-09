@@ -187,7 +187,7 @@ export function applyGraph(c: WriteContext, command: CommandInput): boolean {
       return true;
     }
     case 'stance.set': {
-      c.human();
+      c.personalRecord();
       const e = c.get(command.id);
       c.expect(e.id);
       requireThat(
@@ -220,7 +220,7 @@ export function applyGraph(c: WriteContext, command: CommandInput): boolean {
       return true;
     }
     case 'object.adopt': {
-      c.human();
+      c.personalRecord();
       const e = c.get(command.id);
       c.expect(e.id);
       requireThat(
@@ -232,7 +232,7 @@ export function applyGraph(c: WriteContext, command: CommandInput): boolean {
       return true;
     }
     case 'note.create': {
-      c.human();
+      c.personalRecord();
       c.expect(command.targetId);
       c.get(command.targetId);
       c.add(command.id, 'note', { targetId: command.targetId, text: command.text });

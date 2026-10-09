@@ -1,4 +1,5 @@
 import { ManualUpdateService } from './services/manual-updates.js';
+import { ExternalResearchService } from './services/external-research.js';
 import { TranscriptionService, type VisionModel } from './services/transcription.js';
 import { randomBytes } from 'node:crypto';
 import { AccessService } from './services/access.js';
@@ -28,6 +29,7 @@ export function createApplication(options: {
   publicDataClient?: SecClient;
   researchModel?: StructuredModel;
   visionModel?: VisionModel;
+  importRoots?: Record<string, string[]>;
 }) {
   const db = openDatabase(options.database);
   const repo = new ResearchRepository(db);
@@ -48,6 +50,7 @@ export function createApplication(options: {
   const files = new MaterialFileService(write, jobs);
   const filings = new SecFilingService(write, jobs, files, options.publicDataClient);
   const researchTasks = new ResearchTaskService(write, jobs, options.researchModel, search);
+  const externalResearch = new ExternalResearchService(researchTasks, evaluation);
   const manualUpdates = new ManualUpdateService(researchTasks);
   const initialResearch = new InitialResearchService(
     write,
@@ -76,6 +79,8 @@ export function createApplication(options: {
     initialResearch,
     filings,
     manualUpdates,
+    externalResearch,
+    options.importRoots ?? {},
   );
   const maintenance =
     options.database === ':memory:'
@@ -100,5 +105,6 @@ export function createApplication(options: {
     initialResearch,
     filings,
     manualUpdates,
+    externalResearch,
   };
 }
