@@ -16,7 +16,7 @@ backend/artifacts/
 **/local-access.json
 **/__pycache__/
 
-# 私有归档：PRD、计划与产品调研文档不纳入版本控制
-投资推理图谱_PRD_v0.2.md
+# 私有归档：PRD、计划与产品调研文档不纳入版本控制；交接（handoff）文档只放 TMPDIR，不进仓库
+docs/prd/
 docs/plans/
 docs/research/
