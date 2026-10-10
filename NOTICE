@@ -1,0 +1,38 @@
+见岔（Forkwise）
+Copyright 2026 mempAw
+
+This product is licensed under the Apache License, Version 2.0 (the "License");
+you may not use this product except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+
+
+---
+
+This NOTICE file provides attribution information as required by
+Section 4(d) of the Apache License, Version 2.0.
+
+见岔（Forkwise）本身以 Apache License 2.0 授权（见上方声明）。
+
+本项目构建与运行中依赖若干第三方开源组件。除本仓库自身代码外，这些组件
+**各自保留其原始许可**，不在 Apache-2.0 覆盖范围内；使用它们时须遵守各自
+的许可条款。主要组件按 Apache-2.0 的义务在此说明其许可归属：
+
+- 以 MIT 许可为主的组件（部分列举，非完整清单）：
+  Excalidraw、React（含 React Flow 核心）、Vite、Hono、better-sqlite3、
+  Zustand、Zod、Vitest、Tailwind CSS、Ollama 软件等。
+- 以 Apache-2.0 许可的组件（部分列举，非完整清单）：
+  TypeScript、PDF.js 主体、drizzle-orm 等。
+
+上述列举为便于识别许可类型的摘要，**不构成完整依赖清单**。每个依赖的
+许可以其自身发布包内随附的许可证文本为准；递归依赖与发布产物的完整许可
+清单见各构建产物（如 `package-lock.json`、node_modules 内 LICENSE 文件）。
+
+本项目不随附上述任何第三方组件的商标授权；各组件名称与商标归其各自所有者。
