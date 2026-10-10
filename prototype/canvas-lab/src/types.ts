@@ -13,6 +13,7 @@ export type Card = {
   researchUse?:'reference'|'research';
   reconstructionCorrected?:boolean;
   canCorrectSource?:boolean;
+  body?:string; tags?:string[]; showBody?:boolean; showTags?:boolean; customSize?:boolean; noteCard?:boolean;
 }
 export type PortSide = 'top'|'right'|'bottom'|'left'
 export type Link = { id: string; relationId: string; from: string; to: string; fromSide?:PortSide; toSide?:PortSide }
@@ -33,8 +34,9 @@ export type Snapshot = {
   backend?:boolean; directCanvas?:boolean; simpleLinks?:boolean; semanticDensity?:0|1|2|3;
 }
 export type Position = { id: string; x: number; y: number }
-export type ObjectTask = 'judgment'|'stance'|'results'|'structure'|'history'|'ai'|'question'|'preview'|'adopt'|'correct'|'materials'|'annotations'
+export type ObjectTask = 'judgment'|'stance'|'results'|'structure'|'history'|'ai'|'question'|'preview'|'adopt'|'correct'|'materials'|'annotations'|'notebook'
 export type CanvasEvent =
+ | { type:'card-size'; id:string; width:number; height:number }
  | { type:'convert-arrow'; ids:string[]; from:string; to:string; fromSide?:PortSide; toSide?:PortSide; nativeDraw?:boolean; canvasState?:CanvasPersistence; canvasBefore?:CanvasPersistence }
  | { type:'connect'; from:string; to:string; text?:string; fromSide?:PortSide; toSide?:PortSide }
  | { type:'reconnect'; id:string; end:'premise'|'conclusion'; previous?:string; target:string; side?:PortSide }

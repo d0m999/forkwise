@@ -8,6 +8,7 @@ import type { ObjectStyle } from './objectTools'
 import { getCanvasDraft, putCanvasDraft, getReturnView, putReturnView } from './canvasPersistence'
 import { layoutSelection } from './selectionLayout'
 import type { SelectionLayoutOperation } from './selectionLayout'
+import NotebookCard from './NotebookCard'
 
 type Draft = CanvasDraft
 type Props = { selectedRelations:string[]; selectRelations:(ids:string[])=>void; api:ExcalidrawImperativeAPI; snapshot:Snapshot; onEvent:(event:CanvasEvent)=>void; register:(open:()=>void)=>void; registerPromote:(open:()=>void)=>void; registerFocusRange:(focus:(ids:string[])=>void)=>void; registerSource:(open:(id:string,scroll:number)=>void)=>void; measureCard:(card:Card)=>{width:number;height:number}; onDraftChange:()=>void }
@@ -115,6 +116,7 @@ export default function ResearchOverlay({api,snapshot,selectedRelations,selectRe
     if(draft?.id&&(!editable||!snapshot.cards.some(c=>c.id===draft.id))){setDraft(null);onEvent({type:'overlay',open:false})}
   },[snapshot])
   const edit=(card:Card)=>{
+    if(card.noteCard){closeLocal();onEvent({type:'task',id:card.id,task:'notebook'});return}
     if(snapshot.backend){onEvent({type:'details',id:card.id,view:'edit'});return}
     if(!editable){onEvent({type:'notice',message:'先收录为个人论证，再改写卡片；作者原版保留。'});return}
     announceLocal();setSourceId(null);setStyleIds(null);setDraft({id:card.id,text:card.text,reason:'',x:card.x,y:card.y})
@@ -348,6 +350,7 @@ export default function ResearchOverlay({api,snapshot,selectedRelations,selectRe
       const stanceTag=elements.find(e=>e.customData?.forkwiseId===card.id&&(e.customData?.forkwiseField==='stance-tag'||snapshot.simpleLinks&&card.kind==='inference'&&e.customData?.forkwiseField==='stance'))
       const stanceToken=card.stance==='认可'?'accepted':card.stance==='质疑'?'questioned':card.stance==='不认可'?'rejected':'pending'
       if(b.left+b.width<0||b.top+b.height<0||b.left>viewport.width||b.top>viewport.height)return null
+      if(card.noteCard)return <NotebookCard key={card.id} card={card} left={b.left} top={b.top} width={b.width/zoom} height={b.height/zoom} zoom={zoom} selected={selectedIds.includes(card.id)} related={neighborhoodIds.has(card.id)&&!selectedIds.includes(card.id)} open={()=>task('notebook',card)} resize={(width,height)=>onEvent({type:'card-size',id:card.id,width,height})}/>
       return <div key={card.id}>
         {selectedIds.includes(card.id)&&card.kind==='claim'&&<div className="card-selection" style={{left:b.left,top:b.top,width:b.width,height:b.height,borderRadius:10*zoom}}/>}
         {snapshot.directCanvas&&neighborhoodIds.has(card.id)&&!selectedIds.includes(card.id)&&<div className="card-neighborhood" data-neighborhood-card={card.id} aria-hidden="true" style={{left:b.left-3,top:b.top-3,width:b.width+6,height:b.height+6,borderRadius:(card.kind==='claim'?10:5)*zoom}}/>}
@@ -360,7 +363,7 @@ export default function ResearchOverlay({api,snapshot,selectedRelations,selectRe
     {toolbarCard&&!localOpen&&<div ref={toolbarRef} className={`research-ui object-toolbar ${snapshot.directCanvas&&single?'object-toolbar-compact':''}`} data-object-kind={single?.kind} role="toolbar" aria-label="所选研究对象操作" data-toolbar-count={selectedCards.length} data-selected-ids={selectedIds.join(',')} style={toolAt} onPointerDown={stop}>
       <div className="object-toolbar-range"><strong>{single?single.kind==='inference'?'线上推导':'主张卡':`已选 ${selectedCards.length} 个研究对象`}</strong><span hidden={Boolean(snapshot.directCanvas&&single)}>{selection.free.length?`另选 ${selection.free.length} 个批注，仅操作研究对象`:snapshot.directCanvas&&single&&neighborhoodIds.size>selectedIds.length?'相关前提与结论已高亮':'Shift 点选可多选'}</span></div>
       <div className="object-toolbar-actions">
-        {single&&<><button data-object-action="rewrite" data-object-id={single.id} disabled={!editable} title={!editable?'收录后可改写':undefined} onClick={()=>edit(single)}>{snapshot.directCanvas?(single.kind==='inference'?'说明':'改写'):'改写'}</button>{snapshot.directCanvas?<button data-object-action="judgment" data-object-id={single.id} onClick={()=>task('judgment')}>查证与立场</button>:<><button data-object-action="stance" data-object-id={single.id} onClick={()=>task('stance')}>立场</button><button data-object-action="results" data-object-id={single.id} onClick={()=>task('results')}>查证</button><button data-object-action="materials" data-object-id={single.id} onClick={()=>task('materials')}>材料</button>
+        {single&&<><button data-object-action="rewrite" data-object-id={single.id} disabled={!editable} title={!editable?'收录后可改写':undefined} onClick={()=>single.noteCard?task('notebook'):edit(single)}>{single.noteCard?'写字板':snapshot.directCanvas?(single.kind==='inference'?'说明':'改写'):'改写'}</button>{snapshot.directCanvas?<button data-object-action="judgment" data-object-id={single.id} onClick={()=>task('judgment')}>查证与立场</button>:<><button data-object-action="stance" data-object-id={single.id} onClick={()=>task('stance')}>立场</button><button data-object-action="results" data-object-id={single.id} onClick={()=>task('results')}>查证</button><button data-object-action="materials" data-object-id={single.id} onClick={()=>task('materials')}>材料</button>
           <button data-object-action="annotations" data-object-id={single.id} onClick={()=>task('annotations')}>随动批注</button>
           <button data-object-action="source" data-object-id={single.id} onClick={()=>openSource(single)}>来源</button><button data-object-action="structure" data-object-id={single.id} onClick={()=>task('structure')}>推导</button></>}</>}
         {!snapshot.directCanvas&&snapshot.history&&snapshot.mode==='author'&&<button data-object-action="adopt" onClick={()=>task('adopt')}>收录所选</button>}

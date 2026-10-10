@@ -105,6 +105,10 @@ function stanceColors(stance:string){
   return {fg:css.getPropertyValue(`--stance-${token}-fg`).trim(),bg:css.getPropertyValue(`--stance-${token}-bg`).trim(),border:css.getPropertyValue(`--stance-${token}-border`).trim()}
 }
 function cardLayout(card:Card,density=3){
+  if(card.noteCard){
+    const width=card.width,title=wrap(card.text,16,width-34),body=wrap((card.body||'').replace(/!\[[^\]]*\]\([^\s]+\)/g,'[正文图片]'),14,width-34),bodyY=34+title.split('\n').length*24+16;
+    return {width,height:card.height,body:title,summary:body,bodyY:36,lineY:0,comboY:0,stanceY:0,checkY:0,checkHeight:0,footerY:card.height-34,dividerY:bodyY};
+  }
   const width=card.kind==='inference'?270:320,pad=20
   const body=wrap(card.text,card.kind==='inference'?14:20,width-(card.kind==='inference'?24:pad*2))
   const bodyHeight=body.split('\n').length*(card.kind==='inference'?21:30)
@@ -196,6 +200,15 @@ function project(snapshot: Snapshot, current: readonly ExcalidrawElement[], useC
       let y=-rows.reduce((height,row)=>height+row.value.split('\n').length*18+4,0)-8
       for(const row of rows){text(row.field,row.value,0,y,12,row.color);y+=row.value.split('\n').length*18+4}
       continue
+    }
+    if(card.noteCard){
+      text('origin',card.origin,16,16,11,'#687b8e');text('body',layout.body,16,36,16);
+      // Keep a plain-text preview in native canvas exports; the live HTML skin
+      // supplies rich image previews and controls without changing the graph.
+      const available=Math.max(0,Math.floor((layout.height-layout.dividerY-65)/22));
+      if(card.showBody!==false&&card.body)text('notebook-body',layout.summary.split('\n').slice(0,available).join('\n'),16,layout.dividerY,14);
+      if(card.showTags!==false&&card.tags?.length)text('tags',card.tags.join(' · '),16,layout.footerY-24,11,'#687b8e');
+      text('details','写字板',layout.width-70,layout.footerY,12,'#276e68');continue;
     }
     const originX=card.kind==='inference'?0:20,originY=card.kind==='inference'?0:18
     if(density>=1){
