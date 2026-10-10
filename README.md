@@ -50,12 +50,12 @@ Terminology and domain concepts use [CONTEXT.md](CONTEXT.md) as the single sourc
 
 ## Documentation
 
-- Requirements and change log: [投资推理图谱_PRD_v0.2.md](投资推理图谱_PRD_v0.2.md)
 - Domain terminology: [CONTEXT.md](CONTEXT.md)
 - Domain model: [docs/domain-model.md](docs/domain-model.md)
 - Design interview and confirmed decisions: [docs/design-interview.md](docs/design-interview.md)
 - Architecture decisions: [docs/adr/](docs/adr/)
-- Open-source and reference-product research: [docs/research/open-source-landscape.md](docs/research/open-source-landscape.md)
+
+> Requirements (PRD) and open-source/reference research notes are internal documents and are not distributed with this public repository.
 
 ## License
 

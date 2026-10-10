@@ -50,12 +50,12 @@ npm start                               # 启动，默认 http://127.0.0.1:8787
 
 ## 文档
 
-- 需求与变更记录：[投资推理图谱_PRD_v0.2.md](投资推理图谱_PRD_v0.2.md)
 - 领域术语：[CONTEXT.md](CONTEXT.md)
 - 领域模型：[docs/domain-model.md](docs/domain-model.md)
 - 设计访谈与已确认决策：[docs/design-interview.md](docs/design-interview.md)
 - 架构决策：[docs/adr/](docs/adr/)
-- 开源与参考产品调研：[docs/research/open-source-landscape.md](docs/research/open-source-landscape.md)
+
+> 需求（PRD）与开源／参考产品调研属于内部文档，不随本公开仓库分发。
 
 ## 许可
 
