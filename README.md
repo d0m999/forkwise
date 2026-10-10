@@ -57,6 +57,10 @@ Terminology and domain concepts use [CONTEXT.md](CONTEXT.md) as the single sourc
 
 > Requirements (PRD) and open-source/reference research notes are internal documents and are not distributed with this public repository.
 
+## Brand assets
+
+The approved [T1 basic brand kit v1.0](assets/brand/forkwise-basic-kit/README.txt) contains 26 files for Forkwise32 A / Current. See the kit’s [usage terms and font licenses](assets/brand/forkwise-basic-kit/LICENSE-usage.txt) before using or redistributing these assets.
+
 ## License
 
 This project is licensed under the [Apache License 2.0](LICENSE). Copyright © 2026 mempAw.

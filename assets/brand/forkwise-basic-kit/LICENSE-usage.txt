@@ -1,0 +1,170 @@
+Forkwise 基础设计包使用说明
+
+适用交付：Forkwise T1 基础设计包
+正式定稿：Forkwise32 精修 A / Current
+品牌版本：v1.0
+说明日期：2026-10-10
+
+一 说明性质
+
+本文件拟定本次品牌资产交付的使用范围，供品牌方确认与项目协作使用。正式权利归属及授权范围以品牌方确认、双方有效合同和适用法律为准。本文件不代表第三方权利人授予新的许可，不转让或扩张任何第三方权利。
+
+二 Forkwise 品牌资产的项目使用
+
+在品牌方拥有或已取得所需权利、且相关制作已获品牌方授权的前提下，品牌方内部及其受托供应商可使用本包资产为 Forkwise 项目制作网站、应用、社交媒体、演示材料、印刷品及其他获授权物料。
+
+受托供应商应按品牌规范使用正式素材，只在受托项目范围内复制、输出和交付必要文件。品牌资产的第三方再分发、转授权、素材库收录、模板销售、其他品牌用途或商标相关申请及使用，需另行取得品牌方授权及必要权利人的许可。
+
+不得以本次交付暗示品牌方拥有 Outfit 字体的独占权，或取得字体作者的背书。上述品牌资产使用范围不改变独立适用的字体许可，也不能限制任何人依 SIL OFL 1.1 合法取得的字体软件使用权利。
+
+三 字体出处与许可
+
+字标字体：Outfit
+字标制作：550 字重，手工成对字距调整，已转为路径
+字体权利人标示：Copyright 2021 The Outfit Project Authors
+官方项目：https://github.com/Outfitio/Outfit-Fonts
+字体来源：Google Fonts 官方仓库
+来源文件：https://raw.githubusercontent.com/google/fonts/main/ofl/outfit/Outfit%5Bwght%5D.ttf
+对应许可：https://raw.githubusercontent.com/google/fonts/main/ofl/outfit/OFL.txt
+许可名称：SIL Open Font License 1.1
+SIL 官方许可文本：https://openfontlicense.org/open-font-license-official-text/
+来源核对日期：2026-10-10
+
+原素材中的 fonts/SOURCE.txt、fonts/OFL-Outfit.txt 已与官方来源核对。原字体版本为 Version 1.100；原文件 SHA-256 为：
+fc7287273e66929776e2ba54f144fe699080bec29f61bf649d70d871468aeade
+
+本 T1 基础包不单独附可安装字体；规范 HTML 嵌入中文阅读用字体子集，详见下一节。正式 Logo 字标为路径，不需要安装字体才能显示或输出。OFL 对字体软件的许可要求不自动延伸到使用该字体制作的品牌成品；字体本身仍受其许可约束。
+
+如另行获取、使用或再分发 Outfit 字体软件，应遵守其完整英文 OFL 1.1，包括保留版权及许可信息、不单独销售字体软件，以及在适用时遵守修改字体的保留名称规则。字体软件不能改以本文件作为其许可证。此段为简要说明，完整英文原文为准。
+
+四 规范 HTML 的中文嵌入字体
+
+04-spec/quick-spec.html 内嵌 Noto Sans CJK SC Regular 的 WOFF 字体子集，用于规范文字的中文离线显示，不用于 Forkwise 品牌字标。该子集由原字体筛选字形并转换格式而成，仍按 SIL Open Font License 1.1 分发。
+
+源字体集合：NotoSansCJK-Regular.ttc
+集合内字体索引：2（从 0 开始）
+字体名称：Noto Sans CJK SC Regular
+PostScript 名称：NotoSansCJKsc-Regular
+原字体版本：2.004
+原字体版权元数据：© 2014-2021 Adobe (http://www.adobe.com/).
+本地发行包版权记录另列：Copyright 2010-2012, Google Corporation
+官方项目：https://github.com/notofonts/noto-cjk
+官方许可：https://github.com/notofonts/noto-cjk/blob/main/Sans/LICENSE
+许可纯文本：https://raw.githubusercontent.com/notofonts/noto-cjk/main/Sans/LICENSE
+来源核对日期：2026-10-10
+
+完整英文 OFL 1.1 附于本文件末尾。字体子集与它的版权、许可信息须一同保留；单独再分发 HTML 或提取出的字体子集时，同样应保留该信息。本文件对 Forkwise 品牌资产的项目使用限制，不额外限制嵌入字体按 OFL 享有的权利，也不暗示品牌方对 Noto 字体拥有独占权。
+
+五 商标与法律边界
+
+本次交付未进行商标近似检索、注册可用性判断、权利清查或法律审查。不保证名称或图形可注册、可独占或在全部地区与类别中无权利冲突；不应据此标注注册商标符号或暗示已完成注册。
+
+需要申请商标、对外授权或处理权利争议时，请由品牌方确认权利范围并咨询合格专业人士。本文件不构成法律意见。
+
+六 输出与适用性边界
+
+包内 CMYK 数值为数学近似，未经过 ICC 校准；印刷需针对实际工艺转换、打样并确认。通用 App 图标母版不等于全平台认证。16 px 的检验重点为整体识别，不保证眼睛与表情细节在所有终端均清晰。制作与上线前请按实际用途验收。
+
+品牌资产使用与授权联系人：[待品牌方填写]
+媒体联系邮箱：[待品牌方填写]
+
+七 随嵌入字体提供的完整英文许可
+
+Noto Sans CJK SC Regular
+© 2014-2021 Adobe (http://www.adobe.com/).
+Local distribution copyright notice: Copyright 2010-2012, Google Corporation
+
+This Font Software is licensed under the SIL Open Font License, Version 1.1.
+This license is copied below and is also available with a FAQ at:
+https://openfontlicense.org
+
+-----------------------------------------------------------
+SIL OPEN FONT LICENSE Version 1.1 - 26 February 2007
+-----------------------------------------------------------
+
+PREAMBLE
+
+The goals of the Open Font License (OFL) are to stimulate worldwide
+development of collaborative font projects, to support the font
+creation efforts of academic and linguistic communities, and to provide
+a free and open framework in which fonts may be shared and improved in
+partnership with others.
+
+The OFL allows the licensed fonts to be used, studied, modified and
+redistributed freely as long as they are not sold by themselves. The
+fonts, including any derivative works, can be bundled, embedded,
+redistributed and/or sold with any software provided that any reserved
+names are not used by derivative works. The fonts and derivatives,
+however, cannot be released under any other type of license. The
+requirement for fonts to remain under this license does not apply to
+any document created using the fonts or their derivatives.
+
+DEFINITIONS
+
+"Font Software" refers to the set of files released by the Copyright
+Holder(s) under this license and clearly marked as such. This may
+include source files, build scripts and documentation.
+
+"Reserved Font Name" refers to any names specified as such after the
+copyright statement(s).
+
+"Original Version" refers to the collection of Font Software components
+as distributed by the Copyright Holder(s).
+
+"Modified Version" refers to any derivative made by adding to,
+deleting, or substituting -- in part or in whole -- any of the
+components of the Original Version, by changing formats or by porting
+the Font Software to a new environment.
+
+"Author" refers to any designer, engineer, programmer, technical writer
+or other person who contributed to the Font Software.
+
+PERMISSION & CONDITIONS
+
+Permission is hereby granted, free of charge, to any person obtaining a
+copy of the Font Software, to use, study, copy, merge, embed, modify,
+redistribute, and sell modified and unmodified copies of the Font
+Software, subject to the following conditions:
+
+1) Neither the Font Software nor any of its individual components, in
+Original or Modified Versions, may be sold by itself.
+
+2) Original or Modified Versions of the Font Software may be bundled,
+redistributed and/or sold with any software, provided that each copy
+contains the above copyright notice and this license. These can be
+included either as stand-alone text files, human-readable headers or
+in the appropriate machine-readable metadata fields within text or
+binary files as long as those fields can be easily viewed by the user.
+
+3) No Modified Version of the Font Software may use the Reserved Font
+Name(s) unless explicit written permission is granted by the
+corresponding Copyright Holder. This restriction only applies to the
+primary font name as presented to the users.
+
+4) The name(s) of the Copyright Holder(s) or the Author(s) of the Font
+Software shall not be used to promote, endorse or advertise any
+Modified Version, except to acknowledge the contribution(s) of the
+Copyright Holder(s) and the Author(s) or with their explicit written
+permission.
+
+5) The Font Software, modified or unmodified, in part or in whole, must
+be distributed entirely under this license, and must not be distributed
+under any other license. The requirement for fonts to remain under this
+license does not apply to any document created using the Font Software.
+
+TERMINATION
+
+This license becomes null and void if any of the above conditions are
+not met.
+
+DISCLAIMER
+
+THE FONT SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO ANY WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT
+OF COPYRIGHT, PATENT, TRADEMARK, OR OTHER RIGHT. IN NO EVENT SHALL THE
+COPYRIGHT HOLDER BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+INCLUDING ANY GENERAL, SPECIAL, INDIRECT, INCIDENTAL, OR CONSEQUENTIAL
+DAMAGES, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+FROM, OUT OF THE USE OR INABILITY TO USE THE FONT SOFTWARE OR FROM
+OTHER DEALINGS IN THE FONT SOFTWARE.

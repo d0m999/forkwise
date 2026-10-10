@@ -57,6 +57,10 @@ npm start                               # 启动，默认 http://127.0.0.1:8787
 
 > 需求（PRD）与开源／参考产品调研属于内部文档，不随本公开仓库分发。
 
+## 品牌资产
+
+已确认的 [T1 基础设计包 v1.0](assets/brand/forkwise-basic-kit/README.txt) 采用 Forkwise32 精修 A / Current，含 26 件文件。使用或再分发前，请阅读包内的[使用说明与字体许可](assets/brand/forkwise-basic-kit/LICENSE-usage.txt)。
+
 ## 许可
 
 本项目以 [Apache License 2.0](LICENSE) 授权，版权归 mempAw（Copyright 2026 mempAw）所有。

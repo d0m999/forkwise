@@ -1,0 +1,100 @@
+{
+  "brand": "Forkwise",
+  "version": "1.0",
+  "date": "2026-10-10",
+  "design": "Forkwise32 refined A / Current",
+  "color_space": "sRGB",
+  "source_of_truth": "This file is the only master color definition for this kit. All values and artwork are derived from it.",
+  "colors": {
+    "apricot": {
+      "name_zh": "主杏橙",
+      "role": "primary",
+      "hex": "#F3AC64",
+      "rgb": {
+        "r": 243,
+        "g": 172,
+        "b": 100
+      },
+      "hsl": {
+        "h": 30.21,
+        "s": 85.63,
+        "l": 67.25
+      },
+      "cmyk": {
+        "c": 0.0,
+        "m": 29.22,
+        "y": 58.85,
+        "k": 4.71
+      }
+    },
+    "brown": {
+      "name_zh": "结构深棕",
+      "role": "structure",
+      "hex": "#623C2A",
+      "rgb": {
+        "r": 98,
+        "g": 60,
+        "b": 42
+      },
+      "hsl": {
+        "h": 19.29,
+        "s": 40.0,
+        "l": 27.45
+      },
+      "cmyk": {
+        "c": 0.0,
+        "m": 38.78,
+        "y": 57.14,
+        "k": 61.57
+      }
+    },
+    "cream": {
+      "name_zh": "背景奶油",
+      "role": "background",
+      "hex": "#FFF8EF",
+      "rgb": {
+        "r": 255,
+        "g": 248,
+        "b": 239
+      },
+      "hsl": {
+        "h": 33.75,
+        "s": 100.0,
+        "l": 96.86
+      },
+      "cmyk": {
+        "c": 0.0,
+        "m": 2.75,
+        "y": 6.27,
+        "k": 0.0
+      }
+    }
+  },
+  "utility": {
+    "black": "#000000",
+    "white": "#FFFFFF"
+  },
+  "units": {
+    "hsl": "h degrees; s and l percent",
+    "cmyk": "percent"
+  },
+  "cmyk_status": "Mathematical approximation from sRGB; no ICC profile, substrate or ink calibration; not press-calibrated or a proof. Confirm ICC conversion and proof with the print supplier.",
+  "contrast_method": "WCAG relative luminance from sRGB; (lighter + 0.05) / (darker + 0.05)",
+  "contrast": [
+    {
+      "foreground": "brown",
+      "background": "cream",
+      "ratio": 9.0606
+    },
+    {
+      "foreground": "brown",
+      "background": "apricot",
+      "ratio": 4.9547
+    },
+    {
+      "foreground": "apricot",
+      "background": "cream",
+      "ratio": 1.8287
+    }
+  ]
+}
