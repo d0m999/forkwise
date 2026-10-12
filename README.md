@@ -54,6 +54,7 @@ Terminology and domain concepts use [CONTEXT.md](CONTEXT.md) as the single sourc
 - Domain model: [docs/domain-model.md](docs/domain-model.md)
 - Design interview and confirmed decisions: [docs/design-interview.md](docs/design-interview.md)
 - Architecture decisions: [docs/adr/](docs/adr/)
+- Architecture mapping contract v0.1 (proposal and reference scope): [documentation index](docs/architecture/mapping-contract-v0.1/README.md)
 
 > Requirements (PRD) and open-source/reference research notes are internal documents and are not distributed with this public repository.
 

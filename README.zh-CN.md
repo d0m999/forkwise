@@ -54,6 +54,7 @@ npm start                               # 启动，默认 http://127.0.0.1:8787
 - 领域模型：[docs/domain-model.md](docs/domain-model.md)
 - 设计访谈与已确认决策：[docs/design-interview.md](docs/design-interview.md)
 - 架构决策：[docs/adr/](docs/adr/)
+- 映射契约 v0.1（提案与参考验证范围）：[架构文档索引](docs/architecture/mapping-contract-v0.1/README.md)
 
 > 需求（PRD）与开源／参考产品调研属于内部文档，不随本公开仓库分发。
 
