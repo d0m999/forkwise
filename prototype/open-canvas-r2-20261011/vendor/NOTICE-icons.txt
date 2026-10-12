@@ -1,0 +1,5 @@
+Inline SVG icons in this prototype are based on Lucide icon paths, with local adjustments. They are not claimed as wholly original artwork.
+Source: https://github.com/lucide-icons/lucide
+License source retrieved 2026-10-12: https://raw.githubusercontent.com/lucide-icons/lucide/main/LICENSE
+License: ISC; the upstream license also includes the MIT terms and attribution for icons derived from Feather. The complete upstream text is preserved in LICENSE-lucide.txt.
+The exact original icon-package version was not recorded; no package version is invented here.

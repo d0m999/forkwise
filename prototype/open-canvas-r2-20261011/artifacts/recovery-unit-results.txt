@@ -1,0 +1,100 @@
+
+> forkwise-open-canvas-prototype@0.2.0 test
+> node tests/canvas-unit-tests.cjs && node tests/canvas-r2-tests.cjs && node tests/clipboard-r2-tests.cjs && node tests/panels-model.test.cjs && node tests/onboarding-model.test.cjs && node tests/objects-model.test.cjs && node tests/app-storage-model.test.cjs
+
+PASS ungroup preserves members, edge content, absolute endpoint
+PASS delete frame preserves contents, internal and container edges
+PASS delete whole group removes members
+PASS duplicate offset +24 and internal edge rebinding
+PASS regular endpoint deletion removes incident edge
+PASS restore full image preserves current display scale and original source
+PASS line interior hit binds content before container, empty space stays free
+PASS self-connection interior returns blockedSelf rather than falling through to frame/free
+PASS D318 independent overlapping targets are crossed together
+PASS D319 forward conflict moves necessary selected followers
+PASS D319 backward conflict moves necessary selected predecessors
+PASS D314 non-overlapping objects are skipped
+PASS group layer operation includes member persistent order
+PASS front and back keep selected order despite selection order
+PASS frame enclosure preserves group membership and captures whole group
+PASS frame enclosure never captures a partly enclosed group via its member
+PASS frame resizing retains intersections and releases wholly outside members
+PASS nested candidate wins over parent, unrelated branch uses foreground
+PASS drop uses pointer rather than full enclosure, and prevents cycles
+PASS moving a group member cannot change frame or group membership
+PASS moving frame preserves descendant memberships
+PASS selection frame creation requires a common direct parent
+PASS grouping assigns only one direct container and ungroup restores frame
+PASS remove member preserves geometry and persistent order
+PASS card grows only for title/tags and shrinks to manual floor
+PASS manual text width stays fixed while content height changes
+PASS automatic text width caps at320 independent of viewport zoom
+PASS alignment uses edge and center guides rather than grid coordinates
+PASS elbow label uses path distance, curve label follows cubic
+PASS removing final group member frees container-bound endpoint
+PASS annotations follow target center and target deletion preserves them
+PASS annotation frame release requires explicit flag and copies are free
+PASS card preview only shows complete line boxes with measured footer reserve
+PASS card preview reflow uses actual body offset, line height and tag location
+
+26 R2 engine tests passed
+PASS copy snapshots body before subsequent editing
+PASS first same-project cut restores external edge; subsequent paste independent
+PASS undo first paste restores first-move eligibility
+PASS undo cut then paste creates independent copy
+PASS deleted external endpoint not revived
+PASS cross-project first move consumes token globally
+PASS cross-project undo changes only target and allows retry
+PASS case-insensitive target tag keeps existing color
+PASS missing tag created and undone atomically
+PASS continuous paste +24 and viewport resets sequence
+PASS write failure never cuts
+PASS cut annotation plus target preserves relative offsets
+PASS native paste uses common frame membership path
+13 clipboard recovery regressions passed
+PASS: block identities, sections/folds, indent/outdent, parent conversion, table rows/columns/header, rich cross-inline hits, duplicate identity, serialization, OpenCC
+PASS: block boundaries and Unicode normalization source mapping
+PASS: traditional-equivalent search, rich preview, hit navigation and reopen state
+PASS: block identities and folded preference persist across editor close/reopen
+PASS: last-cell Tab, insertion keyboard navigation, caret clamping, menu Escape
+PASS: explicit degraded/ready engine status and retry affordance
+PASS: browser-split duplicate block identities cannot redirect undo caret
+PASS: block rail redraw preserves handle keyboard focus
+PASS: First invitation is idempotent, non-modal, focus-preserving, and data-free
+PASS: Skip survives refresh; explicit restart always begins at step one
+PASS: Navigation, completion, refresh and reopening never edit project storage
+PASS: Refreshing an interrupted tour offers resume without opening it or stealing focus
+PASS: Guide keyboard capture blocks app shortcuts and clipboard actions; Tab remains untrapped
+PASS: Real app capture/bubble shortcuts cannot delete objects, switch tools or undo from tour
+PASS: Modal suspension yields Escape/Tab and resumes without focus theft
+PASS: Initial invitation waits for existing editing; active tour never rewrites or steals caret
+PASS: Pointer interaction minimizes; locate only changes focus, never activates controls
+PASS: Context switches from visible card to body or empty canvas without creating content
+PASS: Invalid state and storage failure are recoverable; isolated mode writes no storage
+PASS: Deterministic placement stays inside narrow and short mocked viewports
+
+12 onboarding DOM/model regressions passed. Real-browser visual, native Tab order, touch and screen-reader QA remain separate.
+PASS init is idempotent and registers no clipboard listeners
+PASS card title and writing board are explicit independent actions
+PASS line style, both markers, width, dashed, label font and color are editable
+PASS multi-line reversal swaps each line separately and preserves geometry/content
+PASS property closures re-resolve objects after undo and keep panel state live
+PASS text controls clamp 10–144, align and apply whole-block styles
+PASS shape picker has all five shapes and custom color preserves content
+PASS popover keys never reach background shortcuts; Escape closes and restores focus
+PASS input keys and composition never invoke object deletion/group shortcuts
+PASS layer menu honors availability and same-parent frame gate
+PASS attachment menu supports text, shape, image and stroke with detach IDs
+PASS image crop/restore remain wired and rotation preserves source and center
+PASS image viewer switches original/canvas and Escape returns to canvas
+PASS a stale property handler cannot modify another project
+PASS stale selected IDs hide toolbar instead of dereferencing missing geometry
+PASS appearance close button restores focus and palettes match object semantics
+16 objects DOM/model tests passed; these are not visual browser tests.
+PASS malformed archive is never overwritten by edits
+PASS quota failure preserves in-memory edit and undo with visible failure
+PASS isolated mode never writes project storage
+3 application storage recovery regressions passed
+
+> forkwise-open-canvas-prototype@0.2.0 check
+> node --check app.js && node --check canvas.js && node --check objects.js && node --check clipboard.js && node --check panels.js && node --check onboarding.js

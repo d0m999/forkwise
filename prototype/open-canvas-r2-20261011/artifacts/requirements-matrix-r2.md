@@ -1,0 +1,120 @@
+# R2 需求追踪矩阵：重建审计最终版
+
+2026-10-12 UTC；业务冻结03:00。原矩阵及脚本在云端重置中丢失；本表从保留审计上下文恢复相同97行D编号顺序及要求范围，重新核查重建源码。**这不是原文件的字节级恢复，也不是原矩阵逐字副本。**
+
+源码相对本报告为 ../；最终SHA-256见 audit-source-sha256-20261012.txt。业务源码未由审计修改。设计以D423收束版为基线：D201–203替代旧搜索布局/单击定位；D302替代D298–300避让；D422取消D84/D402转卡；D423收缩旧专用研究工具。溯源和旧数据迁移暂缓。97行是合并交互要求，不是全部423项累计实施清单。新用户引导独立验收，不添加到历史97行。
+
+## 本次证据及边界
+
+- recovery-unit-results.txt：34画布、13剪贴板、16对象、3存储、12引导，共78个单项；另8组面板测试。6份业务JS语法检查通过。测试套件通过不表示全部子功能或真实浏览器通过
+- 模型索引：C=canvas-unit-tests.cjs/canvas-r2-tests.cjs；K=clipboard-r2-tests.cjs；P=panels-model.test.cjs；O=objects-model.test.cjs。均在 ../tests/，后缀为结果关键词
+- 新构建独立云端CUA见 QA-RECOVERY-20261012.md；具体通过逐行写入，未观察的子项仍注明。正文普通保存刷新与引导跳过/完成刷新已新验；正常保存不代替配额异常、崩溃或冲突恢复
+- 新CUA验证了标题/正文分工、表格键盘、H2折叠、列表缩进、简繁富文搜索命中接续、普通线/自连接拒绝/端点随动、跨项目复制剪切、删除frame保卡、线样式及Esc/X焦点。四项键盘已在新构建重新测试，包括菜单Esc延迟重绘后的焦点修复
+- 本次未CUA验证图片导入/裁剪、真实OS中文IME、长文重开阅读位置、块拖动、窄屏/移动、代码字面编辑、全部组与嵌套frame/自由端、全部剪贴板内线集合、AI候选流程。旧2026-10-11通过不作为重建构建证据
+- 状态仍以实现范围为准，**未因单项CUA通过把复合“部分”行整体升级**。“实现有局部模型证据”不等于整行验收
+
+## 仍未完整范围
+
+正文静态SVG/GIF控制、完整Markdown与链接菜单、图片占位进度/恢复任务、失败恢复草稿与版本冲突、复杂块拖动、标签+N/拖序/筛选排序、初始侧栏宽度及结构阅读锚点仍不完整。表格列宽、库失败提示/重试、原生粘贴frame归属已有代码及局部模型，不再误报完全没有，但本次CUA未覆盖其完整边界。AI仍只是明确的本地模拟。溯源、转卡、旧专用研究工具、布局锁等继续明确排除。
+
+## 97行矩阵
+
+| 行号 | D编号 | 现行要求 | 当前源码证据 | 重建审计状态 | R2恢复差异与剩余缺口 | 验收步骤 | 优先级 | 本次模型证据 | 本次浏览器证据 | 历史证据说明 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 1 | D29,D31,D36 | 本机免登录与自动保存 | app.js save/saveBanner | 部分 | 损坏原存档不覆盖，错误重试/导出；仍无崩溃恢复区 | 编辑重开；模拟配额异常 | P0 | 无该行专门测试证据；tests/storage-recovery.test.cjs：损坏档不覆盖/配额失败保内存与undo/isolated不写入（3项）；tests/app-storage-model.test.cjs：损坏档不覆盖/配额失败保内存与undo/isolated不写入（3项） | QA-RECOVERY-20261012.md：正式地址正文保存后完整刷新仍在；不是配额失败或崩溃恢复验收 | 2026-10-11历史结果不作为本次构建通过证据 |
+| 2 | D37,D125,D421 | Markdown可读摘要及完整JSON，区分画布图像/备份 | app.js exportFile | 部分 | 摘要为卡片文字/连线；未见画布图像导出 | 混合图文与自由线导出核对 | P1 | 无该行专门测试证据 | QA-RECOVERY-20261012.md未记录此行专门CUA；不沿用旧通过 | 2026-10-11历史结果不作为本次构建通过证据 |
+| 3 | D40 | 不采集使用事件 | 全部业务JS | 已实现未测 | 未见遥测调用 | 观察网络 | P2 | 无该行专门测试证据 | QA-RECOVERY-20261012.md未记录此行专门CUA；不沿用旧通过 | 2026-10-11历史结果不作为本次构建通过证据 |
+| 4 | D55–D59,D73,D82,D150 | 紧凑项目导航与底部创作 | app.js boot/render,index.html | 已实现未测 | 保留项目切换/新建/改名与创作栏 | 窄屏导航及切项目 | P1 | 无该行专门测试证据 | QA-RECOVERY-20261012.md未记录此行专门CUA；不沿用旧通过 | 2026-10-11历史结果不作为本次构建通过证据 |
+| 5 | D151,D251–255,D262–263 | 先放卡再标题，创建首次输入一次撤销 | canvas.js down/editText/finishEdit | 已实现未测 | 保留快照和输入法guard，真实IME未验 | 中文标题→Esc→undo/redo；点另卡 | P0 | 无该行专门测试证据 | QA-RECOVERY-20261012.md：新卡先放置再标题，Enter提交；N新建第二卡 | 2026-10-11历史结果不作为本次构建通过证据 |
+| 6 | D256–258 | 标题显式编辑及双击分工 | objects.js refresh,canvas.js activate | 实现有局部模型证据 | 独立编辑标题/写字板入口，双击按titleHit | 标题双击/正文双击区别 | P1 | O:title | QA-RECOVERY-20261012.md：实际双击标题编辑标题，双击正文开写字板 | 2026-10-11历史结果不作为本次构建通过证据 |
+| 7 | D152–156,D259–260 | 右侧文档面板跟随单卡，多选/空白保留 | panels.js openEditor/followSelection | 已实现未测 | 保持单卡编辑职责 | 空白、多选、切卡、关闭后重开 | P0 | 无该行专门测试证据 | QA-RECOVERY-20261012.md：正文打开和编辑通过；多选/空白保留完整边界未测 | 2026-10-11历史结果不作为本次构建通过证据 |
+| 8 | D261 | 删除卡保留写字板并有直接撤销 | panels.js renderEditor | 部分 | 删除态仅文字，无面板撤销按钮 | 删正在编辑卡→直接undo入口 | P1 | 无该行专门测试证据 | QA-RECOVERY-20261012.md未记录此行专门CUA；不沿用旧通过 | 2026-10-11历史结果不作为本次构建通过证据 |
+| 9 | D157,D264,D266,D278 | 按需格式与斜杠菜单，无源码模式 | panels.js showInsert/bindBlockMenu | 部分 | 补H3/待办及菜单键盘；斜杠完整消费/取消边界未全验 | 空段落、网址、代码、取消文件 | P1 | P:keyboard | QA-RECOVERY-20261012.md：插入过滤“表格”+Down/Enter成功 | 2026-10-11历史结果不作为本次构建通过证据 |
+| 10 | D265,D284 | 展开还原与响应式阅读位置/侧栏基线 | panels.js renderEditor,panels.css | 部分 | 首次仍440，非0.4W；缺结构阅读锚点 | 长文宽窄切换与展开 | P1 | 无该行专门测试证据 | QA-RECOVERY-20261012.md未记录此行专门CUA；不沿用旧通过 | 2026-10-11历史结果不作为本次构建通过证据 |
+| 11 | D158–163 | 近旁图标/即时外观/标题色白正文 | objects.js style,canvas.js nodeHTML | 实现有局部模型证据 | 菜单闭包重取对象、Esc恢复焦点有模型；卡外观全链未测 | 改色undo后继续改色，退出菜单 | P1 | O:closures/keys；第16项objects：X关闭焦点与语义色板 | QA-RECOVERY-20261012.md：卡绿色应用；线外观Esc/X还焦点保选择 | 2026-10-11历史结果不作为本次构建通过证据 |
+| 12 | D164,D307–308 | 标题标签必要增高与手动高度下限 | canvas.js reflowNode | 实现有局部模型证据 | 自动增减与完整行预览已补 | 长标题删短/手高下限/标签增减 | P1 | C:card/preview | QA-RECOVERY-20261012.md未记录此行专门CUA；不沿用旧通过 | 2026-10-11历史结果不作为本次构建通过证据 |
+| 13 | D165–167,D196 | 标签单行+N及长名省略，完整标签写字板 | canvas.js nodeHTML/reflowNode | 部分 | 仍直接输出tags，无+N入口 | 10标签和超长名 | P1 | 无该行专门测试证据 | QA-RECOVERY-20261012.md未记录此行专门CUA；不沿用旧通过 | 2026-10-11历史结果不作为本次构建通过证据 |
+| 14 | D185–189 | 标签创建颜色/删除影响数与撤销 | panels.js drawTags | 已实现未测 | 基础路径保留 | 共用标签多卡改色→删→undo | P1 | 无该行专门测试证据 | QA-RECOVERY-20261012.md未记录此行专门CUA；不沿用旧通过 | 2026-10-11历史结果不作为本次构建通过证据 |
+| 15 | D193–194 | 标签大小写不敏感判重及复用 | panels.js drawTags | 已实现未测 | 创建/改名lowercase，重复复用 | AI与ai重复创建 | P1 | 无该行专门测试证据 | QA-RECOVERY-20261012.md未记录此行专门CUA；不沿用旧通过 | 2026-10-11历史结果不作为本次构建通过证据 |
+| 16 | D195 | 当前卡片标签拖动排序 | panels.js drawTags | 部分 | 改为n.tags上移按钮，未提供拖动 | 拖标签且其他卡顺序不变 | P1 | 无该行专门测试证据 | QA-RECOVERY-20261012.md未记录此行专门CUA；不沿用旧通过 | 2026-10-11历史结果不作为本次构建通过证据 |
+| 17 | D190–192 | 失效标签保留与名称同步 | panels.js tagNames/tagLabel/runSearch | 已实现未测 | 被删名称保留，失效条件明确 | 历史标签改名/删除/恢复查询 | P1 | 无该行专门测试证据 | QA-RECOVERY-20261012.md未记录此行专门CUA；不沿用旧通过 | 2026-10-11历史结果不作为本次构建通过证据 |
+| 18 | D197 | 筛选标签按名称排序 | panels.js searchPopover | 未实现 | 仍project.tags.map原顺序 | 乱序创建检查排序 | P2 | 无该行专门测试证据 | QA-RECOVERY-20261012.md未记录此行专门CUA；不沿用旧通过 | 2026-10-11历史结果不作为本次构建通过证据 |
+| 19 | D168–176,D171–175,D201–203 | 当前卡片标题全文+标签交集，居中只读预览 | panels.js runSearch/openSearch | 实现有局部模型证据 | 富文预览；单击预览与明确打开分离 | 查询不隐藏画布，单击不改变选择 | P0 | P:search | QA-RECOVERY-20261012.md：简体查询匹配繁体，富文保标题/列表/表格；明确打开接续 | 2026-10-11历史结果不作为本次构建通过证据 |
+| 20 | D177,D199–200,D204–206,D210 | 首命中/导航及已开写字板接续命中 | panels.js drawPreview/openResult/drawEditorFind | 实现有局部模型证据 | terms/hit接续已补；真实布局另验 | 末尾命中→下一处→打开2/2 | P1 | P:search | QA-RECOVERY-20261012.md：下一命中→明确打开已开写字板为2/2 | 2026-10-11历史结果不作为本次构建通过证据 |
+| 21 | D207–209,D211,D250 | 改词重置、标签保位置、重开阅读进度 | panels.js runSearch/drawPreview | 部分 | lastQuery与scroll保留，仍像素位置非结构锚点 | 仅标签/关键词/关闭重开比较 | P1 | P:search | QA-RECOVERY-20261012.md未记录此行专门CUA；不沿用旧通过 | 2026-10-11历史结果不作为本次构建通过证据 |
+| 22 | D212 | 搜索定位保持zoom及可见画布中心 | canvas.js centerOn | 已实现未测 | 未改变zoom，面板占位中心须实测 | 开/关面板搜索定位 | P1 | 无该行专门测试证据 | QA-RECOVERY-20261012.md未记录此行专门CUA；不沿用旧通过 | 2026-10-11历史结果不作为本次构建通过证据 |
+| 23 | D213–218,D247,D249 | 固定比例、窄屏单栏、键盘与IME | panels.js openSearch,panels.css | 部分 | 基本focus trap/IME guard；真实IME和窄屏未新验 | 窄屏Tab/Enter/选字/Esc | P1 | 无该行专门测试证据 | QA-RECOVERY-20261012.md：搜索当前桌面键盘操作局部通过；真实IME/窄屏未测 | 2026-10-11历史结果不作为本次构建通过证据 |
+| 24 | D219 | 无匹配独立清词/清标签 | panels.js runSearch | 部分 | 仅失效标签有移除按钮，普通无结果缺清全标签 | 仅清标签保关键词 | P2 | 无该行专门测试证据 | QA-RECOVERY-20261012.md未记录此行专门CUA；不沿用旧通过 | 2026-10-11历史结果不作为本次构建通过证据 |
+| 25 | D198,D220,D238 | 最近内容时间/标题命中三级排序 | panels.js runSearch,canvas.js editText | 部分 | rank排序在；画布标题编辑未显式更新updatedAt | 不同途径改正文/标题后顺序 | P1 | 无该行专门测试证据 | QA-RECOVERY-20261012.md未记录此行专门CUA；不沿用旧通过 | 2026-10-11历史结果不作为本次构建通过证据 |
+| 26 | D221–225 | 两行摘要及图文缩略/纯图计数 | panels.js runSearch | 已实现未测 | 首图缩略和纯图计数路径在 | 纯图与图文长摘要 | P1 | 无该行专门测试证据 | QA-RECOVERY-20261012.md未记录此行专门CUA；不沿用旧通过 | 2026-10-11历史结果不作为本次构建通过证据 |
+| 27 | D179,D180–184,D226–232 | 20条历史/防抖/去重/删除撤销边界 | panels.js loadSearch/recordSearch/historyKey | 已实现未测 | 保留跨次状态及删历史抑制；组合边界未全验 | 关闭未点击记录，清后不补回 | P1 | 无该行专门测试证据 | QA-RECOVERY-20261012.md未记录此行专门CUA；不沿用旧通过 | 2026-10-11历史结果不作为本次构建通过证据 |
+| 28 | D234–237,D245 | jieba专业词组、引号与全命中语义 | panels.js loadSearchLibraries/units,vendor | 部分 | 真实WASM/词典在；失败降级公开；专业覆盖待语料测 | 专业词/引号/库失败重试 | P0 | P:engines | QA-RECOVERY-20261012.md：界面报告中文分词已就绪；专业语料与加载失败未实际测 | 2026-10-11历史结果不作为本次构建通过证据 |
+| 29 | D240–242 | 大小写简繁匹配及历史合并保原文 | panels.js fold/historyKey | 实现有局部模型证据 | OpenCC tw→cn，历史归一化 | 台积电/臺積電及历史合并 | P1 | P:OpenCC/search | QA-RECOVERY-20261012.md：台积电 ALPHA匹配臺積電 alpha | 2026-10-11历史结果不作为本次构建通过证据 |
+| 30 | D239,D246 | 原文位置去重/跨inline统一高亮 | panels.js ranges/documentIndex/richMatches | 实现有局部模型证据 | 归一化map和DOM边界已补；多字上下文扩测 | 兼容字符/重叠词/跨inline | P1 | P:Unicode/boundaries | QA-RECOVERY-20261012.md：原文字形高亮及富文标题/列表/表格预览；全Unicode映射未实测 | 2026-10-11历史结果不作为本次构建通过证据 |
+| 31 | D248 | 加载失败/内容更新及异步状态 | panels.js searchEngines/drawSearchEngineStatus | 部分 | loading/ready/failed+retry在；主查询同步，迟到重试/性能未全验 | 错误注入、快速改词/IME/切项目 | P1 | P:degraded | QA-RECOVERY-20261012.md：分词/OpenCC就绪显示通过；加载失败/重试仍模型证据 | 2026-10-11历史结果不作为本次构建通过证据 |
+| 32 | D267–269,D281 | 正文图独立块/等比拖宽/适应/排序 | panels.js selectImage/structural | 已实现未测 | 有拖宽柄与width属性；真实手势未新验 | 拖宽→窄屏→展开→重排 | P0 | 无该行专门测试证据 | QA-RECOVERY-20261012.md未记录此行专门CUA；不沿用旧通过 | 2026-10-11历史结果不作为本次构建通过证据 |
+| 33 | D270,D279 | Enter/Backspace/列表/代码键盘规则 | panels.js blockKeys | 部分 | 标题/列表/代码/表格补齐；复杂退格仍浏览器默认 | 父子列表Enter/代码Tab/中文选字 | P0 | P:keyboard | QA-RECOVERY-20261012.md：正文Enter分第二段；独立beta撤销后gamma仍在原第二段；表格末格Tab新行 | 2026-10-11历史结果不作为本次构建通过证据 |
+| 34 | D271–274,D278 | 转换/缩进/父子整体移动删除及撤销 | panels.js indentBlock/convertBlock/blockAction | 部分 | 父子结构及一次structural历史；复杂嵌套转换待测 | 父三后代转换/删/拖→undo | P0 | P:conversion/indent | QA-RECOVERY-20261012.md：列表增加缩进形成子列表；复杂转换删除未本次实测 | 2026-10-11历史结果不作为本次构建通过证据 |
+| 35 | D275–276,D279 | 子列表与章节折叠、跨次偏好独立历史 | panels.js foldState/applyFolds | 部分 | 按项目卡片保存；折叠焦点/插入自动展开边界未全验 | 嵌套折叠重开，历史不增加 | P0 | P:folds | QA-RECOVERY-20261012.md：H2章节折叠/展开，折叠不增加内容undo | 2026-10-11历史结果不作为本次构建通过证据 |
+| 36 | D278 行内 | 有限全部行内格式与待办/H3 | panels.js format/showInsert | 部分 | 下划线/代码/高亮/ochre色/H3在；非完整预设色选项 | 格式重开、待办层级 | P1 | 无该行专门测试证据 | QA-RECOVERY-20261012.md未记录此行专门CUA；不沿用旧通过 | 2026-10-11历史结果不作为本次构建通过证据 |
+| 37 | D278–280 块菜单 | 块柄/连续多选/副本复制删/选择本节 | panels.js refreshBlockRail/showBlockMenu/blockAction | 部分 | 主要菜单已补；完整结构化剪切与粘贴新身份待验 | Shift连续块含折叠父项复制删undo | P0 | P:block identities/duplicate | QA-RECOVERY-20261012.md：块菜单Escape修复后延迟DOM检查焦点仍在相同H2柄；复制/剪切/多选未全测 | 2026-10-11历史结果不作为本次构建通过证据 |
+| 38 | D280 拖动 | 阈值、占位、插入线、边缘滚动与取消 | panels.js enhanceEditor/drag handlers | 部分 | 有落点线/同类li限制；缺6px/占位/自动滚动 | 拖长文边缘/Esc/无效落点 | P1 | 无该行专门测试证据 | QA-RECOVERY-20261012.md未记录此行专门CUA；不沿用旧通过 | 2026-10-11历史结果不作为本次构建通过证据 |
+| 39 | D281 图片输入 | 文件选择/拖入/剪贴板，含静态SVG | panels.js pickImage/insertImageFile | 部分 | 图片文件/drop/paste在；明确拒绝SVG | JPEG/PNG/GIF/SVG/错误文件 | P0 | 无该行专门测试证据 | QA-RECOVERY-20261012.md未记录此行专门CUA；不沿用旧通过 | 2026-10-11历史结果不作为本次构建通过证据 |
+| 40 | D281 图片管理 | 图注alt/替换/占位进度失败/取消和原卡任务 | panels.js selectImage/insertImageFile | 部分 | token/isConnected保护；无占位任务重试，切卡丢弃结果 | 换图后撤销、删占位、切卡晚到 | P0 | 无该行专门测试证据 | QA-RECOVERY-20261012.md未记录此行专门CUA；不沿用旧通过 | 2026-10-11历史结果不作为本次构建通过证据 |
+| 41 | D281 正文大图 | fit/100%/zoom/pan/关闭回正文 | panels.js viewImage | 已实现未测 | 完整工具路径在 | 双击图放大平移关闭位置 | P1 | 无该行专门测试证据 | QA-RECOVERY-20261012.md未记录此行专门CUA；不沿用旧通过 | 2026-10-11历史结果不作为本次构建通过证据 |
+| 42 | D281 GIF | 播放暂停及减少动态默认暂停 | panels.js img rendering | 未实现 | 仍普通img | GIF可见性/减少动态 | P2 | 无该行专门测试证据 | QA-RECOVERY-20261012.md未记录此行专门CUA；不沿用旧通过 | 2026-10-11历史结果不作为本次构建通过证据 |
+| 43 | D281 表格 | 行列/表头/列宽/Tab新行/横向滚动 | panels.js tableAction/enhanceEditor/blockKeys | 部分 | 列右7px拖宽无明显柄；视觉可发现性未验 | 2x2到3x3、末格Tab、拖列宽 | P0 | P:table/last-cell | QA-RECOVERY-20261012.md：过滤插表及末格输入last后Tab新增第三行；列宽未本次实测 | 2026-10-11历史结果不作为本次构建通过证据 |
+| 44 | D281 代码 | 纯文本/语言/复制/换行/Tab与退出 | panels.js blockKeys/showBlockMenu | 部分 | 工具存在；所有粘贴/持久化组合待验 | HTML字面、复制、切换wrap再重开 | P1 | P:keyboard | QA-RECOVERY-20261012.md未记录此行专门CUA；不沿用旧通过 | 2026-10-11历史结果不作为本次构建通过证据 |
+| 45 | D282 Markdown | 段首/行内快捷及显式粘贴Markdown/纯文本 | panels.js markdown | 部分 | 仅#/-/*/1./>；缺待办围栏/行内等 | 各触发一次undo恢复原字符 | P1 | 无该行专门测试证据 | QA-RECOVERY-20261012.md未记录此行专门CUA；不沿用旧通过 | 2026-10-11历史结果不作为本次构建通过证据 |
+| 46 | D282 链接 | 预览/显式打开/编辑/移除保文字 | panels.js format/body.onclick | 部分 | 仍prompt+toast，无完整菜单 | 加链→改/移除，不误跳转 | P1 | 无该行专门测试证据 | QA-RECOVERY-20261012.md未记录此行专门CUA；不沿用旧通过 | 2026-10-11历史结果不作为本次构建通过证据 |
+| 47 | D282 富文本保存 | 格式保真/不支持内容占位保原文 | panels.js sanitize/serializeBody | 部分 | 块ID保留并修重复ID；未知块保全/粘贴结构未完整 | 复杂富文及未知块保存重开 | P0 | P:duplicate-block-ID | QA-RECOVERY-20261012.md未记录此行专门CUA；不沿用旧通过 | 2026-10-11历史结果不作为本次构建通过证据 |
+| 48 | D283 保存恢复 | 原卡草稿、失败恢复/版本冲突/晚到保护 | app.js save,panels.js update/flush | 部分 | 错误banner保护原档；未实现恢复草稿区/版本冲突 | 配额失败刷新、两版本冲突 | P0 | 无该行专门测试证据；tests/storage-recovery.test.cjs：损坏档不覆盖/配额失败保内存与undo/isolated不写入（3项）；tests/app-storage-model.test.cjs：损坏档不覆盖/配额失败保内存与undo/isolated不写入（3项） | QA-RECOVERY-20261012.md：正常正文保存刷新通过；配额/损坏保护另有模型，恢复草稿/冲突仍缺 | 2026-10-11历史结果不作为本次构建通过证据 |
+| 49 | D284 可达性 | 菜单键盘、正文CtrlF、触控/读屏 | panels.js bindBlockMenu/captureCaret/drawEditorFind | 部分 | 键盘与caret回归在；全可达性/触控未验 | Esc回柄、菜单键、undo后继续输入 | P1 | P:keyboard/duplicate-block-ID；第8组panel：菜单Esc延迟重绘焦点回归 | QA-RECOVERY-20261012.md：菜单Down/Enter、末格Tab、undo后续写；Esc延迟重绘焦点修复复测通过；读屏/触控未测 | 2026-10-11历史结果不作为本次构建通过证据 |
+| 50 | D285 | 折叠命中临时展开，结束恢复偏好 | panels.js drawEditorFind/applyFolds | 部分 | 隐藏路径展开与关闭恢复在；光标延迟收折未全验 | 折叠中命中并查找退出 | P1 | P:search/folds | QA-RECOVERY-20261012.md：搜索命中接续已开写字板2/2；折叠祖先偏好恢复未全链验 | 2026-10-11历史结果不作为本次构建通过证据 |
+| 51 | D288–292 | 完整框选/Shift累加/空白平移/多选移 | canvas.js down/move/up | 已实现未测 | 保留并加pointercancel恢复 | 部分框不选、空白替换、Shift累加 | P0 | 无该行专门测试证据 | QA-RECOVERY-20261012.md未记录此行专门CUA；不沿用旧通过 | 2026-10-11历史结果不作为本次构建通过证据 |
+| 52 | D293–295 | 边中心吸附/辅助线/开关与临时禁用 | canvas.js alignmentMove,app.js snap | 实现有局部模型证据 | 对象对齐非网格，默认开启，Alt禁用 | 近边/中心吸附和开关 | P1 | C:alignment | QA-RECOVERY-20261012.md未记录此行专门CUA；不沿用旧通过 | 2026-10-11历史结果不作为本次构建通过证据 |
+| 53 | D296–302 | 允许重叠自由调整，后决定优先 | canvas.js move/resize | 已实现未测 | 未恢复D298–300避让限制 | 重叠移动/放大 | P1 | 无该行专门测试证据 | QA-RECOVERY-20261012.md未记录此行专门CUA；不沿用旧通过 | 2026-10-11历史结果不作为本次构建通过证据 |
+| 54 | D303–312 | 纯卡临时置前，混合保持/取消恢复 | canvas.js render/suppressRaise | 已实现未测 | 纯卡判断在，框选重置抑制 | 纯卡/混合多选取消比较层级 | P0 | 无该行专门测试证据 | QA-RECOVERY-20261012.md未记录此行专门CUA；不沿用旧通过 | 2026-10-11历史结果不作为本次构建通过证据 |
+| 55 | D310,D313–320 | 跨类型持久层级、跳非重叠、批量保序 | canvas.js layerOrder | 实现有局部模型证据 | gap保序传播和group后代纳入 | 三选对象交错前后移 | P1 | C:layer/D314/D318/D319 | QA-RECOVERY-20261012.md未记录此行专门CUA；不沿用旧通过 | 2026-10-11历史结果不作为本次构建通过证据 |
+| 56 | D321 | 层级不可调则保留禁用 | objects.js refresh,canvas.js canSetLayer | 实现有局部模型证据 | 禁用路径与模型在 | 顶层唯一对象菜单 | P2 | O:layer | QA-RECOVERY-20261012.md未记录此行专门CUA；不沿用旧通过 | 2026-10-11历史结果不作为本次构建通过证据 |
+| 57 | D322–328,D332 | 副本24px/置顶/选中/外观标签快照 | canvas.js duplicate/paste,clipboard.js snapshot | 实现有局部模型证据 | 独立内容及重映射保留 | 多对象复制后改原件 | P0 | C:duplicate;K:snapshot | QA-RECOVERY-20261012.md未记录此行专门CUA；不沿用旧通过 | 2026-10-11历史结果不作为本次构建通过证据 |
+| 58 | D329–331 | 内部线复制，单线自由/单端重映射 | clipboard.js snapshot/pasteData | 实现有局部模型证据 | 复制时绝对端点快照 | 线单独/单端/两端跨项目 | P0 | K:first move/deleted endpoint | QA-RECOVERY-20261012.md未记录此行专门CUA；不沿用旧通过 | 2026-10-11历史结果不作为本次构建通过证据 |
+| 59 | D333–336 | 鼠标落点/外中心及连续24px/视口重置 | clipboard.js pastePosition | 实现有局部模型证据 | copyId+视图key序列 | 三次粘贴→移动视口/鼠标 | P1 | K:continuous paste | QA-RECOVERY-20261012.md未记录此行专门CUA；不沿用旧通过 | 2026-10-11历史结果不作为本次构建通过证据 |
+| 60 | D337–338 | 剪贴板内容快照/写成功才删 | clipboard.js write/onCut | 实现有局部模型证据 | try/catch保护原对象 | 写失败原对象与线保持 | P0 | K:write failure/snapshot | QA-RECOVERY-20261012.md未记录此行专门CUA；不沿用旧通过 | 2026-10-11历史结果不作为本次构建通过证据 |
+| 61 | D339–345 | 首次同项目搬动、再粘副本与undo边界 | clipboard.js cutToken/tokenConsumed | 实现有局部模型证据 | 项目历史消费token及原件存在检测 | 剪→粘→undo→重试、undo剪再粘 | P0 | K:first/undo/deleted | QA-RECOVERY-20261012.md：实际剪切对象跨项目粘贴保原有对象；同项目首次/再粘全边界仍模型 | 2026-10-11历史结果不作为本次构建通过证据 |
+| 62 | D346–348 | 跨项目同名标签复用目标色/缺失新增 | clipboard.js pasteData | 实现有局部模型证据 | 大小写不敏感复用 | AI/ai、缺标签新增undo | P1 | K:tags | QA-RECOVERY-20261012.md：跨项目Ctrl+C/V卡片成功；标签同名/颜色语义未CUA专项验 | 2026-10-11历史结果不作为本次构建通过证据 |
+| 63 | D349–353 | 跨项目剪切/内外线/项目独立撤销 | clipboard.js tokenConsumed/pasteData | 实现有局部模型证据 | 全项目消费防回源复活外线 | A剪B粘A再粘，分别undo | P0 | K:cross-project | QA-RECOVERY-20261012.md：Ctrl+X后切回源项目Ctrl+V，复制对象搬回且原B保留；内外线全组合未实测 | 2026-10-11历史结果不作为本次构建通过证据 |
+| 64 | D354–356 | 外纯文为正文卡/外图独立及60%限制 | clipboard.js onPaste,canvas.js addImage | 已实现未测 | 新卡补updateFrames | 多行文字/超大图/面板占位 | P1 | K:native frame仅局部 | QA-RECOVERY-20261012.md未记录此行专门CUA；不沿用旧通过 | 2026-10-11历史结果不作为本次构建通过证据 |
+| 65 | D357–363,D378–381 | 独立大图每次fit/原图切换/比例方向 | objects.js openImage | 部分 | 对象模块重建有切换模型；90度fit视觉边界未验 | 长宽图90度原图/效果切换 | P1 | O:image viewer | QA-RECOVERY-20261012.md未记录此行专门CUA；不沿用旧通过 | 2026-10-11历史结果不作为本次构建通过证据 |
+| 66 | D361–362,D374 | 图片四角等比、四边自由拉伸 | canvas.js resize | 已实现未测 | 角投影等比算法在 | 各边角及裁剪后缩放 | P0 | 无该行专门测试证据 | QA-RECOVERY-20261012.md未记录此行专门CUA；不沿用旧通过 | 2026-10-11历史结果不作为本次构建通过证据 |
+| 67 | D364–373 | 裁剪预览取消/完成/恢复保护几何 | canvas.js beginCrop/move/finishCrop/restoreImage | 实现有局部模型证据 | 恢复原图模型；完整真实手势另验 | 裁剪取消/应用/恢复undo | P0 | C:restore image;O:crop wiring | QA-RECOVERY-20261012.md未记录此行专门CUA；不沿用旧通过 | 2026-10-11历史结果不作为本次构建通过证据 |
+| 68 | D375–377 | 90度旋转保中心/宽高换/查看方向 | objects.js rotate | 实现有局部模型证据 | 保source/center模型在 | 非方裁剪图四次旋转重开 | P0 | O:rotation | QA-RECOVERY-20261012.md未记录此行专门CUA；不沿用旧通过 | 2026-10-11历史结果不作为本次构建通过证据 |
+| 69 | D382 | 独立图片永不替换 | objects.js menus | 明确排除 | 独立图无替换，正文图替换另属D281 | 菜单无替换 | P2 | 无该行专门测试证据 | QA-RECOVERY-20261012.md未记录此行专门CUA；不沿用旧通过 | 2026-10-11历史结果不作为本次构建通过证据 |
+| 70 | D383–395,D401 | 独立文字320/手宽/字号/多行/创建历史 | canvas.js editText/reflowNode | 实现有局部模型证据 | 手宽与自动宽模型；真实IME未验 | 中文长文调宽/空白结束undo | P0 | C:text width | QA-RECOVERY-20261012.md未记录此行专门CUA；不沿用旧通过 | 2026-10-11历史结果不作为本次构建通过证据 |
+| 71 | D387,D396–400 | 局部样式/整块字号对齐/光标继承混合显示 | canvas.js inline tools,objects.js style | 部分 | 整块样式去旧局部色/粗有模型；光标同步/混合状态未完整 | 混色粗选区与光标工具同步 | P1 | O:text controls | QA-RECOVERY-20261012.md未记录此行专门CUA；不沿用旧通过 | 2026-10-11历史结果不作为本次构建通过证据 |
+| 72 | D402,D404 | 五基础带字形状，无完整写字板 | objects.js shape picker,canvas.js shape | 部分 | 形状切换和自定义色模型；文字样式/轮廓仍基础 | 五形文字与尺寸 | P1 | O:shape | QA-RECOVERY-20261012.md未记录此行专门CUA；不沿用旧通过 | 2026-10-11历史结果不作为本次构建通过证据 |
+| 73 | D78,D84,D421 | 附着批注随动/副本自由/删除解绑 | canvas.js attachment functions | 实现有局部模型证据 | offset及跨容器明确确认路径在 | 附着移目标/复制/删/undo | P0 | C:annotations;K:annotation offsets | QA-RECOVERY-20261012.md未记录此行专门CUA；不沿用旧通过 | 2026-10-11历史结果不作为本次构建通过证据 |
+| 74 | D405–406 | 画笔荧光笔与撤销/选删，无橡皮 | app.js penMenu,canvas.js stroke | 已实现未测 | 保留两笔工具 | 笔迹选择删undo | P1 | 无该行专门测试证据 | QA-RECOVERY-20261012.md未记录此行专门CUA；不沿用旧通过 | 2026-10-11历史结果不作为本次构建通过证据 |
+| 75 | D407–408 | 单层组合/扁平重新组合/快捷键 | canvas.js group/ungroup | 已实现未测 | 阻止frame进普通组，单层保持 | 两组重组成一组undo | P0 | 无该行专门测试证据 | QA-RECOVERY-20261012.md未记录此行专门CUA；不沿用旧通过 | 2026-10-11历史结果不作为本次构建通过证据 |
+| 76 | D409–413 | 组内成员选择/双击/拖远不脱组/Esc | canvas.js down/updateFrames | 实现有局部模型证据 | 已入组切另一成员路径；归属保护模型 | 成员切换/Shift/远拖/Esc | P0 | C:group member | QA-RECOVERY-20261012.md未记录此行专门CUA；不沿用旧通过 | 2026-10-11历史结果不作为本次构建通过证据 |
+| 77 | D414 移出 | 移出组合保几何层级选择/空组清理 | objects.js menus,canvas.js removeFromGroup/cleanupEmptyGroups | 实现有局部模型证据 | 入口已接，空组先释放绑定端 | 最后成员移出线仍有效 | P0 | C:remove member/final member | QA-RECOVERY-20261012.md未记录此行专门CUA；不沿用旧通过 | 2026-10-11历史结果不作为本次构建通过证据 |
+| 78 | D414 复制删除 | 单成员副本组外，整组副本/删除成员 | canvas.js descendants/copy/paste/remove | 实现有局部模型证据 | 单父归属与解组还frame | 单成员复制、整组删undo | P0 | C:group/delete | QA-RECOVERY-20261012.md未记录此行专门CUA；不沿用旧通过 | 2026-10-11历史结果不作为本次构建通过证据 |
+| 79 | D414 混合变换 | 组内变换服从成员能力 | canvas.js resize | 部分 | 共同角等比；边变换各类型规则仍需专测 | 图+字+卡混组角/边拉伸 | P1 | 无该行专门测试证据 | QA-RECOVERY-20261012.md未记录此行专门CUA；不沿用旧通过 | 2026-10-11历史结果不作为本次构建通过证据 |
+| 80 | D415 | 首版无布局锁 | 对象菜单 | 明确排除 | 未加入锁/解锁 | 检查无锁入口 | P2 | 无该行专门测试证据 | QA-RECOVERY-20261012.md未记录此行专门CUA；不沿用旧通过 | 2026-10-11历史结果不作为本次构建通过证据 |
+| 81 | D416 创建 | 拖框/同父选区成框/透明/分区N | canvas.js down/frameFromSelection | 实现有局部模型证据 | 拖框和同父门槛路径在 | 拖矩形/空frame/命名 | P0 | C:selection frame;O:frame gate | QA-RECOVERY-20261012.md：实际拖frame包围3卡；同父选区创建未实测 | 2026-10-11历史结果不作为本次构建通过证据 |
+| 82 | D416 嵌套 | 嵌套frame单父无循环且保护组整体 | canvas.js frameAt/updateFrames/encloseFrame | 实现有局部模型证据 | 候选/组保护模型在 | 嵌套组进出/循环候选 | P0 | C:frame enclosure/nested | QA-RECOVERY-20261012.md未记录此行专门CUA；不沿用旧通过 | 2026-10-11历史结果不作为本次构建通过证据 |
+| 83 | D416 归属 | 新对象中心/拖动指针/内层前景预览 | canvas.js updateFrames,clipboard.js pasteData | 部分 | 原生粘贴已接同路径；新构建真实组合手势未验 | 重叠frame、新建/拖入/原生粘贴 | P0 | C:pointer/nested;K:native frame | QA-RECOVERY-20261012.md未记录此行专门CUA；不沿用旧通过 | 2026-10-11历史结果不作为本次构建通过证据 |
+| 84 | D416 resize | 边框只改范围/相交保留/完全释放/收纳预览 | canvas.js frameResizeEffect/encloseFrame | 实现有局部模型证据 | 只边框resize且终点更新归属 | 扩大纳入/缩小相交/全离/undo | P0 | C:frame resizing | QA-RECOVERY-20261012.md：仅拖创建已测；resize归属仍模型 | 2026-10-11历史结果不作为本次构建通过证据 |
+| 85 | D416 移动删除复制 | 父框带后代/删框保内容/副本独立落点归属 | canvas.js descendants/remove/paste,clipboard.js | 部分 | 移动后代/删框模型；原生归属路径有断言，完整重开未验 | 嵌套框移动删复制跨项目 | P0 | C:frame delete/moving;K:native frame | QA-RECOVERY-20261012.md：删除frame保3卡，Ctrl+Z恢复frame；嵌套/存档/自由端未本次实测 | 2026-10-11历史结果不作为本次构建通过证据 |
+| 86 | D403,D417,D418 路径 | 普通直折曲默认直，无领域含义 | canvas.js path,objects.js style | 实现有局部模型证据 | frame内部命中CSS修复重建在 | 三路径换型保端点标签 | P0 | O:line style | QA-RECOVERY-20261012.md：A→B重复及B→A共3线，普通线创建通过；全部三线型未实测 | 2026-10-11历史结果不作为本次构建通过证据 |
+| 87 | D418 样式 | 两端标记/逐线反转/虚实/4px/标签格式 | objects.js style,canvas.js edgeHTML | 实现有局部模型证据 | 重建对象模块含各自反转及undo闭包保护 | 不同标记多选反转/undo | P1 | O:line style/reversal/closures；第16项objects：X关闭焦点与语义色板 | QA-RECOVERY-20261012.md：起点圆点+虚线→反转后起点箭头终点圆点；Esc/X还外观焦点保选择 | 2026-10-11历史结果不作为本次构建通过证据 |
+| 88 | D418 创建绑定 | 自由端/四边固定/重接/自连接拒绝/Esc | canvas.js nearest/endpoints/down/up | 实现有局部模型证据 | 内容命中优先和自连接模型 | 四类+容器各端重接/取消 | P0 | C:interior/self | QA-RECOVERY-20261012.md：A→A明确拒绝仍3线；移动B全部3条端点随动；所有重接类型未实测 | 2026-10-11历史结果不作为本次构建通过证据 |
+| 89 | D418 标签 | 多行IME/沿路径拖/外点保存/统一undo | canvas.js edgePoint/nearestEdgePosition/editLabel | 实现有局部模型证据 | 折线路程/曲线采样模型；真实IME未验 | 曲/折线拖标签中文换行Esc | P1 | C:elbow/curve | QA-RECOVERY-20261012.md未记录此行专门CUA；不沿用旧通过 | 2026-10-11历史结果不作为本次构建通过证据 |
+| 90 | D419 | 组/frame本体及成员均能连接 | canvas.js nearest/anchors | 实现有局部模型证据 | 容器端点基础路径在 | 容器边框及成员各绑一次 | P0 | C:container edges | QA-RECOVERY-20261012.md：frame创建删除通过；容器本体绑定未本次实测 | 2026-10-11历史结果不作为本次构建通过证据 |
+| 91 | D420 | 解组删框保线转真自由端/双端/undo/重开 | canvas.js freeContainerEnds/cleanupEmptyGroups | 部分 | 绝对端点和空组模型通过；真实双容器存档重开未验 | 双容器移除→重开→undo/redo | P0 | C:ungroup/frame/final member | QA-RECOVERY-20261012.md：删frame保内容且undo恢复；真自由端存档/双容器链未实测 | 2026-10-11历史结果不作为本次构建通过证据 |
+| 92 | D64,D66,D421,D423 AI | 按需候选审阅明确添加，不改原卡/自动连线 | panels.js openAI | 部分 | 仍本地模拟summary/questions，无真实模型查证 | 未添加不产卡，添加不覆盖 | P1 | 无该行专门测试证据 | QA-RECOVERY-20261012.md未记录此行专门CUA；不沿用旧通过 | 2026-10-11历史结果不作为本次构建通过证据 |
+| 93 | D287,D421 溯源 | 来源/证据锚点/旧材料迁移暂缓 | 范围及无对应入口 | 明确排除 | 不把溯源算漏做 | 无需补历史来源界面 | P2 | 无该行专门测试证据 | QA-RECOVERY-20261012.md未记录此行专门CUA；不沿用旧通过 | 2026-10-11历史结果不作为本次构建通过证据 |
+| 94 | D422 | 无文字/形状转卡，复制文字另建 | 对象菜单 | 明确排除 | 覆盖D84/D402转卡与D421旧映射提案 | 无转卡入口 | P2 | 无该行专门测试证据 | QA-RECOVERY-20261012.md未记录此行专门CUA；不沿用旧通过 | 2026-10-11历史结果不作为本次构建通过证据 |
+| 95 | D423 | 无专用立场/条件阈值/推演/结构化推导 | 全部业务源码 | 明确排除 | 旧资料不迁移不删除，后端不在原型范围 | 无旧专用研究流程 | P2 | 无该行专门测试证据 | QA-RECOVERY-20261012.md未记录此行专门CUA；不沿用旧通过 | 2026-10-11历史结果不作为本次构建通过证据 |
+| 96 | D01–D149 历史 | 旧研究/后端决定按现行范围分流 | 独立localStorage原型 | 范围分流 | 不是全423项累计实施或生产引擎改造授权 | 生产化另审，不恢复被覆盖功能 | P2 | 无该行专门测试证据 | QA-RECOVERY-20261012.md未记录此行专门CUA；不沿用旧通过 | 2026-10-11历史结果不作为本次构建通过证据 |
+| 97 | D278,D372,D406,D408,D415,D418 范围 | 排除数据库/任意容器块/固定裁剪比/橡皮/嵌套组/锁/任意路径柄 | 当前菜单及模型范围 | 明确排除 | 嵌套frame不等于嵌套普通组；正文替换不受D382禁止 | 检查未扩展排除范围 | P2 | 无该行专门测试证据 | QA-RECOVERY-20261012.md未记录此行专门CUA；不沿用旧通过 | 2026-10-11历史结果不作为本次构建通过证据 |

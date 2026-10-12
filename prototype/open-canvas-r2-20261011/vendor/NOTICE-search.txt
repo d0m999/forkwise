@@ -1,0 +1,4 @@
+Locally bundled search dependencies (no external runtime requests):
+opencc-js 1.4.2, https://registry.npmjs.org/opencc-js/-/opencc-js-1.4.2.tgz (MIT code + Apache-2.0 bundled dictionary data; LICENSE-opencc-js.txt, THIRD_PARTY_LICENSES-opencc-js.md, LICENSE-opencc-data-Apache-2.0.txt)
+jieba-wasm 2.4.0, https://registry.npmjs.org/jieba-wasm/-/jieba-wasm-2.4.0.tgz (MIT, jieba/LICENSE.txt)
+Chinese tokenization uses jieba cut(text, true); loading failure falls back visibly to Intl.Segmenter.
