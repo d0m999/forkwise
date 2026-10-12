@@ -4,10 +4,11 @@
   "private": true,
   "description": "Local-only interactive prototype; dependencies are for tests, not the browser app",
   "scripts": {
-    "test": "node tests/canvas-unit-tests.cjs && node tests/canvas-r2-tests.cjs && node tests/clipboard-r2-tests.cjs && node tests/panels-model.test.cjs && node tests/onboarding-model.test.cjs && node tests/objects-model.test.cjs && node tests/app-storage-model.test.cjs",
+    "test": "node tests/canvas-unit-tests.cjs && node tests/canvas-r2-tests.cjs && node tests/clipboard-r2-tests.cjs && node tests/panels-model.test.cjs && node tests/onboarding-model.test.cjs && node tests/objects-model.test.cjs && node tests/app-storage-model.test.cjs && node tests/tag-palette.test.cjs",
     "check": "node --check app.js && node --check canvas.js && node --check objects.js && node --check clipboard.js && node --check panels.js && node --check onboarding.js"
   },
   "devDependencies": {
     "jsdom": "30.1.2"
   }
 }
+

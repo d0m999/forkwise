@@ -1,0 +1,43 @@
+const {JSDOM}=require(process.env.FW_JSDOM||'jsdom');
+const fs=require('node:fs'),assert=require('node:assert/strict');
+const source=fs.readFileSync('panels.js','utf8');
+function setup(saved){
+  const dom=new JSDOM('<div id="editorHost"></div><div id="modalHost"></div>',{url:'https://example.test',runScripts:'outside-only',pretendToBeVisual:true});
+  const w=dom.window;w.Range.prototype.getBoundingClientRect=()=>({top:0,left:0});w.HTMLElement.prototype.scrollIntoView=()=>{};
+  let p=saved?JSON.parse(saved):{id:'p',tags:[{id:'old',name:'原有标签',color:'#123456'},{id:'green',name:'待研究',color:'#dce8dd'}],nodes:[{id:'c',type:'card',title:'第一张',body:'正文',tags:['old','green']},{id:'c2',type:'card',title:'第二张',body:'',tags:['old']}]};
+  const undo=[],redo=[];let count=0;
+  const save=()=>{w.localStorage.setItem('project',JSON.stringify(p));return true};
+  w.FW={escape:s=>String(s).replace(/[&<>"']/g,x=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[x])),project:()=>p,uid:()=>`new${++count}`,save,render:()=>w.FWPanels?.render(),commit:()=>{},state:{selected:new Set(['c'])},toast:()=>{},transact:(label,fn)=>{undo.push(JSON.stringify(p));redo.length=0;fn();save();w.FWPanels.render()},select:()=>{}};
+  w.eval(source.replace('loadSearchLibraries();window.addEventListener', 'window.addEventListener'));
+  w.FWPanels.mount();w.FWPanels.openEditor('c');
+  const $=s=>w.document.querySelector(s),click=s=>$(s).click(),key=(s,key)=>$(s).dispatchEvent(new w.KeyboardEvent('keydown',{key,bubbles:true,cancelable:true}));
+  return {w,$,click,key,get p(){return p},undo,restore:()=>{redo.push(JSON.stringify(p));p=JSON.parse(undo.pop());save();w.FWPanels.render()},redo:()=>{undo.push(JSON.stringify(p));p=JSON.parse(redo.pop());save();w.FWPanels.render()}};
+}
+const t=setup();t.click('#fp-edit-tags');t.click('[data-tag-color=old]');
+assert.equal(t.w.document.querySelectorAll('[data-tag-swatch]').length,10);
+assert.equal(t.w.document.querySelectorAll('#fp-tag-manager input[type=color]').length,0);
+assert.equal(t.p.tags[0].color,'#123456');assert(t.$('.fp-tag-legacy'));assert.match(t.$('.fp-tag-color-status').textContent,/原有颜色/);
+assert.equal(t.$('[data-tag-color=old]').getAttribute('aria-expanded'),'true');
+assert.equal(t.w.document.querySelectorAll('[data-tag-swatch][aria-pressed=true]').length,0);
+console.log('PASS legacy custom color retained honestly; ten named presets and no native picker');
+t.key('[data-tag-swatch]','ArrowRight');assert.equal(t.w.document.activeElement.getAttribute('aria-label'),'灰色');assert.equal(t.p.tags[0].color,'#123456');
+t.key('[data-tag-swatch]','End');assert.equal(t.w.document.activeElement.getAttribute('aria-label'),'红色');
+t.key('[data-tag-swatch]','Escape');assert(!t.$('.fp-tag-palette'));assert.equal(t.w.document.activeElement.dataset.tagColor,'old');assert.equal(t.undo.length,0);
+t.click('[data-tag-color=old]');t.click('[data-close-tag-colors]');assert(!t.$('.fp-tag-palette'));assert.equal(t.p.tags[0].color,'#123456');
+let escapedKeys=0;t.w.document.addEventListener('keydown',()=>escapedKeys++);t.click('[data-tag-color=old]');t.key('[data-tag-swatch]','Delete');t.key('[data-tag-swatch]','n');assert.equal(escapedKeys,0);t.click('[data-close-tag-colors]');
+console.log('PASS keyboard navigation does not mutate; Escape/close restore focus; palette keys do not reach canvas');
+t.click('[data-tag-color=old]');t.click('[data-tag-swatch="#d9e7f1"]');assert.equal(t.p.tags[0].color,'#d9e7f1');assert.equal(t.undo.length,1);assert(t.$('.fp-tag-legacy').hidden);assert.equal(t.$('[data-tag-swatch="#d9e7f1"]').getAttribute('aria-pressed'),'true');assert.equal(t.$('#fp-card-tags .fp-tag').style.getPropertyValue('--tag'),'#d9e7f1');
+t.click('[data-tag-swatch="#d9e7f1"]');assert.equal(t.undo.length,1);assert(t.$('.fp-tag-palette'));
+t.restore();assert.equal(t.p.tags[0].color,'#123456');assert.equal(t.$('[data-tag-color=old]').style.getPropertyValue('--tag'),'#123456');assert.equal(t.w.document.querySelectorAll('[data-tag-swatch][aria-pressed=true]').length,0);t.redo();assert.equal(t.p.tags[0].color,'#d9e7f1');
+// Re-resolve the tag after undo replaces project data; a stale closure must not mutate the old object.
+t.click('[data-tag-swatch="#f3dcd8"]');assert.equal(t.p.tags[0].color,'#f3dcd8');
+console.log('PASS instant save, selected state, repeated selection no-op, undo/redo and stale-object safety');
+t.$('#fp-title').dispatchEvent(new t.w.Event('pointerdown',{bubbles:true}));assert(!t.$('.fp-tag-palette'));assert.equal(t.p.tags[0].color,'#f3dcd8');
+t.click('[data-tag-color=green]');assert.equal(t.w.document.activeElement.getAttribute('aria-label'),'绿色');t.click('#fp-tags-done');assert.equal(t.$('#fp-tag-manager').children.length,0);assert.equal(t.w.document.activeElement.id,'fp-edit-tags');
+t.w.FW.state.selected=new Set(['c2']);t.w.FWPanels.openEditor('c2');assert.equal(t.$('#fp-card-tags .fp-tag').style.getPropertyValue('--tag'),'#f3dcd8');
+const saved=t.w.localStorage.getItem('project'),r=setup(saved);r.click('#fp-edit-tags');r.click('[data-tag-color=old]');assert.equal(r.$('[data-tag-swatch="#f3dcd8"]').getAttribute('aria-pressed'),'true');
+console.log('PASS outside dismissal, Done focus, shared card color and serialized reload persistence');
+r.click('[data-close-tag-colors]');r.$('#fp-tag-create input').value='新标签';r.$('#fp-tag-create').dispatchEvent(new r.w.Event('submit',{bubbles:true,cancelable:true}));assert.equal(r.p.tags.at(-1).color,'#f1f0ec');r.click('[data-tag-color="'+r.p.tags.at(-1).id+'"]');assert.equal(r.w.document.activeElement.getAttribute('aria-label'),'默认');
+r.w.FWPanels.closeEditor();assert(!r.$('.fp-tag-palette'));
+console.log('PASS new tags use palette default; closing editor clears palette');
+t.w.close();r.w.close();
