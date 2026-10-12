@@ -42,3 +42,17 @@
 - 交接（handoff）文档只写系统临时目录，不进仓库、不归档。目录归属：`adr/`、`decisions/`、`design-interview.md`、`domain-model.md` 进 Git；PRD（`docs/prd/`）、`docs/plans/`、`docs/research/` 为私有归档（见 `.gitignore` 注释）。
 - 保持单一事实来源：术语改 `CONTEXT.md`，决策改访谈记录或 ADR，需求改 PRD；本文件只保留跨任务都适用的规则。
 - 仓库说明与面向用户的默认文案使用简体中文；代码标识符、命令、文件名和原文引用保持原样。
+
+## Agent skills
+
+### Issue tracker
+
+在 GitHub Issues 跟踪本仓库工作；读取或发布规格、工单及分诊结果前，先读 `docs/agents/issue-tracker.md`。
+
+### Triage labels
+
+分诊使用默认五个状态标签；分类或变更状态前，先读 `docs/agents/triage-labels.md`。
+
+### Domain docs
+
+采用单一领域布局并沿用现有术语与 ADR；建模、编写规格、审查或实现前，先读 `docs/agents/domain.md`。
