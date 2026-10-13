@@ -176,11 +176,16 @@ function Workspace() {
   function scanRecovery() {
     try {
       recovery.current ??= new DraftRecovery();
-      setRecoveries(recovery.current.list());
+      const entries = recovery.current.list();
+      setRecoveries(entries);
       if (recovery.current.damaged)
         setRecoveryError("部分恢复记录损坏，原件已保留；其他草稿仍可恢复");
+      return entries.some(
+        (entry) => entry.value.projectId === authority.current?.project.id,
+      );
     } catch {
       setRecoveryError("恢复区无法读取，原始草稿已保留");
+      return false;
     }
   }
   async function restoreDraft(entry: { key: string; value: Recovery }) {
@@ -680,6 +685,11 @@ function Workspace() {
         setError("");
         return true;
       } catch (e) {
+        // Queued-only input remains visible and recoverable on any failure.
+        // An older failure must never replace later complete input.
+        const latest = drafts.current[key];
+        if (!latest || latest.generation <= current.generation)
+          drafts.current[key] = current;
         if (
           e instanceof MappingError &&
           ["INVALID_COMMAND", "TOO_LARGE", "MEDIA_NOT_PERSISTED"].includes(
@@ -692,12 +702,15 @@ function Workspace() {
           // A media refusal does not remove the draft's referenced resources.
           // Without an edit, retry the same request with its full requirements.
           if (e.code !== "MEDIA_NOT_PERSISTED") delete current.command;
+          // A definite refusal retires this batch only after its input is
+          // retained above or superseded by later complete input.
           unconfirmed.current = null;
           closedDrafts.current = closedDrafts.current.filter(
             (d) => !draftCoveredBy(d, submitted),
           );
-          persistDrafts();
         }
+        persistDrafts();
+        setDraftView({ ...drafts.current });
         if (e instanceof MappingError && e.code === "VERSION_CONFLICT") {
           try {
             const latest = await api.project(current.projectId);
@@ -987,8 +1000,7 @@ function Workspace() {
           if (active) updateState(value);
         }
         if (active) {
-          scanRecovery();
-          setStatus("已保存到本机");
+          setStatus(scanRecovery() ? "有待恢复的未确认草稿" : "已保存到本机");
         }
       })
       .catch((e) => {

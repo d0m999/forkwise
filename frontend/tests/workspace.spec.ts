@@ -4971,3 +4971,600 @@ test("S5-R4 合法重复投影允许资源集合与对象键顺序不同，原�
     await page.screenshot({ path: testInfo.outputPath("bare-media.png") });
   }
 });
+
+test("S5-R5 closed-only媒体拒绝保留可见输入和缓存，原请求重试及刷新仍可恢复", async ({
+  page,
+}, testInfo) => {
+  await openWorkspace(page);
+  const projectId = await newCard(page);
+  const before = await draftProject(page);
+  const card: Card = before.cards[0];
+  const text = "只有closed的最后未确认正文";
+  const original = await seedRecoveryJournal(page, projectId, card, text, [
+    "pending-resource",
+  ]);
+  const journal = await page.evaluate(() => {
+    const key = Object.keys(localStorage).find((k) =>
+      k.startsWith("forkwise:recovery:v1:"),
+    )!;
+    const value = JSON.parse(localStorage.getItem(key)!);
+    value.closed = value.drafts;
+    value.drafts = [];
+    localStorage.setItem(key, JSON.stringify(value));
+    return value;
+  });
+  const history = async () =>
+    (
+      await page.request.get(
+        origin + `/api/mapping/projects/${projectId}/history`,
+      )
+    ).json();
+  const historyBefore = await history();
+  const requests: Command[] = [],
+    codes: string[] = [];
+  page.on("request", (r) => {
+    if (r.url().endsWith("/api/mapping/execute"))
+      requests.push(r.postDataJSON());
+  });
+  page.on("response", async (r) => {
+    if (r.url().endsWith("/api/mapping/execute"))
+      codes.push((await r.json()).code);
+  });
+  const cache = () =>
+    page.evaluate(() =>
+      Object.keys(localStorage)
+        .filter((k) => k.startsWith("forkwise:recovery:v1:"))
+        .map((k) => ({ key: k, raw: localStorage.getItem(k)! })),
+    );
+  const body = page.getByLabel("卡片正文", { exact: true });
+  try {
+    await page.reload();
+    await expect(page.getByRole("tab", { selected: true })).toHaveAttribute(
+      "title",
+      projectId,
+    );
+    await page.getByRole("button", { name: "恢复草稿", exact: true }).click();
+    await expect(page.getByRole("alert")).toContainText("所需媒体尚未持久保存");
+    await expect.poll(() => codes).toEqual(["MEDIA_NOT_PERSISTED"]);
+    expect(requests).toEqual([original]);
+    expect(await draftProject(page)).toEqual(before);
+    expect(await history()).toEqual(historyBefore);
+    await expect(body).toHaveValue(text);
+    expect((await cache()).some((x) => x.raw.includes(text))).toBe(true);
+    await expect(page.getByRole("status")).toHaveText("保存未完成");
+    await page.getByRole("button", { name: "重试保存", exact: true }).click();
+    await expect
+      .poll(() => codes)
+      .toEqual(["MEDIA_NOT_PERSISTED", "MEDIA_NOT_PERSISTED"]);
+    expect(requests).toEqual([original, original]);
+    await expect(body).toHaveValue(text);
+    expect((await cache()).some((x) => x.raw.includes(text))).toBe(true);
+    await page.reload();
+    await expect(page.getByRole("tab", { selected: true })).toHaveAttribute(
+      "title",
+      projectId,
+    );
+    await expect(page.getByLabel("草稿恢复")).toContainText(text);
+    await expect(page.getByRole("status")).not.toHaveText("已保存到本机");
+    await page.getByRole("button", { name: "恢复草稿", exact: true }).click();
+    await expect
+      .poll(() => codes)
+      .toEqual(Array(3).fill("MEDIA_NOT_PERSISTED"));
+    expect(requests).toEqual([original, original, original]);
+    await expect(body).toHaveValue(text);
+    expect(await draftProject(page)).toEqual(before);
+    expect(await history()).toEqual(historyBefore);
+    expect((await cache()).some((x) => x.raw.includes(text))).toBe(true);
+  } finally {
+    writeFileSync(
+      testInfo.outputPath("closed-only-rejection-runtime.json"),
+      JSON.stringify({
+        journal,
+        original,
+        requests,
+        codes,
+        before,
+        after: await draftProject(page),
+        historyBefore,
+        historyAfter: await history(),
+        visible: await page.evaluate(
+          () =>
+            document.querySelector<HTMLTextAreaElement>("#card-body")?.value ??
+            null,
+        ),
+        cache: await cache(),
+      }),
+      { mode: 0o600 },
+    );
+    await page.screenshot({
+      path: testInfo.outputPath("closed-only-rejection.png"),
+    });
+  }
+});
+
+test("S5-R5 queued-only丢ACK保留可见输入，明确重试原请求只持久写入一次", async ({
+  page,
+}, testInfo) => {
+  await openWorkspace(page);
+  const projectId = await newCard(page);
+  const before = await draftProject(page);
+  const card: Card = before.cards[0];
+  const text = "只有队列投影的未知结果正文";
+  const original = await seedRecoveryJournal(page, projectId, card, text);
+  await page.evaluate(() => {
+    const key = Object.keys(localStorage).find((k) =>
+      k.startsWith("forkwise:recovery:v1:"),
+    )!;
+    const value = JSON.parse(localStorage.getItem(key)!);
+    value.closed = value.drafts;
+    value.drafts = [];
+    localStorage.setItem(key, JSON.stringify(value));
+  });
+  const requests: Command[] = [];
+  page.on("request", (r) => {
+    if (r.url().endsWith("/api/mapping/execute"))
+      requests.push(r.postDataJSON());
+  });
+  await page.route(
+    "**/api/mapping/execute",
+    async (route) => {
+      await route.fetch();
+      await route.abort();
+    },
+    { times: 1 },
+  );
+  const body = page.getByLabel("卡片正文", { exact: true });
+  try {
+    await page.reload();
+    await expect(page.getByRole("tab", { selected: true })).toHaveAttribute(
+      "title",
+      projectId,
+    );
+    await page.getByRole("button", { name: "恢复草稿", exact: true }).click();
+    await expect(page.getByRole("alert")).toBeVisible();
+    expect(requests).toEqual([original]);
+    const committed = await draftProject(page);
+    expect(committed.cards[0].body.blocks[0].text).toBe(text);
+    await expect(body).toHaveValue(text);
+    await page.unroute("**/api/mapping/execute");
+    await page.getByRole("button", { name: "重试保存", exact: true }).click();
+    await expect(page.getByRole("status")).toHaveText("已保存到本机");
+    expect(requests).toEqual([original, original]);
+    expect(await draftProject(page)).toEqual(committed);
+    const changes = await (
+      await page.request.get(
+        origin + `/api/mapping/projects/${projectId}/changes?after=0`,
+      )
+    ).json();
+    expect(
+      changes.changes.filter(
+        (c: { commandId: string }) => c.commandId === original.commandId,
+      ),
+    ).toHaveLength(1);
+    await body.fill("未知原请求确认后的新一代正文");
+    await expect(page.getByRole("status")).toHaveText("已保存到本机");
+    expect(requests).toHaveLength(3);
+    expect(requests[2].commandId).not.toBe(original.commandId);
+    expect(requests[2].expected).toBe(committed.cards[0].body.versionId);
+    await page.reload();
+    await expect(page.getByRole("tab", { selected: true })).toHaveAttribute(
+      "title",
+      projectId,
+    );
+    await page.getByRole("button", { name: "编辑正文", exact: true }).click();
+    await expect(body).toHaveValue("未知原请求确认后的新一代正文");
+    expect((await draftProject(page)).cards[0].body.blocks[0].text).toBe(
+      "未知原请求确认后的新一代正文",
+    );
+    await expect(
+      page.getByRole("button", { name: "恢复草稿", exact: true }),
+    ).toHaveCount(0);
+  } finally {
+    await page.unroute("**/api/mapping/execute");
+    writeFileSync(
+      testInfo.outputPath("queued-unknown-runtime.json"),
+      JSON.stringify({
+        original,
+        requests,
+        before,
+        after: await draftProject(page),
+        visible: await page.evaluate(
+          () =>
+            document.querySelector<HTMLTextAreaElement>("#card-body")?.value ??
+            null,
+        ),
+        cache: await page.evaluate(() =>
+          Object.keys(localStorage)
+            .filter((k) => k.startsWith("forkwise:recovery:v1:"))
+            .map((k) => localStorage.getItem(k)),
+        ),
+      }),
+      { mode: 0o600 },
+    );
+    await page.screenshot({ path: testInfo.outputPath("queued-unknown.png") });
+  }
+});
+
+for (const refusal of [
+  "MEDIA_NOT_PERSISTED",
+  "INVALID_COMMAND",
+  "TOO_LARGE",
+] as const) {
+  test(`S5-R5 pending-only真实${refusal}拒绝保留最后输入，最新纠正稿及重开保持约束`, async ({
+    page,
+    browser,
+  }, testInfo) => {
+    await openWorkspace(page);
+    const projectId = await newCard(page);
+    const before = await draftProject(page);
+    const card: Card = before.cards[0];
+    // These lengths are reachable through ordinary paste. The HTTP byte limit
+    // rejects the multibyte case before Mapping's per-field length validation.
+    const text =
+      refusal === "INVALID_COMMAND"
+        ? "x".repeat(200001)
+        : refusal === "TOO_LARGE"
+          ? "文".repeat(333400)
+          : "pending中尚未持久化的媒体正文";
+    const original = await seedRecoveryJournal(
+      page,
+      projectId,
+      card,
+      text,
+      refusal === "MEDIA_NOT_PERSISTED" ? ["pending-resource"] : undefined,
+    );
+    const journal = await page.evaluate(() => {
+      const key = Object.keys(localStorage).find((k) =>
+        k.startsWith("forkwise:recovery:v1:"),
+      )!;
+      const value = JSON.parse(localStorage.getItem(key)!);
+      value.pending = value.drafts[0];
+      value.drafts = [];
+      localStorage.setItem(key, JSON.stringify(value));
+      return value;
+    });
+    const history = async () =>
+      (
+        await page.request.get(
+          origin + `/api/mapping/projects/${projectId}/history`,
+        )
+      ).json();
+    const historyBefore = await history();
+    const requests: Command[] = [],
+      codes: string[] = [];
+    page.on("request", (r) => {
+      if (r.url().endsWith("/api/mapping/execute"))
+        requests.push(r.postDataJSON());
+    });
+    page.on("response", async (r) => {
+      if (r.url().endsWith("/api/mapping/execute"))
+        codes.push((await r.json()).code ?? "ACK");
+    });
+    const cache = () =>
+      page.evaluate(() =>
+        Object.keys(localStorage)
+          .filter((k) => k.startsWith("forkwise:recovery:v1:"))
+          .map((k) => ({ key: k, raw: localStorage.getItem(k)! })),
+      );
+    const body = page.getByLabel("卡片正文", { exact: true });
+    const corrected = `${refusal}之后明确编辑的最新完整正文`;
+    try {
+      await page.reload();
+      await expect(page.getByRole("tab", { selected: true })).toHaveAttribute(
+        "title",
+        projectId,
+      );
+      await page.getByRole("button", { name: "恢复草稿", exact: true }).click();
+      await expect.poll(() => codes).toEqual([refusal]);
+      expect(requests).toEqual([original]);
+      await expect(body).toHaveValue(text);
+      await expect(page.getByRole("status")).toHaveText("保存未完成");
+      expect((await cache()).some((x) => x.raw.includes(text))).toBe(true);
+      expect(await draftProject(page)).toEqual(before);
+      expect(await history()).toEqual(historyBefore);
+      if (refusal === "MEDIA_NOT_PERSISTED") {
+        await page
+          .getByRole("button", { name: "重试保存", exact: true })
+          .click();
+        await expect.poll(() => codes).toEqual([refusal, refusal]);
+        expect(requests).toEqual([original, original]);
+      }
+      await body.fill(corrected);
+      await page.getByRole("button", { name: "重试保存", exact: true }).click();
+      await expect
+        .poll(() => codes.length)
+        .toBe(refusal === "MEDIA_NOT_PERSISTED" ? 3 : 2);
+      const latest = requests.at(-1)!;
+      expect(latest.commandId).not.toBe(original.commandId);
+      expect(latest.expected).toBe(original.expected);
+      expect(latest.type).toBe("body.edit");
+      if (latest.type !== "body.edit") throw new Error("Expected a body edit");
+      expect(latest.payload.text).toBe(corrected);
+      if (refusal === "MEDIA_NOT_PERSISTED") {
+        expect(latest.payload.requiredAssetIds).toEqual(["pending-resource"]);
+        expect(codes).toEqual(Array(3).fill(refusal));
+        expect(await draftProject(page)).toEqual(before);
+        expect(await history()).toEqual(historyBefore);
+        await expect(body).toHaveValue(corrected);
+        await page.reload();
+        await expect(page.getByLabel("草稿恢复")).toContainText(corrected);
+        await expect(page.getByRole("status")).not.toHaveText("已保存到本机");
+        await page
+          .getByRole("button", { name: "恢复草稿", exact: true })
+          .click();
+        await expect.poll(() => codes).toEqual(Array(4).fill(refusal));
+        expect(requests.at(-1)).toEqual(latest);
+        await expect(body).toHaveValue(corrected);
+        expect((await cache()).some((x) => x.raw.includes(corrected))).toBe(
+          true,
+        );
+        expect(await draftProject(page)).toEqual(before);
+        expect(await history()).toEqual(historyBefore);
+      } else {
+        await expect(page.getByRole("status")).toHaveText("已保存到本机");
+        expect(codes).toEqual([refusal, "ACK"]);
+        const saved = await draftProject(page);
+        expect(saved.cards[0].body.blocks[0].text).toBe(corrected);
+        const changes = await (
+          await page.request.get(
+            origin + `/api/mapping/projects/${projectId}/changes?after=0`,
+          )
+        ).json();
+        expect(
+          changes.changes.filter(
+            (c: { commandId: string }) => c.commandId === original.commandId,
+          ),
+        ).toHaveLength(0);
+        expect(
+          changes.changes.filter(
+            (c: { commandId: string }) => c.commandId === latest.commandId,
+          ),
+        ).toHaveLength(1);
+        // Release owned HTTP connections before restarting this fixture's server.
+        await page.goto("about:blank");
+        await stop();
+        await start();
+        const context = await browser.newContext();
+        try {
+          const reopened = await context.newPage();
+          await openWorkspace(reopened);
+          await reopened
+            .getByRole("tab")
+            .filter({
+              has: reopened.locator(
+                `small:text-is("${projectId.slice(0, 6)}")`,
+              ),
+            })
+            .click();
+          await reopened
+            .getByRole("button", { name: "编辑正文", exact: true })
+            .click();
+          await expect(
+            reopened.getByLabel("卡片正文", { exact: true }),
+          ).toHaveValue(corrected);
+          expect(await draftProject(reopened)).toEqual(saved);
+          await expect(
+            reopened.getByRole("button", { name: "恢复草稿", exact: true }),
+          ).toHaveCount(0);
+          await reopened.screenshot({
+            path: testInfo.outputPath("pending-rejection-restarted.png"),
+          });
+        } finally {
+          await context.close();
+        }
+        // Reauthorize the original synthetic context solely for final readback.
+        const access = JSON.parse(
+          readFileSync(join(directory, "local-access.json"), "utf8"),
+        );
+        await page.goto(access.url);
+        await expect(page).not.toHaveURL(/#token=/);
+      }
+    } finally {
+      writeFileSync(
+        testInfo.outputPath("pending-rejection-runtime.json"),
+        JSON.stringify({
+          refusal,
+          journal,
+          original,
+          requests,
+          codes,
+          before,
+          after: await draftProject(page),
+          historyBefore,
+          historyAfter: await history(),
+          visible: await page.evaluate(
+            () =>
+              document.querySelector<HTMLTextAreaElement>("#card-body")
+                ?.value ?? null,
+          ),
+          cache: await cache(),
+        }),
+        { mode: 0o600 },
+      );
+      await page.screenshot({
+        path: testInfo.outputPath("pending-rejection.png"),
+      });
+    }
+  });
+}
+
+for (const refusal of ["MEDIA_NOT_PERSISTED", "INVALID_COMMAND"] as const) {
+  test(`S5-R5 ${refusal}旧拒绝晚到不覆盖后来完整输入，也不堵住最新重试`, async ({
+    page,
+  }, testInfo) => {
+    await openWorkspace(page);
+    const projectId = await newCard(page);
+    const before = await draftProject(page);
+    const card: Card = before.cards[0];
+    const original = await seedRecoveryJournal(
+      page,
+      projectId,
+      card,
+      refusal === "INVALID_COMMAND" ? "x".repeat(200001) : "旧媒体输入等待拒绝",
+      refusal === "MEDIA_NOT_PERSISTED" ? ["pending-resource"] : undefined,
+    );
+    await page.evaluate(() => {
+      const key = Object.keys(localStorage).find((k) =>
+        k.startsWith("forkwise:recovery:v1:"),
+      )!;
+      const value = JSON.parse(localStorage.getItem(key)!);
+      value.closed = value.drafts;
+      value.drafts = [];
+      localStorage.setItem(key, JSON.stringify(value));
+    });
+    const hold = gate(),
+      replied = gate();
+    let serverCode: string | undefined;
+    const requests: Command[] = [],
+      codes: string[] = [];
+    page.on("request", (r) => {
+      if (r.url().endsWith("/api/mapping/execute"))
+        requests.push(r.postDataJSON());
+    });
+    page.on("response", async (r) => {
+      if (r.url().endsWith("/api/mapping/execute"))
+        codes.push((await r.json()).code ?? "ACK");
+    });
+    await page.route("**/api/mapping/execute", async (route) => {
+      if (route.request().postDataJSON().commandId !== original.commandId)
+        return route.continue();
+      const response = await route.fetch();
+      serverCode = (await response.json()).code;
+      replied.release();
+      await hold.promise;
+      await route.fulfill({ response });
+    });
+    const history = async () =>
+      (
+        await page.request.get(
+          origin + `/api/mapping/projects/${projectId}/history`,
+        )
+      ).json();
+    const historyBefore = await history();
+    const body = page.getByLabel("卡片正文", { exact: true });
+    const latestText = `${refusal}响应晚到期间本人继续输入的最新完整正文`;
+    const cache = () =>
+      page.evaluate(() =>
+        Object.keys(localStorage)
+          .filter((k) => k.startsWith("forkwise:recovery:v1:"))
+          .map((k) => ({ key: k, raw: localStorage.getItem(k)! })),
+      );
+    try {
+      await page.reload();
+      await expect(page.getByRole("tab", { selected: true })).toHaveAttribute(
+        "title",
+        projectId,
+      );
+      await page.getByRole("button", { name: "恢复草稿", exact: true }).click();
+      await replied.promise;
+      expect(serverCode).toBe(refusal);
+      expect(await draftProject(page)).toEqual(before);
+      expect(await history()).toEqual(historyBefore);
+      await body.fill(latestText);
+      expect((await cache()).some((x) => x.raw.includes(latestText))).toBe(
+        true,
+      );
+      hold.release();
+      await expect(page.getByRole("alert")).toBeVisible();
+      await expect.poll(() => codes).toEqual([refusal]);
+      await expect(body).toHaveValue(latestText);
+      expect((await cache()).some((x) => x.raw.includes(latestText))).toBe(
+        true,
+      );
+      await page.unroute("**/api/mapping/execute");
+      await page.getByRole("button", { name: "重试保存", exact: true }).click();
+      await expect.poll(() => codes.length).toBe(2);
+      expect(requests[0]).toEqual(original);
+      const latest = requests[1];
+      expect(latest.commandId).not.toBe(original.commandId);
+      expect(latest.expected).toBe(original.expected);
+      if (latest.type !== "body.edit") throw new Error("Expected a body edit");
+      expect(latest.payload.text).toBe(latestText);
+      if (refusal === "MEDIA_NOT_PERSISTED") {
+        expect(latest.payload.requiredAssetIds).toEqual(["pending-resource"]);
+        expect(codes).toEqual([refusal, refusal]);
+        await expect(page.getByRole("status")).toHaveText("保存未完成");
+        await expect(body).toHaveValue(latestText);
+        await page
+          .getByRole("button", { name: "重试保存", exact: true })
+          .click();
+        await expect.poll(() => codes.length).toBe(3);
+        expect(requests[2]).toEqual(latest);
+        expect(await draftProject(page)).toEqual(before);
+        expect(await history()).toEqual(historyBefore);
+        await page.reload();
+        await expect(page.getByLabel("草稿恢复")).toContainText(latestText);
+        await page
+          .getByRole("button", { name: "恢复草稿", exact: true })
+          .click();
+        await expect.poll(() => codes.length).toBe(4);
+        expect(requests[3]).toEqual(latest);
+        await expect(body).toHaveValue(latestText);
+        expect(await draftProject(page)).toEqual(before);
+        expect(await history()).toEqual(historyBefore);
+      } else {
+        expect(codes).toEqual([refusal, "ACK"]);
+        await expect(page.getByRole("status")).toHaveText("已保存到本机");
+        expect((await draftProject(page)).cards[0].body.blocks[0].text).toBe(
+          latestText,
+        );
+        const changes = await (
+          await page.request.get(
+            origin + `/api/mapping/projects/${projectId}/changes?after=0`,
+          )
+        ).json();
+        expect(
+          changes.changes.filter(
+            (c: { commandId: string }) => c.commandId === original.commandId,
+          ),
+        ).toHaveLength(0);
+        expect(
+          changes.changes.filter(
+            (c: { commandId: string }) => c.commandId === latest.commandId,
+          ),
+        ).toHaveLength(1);
+        await page.reload();
+        await expect(page.getByRole("tab", { selected: true })).toHaveAttribute(
+          "title",
+          projectId,
+        );
+        await page
+          .getByRole("button", { name: "编辑正文", exact: true })
+          .click();
+        await expect(body).toHaveValue(latestText);
+        await expect(
+          page.getByRole("button", { name: "恢复草稿", exact: true }),
+        ).toHaveCount(0);
+        expect((await draftProject(page)).cards[0].body.blocks[0].text).toBe(
+          latestText,
+        );
+      }
+    } finally {
+      hold.release();
+      await page.unroute("**/api/mapping/execute");
+      writeFileSync(
+        testInfo.outputPath("late-refusal-runtime.json"),
+        JSON.stringify({
+          refusal,
+          serverCode,
+          original,
+          latestText,
+          requests,
+          codes,
+          before,
+          after: await draftProject(page),
+          historyBefore,
+          historyAfter: await history(),
+          visible: await page.evaluate(
+            () =>
+              document.querySelector<HTMLTextAreaElement>("#card-body")
+                ?.value ?? null,
+          ),
+          cache: await cache(),
+        }),
+        { mode: 0o600 },
+      );
+      await page.screenshot({ path: testInfo.outputPath("late-refusal.png") });
+    }
+  });
+}
