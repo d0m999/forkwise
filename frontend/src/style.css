@@ -1,0 +1,349 @@
+:root {
+  font-family:
+    -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei",
+    sans-serif;
+  color: #252933;
+  background: #f6f7f9;
+  font-synthesis: none;
+  font-size: 14px;
+}
+* {
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+}
+button,
+input,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+button {
+  cursor: pointer;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  padding: 8px 12px;
+}
+button:hover {
+  background: #eef1f7;
+}
+button:disabled {
+  cursor: wait;
+  opacity: 0.5;
+}
+button:focus-visible,
+input:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid #365ec9;
+  outline-offset: 2px;
+}
+button[aria-pressed="true"],
+button[aria-selected="true"],
+button[aria-current="true"] {
+  background: #e8eefc;
+  color: #264aad;
+}
+.workspace {
+  height: 100dvh;
+  overflow: hidden;
+}
+.topbar {
+  height: 44px;
+  background: #fff;
+  border-bottom: 1px solid #dce0e7;
+  display: flex;
+  align-items: center;
+  padding: 0 8px;
+  gap: 6px;
+  position: relative;
+  z-index: 5;
+}
+.project-tabs {
+  display: flex;
+  min-width: 0;
+  overflow: auto;
+  flex: 1;
+  height: 100%;
+  align-items: center;
+}
+.project-tabs button {
+  white-space: nowrap;
+  border-radius: 6px 6px 0 0;
+  height: 38px;
+  margin-top: 6px;
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.topbar > button {
+  white-space: nowrap;
+}
+.project-tabs small,
+.project-nav small {
+  font-size: 10px;
+  color: #697386;
+  margin-left: 10px;
+}
+.canvas {
+  position: absolute;
+  inset: 44px 0 0;
+}
+.canvas.with-editor {
+  right: 360px;
+}
+.thought-card {
+  width: 280px;
+  border: 1px solid #d1d8e5;
+  border-radius: 9px;
+  background: #fff;
+  box-shadow: 0 3px 12px #2331490a;
+  overflow: hidden;
+}
+.title-button,
+.card-title {
+  display: block;
+  width: 100%;
+  background: #edf1fa;
+  border: 0;
+  border-radius: 0;
+  padding: 16px;
+  text-align: left;
+  font-size: 17px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-weight: 600;
+}
+.card-title {
+  resize: vertical;
+  min-height: 62px;
+  max-height: 180px;
+}
+.preview {
+  padding: 0 16px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+.body-button {
+  font-size: 12px;
+  margin: 6px 8px;
+  color: #526075;
+}
+.creation-tools {
+  position: absolute;
+  bottom: 30px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px;
+  background: #fff;
+  border: 1px solid #dce0e7;
+  border-radius: 10px;
+  box-shadow: 0 5px 18px #2331490b;
+  white-space: nowrap;
+}
+.creation-tools span {
+  font-size: 12px;
+  color: #626e81;
+  padding: 0 10px;
+}
+.body-editor {
+  position: absolute;
+  right: 0;
+  top: 44px;
+  bottom: 0;
+  width: 360px;
+  background: #fff;
+  border-left: 1px solid #dce0e7;
+  display: flex;
+  flex-direction: column;
+  padding: 22px 24px 72px;
+}
+.body-editor header {
+  display: flex;
+  align-items: start;
+  gap: 8px;
+}
+.body-editor h2 {
+  font-size: 18px;
+  line-height: 1.5;
+  flex: 1;
+  overflow-wrap: anywhere;
+  margin: 0 0 28px;
+}
+.body-editor label {
+  font-size: 12px;
+  color: #697386;
+  margin-bottom: 12px;
+}
+.body-editor textarea {
+  flex: 1;
+  resize: none;
+  border: none;
+  line-height: 1.85;
+  min-height: 100px;
+}
+.save-state {
+  position: absolute;
+  bottom: 8px;
+  right: 16px;
+  z-index: 8;
+  max-width: min(600px, 90vw);
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 12px;
+  background: #fff;
+  padding: 5px 10px;
+  border-radius: 6px;
+}
+.save-state [role="alert"] {
+  color: #a52e39;
+}
+.project-nav {
+  position: absolute;
+  left: 8px;
+  top: 50px;
+  bottom: 50px;
+  width: 248px;
+  background: white;
+  border: 1px solid #dce0e7;
+  border-radius: 10px;
+  z-index: 10;
+  padding: 10px;
+  box-shadow: 0 8px 30px #23314912;
+}
+.nav-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 6px 12px;
+}
+.project-nav > button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.empty {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  color: #6a7485;
+}
+.empty h1 {
+  font-size: 28px;
+  font-weight: 500;
+  color: #3c4656;
+  margin: 0 0 12px;
+}
+.empty p {
+  font-size: 15px;
+}
+.dialog-shade {
+  position: fixed;
+  inset: 0;
+  background: #1d27384a;
+  z-index: 20;
+  display: grid;
+  place-items: center;
+}
+.dialog-shade form {
+  width: min(420px, 90vw);
+  border-radius: 12px;
+  background: white;
+  padding: 28px;
+  box-shadow: 0 20px 80px #16203b30;
+}
+.dialog-shade h2 {
+  font-size: 20px;
+  margin: 0 0 24px;
+}
+.dialog-shade label {
+  display: block;
+  margin-bottom: 8px;
+}
+.dialog-shade input {
+  width: 100%;
+  border: 1px solid #aeb8c8;
+  border-radius: 6px;
+  padding: 10px;
+}
+.dialog-shade form > div {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 24px;
+}
+.dialog-shade button[type="submit"] {
+  background: #365ec9;
+  color: white;
+}
+.react-flow__attribution {
+  bottom: 8px !important;
+  right: auto !important;
+  left: 70px;
+}
+.react-flow__controls {
+  bottom: 16px !important;
+  box-shadow: none !important;
+  border: 1px solid #dce0e7;
+}
+.react-flow__node:focus-visible {
+  outline: 2px solid #365ec9;
+  border-radius: 9px;
+}
+@media (max-width: 760px) {
+  .body-editor {
+    width: min(360px, 88vw);
+    z-index: 6;
+    box-shadow: -8px 0 25px #23314912;
+  }
+  .canvas.with-editor {
+    right: 0;
+  }
+  .creation-tools {
+    bottom: 55px;
+  }
+  .topbar {
+    gap: 0;
+  }
+  .topbar button {
+    padding: 7px 8px;
+  }
+  .save-state {
+    bottom: 10px;
+    right: 8px;
+    max-width: 90vw;
+  }
+  .creation-tools span {
+    display: none;
+  }
+  .project-tabs button {
+    max-width: 160px;
+  }
+  .empty h1 {
+    font-size: 24px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  * {
+    scroll-behavior: auto !important;
+    transition: none !important;
+    animation: none !important;
+  }
+}

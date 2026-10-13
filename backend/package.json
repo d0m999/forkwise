@@ -8,7 +8,7 @@
   },
   "scripts": {
     "dev": "tsx src/server.ts",
-    "build": "npm run build:canvas && tsc -p tsconfig.build.json && mkdir -p dist/drizzle dist/web && cp -R drizzle/. dist/drizzle && cp -R web/. dist/web && mkdir -p dist/src/workers && cp src/workers/*.mjs dist/src/workers/",
+    "build": "npm run build:workspace && npm run build:canvas && tsc -p tsconfig.build.json && mkdir -p dist/drizzle dist/web && cp -R drizzle/. dist/drizzle && cp -R web/. dist/web && mkdir -p dist/src/workers && cp src/workers/*.mjs dist/src/workers/",
     "check": "tsc --noEmit",
     "test": "vitest run",
     "start": "node dist/src/server.js",
@@ -16,7 +16,9 @@
     "openapi": "tsx scripts/openapi.ts",
     "db:generate": "drizzle-kit generate",
     "restore": "tsx scripts/restore.ts",
-    "build:canvas": "npm --prefix ../prototype/canvas-lab run check && npm --prefix ../prototype/canvas-lab run build && mkdir -p web/canvas && cp -R ../prototype/canvas-built/. web/canvas/"
+    "build:canvas": "npm --prefix ../prototype/canvas-lab run check && npm --prefix ../prototype/canvas-lab run build && mkdir -p web/canvas && cp -R ../prototype/canvas-built/. web/canvas/",
+    "build:workspace": "npm --prefix ../frontend run check && npm --prefix ../frontend run build && tsc -p tsconfig.build.json && mkdir -p dist/workspace && cp -R ../frontend/dist/. dist/workspace/",
+    "start:workspace": "node dist/src/workspace-server.js"
   },
   "dependencies": {
     "@forkwise/public-data-core": "file:../public-data-core",
