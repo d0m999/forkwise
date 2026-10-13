@@ -72,12 +72,33 @@ export class DraftRecovery {
           // Schema 1 journals may carry requirements only in the original
           // command. Keep that request intact and retain its resource state
           // independently for subsequent edits and definite rejections.
-          for (const draft of [
+          const projections = [
             ...value.drafts,
             ...value.closed,
             ...(value.pending ? [value.pending] : []),
-          ]) {
+          ];
+          const originals = new Map(
+            projections
+              .filter((draft) => draft.command)
+              .map((draft) => [draftInputKey(draft), draft.command!] as const),
+          );
+          const resources = new Map<string, string[]>();
+          for (const draft of projections) {
+            // A compatible bare projection shares the existing original request;
+            // never generate a replacement key for an execution still unknown.
+            const original = originals.get(draftInputKey(draft));
+            if (!draft.command && original) draft.command = original;
             const assets = draftAssetIds(draft);
+            if (assets)
+              resources.set(draftInputKey(draft), [
+                ...new Set([
+                  ...(resources.get(draftInputKey(draft)) ?? []),
+                  ...assets,
+                ]),
+              ]);
+          }
+          for (const draft of projections) {
+            const assets = resources.get(draftInputKey(draft));
             if (assets) draft.requiredAssetIds = assets;
           }
           result.push({ key, value });
@@ -129,8 +150,13 @@ function validRecovery(value: unknown): value is Recovery {
     !(r.pending === null || typeof r.pending === "object")
   )
     return false;
-  return [...r.drafts, ...r.closed, ...(r.pending ? [r.pending] : [])].every(
-    (d) => {
+  const projections = [
+    ...r.drafts,
+    ...r.closed,
+    ...(r.pending ? [r.pending] : []),
+  ];
+  if (
+    !projections.every((d) => {
       if (
         !d ||
         d.projectId !== r.projectId ||
@@ -146,8 +172,15 @@ function validRecovery(value: unknown): value is Recovery {
           (d.field !== "body" || !validAssetIds(d.requiredAssetIds)))
       )
         return false;
-      if (!d.command) return true;
+      if (d.command === undefined) return true;
       const c = d.command;
+      if (
+        !c ||
+        typeof c !== "object" ||
+        !c.payload ||
+        typeof c.payload !== "object"
+      )
+        return false;
       const commandAssets =
         c.type === "body.edit" ? c.payload.requiredAssetIds : undefined;
       return (
@@ -171,8 +204,49 @@ function validRecovery(value: unknown): value is Recovery {
             c.payload.title === d.value &&
             !("requiredAssetIds" in c.payload)))
       );
-    },
-  );
+    })
+  )
+    return false;
+  const inputs = new Map<string, Draft>();
+  const requests = new Map<string, string>();
+  for (const draft of projections) {
+    const key = draftInputKey(draft);
+    if (draft.command) {
+      const identity = requestIdentity(draft.command);
+      const previousRequest = requests.get(draft.command.commandId);
+      if (previousRequest !== undefined && previousRequest !== identity)
+        return false;
+      requests.set(draft.command.commandId, identity);
+    }
+    const previous = inputs.get(key);
+    if (
+      previous &&
+      (!sameDraftInput(previous, draft) ||
+        (previous.command &&
+          draft.command &&
+          requestIdentity(previous.command) !== requestIdentity(draft.command)))
+    )
+      return false;
+    inputs.set(key, previous?.command ? previous : draft);
+  }
+  const requirements = new Map<string, string>();
+  for (const draft of projections) {
+    const key = draftInputKey(draft);
+    const original = inputs.get(key)?.command;
+    if (original) {
+      const assets =
+        original.type === "body.edit"
+          ? original.payload.requiredAssetIds
+          : undefined;
+      if (!(draft.requiredAssetIds ?? []).every((id) => assets?.includes(id)))
+        return false;
+    } else if (draft.requiredAssetIds !== undefined) {
+      const ids = JSON.stringify([...new Set(draft.requiredAssetIds)].sort());
+      if (requirements.has(key) && requirements.get(key) !== ids) return false;
+      requirements.set(key, ids);
+    }
+  }
+  return true;
 }
 
 function validAssetIds(value: unknown): value is string[] {
@@ -194,4 +268,57 @@ export function draftAssetIds(draft: Draft): string[] | undefined {
   return [
     ...new Set([...(draft.requiredAssetIds ?? []), ...(fromCommand ?? [])]),
   ];
+}
+
+// JSON object property order is not request identity; array order and all values
+// remain intact. Never normalize or replace a request that may already have run.
+function requestIdentity(value: unknown): string {
+  if (Array.isArray(value))
+    return "[" + value.map(requestIdentity).join(",") + "]";
+  if (value && typeof value === "object")
+    return (
+      "{" +
+      Object.entries(value)
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([key, item]) => JSON.stringify(key) + ":" + requestIdentity(item))
+        .join(",") +
+      "}"
+    );
+  return JSON.stringify(value);
+}
+
+export function sameDraftInput(a: Draft, b: Draft): boolean {
+  return (
+    a.projectId === b.projectId &&
+    a.cardId === b.cardId &&
+    a.field === b.field &&
+    a.generation === b.generation &&
+    a.value === b.value &&
+    a.expected === b.expected
+  );
+}
+// A receipt covers its exact input and original request, including resources.
+// A projection that has not generated a command can share that same receipt.
+export function draftCoveredBy(draft: Draft, submitted: Draft): boolean {
+  return (
+    sameDraftInput(draft, submitted) &&
+    (!draft.command ||
+      (!!submitted.command &&
+        requestIdentity(draft.command) ===
+          requestIdentity(submitted.command))) &&
+    (draftAssetIds(draft) ?? []).every(
+      (id) =>
+        submitted.command?.type === "body.edit" &&
+        submitted.command.payload.requiredAssetIds?.includes(id),
+    )
+  );
+}
+
+function draftInputKey(draft: Draft): string {
+  return JSON.stringify([
+    draft.projectId,
+    draft.cardId,
+    draft.field,
+    draft.generation,
+  ]);
 }

@@ -23,6 +23,8 @@ import "./style.css";
 import {
   DraftRecovery,
   draftAssetIds,
+  draftCoveredBy,
+  sameDraftInput,
   type Draft,
   type Recovery,
 } from "./draft-recovery";
@@ -619,7 +621,14 @@ function Workspace() {
                 : {}),
             },
           });
+    const submitted: Draft = { ...current, command };
     current.command = command;
+    for (const projection of [
+      ...closedDrafts.current,
+      ...Object.values(drafts.current),
+    ])
+      if (!projection.command && sameDraftInput(projection, submitted))
+        projection.command = command;
     unconfirmed.current = current;
     persistDrafts();
     setStatus("正在保存…");
@@ -632,9 +641,12 @@ function Workspace() {
           ...Object.values(drafts.current),
         ]) {
           if (
+            newer.projectId === submitted.projectId &&
             newer.cardId === current.cardId &&
             newer.field === current.field &&
             newer.generation !== current.generation &&
+            // An existing original request retains its own expected version.
+            !newer.command &&
             // A no-op confirms current.expected; a later readback may belong
             // to another writer and cannot rebase this unsaved generation.
             newer.expected === current.expected
@@ -648,10 +660,17 @@ function Workspace() {
           }
         }
         closedDrafts.current = closedDrafts.current.filter(
-          (d) => d.generation !== current.generation,
+          (d) => !draftCoveredBy(d, submitted),
         );
-        unconfirmed.current = null;
-        if (drafts.current[key]?.generation === current.generation)
+        if (
+          unconfirmed.current &&
+          draftCoveredBy(unconfirmed.current, submitted)
+        )
+          unconfirmed.current = null;
+        if (
+          drafts.current[key] &&
+          draftCoveredBy(drafts.current[key], submitted)
+        )
           delete drafts.current[key];
         persistDrafts();
         setDraftView({ ...drafts.current });
@@ -675,7 +694,7 @@ function Workspace() {
           if (e.code !== "MEDIA_NOT_PERSISTED") delete current.command;
           unconfirmed.current = null;
           closedDrafts.current = closedDrafts.current.filter(
-            (d) => d.generation !== current.generation,
+            (d) => !draftCoveredBy(d, submitted),
           );
           persistDrafts();
         }
