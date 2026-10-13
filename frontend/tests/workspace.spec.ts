@@ -133,6 +133,8 @@ test("真实 React Flow 卡片经服务重启和新浏览器上下文保持项�
   await page.getByRole("tab", { name: /芯片研究/ }).click();
   await expect(page.locator(".react-flow__node")).toHaveCount(1);
   await page.screenshot({ path: testInfo.outputPath("before-restart.png") });
+  // Release this fixture's active HTTP connections before waiting for graceful shutdown.
+  await page.goto("about:blank");
   await stop();
   await start();
   // A new browser context has no localStorage, IndexedDB, cookies, or prototype archives.
@@ -1033,6 +1035,9 @@ test("H4 创建与首次标题一次撤销，空卡和完整标题重做经服�
   await openWorkspace(page);
   await page.getByRole("button", { name: "新建研究", exact: true }).click();
   await expect(page.locator(".react-flow__node")).toHaveCount(0);
+  await expect(
+    page.getByRole("button", { name: "卡片", exact: true }),
+  ).toBeEnabled();
   await page.getByRole("button", { name: "卡片", exact: true }).focus();
   await page.keyboard.press("Enter");
   await page.getByLabel("卡片标题", { exact: true }).fill("库存观察");
@@ -1040,6 +1045,7 @@ test("H4 创建与首次标题一次撤销，空卡和完整标题重做经服�
   await expect(page.getByRole("status")).toHaveText("已保存到本机");
   await page.getByRole("button", { name: "撤销", exact: true }).click();
   await expect(page.locator(".react-flow__node")).toHaveCount(0);
+  await page.goto("about:blank");
   await stop();
   await start();
   await openWorkspace(page);
@@ -2744,9 +2750,11 @@ test("S5-R2 媒体依赖随新generation和重开继续保留，不能变成已�
   expect(await draftProject(page)).toEqual(before);
   expect(await historyState(page)).toEqual(historyBefore);
   await expect(page.getByRole("status")).not.toHaveText("已保存到本机");
+  const reopenUrl = page.url();
+  await page.goto("about:blank");
   await stop();
   await start();
-  await page.reload();
+  await page.goto(reopenUrl);
   await expect(
     page.getByRole("button", { name: "恢复草稿", exact: true }),
   ).toBeVisible();
