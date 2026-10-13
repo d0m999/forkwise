@@ -151,6 +151,8 @@ function Workspace() {
     end: number;
   } | null>(null);
   function breakBodyGroup() {
+    // Focus changes must not split an unfinished IME unit into saved fragments.
+    if (composition.current) return;
     const group = bodyGroup.current;
     if (group) {
       const draft = Object.values(drafts.current).find(
@@ -183,6 +185,7 @@ function Workspace() {
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const maxTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const composition = useRef(false),
+    compositionPrefixCutoff = useRef(0),
     generation = useRef(0),
     saving = useRef<Promise<boolean> | null>(null);
   const layoutBarrier = useRef<{ cutoff: number } | null>(null);
@@ -349,10 +352,15 @@ function Workspace() {
     // Geometry remains interactive while the prefix of input waits for ACK.
     // Reserve this boundary so later typing cannot overtake the move either.
     breakBodyGroup();
-    const barrier = { cutoff: generation.current };
+    const barrier = {
+      cutoff: composition.current
+        ? compositionPrefixCutoff.current
+        : generation.current,
+    };
     if (
       !pose.start(projectId, card, {
-        beforeSubmit: () => flush(barrier.cutoff),
+        beforeSubmit: async () =>
+          (await drainCompletedPrefix(barrier.cutoff)) !== "unknown",
         afterAttempt: () => {
           if (layoutBarrier.current === barrier) layoutBarrier.current = null;
           void flush();
@@ -404,15 +412,27 @@ function Workspace() {
     setError(e instanceof Error ? e.message : "本机服务暂时不可用");
     setStatus("保存未完成");
   }
-  async function flush(limit = Infinity): Promise<boolean> {
+  async function drainCompletedPrefix(
+    cutoff: number,
+  ): Promise<"drained" | "explicitConflict" | "unknown"> {
+    if (await flush(cutoff, true)) return "drained";
+    // A confirmed conflict preserves both bodies for an explicit later choice.
+    // An unknown response still needs recovery with the original command ID.
+    return conflictRef.current ? "explicitConflict" : "unknown";
+  }
+  async function flush(
+    limit = Infinity,
+    completedPrefix = false,
+  ): Promise<boolean> {
     limit = Math.min(limit, layoutBarrier.current?.cutoff ?? Infinity);
     clearTimeout(timer.current);
     clearTimeout(maxTimer.current);
     maxTimer.current = undefined;
-    if (composition.current || conflictRef.current) return false;
+    if ((!completedPrefix && composition.current) || conflictRef.current)
+      return false;
     if (saving.current) {
       if (!(await saving.current)) return false;
-      return flush(limit);
+      return flush(limit, completedPrefix);
     }
     const current =
       unconfirmed.current ??
@@ -507,7 +527,7 @@ function Workspace() {
     saving.current = null;
     // A completed command only confirms its own generation. Drain newer input
     // before allowing a project switch or any other editor handoff.
-    return result ? flush(limit) : false;
+    return result ? flush(limit, completedPrefix) : false;
   }
   function scheduleSave() {
     clearTimeout(timer.current);
@@ -517,7 +537,10 @@ function Workspace() {
       maxTimer.current = setTimeout(() => void flush(), 2000);
   }
   function compose(value: boolean) {
-    if (value) breakBodyGroup();
+    if (value) {
+      breakBodyGroup();
+      compositionPrefixCutoff.current = generation.current;
+    }
     composition.current = value;
     if (value) {
       clearTimeout(timer.current);
@@ -610,11 +633,8 @@ function Workspace() {
     );
     if (draft.field === "body" && bodyGroup.current?.cardId === draft.cardId)
       bodyGroup.current = null;
-    if (
-      layoutBarrier.current &&
-      draft.generation <= layoutBarrier.current.cutoff
-    )
-      layoutBarrier.current.cutoff = next.generation;
+    // This explicit choice is a new action after any already-started move;
+    // never extend that move's captured prefix to include the resolution.
     drafts.current[key] = next;
     unconfirmed.current = null;
     conflictRef.current = null;

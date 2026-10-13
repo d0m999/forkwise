@@ -601,14 +601,19 @@ test("布局回读不替换正文草稿的起始版本，同正文冲突保留�
     "transform",
     `matrix(1, 0, 0, 1, ${before.cards[0].item.pose.x + 10}, ${before.cards[0].item.pose.y})`,
   );
-  expect(
-    (
-      await page.evaluate(
-        async (id) => (await fetch("/api/mapping/projects/" + id)).json(),
-        projectId,
-      )
-    ).cards[0].item.pose,
-  ).toEqual(before.cards[0].item.pose);
+  // Preserve #3: Pose is really persisted before the unfinished IME unit ends.
+  await expect
+    .poll(
+      async () =>
+        (
+          await page.evaluate(
+            async (id) => (await fetch("/api/mapping/projects/" + id)).json(),
+            projectId,
+          )
+        ).cards[0].item.pose.x,
+    )
+    .toBe(before.cards[0].item.pose.x + 10);
+  await expect(body).toHaveValue("我的待保存正文");
   await body.dispatchEvent("compositionend");
   await expect(page.getByRole("alert")).toContainText("正文已更新");
   await expect(body).toHaveValue("我的待保存正文");
@@ -627,6 +632,108 @@ test("布局回读不替换正文草稿的起始版本，同正文冲突保留�
   await page.getByRole("button", { name: "编辑正文" }).click();
   await expect(body).toHaveValue("我的待保存正文");
 });
+
+for (const delayedPose of [false, true]) {
+  test(`R2 明确正文冲突${delayedPose ? "解决在移动之后" : "不阻塞独立布局落盘或重设正文依据版本"}`, async ({
+    page,
+  }) => {
+    await openWorkspace(page);
+    const projectId = await newCard(page);
+    const body = page.getByLabel("卡片正文", { exact: true });
+    const read = () =>
+      page.evaluate(
+        async (id) => (await fetch("/api/mapping/projects/" + id)).json(),
+        projectId,
+      );
+    const original = (await read()).cards[0];
+    const submitted: {
+      type: string;
+      expected: string;
+      payload: { text?: string };
+    }[] = [];
+    page.on("request", (request) => {
+      if (
+        request.method() === "POST" &&
+        request.url().endsWith("/api/mapping/execute")
+      )
+        submitted.push(request.postDataJSON());
+    });
+    await body.dispatchEvent("compositionstart");
+    await body.fill("我的冲突草稿");
+    const external = await page.evaluate(
+      async ({ projectId, card }) => {
+        const response = await fetch("/api/mapping/execute", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            commandId: crypto.randomUUID(),
+            projectId,
+            type: "body.edit",
+            expected: card.body.versionId,
+            payload: { id: card.id, text: "对方已保存正文" },
+          }),
+        });
+        return response.json();
+      },
+      { projectId, card: original },
+    );
+    expect(external.changedIds).toContain(original.body.id);
+    await body.dispatchEvent("compositionend");
+    await expect(page.getByLabel("已保存的正文")).toHaveValue("对方已保存正文");
+    const poseGate = gate();
+    let poseStarted = false;
+    if (delayedPose)
+      await page.route("**/api/mapping/execute", async (route) => {
+        if (route.request().postDataJSON().type !== "pose.move")
+          return route.continue();
+        poseStarted = true;
+        await poseGate.promise;
+        await route.continue();
+      });
+    try {
+      await page
+        .getByRole("button", { name: "移动卡片：方向键调整位置" })
+        .press("ArrowRight");
+      if (delayedPose) {
+        await expect.poll(() => poseStarted).toBe(true);
+        await page.getByRole("button", { name: "确认保留我的正文" }).click();
+        // Hold the Pose request beyond the save debounce; the later choice must wait.
+        await page.waitForTimeout(600);
+        expect((await read()).cards[0].body.blocks[0].text).toBe(
+          "对方已保存正文",
+        );
+        poseGate.release();
+      }
+      await expect
+        .poll(async () => (await read()).cards[0].item.pose.x)
+        .toBe(original.item.pose.x + 10);
+      if (!delayedPose) {
+        await expect(body).toHaveValue("我的冲突草稿");
+        await expect(page.getByLabel("已保存的正文")).toHaveValue(
+          "对方已保存正文",
+        );
+        await expect(page.getByRole("status")).not.toHaveText("已保存到本机");
+        expect((await read()).cards[0].body.blocks[0].text).toBe(
+          "对方已保存正文",
+        );
+        expect(
+          submitted.filter((c) => c.payload.text === "我的冲突草稿"),
+        ).toEqual([
+          expect.objectContaining({ expected: original.body.versionId }),
+        ]);
+        await page.getByRole("button", { name: "确认保留我的正文" }).click();
+      }
+      await expect(page.getByRole("status")).toHaveText("已保存到本机");
+      expect((await read()).cards[0].body.blocks[0].text).toBe("我的冲突草稿");
+      expect(
+        (await historyState(page)).undo.map((a: { label: string }) => a.label),
+      ).toEqual(["thought.create", "body.edit", "pose.move", "body.edit"]);
+    } finally {
+      poseGate.release();
+      await page.unrouteAll({ behavior: "wait" });
+    }
+  });
+}
 
 test("布局竞争显式确认再保存；丢失布局 ACK 重试一次生效且正文继续可写", async ({
   page,
@@ -1354,6 +1461,124 @@ test("R2 已落盘正文ACK延迟时后续输入先于方向键移动入历史",
     await page.unrouteAll({ behavior: "wait" });
   }
 });
+for (const lostAck of [false, true]) {
+  test(`R2 完整正文前序组${lostAck ? "丢ACK原命令重试" : "迟ACK"}先于布局，新组合输入保持完整且不阻塞布局落盘`, async ({
+    page,
+  }, testInfo) => {
+    await openWorkspace(page);
+    const projectId = await newCard(page);
+    const body = page.getByLabel("卡片正文", { exact: true });
+    const read = () =>
+      page.evaluate(
+        async (id) => (await fetch("/api/mapping/projects/" + id)).json(),
+        projectId,
+      );
+    const original = (await read()).cards[0];
+    const ack = gate();
+    let written = false;
+    let first = true;
+    const submitted: {
+      type: string;
+      commandId: string;
+      payload: { text?: string };
+    }[] = [];
+    await page.route("**/api/mapping/execute", async (route) => {
+      const command = route.request().postDataJSON();
+      submitted.push(command);
+      if (
+        command.type !== "body.edit" ||
+        command.payload.text !== "A" ||
+        !first
+      )
+        return route.continue();
+      first = false;
+      const response = await route.fetch();
+      written = true;
+      await ack.promise;
+      if (lostAck)
+        await route.fulfill({
+          status: 503,
+          contentType: "application/json",
+          body: JSON.stringify({ message: "测试丢失前序组确认" }),
+        });
+      else await route.fulfill({ response });
+    });
+    try {
+      await body.pressSequentially("A");
+      await expect.poll(() => written).toBe(true);
+      await body.pressSequentially("B");
+      // Synthetic events cover the coordinator, not real system IME acceptance.
+      await body.dispatchEvent("compositionstart");
+      await body.fill("ABC");
+      await page
+        .getByRole("button", { name: "移动卡片：方向键调整位置" })
+        .press("ArrowRight");
+      await expect(page.locator(".react-flow__node")).toHaveCSS(
+        "transform",
+        `matrix(1, 0, 0, 1, ${original.item.pose.x + 10}, ${original.item.pose.y})`,
+      );
+      ack.release();
+      if (lostAck) {
+        await expect(page.getByRole("alert")).toContainText("确认此移动之前");
+        expect((await read()).cards[0].item.pose).toEqual(original.item.pose);
+        expect((await read()).cards[0].body.blocks[0].text).toBe("A");
+        await expect(body).toHaveValue("ABC");
+        await page.getByRole("button", { name: "重试保存" }).click();
+      }
+      await expect
+        .poll(async () => (await read()).cards[0].item.pose.x)
+        .toBe(original.item.pose.x + 10);
+      expect((await read()).cards[0].body.blocks[0].text).toBe("AB");
+      const prefix = lostAck
+        ? ["A", "A", "AB", "pose.move"]
+        : ["A", "AB", "pose.move"];
+      expect(
+        submitted.map((c) =>
+          c.type === "body.edit" ? c.payload.text : c.type,
+        ),
+      ).toEqual(prefix);
+      if (lostAck) expect(submitted[0]).toEqual(submitted[1]);
+      await expect(body).toHaveValue("ABC");
+      await expect(page.getByRole("status")).not.toHaveText("已保存到本机");
+      await body.fill("ABCD");
+      await body.dispatchEvent("compositionend");
+      await expect(page.getByRole("status")).toHaveText("已保存到本机");
+      expect(
+        submitted.map((c) =>
+          c.type === "body.edit" ? c.payload.text : c.type,
+        ),
+      ).toEqual([...prefix, "ABCD"]);
+      const timeline = await historyState(page);
+      expect(timeline.undo.map((a: { label: string }) => a.label)).toEqual([
+        "thought.create",
+        "body.edit",
+        "pose.move",
+        "body.edit",
+      ]);
+      await testInfo.attach("completed-prefix-and-composition", {
+        body: JSON.stringify({ submitted, timeline, persisted: await read() }),
+        contentType: "application/json",
+      });
+      await page.getByRole("button", { name: "撤销", exact: true }).click();
+      await expect(body).toHaveValue("AB");
+      expect((await read()).cards[0].item.pose.x).toBe(
+        original.item.pose.x + 10,
+      );
+      await expect(
+        page.getByRole("button", { name: "撤销", exact: true }),
+      ).toBeEnabled();
+      await page.getByRole("button", { name: "撤销", exact: true }).click();
+      await expect
+        .poll(async () => (await read()).cards[0].item.pose)
+        .toEqual(original.item.pose);
+      await expect(body).toHaveValue("AB");
+    } finally {
+      ack.release();
+      await page.unrouteAll({ behavior: "wait" });
+    }
+  });
+}
+
 for (const lostAck of [false, true]) {
   test(`R2 已落盘正文${lostAck ? "丢ACK重试" : "迟ACK在拖动中返回"}不改变可见位置且正文先于布局`, async ({
     page,
