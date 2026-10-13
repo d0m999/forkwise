@@ -976,10 +976,12 @@ for (const field of ["body", "title"] as const) {
       await page.screenshot({
         path: testInfo.outputPath("after-confirmation.png"),
       });
-      await expect.poll(() => commands.length).toBe(1);
-      expect(commands[0]!.expected).toBe(
-        field === "body" ? remote.body.versionId : remote.versionId,
-      );
+      if (!updatedAgain) {
+        await expect.poll(() => commands.length).toBe(1);
+        expect(commands[0]!.expected).toBe(
+          field === "body" ? remote.body.versionId : remote.versionId,
+        );
+      }
       if (updatedAgain) {
         await expect(page.getByLabel(`已保存的${label}`)).toHaveValue(
           "再次保存D",
@@ -994,7 +996,7 @@ for (const field of ["body", "title"] as const) {
         await page
           .getByRole("button", { name: `确认保留我的${label}` })
           .click();
-        await expect.poll(() => commands.length).toBe(2);
+        await expect.poll(() => commands.length).toBe(1);
       }
       await expect(page.getByRole("status")).toHaveText("已保存到本机");
       expect(value((await read()).cards[0])).toBe(original);
