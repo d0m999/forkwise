@@ -200,12 +200,17 @@ function Workspace() {
   > | null>(null);
   const historyActionId = useRef<string | null>(null);
   const historyBlocked = historyBusy || !!historyCommand.current;
-  async function travel(direction: "undo" | "redo", restoreActionId?: string) {
+  async function travel(
+    direction: "undo" | "redo" | "retry",
+    restoreActionId?: string,
+  ) {
     if (
       historyLock.current ||
       composition.current ||
       busy ||
-      pendingAction.current
+      pendingAction.current ||
+      // Unknown results can only resume through the explicit retry action.
+      (historyCommand.current ? direction !== "retry" : direction === "retry")
     )
       return;
     historyLock.current = true;
@@ -217,7 +222,7 @@ function Workspace() {
       titleGroup.current = null;
       const projectId = authority.current?.project.id;
       if (!projectId) return;
-      if (!historyCommand.current) {
+      if (!historyCommand.current && direction !== "retry") {
         const timeline = await api.history(projectId);
         const target = (
           direction === "undo" ? timeline.undo : timeline.redo
@@ -820,14 +825,14 @@ function Workspace() {
     <div className="workspace">
       <header className="topbar">
         <button
-          disabled={!state || busy || historyBusy}
+          disabled={!state || busy || historyBlocked}
           onMouseDown={(e) => e.preventDefault()}
           onClick={() => void travel("undo")}
         >
           撤销
         </button>
         <button
-          disabled={!state || busy || historyBusy}
+          disabled={!state || busy || historyBlocked}
           onMouseDown={(e) => e.preventDefault()}
           onClick={() => void travel("redo")}
         >
@@ -1113,14 +1118,10 @@ function Workspace() {
               {[error, pose.error].filter(Boolean).join("；")}
             </span>
             <button
-              disabled={busy || !!conflict || !!pose.conflict}
+              disabled={busy || !!pose.conflict || (!!conflict && !pose.error)}
               onClick={() => {
                 if (historyCommand.current) {
-                  void travel(
-                    historyCommand.current.type === "history.undo"
-                      ? "undo"
-                      : "redo",
-                  );
+                  void travel("retry");
                   return;
                 }
                 if (pose.error) {
@@ -1133,7 +1134,11 @@ function Workspace() {
                 else location.reload();
               }}
             >
-              重试保存
+              {historyCommand.current
+                ? historyCommand.current.type === "history.undo"
+                  ? "重试撤销"
+                  : "重试重做"
+                : "重试保存"}
             </button>
           </>
         )}

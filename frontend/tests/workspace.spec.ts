@@ -735,6 +735,111 @@ for (const delayedPose of [false, true]) {
   });
 }
 
+test("R3 正文未知转明确冲突后，可独立重试布局且重复点击只保存一次", async ({
+  page,
+}, testInfo) => {
+  await openWorkspace(page);
+  const projectId = await newCard(page);
+  const body = page.getByLabel("卡片正文", { exact: true });
+  const read = () =>
+    page.evaluate(
+      async (id) => (await fetch("/api/mapping/projects/" + id)).json(),
+      projectId,
+    );
+  const original = (await read()).cards[0];
+  const failedBody = gate(),
+    poseAck = gate();
+  let bodyStarted = false,
+    poseWritten = false,
+    first = true;
+  const commands: {
+    type: string;
+    commandId: string;
+    expected: string;
+    payload: { text?: string };
+  }[] = [];
+  await page.route("**/api/mapping/execute", async (route) => {
+    const command = route.request().postDataJSON();
+    commands.push(command);
+    if (command.type === "body.edit" && command.payload.text === "A" && first) {
+      first = false;
+      bodyStarted = true;
+      await failedBody.promise;
+      return route.fulfill({
+        status: 503,
+        contentType: "application/json",
+        body: JSON.stringify({ message: "测试正文结果未知" }),
+      });
+    }
+    if (command.type === "pose.move") {
+      const response = await route.fetch();
+      poseWritten = true;
+      await poseAck.promise;
+      return route.fulfill({ response });
+    }
+    return route.continue();
+  });
+  try {
+    await body.pressSequentially("A");
+    await expect.poll(() => bodyStarted).toBe(true);
+    await page
+      .getByRole("button", { name: "移动卡片：方向键调整位置" })
+      .press("ArrowRight");
+    failedBody.release();
+    await expect(page.getByRole("alert")).toContainText("确认此移动之前");
+    const response = await page.evaluate(
+      async ({ projectId, card }) => {
+        return (
+          await fetch("/api/mapping/execute", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              commandId: crypto.randomUUID(),
+              projectId,
+              type: "body.edit",
+              expected: card.body.versionId,
+              payload: { id: card.id, text: "另一调用者C" },
+            }),
+          })
+        ).ok;
+      },
+      { projectId, card: original },
+    );
+    expect(response).toBe(true);
+    await body.fill("本地后续AB");
+    await expect(page.getByLabel("已保存的正文")).toHaveValue("另一调用者C");
+    const retry = page.getByRole("button", { name: "重试保存", exact: true });
+    await expect(retry).toBeEnabled();
+    await retry.click();
+    await expect.poll(() => poseWritten).toBe(true);
+    await retry.click();
+    poseAck.release();
+    await expect
+      .poll(async () => (await read()).cards[0].item.pose.x)
+      .toBe(original.item.pose.x + 10);
+    await expect(page.getByRole("status")).toHaveText("保存未完成");
+    await expect(body).toHaveValue("本地后续AB");
+    await expect(page.getByLabel("已保存的正文")).toHaveValue("另一调用者C");
+    expect((await read()).cards[0].body.blocks[0].text).toBe("另一调用者C");
+    const attempts = commands.filter((c) => c.payload.text === "A");
+    expect(attempts).toHaveLength(2);
+    expect(attempts[0]).toEqual(attempts[1]);
+    expect(attempts[0]!.expected).toBe(original.body.versionId);
+    expect(commands.filter((c) => c.type === "pose.move")).toHaveLength(1);
+    expect(
+      (await historyState(page)).undo.map((a: { label: string }) => a.label),
+    ).toEqual(["thought.create", "body.edit", "pose.move"]);
+    await testInfo.attach("unknown-to-conflict-recovery", {
+      body: JSON.stringify({ commands, persisted: await read() }),
+      contentType: "application/json",
+    });
+  } finally {
+    failedBody.release();
+    poseAck.release();
+    await page.unrouteAll({ behavior: "wait" });
+  }
+});
+
 test("布局竞争显式确认再保存；丢失布局 ACK 重试一次生效且正文继续可写", async ({
   page,
 }) => {
@@ -1169,7 +1274,7 @@ test("H4 撤销确认在途时阻止跨项目和新建写入，丢ACK只重试�
     await expect(
       page.getByRole("button", { name: "新建研究", exact: true }),
     ).toBeDisabled();
-    await page.getByRole("button", { name: "重试保存", exact: true }).click();
+    await page.getByRole("button", { name: "重试撤销", exact: true }).click();
     await expect(page.locator(".react-flow__node")).toHaveCount(0);
     expect((await historyState(page)).redo).toHaveLength(1);
     await expect(
@@ -1180,6 +1285,118 @@ test("H4 撤销确认在途时阻止跨项目和新建写入，丢ACK只重试�
     await page.unrouteAll({ behavior: "wait" });
   }
 });
+for (const direction of ["undo", "redo"] as const) {
+  test(`R3 ${direction}丢ACK后普通反向入口不执行原动作，明确重试后才可反向操作`, async ({
+    page,
+  }, testInfo) => {
+    await openWorkspace(page);
+    const projectId = await newCard(page);
+    const read = () =>
+      page.evaluate(
+        async (id) => (await fetch("/api/mapping/projects/" + id)).json(),
+        projectId,
+      );
+    const original = (await read()).cards[0];
+    if (direction === "redo") {
+      await page.getByRole("button", { name: "撤销", exact: true }).click();
+      await expect(
+        page.getByText("这张卡片已删除", { exact: true }),
+      ).toBeVisible();
+    }
+    const commands: { type: string; commandId: string }[] = [];
+    let first = true;
+    await page.route("**/api/mapping/execute", async (route) => {
+      const command = route.request().postDataJSON();
+      if (command.type.startsWith("history.")) commands.push(command);
+      if (command.type !== `history.${direction}` || !first)
+        return route.continue();
+      first = false;
+      await route.fetch();
+      return route.fulfill({
+        status: 503,
+        contentType: "application/json",
+        body: JSON.stringify({ message: "测试历史确认丢失" }),
+      });
+    });
+    try {
+      const label = direction === "undo" ? "撤销" : "重做";
+      const oppositeLabel = direction === "undo" ? "重做" : "撤销";
+      await page.getByRole("button", { name: label, exact: true }).click();
+      await expect(page.getByRole("alert")).toHaveText("测试历史确认丢失");
+      const confirmedOnServer = await read();
+      expect(confirmedOnServer.cards).toHaveLength(
+        direction === "undo" ? 0 : 1,
+      );
+      await expect(
+        page.getByRole("button", { name: label, exact: true }),
+      ).toBeDisabled();
+      const opposite = page.getByRole("button", {
+        name: oppositeLabel,
+        exact: true,
+      });
+      await expect(opposite).toBeDisabled();
+      // A disabled button and the ordinary keyboard route must both stay inert.
+      await opposite.evaluate((button) =>
+        (button as HTMLButtonElement).click(),
+      );
+      await page.keyboard.press(
+        direction === "undo" ? "Meta+Shift+z" : "Meta+z",
+      );
+      await page.waitForTimeout(200);
+      expect(commands).toHaveLength(1);
+      const retry = page.getByRole("button", {
+        name: `重试${label}`,
+        exact: true,
+      });
+      await expect(retry).toBeEnabled();
+      await retry.click();
+      await expect(page.getByRole("status")).toHaveText("已保存到本机");
+      expect(commands).toHaveLength(2);
+      expect(commands[1]).toEqual(commands[0]);
+      expect((await read()).project.revision).toBe(
+        confirmedOnServer.project.revision,
+      );
+      if (direction === "undo")
+        await expect(
+          page.getByText("这张卡片已删除", { exact: true }),
+        ).toBeVisible();
+      else expect((await read()).cards[0].id).toBe(original.id);
+      await expect(opposite).toBeEnabled();
+      await opposite.click();
+      await expect
+        .poll(async () => (await read()).project.revision)
+        .toBe(confirmedOnServer.project.revision + 1);
+      await expect(page.getByRole("status")).toHaveText("已保存到本机");
+      expect(commands).toHaveLength(3);
+      expect(commands[2]!.type).toBe(
+        direction === "undo" ? "history.redo" : "history.undo",
+      );
+      expect(commands[2]!.commandId).not.toBe(commands[0]!.commandId);
+      const reversed = await read();
+      expect(reversed.project.revision).toBe(
+        confirmedOnServer.project.revision + 1,
+      );
+      expect(reversed.cards).toHaveLength(direction === "undo" ? 1 : 0);
+      if (direction === "undo") {
+        expect(reversed.cards[0].id).toBe(original.id);
+        expect(reversed.cards[0].body.id).toBe(original.body.id);
+        await expect(
+          page.getByLabel("卡片正文", { exact: true }),
+        ).toBeVisible();
+      } else
+        await expect(
+          page.getByText("这张卡片已删除", { exact: true }),
+        ).toBeVisible();
+      await testInfo.attach("history-direction-recovery", {
+        body: JSON.stringify({ commands, confirmedOnServer, reversed }),
+        contentType: "application/json",
+      });
+    } finally {
+      await page.unrouteAll({ behavior: "wait" });
+    }
+  });
+}
+
 test("H4 待确认期间连续结束多个正文组，撤销按每组原值恢复且旧ACK不清新组", async ({
   page,
 }) => {
@@ -1805,7 +2022,7 @@ for (const written of [false, true]) {
       await expect(page.getByLabel("卡片正文", { exact: true })).toHaveValue(
         "",
       );
-      await page.getByRole("button", { name: "重试保存" }).click();
+      await page.getByRole("button", { name: "重试撤销" }).click();
       await expect(
         page.getByText("这张卡片已删除", { exact: true }),
       ).toBeVisible();
