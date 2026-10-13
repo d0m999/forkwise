@@ -5234,6 +5234,7 @@ for (const refusal of [
     const historyBefore = await history();
     const requests: Command[] = [],
       codes: string[] = [];
+    const reopenedTimeline: unknown[] = [];
     page.on("request", (r) => {
       if (r.url().endsWith("/api/mapping/execute"))
         requests.push(r.postDataJSON());
@@ -5324,12 +5325,23 @@ for (const refusal of [
         ).toHaveLength(1);
         // Release owned HTTP connections before restarting this fixture's server.
         await page.goto("about:blank");
-        await stop();
-        await start();
+        await test.step("Await owned validation fixture service exit", stop);
+        await test.step(
+          "Restart validation fixture on the same temporary SQLite",
+          start,
+        );
         const context = await browser.newContext();
         try {
           const reopened = await context.newPage();
-          await openWorkspace(reopened);
+          await test.step("Authorize the empty validation browser context and load workspace", () =>
+            openWorkspace(reopened));
+          reopenedTimeline.push({
+            phase: "before-tab-click",
+            target: projectId,
+            selected: await reopened
+              .getByRole("tab", { selected: true })
+              .getAttribute("title"),
+          });
           await reopened
             .getByRole("tab")
             .filter({
@@ -5338,9 +5350,30 @@ for (const refusal of [
               ),
             })
             .click();
+          reopenedTimeline.push({
+            phase: "after-tab-click-before-editor",
+            target: projectId,
+            selected: await reopened
+              .getByRole("tab", { selected: true })
+              .getAttribute("title"),
+          });
+          // A tab click starts an async handoff; bind the editor to its target.
+          await expect(
+            reopened.getByRole("tab", { selected: true }),
+          ).toHaveAttribute("title", projectId);
           await reopened
             .getByRole("button", { name: "编辑正文", exact: true })
             .click();
+          reopenedTimeline.push({
+            phase: "after-editor-click",
+            target: projectId,
+            selected: await reopened
+              .getByRole("tab", { selected: true })
+              .getAttribute("title"),
+            bodyCount: await reopened
+              .getByLabel("卡片正文", { exact: true })
+              .count(),
+          });
           await expect(
             reopened.getByLabel("卡片正文", { exact: true }),
           ).toHaveValue(corrected);
@@ -5358,8 +5391,15 @@ for (const refusal of [
         const access = JSON.parse(
           readFileSync(join(directory, "local-access.json"), "utf8"),
         );
-        await page.goto(access.url);
+        const diagnosticUrl = new URL(access.url);
+        diagnosticUrl.searchParams.set("project", projectId);
+        await page.goto(diagnosticUrl.toString());
         await expect(page).not.toHaveURL(/#token=/);
+        // Removing the token precedes session authorization and project loading.
+        await expect(page.getByRole("tab", { selected: true })).toHaveAttribute(
+          "title",
+          projectId,
+        );
       }
     } finally {
       writeFileSync(
@@ -5370,16 +5410,23 @@ for (const refusal of [
           original,
           requests,
           codes,
+          reopenedTimeline,
           before,
-          after: await draftProject(page),
+          after: (await page.getByRole("tab", { selected: true }).count())
+            ? await draftProject(page)
+            : null,
+          originalPageSelectedTabs: await page
+            .getByRole("tab", { selected: true })
+            .count(),
+          originalPageIsBlank: page.url() === "about:blank",
           historyBefore,
-          historyAfter: await history(),
+          historyAfter: page.url() === "about:blank" ? null : await history(),
           visible: await page.evaluate(
             () =>
               document.querySelector<HTMLTextAreaElement>("#card-body")
                 ?.value ?? null,
           ),
-          cache: await cache(),
+          cache: page.url() === "about:blank" ? null : await cache(),
         }),
         { mode: 0o600 },
       );
