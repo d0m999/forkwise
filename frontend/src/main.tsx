@@ -118,6 +118,7 @@ function Workspace() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [state, setState] = useState<ProjectState | null>(null);
   const authority = useRef<ProjectState | null>(null);
+  const [syncNotice, setSyncNotice] = useState("");
   const [nav, setNav] = useState(false),
     [pinned, setPinned] = useState(false);
   const [renaming, setRenaming] = useState<string | null>(null),
@@ -477,6 +478,14 @@ function Workspace() {
         delete binding.removalActionId;
         setDeletedBody(null);
       } else {
+        const removed = timeline?.redo.at(-1);
+        if (
+          !binding.removalActionId &&
+          timeline?.revision === value.project.revision &&
+          removed?.label === "thought.create" &&
+          removed.target.id === binding.card.id
+        )
+          binding.removalActionId = removed.id;
         setDeletedBody({
           projectId: binding.projectId,
           card: binding.card,
@@ -499,6 +508,60 @@ function Workspace() {
     setProjects(await api.projects());
     return value;
   };
+  useEffect(() => {
+    const id = state?.project.id;
+    if (!id) return;
+    let active = true;
+    let running = false;
+    let timer: ReturnType<typeof setTimeout>;
+    const synchronize = async () => {
+      if (!active || running) return;
+      const captured = authority.current;
+      if (!captured || captured.project.id !== id) return;
+      running = true;
+      clearTimeout(timer);
+      try {
+        const latest = await api.synchronize(captured);
+        if (!active || authority.current !== captured) return;
+        if (latest !== captured) {
+          const timeline = await api.history(id);
+          if (!active || authority.current !== captured) return;
+          updateState(latest, timeline);
+          setProjects(await api.projects());
+        }
+        if (active) setSyncNotice("");
+      } catch (error) {
+        if (!active || authority.current?.project.id !== id) return;
+        if (
+          error instanceof MappingError &&
+          ["UNAUTHORIZED", "PROJECT_FORBIDDEN", "UNTRUSTED_PRINCIPAL"].includes(
+            error.code,
+          )
+        ) {
+          persistDrafts();
+          authority.current = null;
+          setState(null);
+          setProjects([]);
+          setSyncNotice(
+            "授权已失效，请从本机启动入口重新打开；未确认草稿已保留",
+          );
+        } else setSyncNotice("地图同步暂时中断，正在重试；未确认草稿已保留");
+      } finally {
+        running = false;
+        if (active) timer = setTimeout(() => void synchronize(), 1000);
+      }
+    };
+    const resume = () => void synchronize();
+    timer = setTimeout(resume, 1000);
+    window.addEventListener("online", resume);
+    window.addEventListener("focus", resume);
+    return () => {
+      active = false;
+      clearTimeout(timer);
+      window.removeEventListener("online", resume);
+      window.removeEventListener("focus", resume);
+    };
+  }, [state?.project.id]);
   const pose = usePoseSave(refresh);
   function startMove(projectId: string, card: Card) {
     // Geometry remains interactive while the prefix of input waits for ACK.
@@ -1093,6 +1156,11 @@ function Workspace() {
       data-snapshot={state?.snapshot}
       data-revision={state?.project.revision}
     >
+      {syncNotice && (
+        <div className="recovery-error" aria-live="polite">
+          {syncNotice}
+        </div>
+      )}
       <header className="topbar">
         <button
           disabled={!state || busy || historyBlocked}

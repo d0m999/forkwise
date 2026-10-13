@@ -1,5 +1,7 @@
 import type Database from 'better-sqlite3';
 import { CompactMaps, type CompactOptions } from './compact.js';
+import { observeChanges, type ObserveOptions } from './observe.js';
+import type { ObserveQuery } from './observe-contracts.js';
 import type {
   CompactPage,
   CompactQuery,
@@ -29,6 +31,7 @@ import {
 
 export interface CommitOptions {
   compact?: CompactOptions;
+  observe?: ObserveOptions;
   // Storage failure seam, injected only by an in-process host (never by HTTP).
   checkpoint?: (phase: 'versions' | 'history' | 'receipt', change: Change) => void;
 }
@@ -379,26 +382,11 @@ export class Mapping {
       .immediate();
   }
 
-  observe(query: { projectId: string; afterRevision: number }, actor: Principal) {
+  observe(query: ObserveQuery, actor: Principal) {
     return this.db.transaction(() => {
       this.access.validate(actor);
       this.access.project(actor, query.projectId);
-      const project = this.project(query.projectId);
-      requireThat(
-        Number.isSafeInteger(query.afterRevision) &&
-          query.afterRevision >= 0 &&
-          query.afterRevision <= project.revision,
-        'INVALID_CURSOR',
-        '变化游标无效',
-      );
-      const changes = (
-        this.db
-          .prepare(
-            'SELECT receipt FROM mapping_changes WHERE project_id=? AND revision>? ORDER BY revision',
-          )
-          .all(project.id, query.afterRevision) as { receipt: string }[]
-      ).map((row) => JSON.parse(row.receipt) as Change);
-      return { revision: project.revision, changes };
+      return observeChanges(this.db, this.compact, query, this.options.observe);
     })();
   }
 

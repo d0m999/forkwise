@@ -4,6 +4,7 @@ import type {
   CompactPage,
   DetailChunk,
 } from "../../backend/src/mapping/compact-contracts";
+import type { ObservePage } from "../../backend/src/mapping/observe-contracts";
 
 export type WorkspaceProjection = ProjectState & { snapshot: string };
 type Reader = <T>(path: string) => Promise<T>;
@@ -14,6 +15,7 @@ const budget = 131_072;
 export async function readCompactMap(
   projectId: string,
   request: Reader,
+  snapshot?: string,
 ): Promise<WorkspaceProjection> {
   const root = `/projects/${encodeURIComponent(projectId)}/map?`;
   async function collect<T>(parameters: Record<string, string>) {
@@ -57,7 +59,10 @@ export async function readCompactMap(
       });
     }
   }
-  const index = await collect<CardIndex>({ view: "index" });
+  const index = await collect<CardIndex>({
+    view: "index",
+    ...(snapshot ? { snapshot } : {}),
+  });
   const cards: Card[] = [];
   for (const item of [...index.items].sort((a, b) => a.order - b.order)) {
     const detail = await collect<DetailChunk>({
@@ -98,4 +103,82 @@ export async function readCompactMap(
     cards,
     snapshot: index.first.snapshot,
   };
+}
+
+// Deltas invalidate a derived projection; only a complete pinned read publishes.
+export async function syncCompactMap(
+  previous: WorkspaceProjection,
+  request: Reader,
+): Promise<WorkspaceProjection> {
+  const projectId = previous.project.id;
+  let after = previous.project.revision;
+  let snapshot: string | undefined;
+  let target: number | undefined;
+  try {
+    for (;;) {
+      const page = await request<ObservePage>(
+        `/projects/${encodeURIComponent(projectId)}/changes?` +
+          new URLSearchParams({
+            after: String(after),
+            budget: String(budget),
+            limit: "100",
+            ...(snapshot ? { snapshot } : { baseSnapshot: previous.snapshot }),
+          }),
+      );
+      if (
+        page.projectId !== projectId ||
+        page.budgetUnit !== "utf8_bytes" ||
+        page.bytes !== new TextEncoder().encode(JSON.stringify(page)).length ||
+        page.bytes > budget
+      )
+        throw new Error("地图变化响应不一致，请重新读取");
+      if (page.status === "RESET_REQUIRED")
+        return readCompactMap(projectId, request, page.snapshot);
+      if (
+        page.status !== "OK" ||
+        page.afterRevision !== after ||
+        (target !== undefined &&
+          (page.revision !== target || page.snapshot !== snapshot)) ||
+        page.changes.some(
+          (c, i) => c.projectId !== projectId || c.revision !== after + i + 1,
+        ) ||
+        page.nextRevision !== after + page.changes.length ||
+        page.nextRevision > page.revision ||
+        page.complete !== (page.nextRevision === page.revision)
+      )
+        throw new Error("地图变化修订断档，请重新读取");
+      snapshot = page.snapshot;
+      target = page.revision;
+      if (page.complete) {
+        if (
+          target === previous.project.revision &&
+          snapshot === previous.snapshot
+        )
+          return previous;
+        return readCompactMap(projectId, request, snapshot);
+      }
+      if (page.nextRevision <= after)
+        throw new Error("地图变化没有推进，请重新读取");
+      after = page.nextRevision;
+    }
+  } catch (error) {
+    const typed = error as {
+      code?: string;
+      details?: { recovery?: { snapshot?: string } };
+    };
+    if (
+      [
+        "SNAPSHOT_EXPIRED",
+        "SNAPSHOT_UNAVAILABLE",
+        "ITEM_EXCEEDS_BUDGET",
+        "BUDGET_TOO_SMALL",
+      ].includes(typed.code ?? "")
+    )
+      return readCompactMap(
+        projectId,
+        request,
+        typed.details?.recovery?.snapshot,
+      );
+    throw error;
+  }
 }

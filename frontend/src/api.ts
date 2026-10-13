@@ -5,7 +5,11 @@ import type {
   Receipt,
   ProjectHistory,
 } from "../../backend/src/mapping/contracts";
-import { readCompactMap, type WorkspaceProjection } from "./compact-map";
+import {
+  readCompactMap,
+  syncCompactMap,
+  type WorkspaceProjection,
+} from "./compact-map";
 export type ProjectState = WorkspaceProjection;
 export type {
   Card,
@@ -16,6 +20,7 @@ export class MappingError extends Error {
   constructor(
     readonly code: string,
     message: string,
+    readonly details?: unknown,
   ) {
     super(message);
   }
@@ -36,6 +41,7 @@ async function request<T>(path: string, body?: unknown): Promise<T> {
     throw new MappingError(
       result.code ?? "UNAVAILABLE",
       result.message ?? "本机服务暂时不可用",
+      result.details,
     );
   return result as T;
 }
@@ -48,6 +54,7 @@ export const api = {
     request<ProjectHistory>("/projects/" + encodeURIComponent(id) + "/history"),
   projects: () => request<Project[]>("/projects"),
   project: (id: string) => readCompactMap(id, request),
+  synchronize: (value: WorkspaceProjection) => syncCompactMap(value, request),
   execute: (command: Command) => request<Receipt>("/execute", command),
 };
 

@@ -6,6 +6,7 @@ import type { Mapping } from './mapping.js';
 import type { Principal } from '../services/access.js';
 import { DomainError, requireThat } from '../domain/errors.js';
 import { CompactQuerySchema } from './compact-contracts.js';
+import { ObserveQuerySchema } from './observe-contracts.js';
 
 export function createWorkspaceApp(
   mapping: Mapping,
@@ -108,7 +109,18 @@ export function createWorkspaceApp(
   app.get('/api/mapping/projects/:id/changes', (c) =>
     c.json(
       mapping.observe(
-        { projectId: c.req.param('id'), afterRevision: Number(c.req.query('after') ?? 0) },
+        ObserveQuerySchema.parse(
+          (() => {
+            const { after, budget, limit, ...parameters } = c.req.query();
+            return {
+              ...parameters,
+              projectId: c.req.param('id'),
+              afterRevision: Number(after ?? 0),
+              ...(budget === undefined ? {} : { budget: Number(budget) }),
+              ...(limit === undefined ? {} : { limit: Number(limit) }),
+            };
+          })(),
+        ),
         c.get('principal'),
       ),
     ),
@@ -151,12 +163,14 @@ export function createWorkspaceApp(
         {
           code: error.code,
           message: error.message,
-          ...(c.req.path.endsWith('/map') ? { details: error.details } : {}),
+          ...(c.req.path.endsWith('/map') || c.req.path.endsWith('/changes')
+            ? { details: error.details }
+            : {}),
         },
         error.status,
       );
     if (error instanceof ZodError || error instanceof SyntaxError)
-      return c.req.path.endsWith('/map')
+      return c.req.path.endsWith('/map') || c.req.path.endsWith('/changes')
         ? c.json({ code: 'INVALID_QUERY', message: '地图读取请求格式无效' }, 400)
         : c.json({ code: 'INVALID_COMMAND', message: '保存请求格式无效；原内容未修改' }, 400);
     return c.json({ code: 'SAVE_FAILED', message: '保存失败，请保留当前输入并重试' }, 503);
