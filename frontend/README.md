@@ -17,3 +17,5 @@
 测试使用随机回环端口、自有临时 SQLite 和全新浏览器上下文；合成 composition、格式及粘贴事件只验证事件协调，不代表真实系统输入法、富文本编辑或系统剪贴板验收。
 
 同一 journal 的同项目／卡片／字段／generation 必须对应同一文本、expected 和原请求；不一致的投影整条隔离、保留原字节。commandId 在 journal 内也只能绑定一份完整请求，不能跨 generation 改 payload 后沿用旧键。合法 pending／drafts／closed 重复投影仍可恢复；缺少 command 的投影共享已存在的原请求，尚未生成请求时共享该输入的资源要求和首次生成的请求。仅真正缺省的 command 表示尚未生成，非法占位不能被补成合法请求。ACK 按完整目标、输入和原请求消费，不按 generation 数字清除其它字段或卡片；已生成请求的 expected 不因另一条 ACK 改写。
+
+编辑协调器按项目／卡片／字段只持有一个逻辑 active 草稿，`drafts` 中同字段不能同时声明不同 generation；这种坏 shape 整条隔离并保留原字节，不按数组顺序覆盖或排序选取。相同 generation 的一致投影仍兼容；`closed`／`pending` 的前代请求与最新 active 可以共存，未知原请求确认后才按其回执提交最新输入。

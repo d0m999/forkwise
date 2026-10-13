@@ -207,6 +207,15 @@ function validRecovery(value: unknown): value is Recovery {
     })
   )
     return false;
+  // The editor's Record persists one logical active generation per field on
+  // this card. Compatible same-generation projections may share that input;
+  // closed/pending batches can legitimately retain earlier generations.
+  const activeGenerations = new Map<Draft["field"], number>();
+  for (const draft of r.drafts) {
+    const previous = activeGenerations.get(draft.field);
+    if (previous !== undefined && previous !== draft.generation) return false;
+    activeGenerations.set(draft.field, draft.generation);
+  }
   const inputs = new Map<string, Draft>();
   const requests = new Map<string, string>();
   for (const draft of projections) {
