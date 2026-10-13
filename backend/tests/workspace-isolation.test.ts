@@ -1,4 +1,5 @@
 import { it, expect } from 'vitest';
+import Database from 'better-sqlite3';
 import {
   mkdtempSync,
   rmSync,
@@ -52,7 +53,7 @@ it('拒绝改名的未知数据库以及符号链接、硬链接，不改变其�
     old.db.close();
     const bytes = readFileSync(target),
       mode = statSync(target).mode;
-    writeFileSync(path, bytes);
+    writeFileSync(path, bytes, { mode: 0o600 });
     expect(() => openMapping(directory)).toThrow('数据库');
     expect(readFileSync(path)).toEqual(bytes);
     rmSync(path);
@@ -68,3 +69,41 @@ it('拒绝改名的未知数据库以及符号链接、硬链接，不改变其�
     rmSync(external, { recursive: true, force: true });
   }
 });
+
+it.each([['wal'], ['shm'], ['wal', 'shm']])(
+  '缺失主库时拒绝真实残留 sidecar %j，目录条目、字节和权限保持不变',
+  (...extensions) => {
+    const source = mkdtempSync(join(tmpdir(), 'forkwise-live-wal-'));
+    const directory = mkdtempSync(join(tmpdir(), 'forkwise-orphan-wal-'));
+    const db = new Database(join(source, 'source.sqlite'));
+    try {
+      db.pragma('journal_mode = WAL');
+      db.exec("CREATE TABLE original(value TEXT); INSERT INTO original VALUES ('recoverable')");
+      for (const extension of extensions)
+        writeFileSync(
+          join(directory, `workspace.sqlite-${extension}`),
+          readFileSync(join(source, `source.sqlite-${extension}`)),
+          { mode: 0o600 },
+        );
+      const snapshot = () =>
+        readdirSync(directory)
+          .sort()
+          .map((name) => ({
+            name,
+            bytes: readFileSync(join(directory, name)),
+            mode: statSync(join(directory, name)).mode,
+          }));
+      const before = snapshot();
+      expect(before.every((entry) => entry.bytes.length > 0)).toBe(true);
+      expect(() => {
+        const mapping = openMapping(directory);
+        mapping.close();
+      }).toThrow('主库');
+      expect(snapshot()).toEqual(before);
+    } finally {
+      db.close();
+      rmSync(source, { recursive: true, force: true });
+      rmSync(directory, { recursive: true, force: true });
+    }
+  },
+);

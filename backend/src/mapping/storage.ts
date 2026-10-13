@@ -17,18 +17,34 @@ export function openMapping(directory: string): Mapping {
   if (!directory || !isAbsolute(directory)) throw new Error('必须显式提供绝对路径的数据目录');
   const applicationId = 1179472720;
   let existing = false;
+  let sidecar = false;
+  let accessFile = false;
   try {
-    if (!lstatSync(directory).isDirectory()) throw new Error('请使用独立的真实数据目录');
-    const allowed = new Set(['workspace.sqlite', 'workspace.sqlite-wal', 'workspace.sqlite-shm']);
+    const directoryInfo = lstatSync(directory);
+    if (!directoryInfo.isDirectory()) throw new Error('请使用独立的真实数据目录');
+    if (directoryInfo.uid !== process.getuid?.() || (directoryInfo.mode & 0o077) !== 0)
+      throw new Error('数据目录必须仅归当前本机账户访问（0700）；原权限未修改');
+    const allowed = new Set([
+      'workspace.sqlite',
+      'workspace.sqlite-wal',
+      'workspace.sqlite-shm',
+      'local-access.json',
+    ]);
     for (const entry of readdirSync(directory)) {
       const info = lstatSync(join(directory, entry));
       if (entry === 'workspace.sqlite') existing = true;
+      if (entry === 'local-access.json') accessFile = true;
+      if (entry === 'workspace.sqlite-wal' || entry === 'workspace.sqlite-shm') sidecar = true;
       if (!allowed.has(entry) || !info.isFile() || info.nlink !== 1)
         throw new Error('数据目录包含旧资料或链接，请使用新的隔离目录');
+      if (info.uid !== process.getuid?.() || (info.mode & 0o077) !== 0)
+        throw new Error('数据文件必须仅归当前本机账户访问（0600）；原权限未修改');
     }
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
   }
+  if (!existing && sidecar) throw new Error('缺失主库，残留 WAL/SHM 已保留；请先恢复完整副本');
+  if (!existing && accessFile) throw new Error('缺失主库，启动凭证原件已保留');
   mkdirSync(directory, { recursive: true, mode: 0o700 });
   const path = join(directory, 'workspace.sqlite');
   if (existing) {

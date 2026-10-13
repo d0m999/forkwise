@@ -12,6 +12,7 @@ import {
 import "@xyflow/react/dist/style.css";
 import {
   api,
+  authorizeLocalSession,
   type Card,
   type Command,
   type Project,
@@ -52,7 +53,7 @@ function ThoughtCard({ data }: NodeProps<Node<CardData>>) {
         />
       ) : (
         <button className="title-button nodrag" onClick={data.onEdit}>
-          {data.card.title || "未命名卡片"}
+          {data.title || "未命名卡片"}
         </button>
       )}
       {data.card.body.blocks[0]?.text && (
@@ -73,6 +74,9 @@ interface Draft {
   generation: number;
   command?: Command;
 }
+function draftKey(projectId: string, cardId: string, field: Draft["field"]) {
+  return JSON.stringify([projectId, cardId, field]);
+}
 function Workspace() {
   const [dimensions, setDimensions] = useState<
     Record<string, { width: number; height: number }>
@@ -87,8 +91,9 @@ function Workspace() {
   const [placing, setPlacing] = useState(false),
     [editing, setEditing] = useState<string | null>(null),
     [bodyCard, setBodyCard] = useState<string | null>(null);
-  const [draftView, setDraftView] = useState<Draft | null>(null),
-    draft = useRef<Draft | null>(null);
+  const [draftView, setDraftView] = useState<Record<string, Draft>>({}),
+    drafts = useRef<Record<string, Draft>>({});
+  const unconfirmed = useRef<Draft | null>(null);
   const [status, setStatus] = useState("正在打开本机资料…"),
     [error, setError] = useState(""),
     [busy, setBusy] = useState(true);
@@ -112,15 +117,26 @@ function Workspace() {
     setProjects(await api.projects());
     return value;
   };
+  const handoff = async (id: string) => {
+    const value = await api.project(id);
+    const all = await api.projects();
+    // Keep the old project's authority while the destination is loading: the
+    // visible editors may still accept input during those requests.
+    if (!(await flush())) return false;
+    updateState(value);
+    setProjects(all);
+    return true;
+  };
   const select = async (id: string) => {
     if (pendingAction.current) {
       fail(new Error("请先重试未完成的保存"));
       return;
     }
     if (!(await flush())) return;
+    if (id === authority.current?.project.id) return;
     setBusy(true);
     try {
-      await refresh(id);
+      if (!(await handoff(id))) return;
       setEditing(null);
       setBodyCard(null);
       setPlacing(false);
@@ -147,8 +163,9 @@ function Workspace() {
       if (!(await saving.current)) return false;
       return flush();
     }
-    const current = draft.current;
+    const current = unconfirmed.current ?? Object.values(drafts.current)[0];
     if (!current) return true;
+    const key = draftKey(current.projectId, current.cardId, current.field);
     const card = authority.current?.cards.find((c) => c.id === current.cardId);
     if (!card || authority.current?.project.id !== current.projectId) {
       fail(new Error("草稿对应的卡片尚未加载，请保留输入"));
@@ -157,10 +174,10 @@ function Workspace() {
     const original =
       current.field === "title" ? card.title : card.body.blocks[0]!.text;
     if (current.value === original && !current.command) {
-      draft.current = null;
-      setDraftView(null);
-      setStatus("已保存到本机");
-      return true;
+      delete drafts.current[key];
+      setDraftView({ ...drafts.current });
+      if (!Object.keys(drafts.current).length) setStatus("已保存到本机");
+      return flush();
     }
     // Keep this exact command through a lost response; later typing is a new generation.
     const command: Command =
@@ -181,19 +198,19 @@ function Workspace() {
             payload: { id: card.id, text: current.value },
           });
     current.command = command;
+    unconfirmed.current = current;
     setStatus("正在保存…");
     saving.current = (async () => {
       try {
         await api.execute(command);
         await refresh(current.projectId);
-        if (draft.current?.generation === current.generation) {
-          draft.current = null;
-          setDraftView(null);
-          setStatus("已保存到本机");
-        } else {
-          setStatus("等待保存…");
-          timer.current = setTimeout(() => void flush(), 400);
-        }
+        unconfirmed.current = null;
+        if (drafts.current[key]?.generation === current.generation)
+          delete drafts.current[key];
+        setDraftView({ ...drafts.current });
+        setStatus(
+          Object.keys(drafts.current).length ? "等待保存…" : "已保存到本机",
+        );
         setError("");
         return true;
       } catch (e) {
@@ -203,7 +220,9 @@ function Workspace() {
     })();
     const result = await saving.current;
     saving.current = null;
-    return result;
+    // A completed command only confirms its own generation. Drain newer input
+    // before allowing a project switch or any other editor handoff.
+    return result ? flush() : false;
   }
   function scheduleSave() {
     clearTimeout(timer.current);
@@ -229,8 +248,8 @@ function Workspace() {
       value,
       generation: ++generation.current,
     };
-    draft.current = next;
-    setDraftView(next);
+    drafts.current[draftKey(next.projectId, card.id, field)] = next;
+    setDraftView({ ...drafts.current });
     setStatus("等待保存…");
     scheduleSave();
   }
@@ -248,7 +267,12 @@ function Workspace() {
     setStatus("正在保存…");
     try {
       await api.execute(command);
-      await refresh(command.projectId);
+      if (command.projectId !== authority.current?.project.id) {
+        if (!(await handoff(command.projectId))) return;
+      } else {
+        await refresh(command.projectId);
+        if (!(await flush())) return;
+      }
       setStatus("已保存到本机");
       setError("");
       pendingAction.current = null;
@@ -301,8 +325,8 @@ function Workspace() {
   }
   useEffect(() => {
     let active = true;
-    void api
-      .projects()
+    void authorizeLocalSession()
+      .then(() => api.projects())
       .then(async (all) => {
         if (!active) return;
         setProjects(all);
@@ -321,7 +345,7 @@ function Workspace() {
         if (active) setBusy(false);
       });
     const beforeUnload = (event: BeforeUnloadEvent) => {
-      if (draft.current || saving.current) {
+      if (Object.keys(drafts.current).length || saving.current) {
         event.preventDefault();
         event.returnValue = "";
       }
@@ -348,9 +372,8 @@ function Workspace() {
       card,
       editing: editing === card.id,
       title:
-        draftView?.cardId === card.id && draftView.field === "title"
-          ? draftView.value
-          : card.title,
+        draftView[draftKey(state!.project.id, card.id, "title")]?.value ??
+        card.title,
       onTitle: (value) => change("title", card, value),
       onFinish: () => {
         if (!composition.current) {
@@ -505,7 +528,12 @@ function Workspace() {
       {currentBody && (
         <aside className="body-editor">
           <header>
-            <h2>{currentBody.title || "未命名卡片"}</h2>
+            <h2>
+              {(draftView[draftKey(state!.project.id, currentBody.id, "title")]
+                ?.value ??
+                currentBody.title) ||
+                "未命名卡片"}
+            </h2>
             <button
               aria-label="关闭正文"
               onClick={() =>
@@ -521,9 +549,8 @@ function Workspace() {
           <textarea
             id="card-body"
             value={
-              draftView?.cardId === currentBody.id && draftView.field === "body"
-                ? draftView.value
-                : currentBody.body.blocks[0]!.text
+              draftView[draftKey(state!.project.id, currentBody.id, "body")]
+                ?.value ?? currentBody.body.blocks[0]!.text
             }
             onChange={(e) => change("body", currentBody, e.target.value)}
             onCompositionStart={() => compose(true)}
@@ -545,7 +572,7 @@ function Workspace() {
               onClick={() => {
                 const pending = pendingAction.current;
                 if (pending) void action(pending.command, pending.onDone);
-                else if (draft.current) void flush();
+                else if (Object.keys(drafts.current).length) void flush();
                 else location.reload();
               }}
             >

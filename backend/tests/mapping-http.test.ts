@@ -15,7 +15,26 @@ it('HTTP 回环会话可以创建和重读项目，跨站、无会话及伪造 H
       headers: { 'Sec-Fetch-Site': 'none', 'Sec-Fetch-Mode': 'navigate' },
     });
     expect(home.status).toBe(200);
-    const cookie = home.headers.get('set-cookie')!.split(';')[0]!;
+    expect(home.headers.get('set-cookie')).toBeNull();
+    const bootstrap = (token: string) =>
+      app.request(origin + '/api/session', {
+        method: 'POST',
+        headers: { Origin: origin, Authorization: `Bearer ${token}` },
+      });
+    expect(
+      (
+        await app.request(origin + '/api/mapping/projects', {
+          headers: { 'Sec-Fetch-Site': 'none', 'Sec-Fetch-Mode': 'navigate' },
+        })
+      ).status,
+    ).toBe(401);
+    expect((await bootstrap('forged')).status).toBe(401);
+    expect((await bootstrap(mapping.access.issue('agent', ['p']))).status).toBe(403);
+    const session = await bootstrap(mapping.access.issue('human', ['*']));
+    expect(session.status).toBe(200);
+    const cookie = session.headers.get('set-cookie')!.split(';')[0]!;
+    expect(session.headers.get('set-cookie')).toContain('HttpOnly');
+    expect(session.headers.get('set-cookie')).toContain('SameSite=Strict');
     const body = JSON.stringify({
       commandId: 'create',
       projectId: 'p',

@@ -31,3 +31,16 @@ export const api = {
     request<ProjectState>("/projects/" + encodeURIComponent(id)),
   execute: (command: Command) => request<Receipt>("/execute", command),
 };
+
+export async function authorizeLocalSession() {
+  const token = new URLSearchParams(location.hash.slice(1)).get("token");
+  if (!token) return;
+  history.replaceState(null, "", location.pathname + location.search);
+  const response = await fetch("/api/session", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!response.ok)
+    throw new Error("本机启动凭证无效，请从 local-access.json 重新打开");
+}

@@ -64,6 +64,19 @@ export function createWorkspaceApp(
       onError: (c) => c.json({ code: 'TOO_LARGE', message: '内容超过本次保存上限' }, 413),
     }),
   );
+  app.post('/api/session', (c) => {
+    mapping.access.human(c.get('principal'));
+    const token = c.req.header('authorization')?.replace(/^Bearer /, '') ?? '';
+    // Navigation headers establish origin context, never the OS user's identity.
+    mapping.access.human(mapping.access.authenticate(token));
+    setCookie(c, cookieName, token, {
+      httpOnly: true,
+      sameSite: 'Strict',
+      path: '/',
+      maxAge: 8 * 60 * 60,
+    });
+    return c.json({ authorized: true });
+  });
   app.get('/api/mapping/projects', (c) =>
     c.json(mapping.read({ type: 'projects' }, c.get('principal'))),
   );
@@ -89,19 +102,6 @@ export function createWorkspaceApp(
       '请在本机浏览器直接打开工作台',
       403,
     );
-    let valid = false;
-    try {
-      valid = mapping.access.authenticate(getCookie(c, cookieName) ?? '').actor.type === 'human';
-    } catch {
-      /* Start a new local browser session. */
-    }
-    if (!valid)
-      setCookie(c, cookieName, mapping.access.issue('human', ['*']), {
-        httpOnly: true,
-        sameSite: 'Strict',
-        path: '/',
-        maxAge: 8 * 60 * 60,
-      });
     const file = staticFile('/index.html');
     return c.newResponse(file.body, file);
   });
