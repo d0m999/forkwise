@@ -364,12 +364,15 @@ test("等待目标项目读取时仍接收正文输入，完成保存后才交�
   const source = await newCard(page);
   const loaded = gate();
   let reading = false;
-  await page.route(`**/api/mapping/projects/${target}`, async (route) => {
-    const response = await route.fetch();
-    reading = true;
-    await loaded.promise;
-    await route.fulfill({ response });
-  });
+  await page.route(
+    `**/api/mapping/projects/${target}/map?view=index*`,
+    async (route) => {
+      const response = await route.fetch();
+      reading = true;
+      await loaded.promise;
+      await route.fulfill({ response });
+    },
+  );
   try {
     await page
       .getByRole("tab")
@@ -401,14 +404,17 @@ test("创建回读乱序不能回退已保存正文，后续编辑继续成功",
   const oldRead = gate();
   let captured = false;
   let first = true;
-  await page.route(`**/api/mapping/projects/${projectId}`, async (route) => {
-    if (!first) return route.continue();
-    first = false;
-    const response = await route.fetch();
-    captured = true;
-    await oldRead.promise;
-    await route.fulfill({ response });
-  });
+  await page.route(
+    `**/api/mapping/projects/${projectId}/map?view=index*`,
+    async (route) => {
+      if (!first) return route.continue();
+      first = false;
+      const response = await route.fetch();
+      captured = true;
+      await oldRead.promise;
+      await route.fulfill({ response });
+    },
+  );
   const read = () =>
     page.evaluate(
       async (id) => (await fetch("/api/mapping/projects/" + id)).json(),
@@ -457,14 +463,17 @@ test("创建回读到达时保留未确认正文的最新草稿，继续输入�
   let captured = false,
     written = false,
     first = true;
-  await page.route(`**/api/mapping/projects/${projectId}`, async (route) => {
-    if (!first) return route.continue();
-    first = false;
-    const response = await route.fetch();
-    captured = true;
-    await oldRead.promise;
-    await route.fulfill({ response });
-  });
+  await page.route(
+    `**/api/mapping/projects/${projectId}/map?view=index*`,
+    async (route) => {
+      if (!first) return route.continue();
+      first = false;
+      const response = await route.fetch();
+      captured = true;
+      await oldRead.promise;
+      await route.fulfill({ response });
+    },
+  );
   await page.route("**/api/mapping/execute", async (route) => {
     const command = route.request().postDataJSON();
     if (command.type !== "body.edit" || command.payload.text !== "正文 A")
@@ -3008,7 +3017,7 @@ test("S5-R2 恢复project旧读取晚于新输入ACK到达也不得覆盖，恢�
     await route.continue();
   });
   await page.route(
-    origin + "/api/mapping/projects/" + projectId,
+    origin + "/api/mapping/projects/" + projectId + "/map?view=index*",
     async (route) => {
       if (firstRead) {
         firstRead = false;
@@ -3058,7 +3067,9 @@ test("S5-R2 恢复project旧读取晚于新输入ACK到达也不得覆盖，恢�
     );
   } finally {
     releaseRead.release();
-    await page.unroute(origin + "/api/mapping/projects/" + projectId);
+    await page.unroute(
+      origin + "/api/mapping/projects/" + projectId + "/map?view=index*",
+    );
   }
 });
 

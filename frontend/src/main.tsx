@@ -1088,7 +1088,11 @@ function Workspace() {
     </div>
   );
   return (
-    <div className="workspace">
+    <div
+      className="workspace"
+      data-snapshot={state?.snapshot}
+      data-revision={state?.project.revision}
+    >
       <header className="topbar">
         <button
           disabled={!state || busy || historyBlocked}

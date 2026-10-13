@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { CompactQuery } from './compact-contracts.js';
 
 const Id = z.string().min(1).max(160);
 const Name = z.string().trim().min(1).max(240);
@@ -144,6 +145,7 @@ export type CardIdentity =
   | { availability: 'deleted' | 'not_found' };
 export type IdentityQuery = { type: 'card.identity'; projectId: string; id: string };
 export type ReadQuery =
+  | CompactQuery
   | IdentityQuery
   | { type: 'history'; projectId: string }
   | { type: 'projects' }

@@ -2,15 +2,15 @@ import type {
   CardIdentity,
   Command,
   Project,
-  ProjectState,
   Receipt,
   ProjectHistory,
 } from "../../backend/src/mapping/contracts";
+import { readCompactMap, type WorkspaceProjection } from "./compact-map";
+export type ProjectState = WorkspaceProjection;
 export type {
   Card,
   Command,
   Project,
-  ProjectState,
 } from "../../backend/src/mapping/contracts";
 export class MappingError extends Error {
   constructor(
@@ -47,8 +47,7 @@ export const api = {
   history: (id: string) =>
     request<ProjectHistory>("/projects/" + encodeURIComponent(id) + "/history"),
   projects: () => request<Project[]>("/projects"),
-  project: (id: string) =>
-    request<ProjectState>("/projects/" + encodeURIComponent(id)),
+  project: (id: string) => readCompactMap(id, request),
   execute: (command: Command) => request<Receipt>("/execute", command),
 };
 

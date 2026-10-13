@@ -1,4 +1,12 @@
 import type Database from 'better-sqlite3';
+import { CompactMaps, type CompactOptions } from './compact.js';
+import type {
+  CompactPage,
+  CompactQuery,
+  CardIndex,
+  BodySlice,
+  DetailChunk,
+} from './compact-contracts.js';
 import { readHistory, recordAction, travelHistory, interruptGroup } from './history.js';
 import { retainCardVersions } from './versions.js';
 import { canonical } from '../domain/canonical.js';
@@ -20,21 +28,28 @@ import {
 } from './contracts.js';
 
 export interface CommitOptions {
+  compact?: CompactOptions;
   // Storage failure seam, injected only by an in-process host (never by HTTP).
   checkpoint?: (phase: 'versions' | 'history' | 'receipt', change: Change) => void;
 }
 export class Mapping {
   readonly access: AccessService;
+  private readonly compact: CompactMaps;
   constructor(
     private readonly db: Database.Database,
     private readonly options: CommitOptions = {},
   ) {
     this.access = new AccessService(db);
+    this.compact = new CompactMaps(db, options.compact);
   }
   close() {
     this.db.close();
   }
 
+  read(query: CompactQuery & { view: 'index' }, actor: Principal): CompactPage<CardIndex>;
+  read(query: CompactQuery & { view: 'body' }, actor: Principal): CompactPage<BodySlice>;
+  read(query: CompactQuery & { view: 'detail' }, actor: Principal): CompactPage<DetailChunk>;
+  read(query: CompactQuery, actor: Principal): CompactPage;
   read(query: IdentityQuery, actor: Principal): CardIdentity;
   read(query: { type: 'projects' }, actor: Principal): Project[];
   read(query: { type: 'history'; projectId: string }, actor: Principal): ProjectHistory;
@@ -45,7 +60,14 @@ export class Mapping {
   read(
     query: ReadQuery,
     actor: Principal,
-  ): Project[] | ProjectState | ProjectHistory | Card['body'] | Card['item'] | CardIdentity {
+  ):
+    | Project[]
+    | ProjectState
+    | ProjectHistory
+    | Card['body']
+    | Card['item']
+    | CardIdentity
+    | CompactPage {
     return this.db.transaction(() => {
       this.access.validate(actor);
       if (query.type === 'projects') {
@@ -61,6 +83,7 @@ export class Mapping {
         );
       }
       this.access.project(actor, query.projectId);
+      if (query.type === 'map') return this.compact.read(query);
       if (query.type === 'card.identity') {
         this.project(query.projectId);
         const identity = this.db

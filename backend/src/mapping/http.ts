@@ -5,6 +5,7 @@ import { z, ZodError } from 'zod';
 import type { Mapping } from './mapping.js';
 import type { Principal } from '../services/access.js';
 import { DomainError, requireThat } from '../domain/errors.js';
+import { CompactQuerySchema } from './compact-contracts.js';
 
 export function createWorkspaceApp(
   mapping: Mapping,
@@ -83,6 +84,16 @@ export function createWorkspaceApp(
   app.get('/api/mapping/projects/:id', (c) =>
     c.json(mapping.read({ type: 'project', projectId: c.req.param('id') }, c.get('principal'))),
   );
+  app.get('/api/mapping/projects/:id/map', (c) => {
+    const parameters = c.req.query();
+    const query = CompactQuerySchema.parse({
+      ...parameters,
+      type: 'map',
+      projectId: c.req.param('id'),
+      ...(parameters.budget === undefined ? {} : { budget: Number(parameters.budget) }),
+    });
+    return c.json(mapping.read(query, c.get('principal')));
+  });
   app.get('/api/mapping/projects/:id/cards/:cardId/identity', (c) =>
     c.json(
       mapping.read(
@@ -136,9 +147,18 @@ export function createWorkspaceApp(
   });
   app.onError((error, c) => {
     if (error instanceof DomainError)
-      return c.json({ code: error.code, message: error.message }, error.status);
+      return c.json(
+        {
+          code: error.code,
+          message: error.message,
+          ...(c.req.path.endsWith('/map') ? { details: error.details } : {}),
+        },
+        error.status,
+      );
     if (error instanceof ZodError || error instanceof SyntaxError)
-      return c.json({ code: 'INVALID_COMMAND', message: '保存请求格式无效；原内容未修改' }, 400);
+      return c.req.path.endsWith('/map')
+        ? c.json({ code: 'INVALID_QUERY', message: '地图读取请求格式无效' }, 400)
+        : c.json({ code: 'INVALID_COMMAND', message: '保存请求格式无效；原内容未修改' }, 400);
     return c.json({ code: 'SAVE_FAILED', message: '保存失败，请保留当前输入并重试' }, 503);
   });
   return app;

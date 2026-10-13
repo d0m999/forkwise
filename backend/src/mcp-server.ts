@@ -15,6 +15,7 @@ import { ExternalSubmit, ExternalEvaluationInput } from './contracts/external-re
 import { PathImportInput } from './services/local-import.js';
 import { ExternalTranscriptionInput } from './contracts/transcription.js';
 import { DrawingOperations } from './contracts/drawing.js';
+import { registerCompactMapTool } from './mapping/compact-mcp.js';
 
 export interface ApiTransport {
   call(path: string, method?: string, body?: unknown, key?: string): Promise<unknown>;
@@ -52,6 +53,7 @@ export function httpTransport(origin: string, token: string): ApiTransport {
 }
 export function createMcpServer(transport: ApiTransport) {
   const server = new McpServer({ name: 'forkwise', version: '0.1.0' });
+  registerCompactMapTool(server, transport);
   const project = z.object({ projectId: Id });
   const target = project.extend({ id: Id });
   const result = async (run: () => Promise<unknown>) => {
