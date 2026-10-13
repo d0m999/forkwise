@@ -4412,24 +4412,20 @@ test("S5-R4 正常pending和drafts重复投影原封重放，旧ACK只确认原g
   expect(captured.pending.command).toEqual(original);
   expect(captured.drafts[0]).toEqual(captured.pending);
   await body.fill("最新generation必须实际保存");
-  console.log("R4 pending: before reload");
-  await page.reload();
-  console.log("R4 pending: reloaded");
+  // Remove this fixture's interception before navigation starts new bootstrap requests.
   await page.unroute("**/api/mapping/execute");
+  await page.reload();
   await expect(page.getByRole("tab", { selected: true })).toHaveAttribute(
     "title",
     projectId,
   );
-  console.log("R4 pending: ready");
   const requests: Command[] = [];
   page.on("request", (r) => {
     if (r.url().endsWith("/api/mapping/execute"))
       requests.push(r.postDataJSON());
   });
   try {
-    console.log("R4 pending: restore start");
     await page.getByRole("button", { name: "恢复草稿", exact: true }).click();
-    console.log("R4 pending: restore clicked");
     await expect(body).toHaveValue("最新generation必须实际保存");
     await expect(page.getByRole("status")).toHaveText("已保存到本机");
     expect(requests).toHaveLength(2);
