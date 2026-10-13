@@ -3,6 +3,7 @@ import type {
   Project,
   ProjectState,
   Receipt,
+  ProjectHistory,
 } from "../../backend/src/mapping/contracts";
 export type {
   Card,
@@ -38,6 +39,8 @@ async function request<T>(path: string, body?: unknown): Promise<T> {
   return result as T;
 }
 export const api = {
+  history: (id: string) =>
+    request<ProjectHistory>("/projects/" + encodeURIComponent(id) + "/history"),
   projects: () => request<Project[]>("/projects"),
   project: (id: string) =>
     request<ProjectState>("/projects/" + encodeURIComponent(id)),

@@ -83,6 +83,9 @@ export function createWorkspaceApp(
   app.get('/api/mapping/projects/:id', (c) =>
     c.json(mapping.read({ type: 'project', projectId: c.req.param('id') }, c.get('principal'))),
   );
+  app.get('/api/mapping/projects/:id/history', (c) =>
+    c.json(mapping.read({ type: 'history', projectId: c.req.param('id') }, c.get('principal'))),
+  );
   app.get('/api/mapping/projects/:id/changes', (c) =>
     c.json(
       mapping.observe(

@@ -376,3 +376,18 @@ button[aria-current="true"] {
   display: block;
   margin: 8px 0;
 }
+
+.history-notice {
+  position: absolute;
+  top: 54px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 9;
+  background: white;
+  border: 1px solid #dce0e7;
+  border-radius: 8px;
+  padding: 8px 14px;
+  max-width: 60vw;
+  overflow-wrap: anywhere;
+  pointer-events: none;
+}

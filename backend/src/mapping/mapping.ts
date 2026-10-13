@@ -1,4 +1,5 @@
 import type Database from 'better-sqlite3';
+import { readHistory, recordAction, travelHistory, interruptGroup } from './history.js';
 import { retainCardVersions } from './versions.js';
 import { canonical } from '../domain/canonical.js';
 import { randomUUID } from 'node:crypto';
@@ -7,6 +8,7 @@ import { requireThat } from '../domain/errors.js';
 import {
   MappingCommand,
   type Card,
+  type ProjectHistory,
   type Change,
   type Project,
   type ProjectState,
@@ -32,11 +34,15 @@ export class Mapping {
   }
 
   read(query: { type: 'projects' }, actor: Principal): Project[];
+  read(query: { type: 'history'; projectId: string }, actor: Principal): ProjectHistory;
   read(query: { type: 'project'; projectId: string }, actor: Principal): ProjectState;
   read(query: VersionQuery & { domain: 'body' }, actor: Principal): Card['body'];
   read(query: VersionQuery & { domain: 'pose' }, actor: Principal): Card['item'];
   read(query: VersionQuery, actor: Principal): Card['body'] | Card['item'];
-  read(query: ReadQuery, actor: Principal): Project[] | ProjectState | Card['body'] | Card['item'] {
+  read(
+    query: ReadQuery,
+    actor: Principal,
+  ): Project[] | ProjectState | ProjectHistory | Card['body'] | Card['item'] {
     return this.db.transaction(() => {
       this.access.validate(actor);
       if (query.type === 'projects') {
@@ -64,9 +70,12 @@ export class Mapping {
         return JSON.parse(row.value) as Card['body'] | Card['item'];
       }
       const project = this.project(query.projectId);
+      if (query.type === 'history') return readHistory(this.db, project);
       const cards = (
         this.db
-          .prepare('SELECT value FROM mapping_cards WHERE project_id=? ORDER BY rowid')
+          .prepare(
+            'SELECT c.value FROM mapping_cards c JOIN mapping_card_ids i ON i.id=c.id WHERE c.project_id=? ORDER BY i.rowid',
+          )
           .all(query.projectId) as { value: string }[]
       ).map((row) => JSON.parse(row.value) as Card);
       return { project, cards };
@@ -87,7 +96,12 @@ export class Mapping {
           this.access.project(actor, input.projectId);
         const command = MappingCommand.parse(input);
         this.access.mappingWrite(actor, command.projectId);
-        if (command.type === 'project.create') this.access.human(actor);
+        if (
+          command.type === 'project.create' ||
+          command.type === 'history.undo' ||
+          command.type === 'history.redo'
+        )
+          this.access.human(actor);
         const request = canonical(command);
         const saved = this.db
           .prepare(
@@ -106,6 +120,7 @@ export class Mapping {
           return JSON.parse(saved.receipt) as Receipt;
         }
         const unchanged = (revision: number): Receipt => {
+          interruptGroup(this.db, command, actor.tokenHash);
           const receipt = {
             commandId: command.commandId,
             projectId: command.projectId,
@@ -124,10 +139,25 @@ export class Mapping {
           return receipt;
         };
         let before: Card | Project | null = null;
-        let after: Card | Project;
+        let after: Card | Project | null;
+        let travel: ReturnType<typeof travelHistory> | undefined;
         let revision: number;
         let changedIds: string[];
-        if (command.type === 'project.create') {
+        if (command.type === 'history.undo' || command.type === 'history.redo') {
+          const project = this.project(command.projectId);
+          requireThat(
+            command.expected === project.revision,
+            'VERSION_CONFLICT',
+            '项目历史已更新，请重新读取',
+            409,
+          );
+          travel = travelHistory(this.db, project, command.type);
+          ({ before, after, changedIds } = travel);
+          revision = project.revision + 1;
+          this.db
+            .prepare('UPDATE mapping_projects SET revision=? WHERE id=?')
+            .run(revision, project.id);
+        } else if (command.type === 'project.create') {
           requireThat(
             !this.db.prepare('SELECT 1 FROM mapping_projects WHERE id=?').get(command.projectId),
             'ID_CONFLICT',
@@ -144,7 +174,7 @@ export class Mapping {
           const project = this.project(command.projectId);
           const p = command.payload;
           requireThat(
-            !this.db.prepare('SELECT 1 FROM mapping_cards WHERE id=?').get(p.id),
+            !this.db.prepare('SELECT 1 FROM mapping_card_ids WHERE id=?').get(p.id),
             'ID_CONFLICT',
             '身份已使用，请重新创建',
             409,
@@ -164,6 +194,7 @@ export class Mapping {
               pose: { x: p.x, y: p.y, width: 280, height: 160 },
             },
           };
+          this.db.prepare('INSERT INTO mapping_card_ids VALUES(?,?)').run(card.id, project.id);
           this.db
             .prepare('INSERT INTO mapping_cards VALUES(?,?,?)')
             .run(card.id, project.id, JSON.stringify(card));
@@ -255,13 +286,14 @@ export class Mapping {
             .prepare('UPDATE mapping_projects SET revision=? WHERE id=?')
             .run(revision, project.id);
         }
-        if ('body' in after) retainCardVersions(this.db, command.projectId, after);
+        if (after && 'body' in after) retainCardVersions(this.db, command.projectId, after);
         const receipt = {
           commandId: command.commandId,
           projectId: command.projectId,
           revision,
           changedIds,
-          ...('body' in after
+          ...(travel ? { deletedIds: travel.deletedIds, historyTarget: travel.target } : {}),
+          ...(after && 'body' in after
             ? {
                 versions: {
                   thought: after.versionId,
@@ -279,6 +311,7 @@ export class Mapping {
           writtenAt: new Date().toISOString(),
         };
         this.options.checkpoint?.('versions', structuredClone(change));
+        if (!travel) recordAction(this.db, command, change, actor.tokenHash);
         this.db
           .prepare('INSERT INTO mapping_changes VALUES(?,?,?)')
           .run(command.projectId, revision, JSON.stringify(change));

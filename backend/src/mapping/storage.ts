@@ -10,6 +10,7 @@ import {
 } from 'node:fs';
 import { join, isAbsolute } from 'node:path';
 import { Mapping, type CommitOptions } from './mapping.js';
+import { initializeHistory } from './history.js';
 import { initializeVersions } from './versions.js';
 
 // Separate from research.sqlite: opening the workspace never runs legacy migrations,
@@ -84,6 +85,7 @@ export function openMapping(directory: string, options: CommitOptions = {}): Map
       CREATE TABLE IF NOT EXISTS mapping_changes(project_id TEXT NOT NULL REFERENCES mapping_projects(id), revision INTEGER NOT NULL, receipt TEXT NOT NULL, PRIMARY KEY(project_id, revision));
     `);
     initializeVersions(db);
+    initializeHistory(db);
     return new Mapping(db, options);
   } catch (error) {
     db.close();

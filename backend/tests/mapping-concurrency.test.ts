@@ -214,7 +214,7 @@ it.each(['versions', 'history', 'receipt'] as const)(
     const failing = openMapping(directory, {
       checkpoint: (at, change) => {
         if (at === phase) {
-          if ('body' in change.after) failedVersion = change.after.body.versionId;
+          if (change.after && 'body' in change.after) failedVersion = change.after.body.versionId;
           throw new Error('INJECTED_STORAGE_FAILURE');
         }
       },
@@ -336,7 +336,7 @@ it.each(['independent', 'same-body', 'same-command'] as const)(
         expect(changes).toHaveLength(1);
       }
       for (const change of changes)
-        if ('body' in change.after)
+        if (change.after && 'body' in change.after)
           expect(
             mapping.read(
               {

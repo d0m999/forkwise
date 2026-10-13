@@ -787,3 +787,319 @@ for (const field of ["body", "title"] as const) {
     });
   }
 }
+
+test("H4 创建与首次标题一次撤销，空卡和完整标题重做经服务重启保留", async ({
+  page,
+}) => {
+  await openWorkspace(page);
+  await page.getByRole("button", { name: "新建研究", exact: true }).click();
+  await expect(page.locator(".react-flow__node")).toHaveCount(0);
+  await page.getByRole("button", { name: "卡片", exact: true }).focus();
+  await page.keyboard.press("Enter");
+  await page.getByLabel("卡片标题", { exact: true }).fill("库存观察");
+  await page.getByLabel("卡片标题", { exact: true }).press("Escape");
+  await expect(page.getByRole("status")).toHaveText("已保存到本机");
+  await page.getByRole("button", { name: "撤销", exact: true }).click();
+  await expect(page.locator(".react-flow__node")).toHaveCount(0);
+  await stop();
+  await start();
+  await openWorkspace(page);
+  await page.getByRole("tab").last().click();
+  await page.getByRole("button", { name: "重做", exact: true }).click();
+  await expect(page.locator(".react-flow__node")).toContainText("库存观察");
+  await page.getByRole("button", { name: "库存观察", exact: true }).click();
+  await page.getByLabel("卡片标题", { exact: true }).fill("需求观察");
+  await page.getByLabel("卡片标题", { exact: true }).press("Enter");
+  await expect(page.getByRole("status")).toHaveText("已保存到本机");
+  await page.keyboard.press("Meta+z");
+  await expect(page.locator(".react-flow__node")).toContainText("库存观察");
+  await expect(page.locator(".react-flow__node")).toHaveCount(1);
+});
+async function historyState(page: Page) {
+  return page.evaluate(async () => {
+    const id = document
+      .querySelector("[role=tab][aria-selected=true]")!
+      .getAttribute("title");
+    return (await fetch(`/api/mapping/projects/${id}/history`)).json();
+  });
+}
+async function historyCard(page: Page, title = "历史卡") {
+  await expect(
+    page.getByRole("button", { name: "卡片", exact: true }),
+  ).toBeEnabled();
+  await page.getByRole("button", { name: "卡片", exact: true }).focus();
+  await page.keyboard.press("Enter");
+  await page.getByLabel("卡片标题", { exact: true }).fill(title);
+  await page.getByLabel("卡片标题", { exact: true }).press("Enter");
+  await expect(page.getByRole("status")).toHaveText("已保存到本机");
+}
+test("H4 连续正文跨两秒落盘仍一步撤销，停顿和选区改变分组", async ({
+  page,
+}) => {
+  await openWorkspace(page);
+  await page.getByRole("button", { name: "新建研究", exact: true }).click();
+  await historyCard(page);
+  await page.getByRole("button", { name: "编辑正文" }).click();
+  const body = page.getByLabel("卡片正文", { exact: true });
+  await body.pressSequentially("abcdefghi", { delay: 310 });
+  await expect(page.getByRole("status")).toHaveText("已保存到本机");
+  expect((await historyState(page)).undo).toHaveLength(2);
+  await body.press("Meta+z");
+  await expect(body).toHaveValue("");
+  await body.press("Meta+Shift+z");
+  await expect(body).toHaveValue("abcdefghi");
+  await body.press("End");
+  await body.pressSequentially("j");
+  await expect(page.getByRole("status")).toHaveText("已保存到本机");
+  // The next edit changes selection and must not merge, even inside one save batch.
+  await body.press("Home");
+  await body.pressSequentially("X");
+  await body.press("Meta+z");
+  await expect(body).toHaveValue("abcdefghij");
+  await expect(page.locator(".react-flow__node")).toHaveCount(1);
+});
+test("H4 编辑中标题只走文本撤销，synthetic composition 不触发项目撤销", async ({
+  page,
+}) => {
+  await openWorkspace(page);
+  await newCard(page);
+  await page.getByRole("button", { name: "初始标题", exact: true }).click();
+  const title = page.getByLabel("卡片标题", { exact: true });
+  await title.press("End");
+  await title.pressSequentially("AB");
+  await title.press("ArrowLeft");
+  await title.press("ArrowRight");
+  await title.pressSequentially("C");
+  await title.press("Meta+z");
+  await expect(title).toHaveValue("初始标题AB");
+  await expect(page.locator(".react-flow__node")).toHaveCount(1);
+  const before = await historyState(page);
+  await title.dispatchEvent("compositionstart");
+  await title.dispatchEvent("keydown", {
+    key: "z",
+    code: "KeyZ",
+    metaKey: true,
+    isComposing: true,
+  });
+  await title.dispatchEvent("keydown", {
+    key: "Enter",
+    code: "Enter",
+    isComposing: true,
+  });
+  await expect(title).toBeVisible();
+  expect(await historyState(page)).toEqual(before);
+  await title.dispatchEvent("compositionend");
+  await title.press("Escape");
+  await expect(page.getByRole("status")).toHaveText("已保存到本机");
+  await page.keyboard.press("Meta+z");
+  await expect(page.locator(".react-flow__node")).toContainText("初始标题");
+});
+test("H4 跨卡撤销提示实际目标，保留当前正文面板及项目独立历史", async ({
+  page,
+}, testInfo) => {
+  await openWorkspace(page);
+  const projectId = await newCard(page);
+  await page.getByRole("button", { name: "关闭正文" }).click();
+  await page.getByRole("button", { name: "卡片", exact: true }).click();
+  await page
+    .locator(".react-flow__pane")
+    .click({ position: { x: 120, y: 200 } });
+  await page.getByLabel("卡片标题", { exact: true }).fill("当前卡B");
+  await page.getByLabel("卡片标题", { exact: true }).press("Enter");
+  await expect(page.getByRole("status")).toHaveText("已保存到本机");
+  await page
+    .locator(".react-flow__node")
+    .filter({ hasText: "当前卡B" })
+    .getByRole("button", { name: "编辑正文" })
+    .click();
+  await page.evaluate(async (id) => {
+    const s = await (await fetch("/api/mapping/projects/" + id)).json();
+    const card = s.cards[0];
+    await fetch("/api/mapping/execute", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        commandId: crypto.randomUUID(),
+        projectId: id,
+        type: "body.edit",
+        expected: card.body.versionId,
+        payload: { id: card.id, text: "另一调用者编辑A" },
+      }),
+    });
+  }, projectId);
+  await page.getByLabel("卡片正文", { exact: true }).press("Meta+z");
+  await expect(page.locator(".history-notice")).toHaveText("已撤销：初始标题");
+  await expect(page.locator(".body-editor h2")).toHaveText("当前卡B");
+  await expect(page.getByLabel("卡片正文", { exact: true })).toHaveValue("");
+  const originalHistory = await historyState(page);
+  await page.getByRole("button", { name: "新建研究", exact: true }).click();
+  await historyCard(page, "独立项目卡");
+  await page.getByRole("button", { name: "撤销", exact: true }).click();
+  await expect(page.locator(".react-flow__node")).toHaveCount(0);
+  await page.locator(`[role=tab][title="${projectId}"]`).click();
+  await expect(
+    page.locator(`[role=tab][title="${projectId}"]`),
+  ).toHaveAttribute("aria-selected", "true");
+  expect(await historyState(page)).toEqual(originalHistory);
+  await page.getByRole("button", { name: "重做", exact: true }).click();
+  await expect(
+    page.locator(".react-flow__node").filter({ hasText: "初始标题" }),
+  ).toContainText("另一调用者编辑A");
+  await page.screenshot({
+    path: testInfo.outputPath("history-cross-card.png"),
+  });
+});
+test("H4 在途正文确认后才撤销且不复活，布局待确认按同一时间线撤销", async ({
+  page,
+}) => {
+  await openWorkspace(page);
+  const projectId = await newCard(page);
+  const body = page.getByLabel("卡片正文", { exact: true });
+  const ack = gate();
+  let written = false;
+  let historyRequests = 0;
+  await page.route("**/api/mapping/execute", async (route) => {
+    const command = route.request().postDataJSON();
+    if (command.type.startsWith("history.")) historyRequests++;
+    if (command.type !== "body.edit") return route.continue();
+    const response = await route.fetch();
+    written = true;
+    await ack.promise;
+    await route.fulfill({ response });
+  });
+  try {
+    await body.fill("等待确认的正文");
+    await expect.poll(() => written).toBe(true);
+    await body.press("Meta+z");
+    await expect(body).toHaveAttribute("readonly", "");
+    expect(historyRequests).toBe(0);
+    ack.release();
+    await expect(body).toHaveValue("");
+    await expect(body).not.toHaveAttribute("readonly", "");
+    expect(historyRequests).toBe(1);
+    expect((await historyState(page)).redo).toHaveLength(1);
+  } finally {
+    ack.release();
+    await page.unrouteAll({ behavior: "wait" });
+  }
+  const moveAck = gate();
+  let moved = false;
+  await page.route("**/api/mapping/execute", async (route) => {
+    if (route.request().postDataJSON().type !== "pose.move")
+      return route.continue();
+    const response = await route.fetch();
+    moved = true;
+    await moveAck.promise;
+    await route.fulfill({ response });
+  });
+  const node = page.locator(".react-flow__node");
+  const original = await node.getAttribute("style");
+  try {
+    await page
+      .getByRole("button", { name: "移动卡片：方向键调整位置" })
+      .press("ArrowRight");
+    await expect.poll(() => moved).toBe(true);
+    await page.getByRole("button", { name: "撤销", exact: true }).click();
+    moveAck.release();
+    await expect(
+      page.getByRole("button", { name: "撤销", exact: true }),
+    ).toBeEnabled();
+    await expect(node).toHaveAttribute("style", original!);
+    const s = await page.evaluate(
+      async (id) => (await fetch("/api/mapping/projects/" + id)).json(),
+      projectId,
+    );
+    expect(s.cards[0].body.blocks[0].text).toBe("");
+  } finally {
+    moveAck.release();
+    await page.unrouteAll({ behavior: "wait" });
+  }
+});
+test("H4 撤销确认在途时阻止跨项目和新建写入，丢ACK只重试原动作", async ({
+  page,
+}) => {
+  await openWorkspace(page);
+  await newCard(page);
+  const ack = gate();
+  let applied = false;
+  let first = true;
+  await page.route("**/api/mapping/execute", async (route) => {
+    const c = route.request().postDataJSON();
+    if (c.type !== "history.undo" || !first) return route.continue();
+    first = false;
+    await route.fetch();
+    applied = true;
+    await ack.promise;
+    await route.fulfill({
+      status: 503,
+      contentType: "application/json",
+      body: JSON.stringify({ message: "测试丢失撤销确认" }),
+    });
+  });
+  try {
+    await page.getByRole("button", { name: "撤销", exact: true }).click();
+    await expect.poll(() => applied).toBe(true);
+    await expect(
+      page.getByRole("button", { name: "新建研究", exact: true }),
+    ).toBeDisabled();
+    await expect(
+      page.getByRole("button", { name: "卡片", exact: true }),
+    ).toBeDisabled();
+    ack.release();
+    await expect(page.getByRole("alert")).toHaveText("测试丢失撤销确认");
+    await expect(
+      page.getByRole("button", { name: "新建研究", exact: true }),
+    ).toBeDisabled();
+    await page.getByRole("button", { name: "重试保存", exact: true }).click();
+    await expect(page.locator(".react-flow__node")).toHaveCount(0);
+    expect((await historyState(page)).redo).toHaveLength(1);
+    await expect(
+      page.getByRole("button", { name: "新建研究", exact: true }),
+    ).toBeEnabled();
+  } finally {
+    ack.release();
+    await page.unrouteAll({ behavior: "wait" });
+  }
+});
+test("H4 待确认期间连续结束多个正文组，撤销按每组原值恢复且旧ACK不清新组", async ({
+  page,
+}) => {
+  await openWorkspace(page);
+  await newCard(page);
+  const body = page.getByLabel("卡片正文", { exact: true });
+  const ack = gate();
+  let written = false;
+  let first = true;
+  await page.route("**/api/mapping/execute", async (route) => {
+    if (route.request().postDataJSON().type !== "body.edit" || !first)
+      return route.continue();
+    first = false;
+    const response = await route.fetch();
+    written = true;
+    await ack.promise;
+    await route.fulfill({ response });
+  });
+  try {
+    await body.pressSequentially("A");
+    await expect.poll(() => written).toBe(true);
+    await body.press("Home");
+    await body.pressSequentially("B");
+    await body.press("End");
+    await body.pressSequentially("C");
+    await expect(body).toHaveValue("BAC");
+    await body.press("Meta+z");
+    ack.release();
+    await expect(body).toHaveValue("BA");
+    await expect(body).not.toHaveAttribute("readonly", "");
+    await body.press("Meta+z");
+    await expect(body).toHaveValue("A");
+    await expect(body).not.toHaveAttribute("readonly", "");
+    await body.press("Meta+z");
+    await expect(body).toHaveValue("");
+    expect((await historyState(page)).redo).toHaveLength(3);
+    await expect(page.locator(".react-flow__node")).toHaveCount(1);
+  } finally {
+    ack.release();
+    await page.unrouteAll({ behavior: "wait" });
+  }
+});

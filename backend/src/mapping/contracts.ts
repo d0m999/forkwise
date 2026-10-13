@@ -7,6 +7,22 @@ export const MappingCommand = z.discriminatedUnion('type', [
   z
     .object({
       ...Envelope,
+      type: z.literal('history.undo'),
+      expected: z.number().int().nonnegative(),
+      payload: z.object({}).strict(),
+    })
+    .strict(),
+  z
+    .object({
+      ...Envelope,
+      type: z.literal('history.redo'),
+      expected: z.number().int().nonnegative(),
+      payload: z.object({}).strict(),
+    })
+    .strict(),
+  z
+    .object({
+      ...Envelope,
       type: z.literal('card.edit'),
       expected: z.object({ body: Id, pose: Id }).strict(),
       payload: z
@@ -39,6 +55,7 @@ export const MappingCommand = z.discriminatedUnion('type', [
     .object({
       ...Envelope,
       type: z.literal('thought.title'),
+      editGroup: Id.optional(),
       expected: Id,
       payload: z.object({ id: Id, title: z.string().max(10000) }).strict(),
     })
@@ -47,6 +64,7 @@ export const MappingCommand = z.discriminatedUnion('type', [
     .object({
       ...Envelope,
       type: z.literal('body.edit'),
+      editGroup: Id.optional(),
       expected: Id,
       payload: z.object({ id: Id, text: z.string().max(200000) }).strict(),
     })
@@ -63,6 +81,7 @@ export const MappingCommand = z.discriminatedUnion('type', [
     .object({
       ...Envelope,
       type: z.literal('thought.create'),
+      editGroup: Id.optional(),
       expected: z.null(),
       payload: z
         .object({
@@ -103,6 +122,8 @@ export interface Receipt {
   projectId: string;
   revision: number;
   changedIds: string[];
+  deletedIds?: string[];
+  historyTarget?: { id: string; title: string; label: string };
   versions?: { thought: string; body: string; pose: string };
 }
 export type VersionQuery = {
@@ -113,13 +134,26 @@ export type VersionQuery = {
   versionId: string;
 };
 export type ReadQuery =
+  | { type: 'history'; projectId: string }
   | { type: 'projects' }
   | { type: 'project'; projectId: string }
   | VersionQuery;
 
 export interface Change extends Receipt {
   before: Project | Card | null;
-  after: Project | Card;
+  after: Project | Card | null;
   actor: { id: string; type: 'human' | 'agent' | 'system' };
   writtenAt: string;
+}
+
+export interface HistoryAction {
+  id: string;
+  label: string;
+  target: { id: string; title: string };
+  actor: Change['actor'];
+}
+export interface ProjectHistory {
+  revision: number;
+  undo: HistoryAction[];
+  redo: HistoryAction[];
 }
