@@ -1,4 +1,6 @@
 import type Database from 'better-sqlite3';
+import { retainCardVersions } from './versions.js';
+import { canonical } from '../domain/canonical.js';
 import { randomUUID } from 'node:crypto';
 import { AccessService, type Principal } from '../services/access.js';
 import { requireThat } from '../domain/errors.js';
@@ -9,12 +11,20 @@ import {
   type Project,
   type ProjectState,
   type ReadQuery,
+  type VersionQuery,
   type Receipt,
 } from './contracts.js';
 
+export interface CommitOptions {
+  // Storage failure seam, injected only by an in-process host (never by HTTP).
+  checkpoint?: (phase: 'versions' | 'history' | 'receipt', change: Change) => void;
+}
 export class Mapping {
   readonly access: AccessService;
-  constructor(private readonly db: Database.Database) {
+  constructor(
+    private readonly db: Database.Database,
+    private readonly options: CommitOptions = {},
+  ) {
     this.access = new AccessService(db);
   }
   close() {
@@ -23,8 +33,12 @@ export class Mapping {
 
   read(query: { type: 'projects' }, actor: Principal): Project[];
   read(query: { type: 'project'; projectId: string }, actor: Principal): ProjectState;
-  read(query: ReadQuery, actor: Principal): Project[] | ProjectState {
+  read(query: VersionQuery & { domain: 'body' }, actor: Principal): Card['body'];
+  read(query: VersionQuery & { domain: 'pose' }, actor: Principal): Card['item'];
+  read(query: VersionQuery, actor: Principal): Card['body'] | Card['item'];
+  read(query: ReadQuery, actor: Principal): Project[] | ProjectState | Card['body'] | Card['item'] {
     return this.db.transaction(() => {
+      this.access.validate(actor);
       if (query.type === 'projects') {
         const rows = this.db
           .prepare(
@@ -38,6 +52,17 @@ export class Mapping {
         );
       }
       this.access.project(actor, query.projectId);
+      if (query.type === 'version') {
+        const row = this.db
+          .prepare(
+            'SELECT value FROM mapping_versions WHERE project_id=? AND domain=? AND id=? AND version_id=?',
+          )
+          .get(query.projectId, query.domain, query.id, query.versionId) as
+          | { value: string }
+          | undefined;
+        requireThat(row, 'NOT_FOUND', '版本不存在于当前项目', 404);
+        return JSON.parse(row.value) as Card['body'] | Card['item'];
+      }
       const project = this.project(query.projectId);
       const cards = (
         this.db
@@ -49,12 +74,21 @@ export class Mapping {
   }
 
   execute(input: unknown, actor: Principal): Receipt {
-    this.access.human(actor);
-    const command = MappingCommand.parse(input);
-    this.access.project(actor, command.projectId);
     return this.db
       .transaction(() => {
-        const request = JSON.stringify(command);
+        this.access.validate(actor);
+        // Check project scope before parsing content or returning an old receipt.
+        if (
+          input &&
+          typeof input === 'object' &&
+          'projectId' in input &&
+          typeof input.projectId === 'string'
+        )
+          this.access.project(actor, input.projectId);
+        const command = MappingCommand.parse(input);
+        this.access.mappingWrite(actor, command.projectId);
+        if (command.type === 'project.create') this.access.human(actor);
+        const request = canonical(command);
         const saved = this.db
           .prepare(
             'SELECT actor_id, request, receipt FROM mapping_receipts WHERE project_id=? AND command_id=?',
@@ -64,7 +98,7 @@ export class Mapping {
           | undefined;
         if (saved) {
           requireThat(
-            saved.actor_id === actor.actor.id && saved.request === request,
+            saved.actor_id === actor.actor.id && canonical(JSON.parse(saved.request)) === request,
             'IDEMPOTENCY_MISMATCH',
             '命令编号已用于不同请求',
             409,
@@ -94,6 +128,12 @@ export class Mapping {
         let revision: number;
         let changedIds: string[];
         if (command.type === 'project.create') {
+          requireThat(
+            !this.db.prepare('SELECT 1 FROM mapping_projects WHERE id=?').get(command.projectId),
+            'ID_CONFLICT',
+            '身份已使用，请重新创建',
+            409,
+          );
           this.db
             .prepare('INSERT INTO mapping_projects VALUES(?,?,?,1)')
             .run(command.projectId, command.payload.name, randomUUID());
@@ -103,6 +143,12 @@ export class Mapping {
         } else if (command.type === 'thought.create') {
           const project = this.project(command.projectId);
           const p = command.payload;
+          requireThat(
+            !this.db.prepare('SELECT 1 FROM mapping_cards WHERE id=?').get(p.id),
+            'ID_CONFLICT',
+            '身份已使用，请重新创建',
+            409,
+          );
           const card: Card = {
             id: p.id,
             title: p.title,
@@ -162,17 +208,42 @@ export class Mapping {
               card.versionId = randomUUID();
               changedIds = [card.id];
             } else {
-              requireThat(
-                command.expected === card.body.versionId,
-                'VERSION_CONFLICT',
-                '正文已更新，请重新读取',
-                409,
-              );
-              if (command.payload.text === card.body.blocks[0]!.text)
-                return unchanged(project.revision);
-              card.body.blocks[0]!.text = command.payload.text;
-              card.body.versionId = randomUUID();
-              changedIds = [card.body.id];
+              // Validate the entire read/write set before constructing any version.
+              if (command.type !== 'pose.move')
+                requireThat(
+                  (command.type === 'card.edit' ? command.expected.body : command.expected) ===
+                    card.body.versionId,
+                  'VERSION_CONFLICT',
+                  '正文已更新，请重新读取',
+                  409,
+                );
+              if (command.type !== 'body.edit')
+                requireThat(
+                  (command.type === 'card.edit' ? command.expected.pose : command.expected) ===
+                    card.item.versionId,
+                  'VERSION_CONFLICT',
+                  '布局已更新，请重新读取',
+                  409,
+                );
+              changedIds = [];
+              if (
+                command.type !== 'pose.move' &&
+                command.payload.text !== card.body.blocks[0]!.text
+              ) {
+                card.body.blocks[0]!.text = command.payload.text;
+                card.body.versionId = randomUUID();
+                changedIds.push(card.body.id);
+              }
+              if (
+                command.type !== 'body.edit' &&
+                (command.payload.x !== card.item.pose.x || command.payload.y !== card.item.pose.y)
+              ) {
+                card.item.pose.x = command.payload.x;
+                card.item.pose.y = command.payload.y;
+                card.item.versionId = randomUUID();
+                changedIds.push(card.item.id);
+              }
+              if (!changedIds.length) return unchanged(project.revision);
             }
             after = card;
             this.db
@@ -184,25 +255,34 @@ export class Mapping {
             .prepare('UPDATE mapping_projects SET revision=? WHERE id=?')
             .run(revision, project.id);
         }
+        if ('body' in after) retainCardVersions(this.db, command.projectId, after);
         const receipt = {
           commandId: command.commandId,
           projectId: command.projectId,
           revision,
           changedIds,
+          ...('body' in after
+            ? {
+                versions: {
+                  thought: after.versionId,
+                  body: after.body.versionId,
+                  pose: after.item.versionId,
+                },
+              }
+            : {}),
         };
+        const change: Change = {
+          ...receipt,
+          before,
+          after,
+          actor: actor.actor,
+          writtenAt: new Date().toISOString(),
+        };
+        this.options.checkpoint?.('versions', structuredClone(change));
         this.db
           .prepare('INSERT INTO mapping_changes VALUES(?,?,?)')
-          .run(
-            command.projectId,
-            revision,
-            JSON.stringify({
-              ...receipt,
-              before,
-              after,
-              actor: actor.actor,
-              writtenAt: new Date().toISOString(),
-            } satisfies Change),
-          );
+          .run(command.projectId, revision, JSON.stringify(change));
+        this.options.checkpoint?.('history', structuredClone(change));
         this.db
           .prepare('INSERT INTO mapping_receipts VALUES(?,?,?,?,?)')
           .run(
@@ -212,14 +292,16 @@ export class Mapping {
             request,
             JSON.stringify(receipt),
           );
+        this.options.checkpoint?.('receipt', structuredClone(change));
         return receipt;
       })
       .immediate();
   }
 
   observe(query: { projectId: string; afterRevision: number }, actor: Principal) {
-    this.access.project(actor, query.projectId);
     return this.db.transaction(() => {
+      this.access.validate(actor);
+      this.access.project(actor, query.projectId);
       const project = this.project(query.projectId);
       requireThat(
         Number.isSafeInteger(query.afterRevision) &&

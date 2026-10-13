@@ -493,3 +493,186 @@ test("创建回读到达时保留未确认正文的最新草稿，继续输入�
     await page.unrouteAll({ behavior: "wait" });
   }
 });
+
+test("正文请求在途仍可真实拖动，旧正文确认不覆盖布局或后续输入，重开保持", async ({
+  page,
+}, testInfo) => {
+  await openWorkspace(page);
+  const projectId = await newCard(page);
+  const read = () =>
+    page.evaluate(
+      async (id) => (await fetch("/api/mapping/projects/" + id)).json(),
+      projectId,
+    );
+  const before = await read();
+  const pending = gate();
+  let sending = false;
+  await page.route("**/api/mapping/execute", async (route) => {
+    const command = route.request().postDataJSON();
+    if (command.type === "body.edit" && command.payload.text === "正在写正文") {
+      sending = true;
+      await pending.promise;
+    }
+    await route.continue();
+  });
+  try {
+    await page.getByLabel("卡片正文", { exact: true }).fill("正在写正文");
+    await expect.poll(() => sending).toBe(true);
+    const box = (await page.locator(".thought-card").boundingBox())!;
+    await page.mouse.move(box.x + box.width - 15, box.y + 12);
+    await page.mouse.down();
+    await page.mouse.move(box.x + box.width - 95, box.y + 92, { steps: 12 });
+    await page.mouse.up();
+    // React Flow starts its drag offset after the activation threshold. Verify
+    // the actual visible world position, not an assumed pointer delta.
+    await expect
+      .poll(async () => (await read()).cards[0].item.pose.y)
+      .toBeGreaterThan(before.cards[0].item.pose.y + 60);
+    const moved = (await read()).cards[0].item.pose;
+    await expect(page.locator(".react-flow__node")).toHaveCSS(
+      "transform",
+      `matrix(1, 0, 0, 1, ${moved.x}, ${moved.y})`,
+    );
+    await page
+      .getByLabel("卡片正文", { exact: true })
+      .fill("正在写正文，继续输入");
+    await expect(page.getByRole("status")).not.toHaveText("已保存到本机");
+    pending.release();
+    await expect(page.getByRole("status")).toHaveText("已保存到本机");
+    const after = await read();
+    expect(after.cards[0].body.blocks[0].text).toBe("正在写正文，继续输入");
+    expect(after.cards[0].item.pose).toEqual(moved);
+    expect(moved.x).toBeLessThan(before.cards[0].item.pose.x - 60);
+    await page.reload();
+    await page.getByRole("button", { name: "编辑正文" }).click();
+    await expect(page.getByLabel("卡片正文", { exact: true })).toHaveValue(
+      "正在写正文，继续输入",
+    );
+    expect((await read()).cards[0]).toEqual(after.cards[0]);
+    await page.screenshot({
+      path: testInfo.outputPath("body-pose-reopened.png"),
+    });
+  } finally {
+    pending.release();
+    await page.unrouteAll({ behavior: "wait" });
+  }
+});
+
+test("布局回读不替换正文草稿的起始版本，同正文冲突保留双方并明确重试", async ({
+  page,
+}) => {
+  await openWorkspace(page);
+  const projectId = await newCard(page);
+  const body = page.getByLabel("卡片正文", { exact: true });
+  // Synthetic composition events test save coordination; this is not a real IME test.
+  await body.dispatchEvent("compositionstart");
+  await body.fill("我的待保存正文");
+  const external = await page.evaluate(async (id) => {
+    const state = await (await fetch("/api/mapping/projects/" + id)).json();
+    const card = state.cards[0];
+    const response = await fetch("/api/mapping/execute", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        commandId: crypto.randomUUID(),
+        projectId: id,
+        type: "body.edit",
+        expected: card.body.versionId,
+        payload: { id: card.id, text: "另一个调用者的正文" },
+      }),
+    });
+    return { ok: response.ok, version: card.body.versionId };
+  }, projectId);
+  expect(external.ok).toBe(true);
+  await page
+    .getByRole("button", { name: "移动卡片：方向键调整位置" })
+    .press("ArrowRight");
+  await expect
+    .poll(() =>
+      page.evaluate(
+        async (id) =>
+          (await (await fetch("/api/mapping/projects/" + id)).json()).project
+            .revision,
+        projectId,
+      ),
+    )
+    .toBeGreaterThan(4);
+  await body.dispatchEvent("compositionend");
+  await expect(page.getByRole("alert")).toContainText("正文已更新");
+  await expect(body).toHaveValue("我的待保存正文");
+  await expect(page.getByLabel("已保存的正文")).toHaveValue(
+    "另一个调用者的正文",
+  );
+  await page.getByRole("button", { name: "确认保留我的正文" }).click();
+  await expect(page.getByRole("status")).toHaveText("已保存到本机");
+  const current = await page.evaluate(
+    async (id) => (await fetch("/api/mapping/projects/" + id)).json(),
+    projectId,
+  );
+  expect(current.cards[0].body.blocks[0].text).toBe("我的待保存正文");
+  await page.reload();
+  await page.getByRole("button", { name: "编辑正文" }).click();
+  await expect(body).toHaveValue("我的待保存正文");
+});
+
+test("布局竞争显式确认再保存；丢失布局 ACK 重试一次生效且正文继续可写", async ({
+  page,
+}) => {
+  await openWorkspace(page);
+  const projectId = await newCard(page);
+  const read = () =>
+    page.evaluate(
+      async (id) => (await fetch("/api/mapping/projects/" + id)).json(),
+      projectId,
+    );
+  const before = (await read()).cards[0];
+  await page.evaluate(
+    async ({ id, card }) => {
+      await fetch("/api/mapping/execute", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          commandId: crypto.randomUUID(),
+          projectId: id,
+          type: "pose.move",
+          expected: card.item.versionId,
+          payload: { id: card.id, x: 100, y: 100 },
+        }),
+      });
+    },
+    { id: projectId, card: before },
+  );
+  await page
+    .getByRole("button", { name: "移动卡片：方向键调整位置" })
+    .press("ArrowRight");
+  await expect(page.getByRole("alert")).toContainText("布局已更新");
+  await expect(page.getByText("已保存位置：100, 100")).toBeVisible();
+  await page.getByRole("button", { name: "确认保留本次位置" }).click();
+  await expect(page.getByRole("status")).toHaveText("已保存到本机");
+  expect((await read()).cards[0].item.pose.x).toBe(before.item.pose.x + 10);
+  let lost = false;
+  await page.route("**/api/mapping/execute", async (route) => {
+    if (route.request().postDataJSON().type === "pose.move" && !lost) {
+      await route.fetch();
+      lost = true;
+      await route.abort("failed");
+    } else await route.continue();
+  });
+  await page
+    .getByRole("button", { name: "移动卡片：方向键调整位置" })
+    .press("ArrowDown");
+  await expect(page.getByRole("alert")).toBeVisible();
+  const moved = await read();
+  await page
+    .getByLabel("卡片正文", { exact: true })
+    .fill("布局失败时继续写正文");
+  await expect
+    .poll(async () => (await read()).cards[0].body.blocks[0].text)
+    .toBe("布局失败时继续写正文");
+  await expect(page.getByRole("status")).not.toHaveText("已保存到本机");
+  await page.getByRole("button", { name: "重试保存" }).click();
+  await expect(page.getByRole("status")).toHaveText("已保存到本机");
+  const after = await read();
+  expect(after.cards[0].item).toEqual(moved.cards[0].item);
+  expect(after.project.revision).toBe(moved.project.revision + 1);
+});

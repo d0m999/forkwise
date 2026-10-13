@@ -347,3 +347,32 @@ button[aria-current="true"] {
     animation: none !important;
   }
 }
+
+.move-handle {
+  font-size: 11px;
+  color: #657187;
+  padding: 2px 5px;
+  margin-bottom: 4px;
+}
+
+.conflict-panel {
+  position: absolute;
+  bottom: 64px;
+  right: 20px;
+  width: min(420px, 90vw);
+  padding: 20px;
+  background: white;
+  border: 1px solid #b98c48;
+  border-radius: 8px;
+  z-index: 12;
+  box-shadow: 0 8px 30px #23314925;
+}
+.conflict-panel h2 {
+  font-size: 16px;
+}
+.conflict-panel textarea {
+  width: 100%;
+  min-height: 100px;
+  display: block;
+  margin: 8px 0;
+}

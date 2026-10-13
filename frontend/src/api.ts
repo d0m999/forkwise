@@ -10,6 +10,14 @@ export type {
   Project,
   ProjectState,
 } from "../../backend/src/mapping/contracts";
+export class MappingError extends Error {
+  constructor(
+    readonly code: string,
+    message: string,
+  ) {
+    super(message);
+  }
+}
 async function request<T>(path: string, body?: unknown): Promise<T> {
   const response = await fetch("/api/mapping" + path, {
     credentials: "same-origin",
@@ -22,7 +30,11 @@ async function request<T>(path: string, body?: unknown): Promise<T> {
         }),
   });
   const result = await response.json();
-  if (!response.ok) throw new Error(result.message ?? "本机服务暂时不可用");
+  if (!response.ok)
+    throw new MappingError(
+      result.code ?? "UNAVAILABLE",
+      result.message ?? "本机服务暂时不可用",
+    );
   return result as T;
 }
 export const api = {

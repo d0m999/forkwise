@@ -12,6 +12,7 @@ import {
 import "@xyflow/react/dist/style.css";
 import {
   api,
+  MappingError,
   authorizeLocalSession,
   type Card,
   type Command,
@@ -19,6 +20,7 @@ import {
   type ProjectState,
 } from "./api";
 import "./style.css";
+import { usePoseSave } from "./pose-save";
 
 type CardData = {
   card: Card;
@@ -29,10 +31,32 @@ type CardData = {
   onEdit: () => void;
   onBody: () => void;
   onComposition: (value: boolean) => void;
+  onMove: (dx: number, dy: number) => void;
+  movingDisabled: boolean;
 };
 function ThoughtCard({ data }: NodeProps<Node<CardData>>) {
   return (
     <article className="thought-card">
+      <button
+        className="move-handle nodrag"
+        aria-label="移动卡片：方向键调整位置"
+        disabled={data.movingDisabled}
+        onKeyDown={(event) => {
+          const delta = {
+            ArrowLeft: [-10, 0],
+            ArrowRight: [10, 0],
+            ArrowUp: [0, -10],
+            ArrowDown: [0, 10],
+          }[event.key];
+          if (delta) {
+            event.preventDefault();
+            event.stopPropagation();
+            data.onMove(delta[0]!, delta[1]!);
+          }
+        }}
+      >
+        移动
+      </button>
       {data.editing ? (
         <textarea
           className="card-title nodrag nowheel"
@@ -72,6 +96,7 @@ interface Draft {
   field: "title" | "body";
   value: string;
   generation: number;
+  expected: string;
   command?: Command;
 }
 function draftKey(projectId: string, cardId: string, field: Draft["field"]) {
@@ -94,6 +119,11 @@ function Workspace() {
   const [draftView, setDraftView] = useState<Record<string, Draft>>({}),
     drafts = useRef<Record<string, Draft>>({});
   const unconfirmed = useRef<Draft | null>(null);
+  const conflictRef = useRef<{ draft: Draft; remote: Card } | null>(null);
+  const [conflict, setConflict] = useState<{
+    draft: Draft;
+    remote: Card;
+  } | null>(null);
   const [status, setStatus] = useState("正在打开本机资料…"),
     [error, setError] = useState(""),
     [busy, setBusy] = useState(true);
@@ -125,12 +155,13 @@ function Workspace() {
     setProjects(await api.projects());
     return value;
   };
+  const pose = usePoseSave(refresh);
   const handoff = async (id: string) => {
     const value = await api.project(id);
     const all = await api.projects();
     // Keep the old project's authority while the destination is loading: the
     // visible editors may still accept input during those requests.
-    if (!(await flush())) return false;
+    if (!(await pose.flush()) || !(await flush())) return false;
     updateState(value);
     setProjects(all);
     return true;
@@ -140,7 +171,7 @@ function Workspace() {
       fail(new Error("请先重试未完成的保存"));
       return;
     }
-    if (!(await flush())) return;
+    if (!(await pose.flush()) || !(await flush())) return;
     if (id === authority.current?.project.id) return;
     setBusy(true);
     try {
@@ -166,7 +197,7 @@ function Workspace() {
     clearTimeout(timer.current);
     clearTimeout(maxTimer.current);
     maxTimer.current = undefined;
-    if (composition.current) return false;
+    if (composition.current || conflictRef.current) return false;
     if (saving.current) {
       if (!(await saving.current)) return false;
       return flush();
@@ -195,14 +226,14 @@ function Workspace() {
             commandId: crypto.randomUUID(),
             projectId: current.projectId,
             type: "thought.title",
-            expected: card.versionId,
+            expected: current.expected,
             payload: { id: card.id, title: current.value },
           }
         : {
             commandId: crypto.randomUUID(),
             projectId: current.projectId,
             type: "body.edit",
-            expected: card.body.versionId,
+            expected: current.expected,
             payload: { id: card.id, text: current.value },
           });
     current.command = command;
@@ -210,8 +241,19 @@ function Workspace() {
     setStatus("正在保存…");
     saving.current = (async () => {
       try {
-        await api.execute(command);
+        const receipt = await api.execute(command);
         await refresh(current.projectId);
+        const newer = drafts.current[key];
+        if (
+          newer &&
+          newer.generation !== current.generation &&
+          newer.expected === current.expected
+        ) {
+          newer.expected =
+            (current.field === "title"
+              ? receipt.versions?.thought
+              : receipt.versions?.body) ?? current.expected;
+        }
         unconfirmed.current = null;
         if (drafts.current[key]?.generation === current.generation)
           delete drafts.current[key];
@@ -222,6 +264,18 @@ function Workspace() {
         setError("");
         return true;
       } catch (e) {
+        if (e instanceof MappingError && e.code === "VERSION_CONFLICT") {
+          try {
+            const latest = await api.project(current.projectId);
+            const remote = latest.cards.find((c) => c.id === current.cardId);
+            if (remote) {
+              conflictRef.current = { draft: current, remote };
+              setConflict(conflictRef.current);
+            }
+          } catch {
+            /* Keep the original draft/command available for retry. */
+          }
+        }
         fail(e);
         return false;
       }
@@ -255,11 +309,43 @@ function Workspace() {
       field,
       value,
       generation: ++generation.current,
+      expected:
+        drafts.current[draftKey(state.project.id, card.id, field)]?.expected ??
+        (unconfirmed.current?.cardId === card.id &&
+        unconfirmed.current.field === field
+          ? unconfirmed.current.expected
+          : field === "title"
+            ? card.versionId
+            : card.body.versionId),
     };
     drafts.current[draftKey(next.projectId, card.id, field)] = next;
     setDraftView({ ...drafts.current });
     setStatus("等待保存…");
     scheduleSave();
+  }
+  function resolveConflict() {
+    const current = conflictRef.current;
+    if (!current) return;
+    const { draft, remote } = current;
+    const key = draftKey(draft.projectId, draft.cardId, draft.field);
+    const latest = drafts.current[key] ?? draft;
+    // The other caller's version remains in immutable history. Reapply only
+    // after this explicit choice and only against the version shown here.
+    const next: Draft = {
+      projectId: draft.projectId,
+      cardId: draft.cardId,
+      field: draft.field,
+      value: latest.value,
+      generation: ++generation.current,
+      expected:
+        draft.field === "title" ? remote.versionId : remote.body.versionId,
+    };
+    drafts.current[key] = next;
+    unconfirmed.current = null;
+    conflictRef.current = null;
+    setConflict(null);
+    setDraftView({ ...drafts.current });
+    void flush();
   }
   async function action(command: Command, onDone?: () => void) {
     if (
@@ -269,7 +355,7 @@ function Workspace() {
       fail(new Error("请先重试未完成的保存"));
       return;
     }
-    if (!(await flush())) return;
+    if (!(await pose.flush()) || !(await flush())) return;
     pendingAction.current = { command, ...(onDone ? { onDone } : {}) };
     setBusy(true);
     setStatus("正在保存…");
@@ -353,7 +439,11 @@ function Workspace() {
         if (active) setBusy(false);
       });
     const beforeUnload = (event: BeforeUnloadEvent) => {
-      if (Object.keys(drafts.current).length || saving.current) {
+      if (
+        Object.keys(drafts.current).length ||
+        saving.current ||
+        pose.hasPending()
+      ) {
         event.preventDefault();
         event.returnValue = "";
       }
@@ -374,8 +464,11 @@ function Workspace() {
     ...(dimensions[card.item.id]
       ? { measured: dimensions[card.item.id]! }
       : {}),
-    position: { x: card.item.pose.x, y: card.item.pose.y },
-    draggable: false,
+    position: pose.positions[card.item.id] ?? {
+      x: card.item.pose.x,
+      y: card.item.pose.y,
+    },
+    draggable: !busy && !pose.pending,
     data: {
       card,
       editing: editing === card.id,
@@ -392,6 +485,11 @@ function Workspace() {
       onEdit: () => void editCard(card.id, "title"),
       onBody: () => void editCard(card.id, "body"),
       onComposition: compose,
+      movingDisabled: busy || pose.pending,
+      onMove: (dx, dy) => {
+        if (pose.start(state!.project.id, card))
+          pose.finish({ x: card.item.pose.x + dx, y: card.item.pose.y + dy });
+      },
     },
   }));
   const currentBody = state?.cards.find((c) => c.id === bodyCard);
@@ -467,7 +565,17 @@ function Workspace() {
               "controls.fitView.ariaLabel": "适应画布",
             }}
             nodes={nodes}
+            onNodeDragStart={(_, node) => {
+              const card = authority.current?.cards.find(
+                (c) => c.item.id === node.id,
+              );
+              if (card) pose.start(authority.current!.project.id, card);
+            }}
+            onNodeDragStop={(_, node) => pose.finish(node.position)}
             onNodesChange={(changes) => {
+              for (const change of changes)
+                if (change.type === "position" && change.position)
+                  pose.preview(change.id, change.position);
               const measured = changes.filter(
                 (change) => change.type === "dimensions" && change.dimensions,
               );
@@ -482,7 +590,8 @@ function Workspace() {
             }}
             edges={[]}
             nodeTypes={nodeTypes}
-            nodesDraggable={false}
+            nodesDraggable
+            nodesFocusable={false}
             nodesConnectable={false}
             deleteKeyCode={null}
             onPaneClick={(event) => {
@@ -568,16 +677,59 @@ function Workspace() {
           />
         </aside>
       )}
+      {pose.conflict && !conflict && (
+        <section className="conflict-panel" aria-label="布局冲突">
+          <h2>布局已由其他调用者更新</h2>
+          <p>
+            已保存位置：{pose.conflict.pose.x}, {pose.conflict.pose.y}
+          </p>
+          <p>画布保留你本次移动的位置，确认后保存；对方版本保留在历史中。</p>
+          <button onClick={pose.resolveConflict}>确认保留本次位置</button>
+        </section>
+      )}
+      {conflict && (
+        <section className="conflict-panel" aria-label="保存冲突">
+          <h2>
+            {conflict.draft.field === "body" ? "正文" : "标题"}
+            已由其他调用者更新
+          </h2>
+          <p>
+            你的输入仍保留。确认后将保存你的内容，对方版本继续保留在历史中。
+          </p>
+          <label>
+            已保存的{conflict.draft.field === "body" ? "正文" : "标题"}
+            <textarea
+              readOnly
+              value={
+                conflict.draft.field === "body"
+                  ? conflict.remote.body.blocks[0]!.text
+                  : conflict.remote.title
+              }
+            />
+          </label>
+          <button onClick={resolveConflict}>
+            确认保留我的{conflict.draft.field === "body" ? "正文" : "标题"}
+          </button>
+        </section>
+      )}
       <div className="save-state">
         <span role="status" aria-live="polite">
-          {status}
+          {pose.error
+            ? "布局保存未完成"
+            : pose.pending || pose.dragging
+              ? "布局等待保存…"
+              : status}
         </span>
-        {error && (
+        {(error || pose.error) && (
           <>
-            <span role="alert">{error}</span>
+            <span role="alert">{pose.error || error}</span>
             <button
-              disabled={busy}
+              disabled={busy || !!conflict || !!pose.conflict}
               onClick={() => {
+                if (pose.error) {
+                  void pose.flush();
+                  return;
+                }
                 const pending = pendingAction.current;
                 if (pending) void action(pending.command, pending.onDone);
                 else if (Object.keys(drafts.current).length) void flush();

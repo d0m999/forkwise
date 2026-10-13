@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { getCookie, setCookie } from 'hono/cookie';
 import { bodyLimit } from 'hono/body-limit';
-import { ZodError } from 'zod';
+import { z, ZodError } from 'zod';
 import type { Mapping } from './mapping.js';
 import type { Principal } from '../services/access.js';
 import { DomainError, requireThat } from '../domain/errors.js';
@@ -87,6 +87,20 @@ export function createWorkspaceApp(
     c.json(
       mapping.observe(
         { projectId: c.req.param('id'), afterRevision: Number(c.req.query('after') ?? 0) },
+        c.get('principal'),
+      ),
+    ),
+  );
+  app.get('/api/mapping/projects/:id/versions/:domain/:objectId/:versionId', (c) =>
+    c.json(
+      mapping.read(
+        {
+          type: 'version',
+          projectId: c.req.param('id'),
+          domain: z.enum(['body', 'pose']).parse(c.req.param('domain')),
+          id: c.req.param('objectId'),
+          versionId: c.req.param('versionId'),
+        },
         c.get('principal'),
       ),
     ),

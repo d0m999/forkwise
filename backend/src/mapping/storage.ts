@@ -9,11 +9,12 @@ import {
   constants,
 } from 'node:fs';
 import { join, isAbsolute } from 'node:path';
-import { Mapping } from './mapping.js';
+import { Mapping, type CommitOptions } from './mapping.js';
+import { initializeVersions } from './versions.js';
 
 // Separate from research.sqlite: opening the workspace never runs legacy migrations,
 // activation recovery, background jobs, or retention cleanup.
-export function openMapping(directory: string): Mapping {
+export function openMapping(directory: string, options: CommitOptions = {}): Mapping {
   if (!directory || !isAbsolute(directory)) throw new Error('必须显式提供绝对路径的数据目录');
   const applicationId = 1179472720;
   let existing = false;
@@ -82,7 +83,8 @@ export function openMapping(directory: string): Mapping {
       CREATE TABLE IF NOT EXISTS mapping_receipts(project_id TEXT NOT NULL REFERENCES mapping_projects(id), command_id TEXT NOT NULL, actor_id TEXT NOT NULL, request TEXT NOT NULL, receipt TEXT NOT NULL, PRIMARY KEY(project_id, command_id));
       CREATE TABLE IF NOT EXISTS mapping_changes(project_id TEXT NOT NULL REFERENCES mapping_projects(id), revision INTEGER NOT NULL, receipt TEXT NOT NULL, PRIMARY KEY(project_id, revision));
     `);
-    return new Mapping(db);
+    initializeVersions(db);
+    return new Mapping(db, options);
   } catch (error) {
     db.close();
     throw error;

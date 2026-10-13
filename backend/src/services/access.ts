@@ -67,6 +67,45 @@ export class AccessService {
       tokenHash: hash,
     };
   }
+  // A Principal is only a transport context, never self-authenticating. Recheck
+  // persisted grants at the Mapping boundary, including after revocation/restart.
+  validate(principal: Principal): void {
+    const row = this.db
+      .prepare('SELECT actor_id,type,projects,expires_at FROM sessions WHERE token_hash=?')
+      .get(principal?.tokenHash ?? '') as
+      | { actor_id: string; type: string; projects: string; expires_at: string }
+      | undefined;
+    requireThat(
+      row && Date.parse(row.expires_at) > this.clock(),
+      'UNAUTHORIZED',
+      '本机会话无效或已过期',
+      401,
+    );
+    requireThat(
+      row.actor_id === principal.actor.id &&
+        row.type === principal.actor.type &&
+        row.projects === JSON.stringify(principal.projects),
+      'UNTRUSTED_PRINCIPAL',
+      '调用者身份和范围必须来自可信会话',
+      403,
+    );
+  }
+  mappingWrite(principal: Principal, projectId: string): void {
+    this.project(principal, projectId);
+    if (principal.actor.type === 'human') return;
+    const row = this.db
+      .prepare('SELECT capabilities FROM sessions WHERE token_hash=?')
+      .get(principal.tokenHash) as { capabilities: string } | undefined;
+    const delegated: string[] = row
+      ? (JSON.parse(row.capabilities).personalRecordProjects ?? [])
+      : [];
+    requireThat(
+      principal.actor.type === 'agent' && delegated.includes(projectId),
+      'EDIT_DELEGATION_REQUIRED',
+      '此操作需要本机会话确认或明确的项目编辑委托',
+      403,
+    );
+  }
   project(principal: Principal, projectId: string): void {
     requireThat(
       principal.projects.includes(projectId) ||

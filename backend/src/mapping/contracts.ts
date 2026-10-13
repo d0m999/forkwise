@@ -7,6 +7,29 @@ export const MappingCommand = z.discriminatedUnion('type', [
   z
     .object({
       ...Envelope,
+      type: z.literal('card.edit'),
+      expected: z.object({ body: Id, pose: Id }).strict(),
+      payload: z
+        .object({
+          id: Id,
+          text: z.string().max(200000),
+          x: z.number().finite(),
+          y: z.number().finite(),
+        })
+        .strict(),
+    })
+    .strict(),
+  z
+    .object({
+      ...Envelope,
+      type: z.literal('pose.move'),
+      expected: Id,
+      payload: z.object({ id: Id, x: z.number().finite(), y: z.number().finite() }).strict(),
+    })
+    .strict(),
+  z
+    .object({
+      ...Envelope,
       type: z.literal('project.rename'),
       expected: Id,
       payload: z.object({ name: Name }).strict(),
@@ -80,8 +103,19 @@ export interface Receipt {
   projectId: string;
   revision: number;
   changedIds: string[];
+  versions?: { thought: string; body: string; pose: string };
 }
-export type ReadQuery = { type: 'projects' } | { type: 'project'; projectId: string };
+export type VersionQuery = {
+  type: 'version';
+  projectId: string;
+  domain: 'body' | 'pose';
+  id: string;
+  versionId: string;
+};
+export type ReadQuery =
+  | { type: 'projects' }
+  | { type: 'project'; projectId: string }
+  | VersionQuery;
 
 export interface Change extends Receipt {
   before: Project | Card | null;
