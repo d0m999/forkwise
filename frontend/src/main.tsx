@@ -127,6 +127,17 @@ function Workspace() {
   const [placing, setPlacing] = useState(false),
     [editing, setEditing] = useState<string | null>(null),
     [bodyCard, setBodyCard] = useState<string | null>(null);
+  const bodyBinding = useRef<{
+    projectId: string;
+    card: Card;
+    removalActionId?: string;
+  } | null>(null);
+  const [deletedBody, setDeletedBody] = useState<{
+    projectId: string;
+    card: Card;
+    actionId?: string;
+    canRestore: boolean;
+  } | null>(null);
   const [draftView, setDraftView] = useState<Record<string, Draft>>({}),
     drafts = useRef<Record<string, Draft>>({});
   const unconfirmed = useRef<Draft | null>(null);
@@ -174,6 +185,7 @@ function Workspace() {
   const composition = useRef(false),
     generation = useRef(0),
     saving = useRef<Promise<boolean> | null>(null);
+  const layoutBarrier = useRef<{ cutoff: number } | null>(null);
   const flow = useReactFlow();
   const titleGroup = useRef<{ cardId: string; id: string } | null>(null);
   const historyLock = useRef(false);
@@ -183,8 +195,9 @@ function Workspace() {
     Command,
     { type: "history.undo" | "history.redo" }
   > | null>(null);
+  const historyActionId = useRef<string | null>(null);
   const historyBlocked = historyBusy || !!historyCommand.current;
-  async function travel(direction: "undo" | "redo") {
+  async function travel(direction: "undo" | "redo", restoreActionId?: string) {
     if (
       historyLock.current ||
       composition.current ||
@@ -201,18 +214,42 @@ function Workspace() {
       titleGroup.current = null;
       const projectId = authority.current?.project.id;
       if (!projectId) return;
-      const latest = await api.project(projectId);
-      const command = historyCommand.current ?? {
-        commandId: crypto.randomUUID(),
-        projectId,
-        type: direction === "undo" ? "history.undo" : "history.redo",
-        expected: latest.project.revision,
-        payload: {},
-      };
-      historyCommand.current = command;
+      if (!historyCommand.current) {
+        const timeline = await api.history(projectId);
+        const target = (
+          direction === "undo" ? timeline.undo : timeline.redo
+        ).at(-1);
+        if (restoreActionId && target?.id !== restoreActionId) {
+          setDeletedBody((previous) =>
+            previous ? { ...previous, canRestore: false } : previous,
+          );
+          setHistoryNotice("这次删除的恢复已不可用");
+          return;
+        }
+        historyActionId.current = target?.id ?? null;
+        // The same revision checked by execute binds this request to the exact
+        // action inspected above. A racing write rejects the whole travel.
+        historyCommand.current = {
+          commandId: crypto.randomUUID(),
+          projectId,
+          type: direction === "undo" ? "history.undo" : "history.redo",
+          expected: timeline.revision,
+          payload: {},
+        };
+      }
+      const command = historyCommand.current;
+      if (!command) return;
       const receipt = await api.execute(command);
+      const binding = bodyBinding.current;
+      if (
+        binding?.projectId === projectId &&
+        receipt.deletedIds?.includes(binding.card.id) &&
+        historyActionId.current
+      )
+        binding.removalActionId = historyActionId.current;
       await refresh(projectId);
       historyCommand.current = null;
+      historyActionId.current = null;
       setHistoryNotice(
         `${command.type === "history.undo" ? "已撤销" : "已重做"}：${receipt.historyTarget?.title || "未命名卡片"}`,
       );
@@ -222,8 +259,21 @@ function Workspace() {
       if (
         e instanceof MappingError &&
         ["VERSION_CONFLICT", "HISTORY_EMPTY"].includes(e.code)
-      )
+      ) {
+        const projectId = historyCommand.current?.projectId;
         historyCommand.current = null;
+        historyActionId.current = null;
+        setDeletedBody((previous) =>
+          previous ? { ...previous, canRestore: false } : previous,
+        );
+        if (projectId) {
+          try {
+            await refresh(projectId);
+          } catch {
+            /* Keep the bound panel; recovery remains unconfirmed. */
+          }
+        }
+      }
       fail(e);
     } finally {
       historyLock.current = false;
@@ -252,7 +302,10 @@ function Workspace() {
     window.addEventListener("keydown", keydown, true);
     return () => window.removeEventListener("keydown", keydown, true);
   });
-  const updateState = (value: ProjectState) => {
+  const updateState = (
+    value: ProjectState,
+    timeline?: Awaited<ReturnType<typeof api.history>>,
+  ) => {
     const current = authority.current;
     // Concurrent action/save readbacks may arrive out of order. Never replace
     // an acknowledged project revision with an older snapshot.
@@ -261,16 +314,55 @@ function Workspace() {
       value.project.revision < current.project.revision
     )
       return;
+    const binding = bodyBinding.current;
+    if (binding?.projectId === value.project.id) {
+      const card = value.cards.find((c) => c.id === binding.card.id);
+      if (card) {
+        binding.card = card;
+        delete binding.removalActionId;
+        setDeletedBody(null);
+      } else {
+        setDeletedBody({
+          projectId: binding.projectId,
+          card: binding.card,
+          ...(binding.removalActionId
+            ? { actionId: binding.removalActionId }
+            : {}),
+          canRestore:
+            !!binding.removalActionId &&
+            timeline?.redo.at(-1)?.id === binding.removalActionId,
+        });
+      }
+    }
     authority.current = value;
     setState(value);
   };
   const refresh = async (id: string) => {
     const value = await api.project(id);
-    updateState(value);
+    const timeline = await api.history(id);
+    updateState(value, timeline);
     setProjects(await api.projects());
     return value;
   };
   const pose = usePoseSave(refresh);
+  function startMove(projectId: string, card: Card) {
+    // Geometry remains interactive while the prefix of input waits for ACK.
+    // Reserve this boundary so later typing cannot overtake the move either.
+    breakBodyGroup();
+    const barrier = { cutoff: generation.current };
+    if (
+      !pose.start(projectId, card, {
+        beforeSubmit: () => flush(barrier.cutoff),
+        afterAttempt: () => {
+          if (layoutBarrier.current === barrier) layoutBarrier.current = null;
+          void flush();
+        },
+      })
+    )
+      return false;
+    layoutBarrier.current = barrier;
+    return true;
+  }
   const handoff = async (id: string) => {
     const value = await api.project(id);
     const all = await api.projects();
@@ -294,6 +386,8 @@ function Workspace() {
     try {
       if (!(await handoff(id))) return;
       setEditing(null);
+      bodyBinding.current = null;
+      setDeletedBody(null);
       setBodyCard(null);
       setPlacing(false);
       if (!pinned) setNav(false);
@@ -310,20 +404,21 @@ function Workspace() {
     setError(e instanceof Error ? e.message : "本机服务暂时不可用");
     setStatus("保存未完成");
   }
-  async function flush(): Promise<boolean> {
+  async function flush(limit = Infinity): Promise<boolean> {
+    limit = Math.min(limit, layoutBarrier.current?.cutoff ?? Infinity);
     clearTimeout(timer.current);
     clearTimeout(maxTimer.current);
     maxTimer.current = undefined;
     if (composition.current || conflictRef.current) return false;
     if (saving.current) {
       if (!(await saving.current)) return false;
-      return flush();
+      return flush(limit);
     }
     const current =
       unconfirmed.current ??
       closedDrafts.current[0] ??
       Object.values(drafts.current)[0];
-    if (!current) return true;
+    if (!current || current.generation > limit) return true;
     const key = draftKey(current.projectId, current.cardId, current.field);
     const card = authority.current?.cards.find((c) => c.id === current.cardId);
     if (!card || authority.current?.project.id !== current.projectId) {
@@ -367,18 +462,16 @@ function Workspace() {
             newer.cardId === current.cardId &&
             newer.field === current.field &&
             newer.generation !== current.generation &&
+            // A no-op confirms current.expected; a later readback may belong
+            // to another writer and cannot rebase this unsaved generation.
             newer.expected === current.expected
           ) {
+            // A no-op confirms current.expected; a later readback may belong
+            // to another writer and cannot rebase this unsaved generation.
             newer.expected =
               (current.field === "title"
                 ? receipt.versions?.thought
-                : receipt.versions?.body) ??
-              (current.field === "title"
-                ? authority.current?.cards.find((c) => c.id === current.cardId)
-                    ?.versionId
-                : authority.current?.cards.find((c) => c.id === current.cardId)
-                    ?.body.versionId) ??
-              current.expected;
+                : receipt.versions?.body) ?? current.expected;
           }
         }
         closedDrafts.current = closedDrafts.current.filter(
@@ -414,7 +507,7 @@ function Workspace() {
     saving.current = null;
     // A completed command only confirms its own generation. Drain newer input
     // before allowing a project switch or any other editor handoff.
-    return result ? flush() : false;
+    return result ? flush(limit) : false;
   }
   function scheduleSave() {
     clearTimeout(timer.current);
@@ -517,12 +610,19 @@ function Workspace() {
     );
     if (draft.field === "body" && bodyGroup.current?.cardId === draft.cardId)
       bodyGroup.current = null;
+    if (
+      layoutBarrier.current &&
+      draft.generation <= layoutBarrier.current.cutoff
+    )
+      layoutBarrier.current.cutoff = next.generation;
     drafts.current[key] = next;
     unconfirmed.current = null;
     conflictRef.current = null;
     setConflict(null);
     setDraftView({ ...drafts.current });
-    void flush();
+    void flush().then((ok) => {
+      if (ok && layoutBarrier.current) void pose.flush();
+    });
   }
   async function action(command: Command, onDone?: () => void) {
     if (historyLock.current || historyCommand.current) return;
@@ -567,6 +667,8 @@ function Workspace() {
         payload: { name: "未命名研究" },
       },
       () => {
+        bodyBinding.current = null;
+        setDeletedBody(null);
         setBodyCard(null);
         setEditing(null);
         setNav(false);
@@ -601,7 +703,13 @@ function Workspace() {
     titleGroup.current =
       field === "title" ? { cardId: id, id: crypto.randomUUID() } : null;
     setEditing(field === "title" ? id : null);
-    if (field === "body") setBodyCard(id);
+    if (field === "body") {
+      const card = authority.current?.cards.find((c) => c.id === id);
+      if (!card || !authority.current) return;
+      bodyBinding.current = { projectId: authority.current.project.id, card };
+      setDeletedBody(null);
+      setBodyCard(id);
+    }
   }
   useEffect(() => {
     let active = true;
@@ -675,13 +783,19 @@ function Workspace() {
       movingDisabled: busy || historyBlocked || pose.pending,
       historyBlocked,
       onMove: (dx, dy) => {
-        breakBodyGroup();
-        if (pose.start(state!.project.id, card))
+        if (startMove(state!.project.id, card))
           pose.finish({ x: card.item.pose.x + dx, y: card.item.pose.y + dy });
       },
     },
   }));
   const currentBody = state?.cards.find((c) => c.id === bodyCard);
+  const panelCard =
+    currentBody ??
+    (deletedBody &&
+    deletedBody.projectId === state?.project.id &&
+    deletedBody.card.id === bodyCard
+      ? deletedBody.card
+      : undefined);
   return (
     <div className="workspace">
       <header className="topbar">
@@ -761,7 +875,7 @@ function Workspace() {
           ))}
         </aside>
       )}
-      <main className={currentBody ? "canvas with-editor" : "canvas"}>
+      <main className={panelCard ? "canvas with-editor" : "canvas"}>
         {state ? (
           <ReactFlow
             ariaLabelConfig={{
@@ -772,11 +886,10 @@ function Workspace() {
             }}
             nodes={nodes}
             onNodeDragStart={(_, node) => {
-              breakBodyGroup();
               const card = authority.current?.cards.find(
                 (c) => c.item.id === node.id,
               );
-              if (card) pose.start(authority.current!.project.id, card);
+              if (card) startMove(authority.current!.project.id, card);
             }}
             onNodeDragStop={(_, node) => pose.finish(node.position)}
             onNodesChange={(changes) => {
@@ -849,59 +962,81 @@ function Workspace() {
           </div>
         )}
       </main>
-      {currentBody && (
+      {panelCard && (
         <aside className="body-editor">
           <header>
             <h2>
-              {(draftView[draftKey(state!.project.id, currentBody.id, "title")]
+              {(draftView[draftKey(state!.project.id, panelCard.id, "title")]
                 ?.value ??
-                currentBody.title) ||
+                panelCard.title) ||
                 "未命名卡片"}
             </h2>
             <button
               aria-label="关闭正文"
               onClick={() =>
                 void flush().then((ok) => {
-                  if (ok) setBodyCard(null);
+                  if (ok) {
+                    bodyBinding.current = null;
+                    setDeletedBody(null);
+                    setBodyCard(null);
+                  }
                 })
               }
             >
               关闭
             </button>
           </header>
-          <label htmlFor="card-body">卡片正文</label>
-          <textarea
-            id="card-body"
-            readOnly={historyBlocked}
-            value={
-              draftView[draftKey(state!.project.id, currentBody.id, "body")]
-                ?.value ?? currentBody.body.blocks[0]!.text
-            }
-            onChange={(e) =>
-              change("body", currentBody, e.target.value, {
-                inputType: (e.nativeEvent as InputEvent).inputType,
-                start: e.target.selectionStart,
-                end: e.target.selectionEnd,
-              })
-            }
-            onSelect={(e) => {
-              const group = bodyGroup.current;
-              if (
-                !composition.current &&
-                group &&
-                (e.currentTarget.selectionStart !== group.start ||
-                  e.currentTarget.selectionEnd !== group.end)
-              )
-                breakBodyGroup();
-            }}
-            onCompositionStart={() => compose(true)}
-            onCompositionEnd={() => compose(false)}
-            onBlur={() => {
-              breakBodyGroup();
-              void flush();
-            }}
-            placeholder="写下你的想法…"
-          />
+          {!currentBody ? (
+            <section className="deleted-body" aria-label="已删除卡片">
+              <p>这张卡片已删除</p>
+              <button
+                disabled={historyBlocked || !deletedBody?.canRestore}
+                onClick={() => {
+                  const actionId = deletedBody?.actionId;
+                  if (actionId) void travel("redo", actionId);
+                }}
+              >
+                撤销删除
+              </button>
+              {!deletedBody?.canRestore && <p>这次删除的恢复已不可用</p>}
+            </section>
+          ) : (
+            <>
+              <label htmlFor="card-body">卡片正文</label>
+              <textarea
+                id="card-body"
+                readOnly={historyBlocked}
+                value={
+                  draftView[draftKey(state!.project.id, currentBody.id, "body")]
+                    ?.value ?? currentBody.body.blocks[0]!.text
+                }
+                onChange={(e) =>
+                  change("body", currentBody, e.target.value, {
+                    inputType: (e.nativeEvent as InputEvent).inputType,
+                    start: e.target.selectionStart,
+                    end: e.target.selectionEnd,
+                  })
+                }
+                onSelect={(e) => {
+                  const group = bodyGroup.current;
+                  if (
+                    !composition.current &&
+                    group &&
+                    (e.currentTarget.selectionStart !== group.start ||
+                      e.currentTarget.selectionEnd !== group.end)
+                  )
+                    breakBodyGroup();
+                }}
+                onCompositionStart={() => compose(true)}
+                onCompositionEnd={() => compose(false)}
+                onBlur={() => {
+                  breakBodyGroup();
+                  void flush();
+                }}
+                placeholder="写下你的想法…"
+              />
+            </>
+          )}
         </aside>
       )}
       {pose.conflict && !conflict && (
@@ -954,7 +1089,9 @@ function Workspace() {
         </span>
         {(error || pose.error) && (
           <>
-            <span role="alert">{pose.error || error}</span>
+            <span role="alert">
+              {[error, pose.error].filter(Boolean).join("；")}
+            </span>
             <button
               disabled={busy || !!conflict || !!pose.conflict}
               onClick={() => {

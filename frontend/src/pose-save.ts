@@ -9,9 +9,14 @@ import {
 
 type Position = { x: number; y: number };
 type Move = Extract<Command, { type: "pose.move" }>;
+export interface MoveOrder {
+  beforeSubmit: () => Promise<boolean>;
+  afterAttempt: () => void;
+}
 interface Pending {
   itemId: string;
   command: Move;
+  order?: MoveOrder;
 }
 
 // Pose has its own in-flight command. Body ACKs cannot own or clear this draft.
@@ -39,7 +44,13 @@ export function usePoseSave(
     if (!current) return true;
     saving.current = (async () => {
       try {
-        await api.execute(current.command);
+        if (current.order && !(await current.order.beforeSubmit()))
+          throw new Error("请先确认此移动之前的正文保存，再重试布局保存");
+        try {
+          await api.execute(current.command);
+        } finally {
+          current.order?.afterAttempt();
+        }
         await refresh(current.command.projectId);
         command.current = null;
         clearPosition(current.itemId);
@@ -67,10 +78,11 @@ export function usePoseSave(
     saving.current = null;
     return result;
   }
-  function start(projectId: string, card: Card) {
+  function start(projectId: string, card: Card, order?: MoveOrder) {
     if (command.current || gesture.current) return false;
     gesture.current = {
       itemId: card.item.id,
+      ...(order ? { order } : {}),
       command: {
         commandId: crypto.randomUUID(),
         projectId,

@@ -526,10 +526,15 @@ test("正文请求在途仍可真实拖动，旧正文确认不覆盖布局或�
     await page.mouse.up();
     // React Flow starts its drag offset after the activation threshold. Verify
     // the actual visible world position, not an assumed pointer delta.
-    await expect
-      .poll(async () => (await read()).cards[0].item.pose.y)
-      .toBeGreaterThan(before.cards[0].item.pose.y + 60);
-    const moved = (await read()).cards[0].item.pose;
+    const moved = await page.locator(".react-flow__node").evaluate((node) => {
+      const matrix = new DOMMatrix(getComputedStyle(node).transform);
+      return { x: matrix.m41, y: matrix.m42 };
+    });
+    expect(moved.y).toBeGreaterThan(before.cards[0].item.pose.y + 60);
+    // The visible drag is immediate; its persistent write waits for prior input.
+    expect((await read()).cards[0].item.pose).toEqual(
+      before.cards[0].item.pose,
+    );
     await expect(page.locator(".react-flow__node")).toHaveCSS(
       "transform",
       `matrix(1, 0, 0, 1, ${moved.x}, ${moved.y})`,
@@ -542,7 +547,7 @@ test("正文请求在途仍可真实拖动，旧正文确认不覆盖布局或�
     await expect(page.getByRole("status")).toHaveText("已保存到本机");
     const after = await read();
     expect(after.cards[0].body.blocks[0].text).toBe("正在写正文，继续输入");
-    expect(after.cards[0].item.pose).toEqual(moved);
+    expect(after.cards[0].item.pose).toMatchObject(moved);
     expect(moved.x).toBeLessThan(before.cards[0].item.pose.x - 60);
     await page.reload();
     await page.getByRole("button", { name: "编辑正文" }).click();
@@ -565,6 +570,10 @@ test("布局回读不替换正文草稿的起始版本，同正文冲突保留�
   await openWorkspace(page);
   const projectId = await newCard(page);
   const body = page.getByLabel("卡片正文", { exact: true });
+  const before = await page.evaluate(
+    async (id) => (await fetch("/api/mapping/projects/" + id)).json(),
+    projectId,
+  );
   // Synthetic composition events test save coordination; this is not a real IME test.
   await body.dispatchEvent("compositionstart");
   await body.fill("我的待保存正文");
@@ -588,16 +597,18 @@ test("布局回读不替换正文草稿的起始版本，同正文冲突保留�
   await page
     .getByRole("button", { name: "移动卡片：方向键调整位置" })
     .press("ArrowRight");
-  await expect
-    .poll(() =>
-      page.evaluate(
-        async (id) =>
-          (await (await fetch("/api/mapping/projects/" + id)).json()).project
-            .revision,
+  await expect(page.locator(".react-flow__node")).toHaveCSS(
+    "transform",
+    `matrix(1, 0, 0, 1, ${before.cards[0].item.pose.x + 10}, ${before.cards[0].item.pose.y})`,
+  );
+  expect(
+    (
+      await page.evaluate(
+        async (id) => (await fetch("/api/mapping/projects/" + id)).json(),
         projectId,
-      ),
-    )
-    .toBeGreaterThan(4);
+      )
+    ).cards[0].item.pose,
+  ).toEqual(before.cards[0].item.pose);
   await body.dispatchEvent("compositionend");
   await expect(page.getByRole("alert")).toContainText("正文已更新");
   await expect(body).toHaveValue("我的待保存正文");
@@ -611,6 +622,7 @@ test("布局回读不替换正文草稿的起始版本，同正文冲突保留�
     projectId,
   );
   expect(current.cards[0].body.blocks[0].text).toBe("我的待保存正文");
+  expect(current.cards[0].item.pose.x).toBe(before.cards[0].item.pose.x + 10);
   await page.reload();
   await page.getByRole("button", { name: "编辑正文" }).click();
   await expect(body).toHaveValue("我的待保存正文");
@@ -1102,4 +1114,553 @@ test("H4 待确认期间连续结束多个正文组，撤销按每组原值恢�
     ack.release();
     await page.unrouteAll({ behavior: "wait" });
   }
+});
+
+test("R2 no-op标题ACK不借回读版本静默覆盖并发标题", async ({
+  page,
+}, testInfo) => {
+  await openWorkspace(page);
+  const projectId = await newCard(page);
+  await page.getByRole("button", { name: "初始标题", exact: true }).click();
+  const title = page.getByLabel("卡片标题", { exact: true });
+  const read = () =>
+    page.evaluate(
+      async (id) => (await fetch("/api/mapping/projects/" + id)).json(),
+      projectId,
+    );
+  const initial = await read();
+  const card = initial.cards[0];
+  const ack = gate();
+  let noOpWritten = false;
+  let first = true;
+  const commands: { value: string; expected: string }[] = [];
+  await page.route("**/api/mapping/execute", async (route) => {
+    const command = route.request().postDataJSON();
+    if (command.type === "thought.title")
+      commands.push({
+        value: command.payload.title,
+        expected: command.expected,
+      });
+    if (
+      command.type !== "thought.title" ||
+      command.payload.title !== "初始标题" ||
+      !first
+    )
+      return route.continue();
+    first = false;
+    const response = await route.fetch();
+    expect((await response.json()).changedIds).toEqual([]);
+    noOpWritten = true;
+    await ack.promise;
+    await route.fulfill({ response });
+  });
+  try {
+    await title.fill("临时标题");
+    await title.fill("初始标题");
+    await expect.poll(() => noOpWritten).toBe(true);
+    await title.fill("本地后续B");
+    const remote = await page.evaluate(
+      async ({ projectId, card }) => {
+        const response = await fetch("/api/mapping/execute", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            commandId: crypto.randomUUID(),
+            projectId,
+            type: "thought.title",
+            expected: card.versionId,
+            payload: { id: card.id, title: "另一调用者C" },
+          }),
+        });
+        return response.json();
+      },
+      { projectId, card },
+    );
+    expect(remote.changedIds).toEqual([card.id]);
+    ack.release();
+    await expect(page.getByRole("alert")).toContainText("标题已更新");
+    await expect(title).toHaveValue("本地后续B");
+    await expect(page.getByLabel("已保存的标题")).toHaveValue("另一调用者C");
+    expect((await read()).cards[0].title).toBe("另一调用者C");
+    expect(commands.find((c) => c.value === "本地后续B")!.expected).toBe(
+      card.versionId,
+    );
+    await testInfo.attach("no-op-ack-versions", {
+      body: JSON.stringify({ commands, remote }),
+      contentType: "application/json",
+    });
+  } finally {
+    ack.release();
+    await page.unrouteAll({ behavior: "wait" });
+  }
+});
+for (const lostAck of [false, true]) {
+  test(`R2 no-op正文${lostAck ? "丢ACK重试" : "延迟ACK"}保持原版本与待确认输入组`, async ({
+    page,
+  }) => {
+    await openWorkspace(page);
+    const projectId = await newCard(page);
+    const body = page.getByLabel("卡片正文", { exact: true });
+    await body.fill("原正文A");
+    await expect(page.getByRole("status")).toHaveText("已保存到本机");
+    const initial = await page.evaluate(
+      async (id) => (await fetch("/api/mapping/projects/" + id)).json(),
+      projectId,
+    );
+    const card = initial.cards[0];
+    const ack = gate();
+    let noOpWritten = false;
+    let first = true;
+    const submitted: { value: string; expected: string; commandId: string }[] =
+      [];
+    await page.route("**/api/mapping/execute", async (route) => {
+      const c = route.request().postDataJSON();
+      if (c.type === "body.edit")
+        submitted.push({
+          value: c.payload.text,
+          expected: c.expected,
+          commandId: c.commandId,
+        });
+      if (c.type !== "body.edit" || c.payload.text !== "原正文A" || !first)
+        return route.continue();
+      first = false;
+      const response = await route.fetch();
+      expect((await response.json()).changedIds).toEqual([]);
+      noOpWritten = true;
+      await ack.promise;
+      if (lostAck)
+        await route.fulfill({
+          status: 503,
+          contentType: "application/json",
+          body: JSON.stringify({ message: "测试丢失无变化确认" }),
+        });
+      else await route.fulfill({ response });
+    });
+    try {
+      await body.fill("临时正文");
+      await body.fill("原正文A");
+      await expect.poll(() => noOpWritten).toBe(true);
+      await body.press("End");
+      await body.pressSequentially("B");
+      await body.press("Home");
+      await body.pressSequentially("X");
+      const local = await body.inputValue();
+      await page.evaluate(
+        async ({ projectId, card }) => {
+          const r = await fetch("/api/mapping/execute", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              commandId: crypto.randomUUID(),
+              projectId,
+              type: "body.edit",
+              expected: card.body.versionId,
+              payload: { id: card.id, text: "另一调用者正文C" },
+            }),
+          });
+          if (!r.ok) throw new Error("Remote write failed");
+        },
+        { projectId, card },
+      );
+      ack.release();
+      if (lostAck) {
+        await expect(page.getByRole("alert")).toHaveText("测试丢失无变化确认");
+        await page.getByRole("button", { name: "重试保存" }).click();
+        const retries = submitted.filter((c) => c.value === "原正文A");
+        expect(retries).toHaveLength(2);
+        expect(retries[0]!.commandId).toBe(retries[1]!.commandId);
+      }
+      await expect(page.getByRole("alert")).toContainText("正文已更新");
+      await expect(body).toHaveValue(local);
+      await expect(page.getByLabel("已保存的正文")).toHaveValue(
+        "另一调用者正文C",
+      );
+      const after = await page.evaluate(
+        async (id) => (await fetch("/api/mapping/projects/" + id)).json(),
+        projectId,
+      );
+      expect(after.cards[0].body.blocks[0].text).toBe("另一调用者正文C");
+      expect(submitted.find((c) => c.value === "原正文AB")!.expected).toBe(
+        card.body.versionId,
+      );
+    } finally {
+      ack.release();
+      await page.unrouteAll({ behavior: "wait" });
+    }
+  });
+}
+test("R2 已落盘正文ACK延迟时后续输入先于方向键移动入历史", async ({
+  page,
+}, testInfo) => {
+  await openWorkspace(page);
+  const projectId = await newCard(page);
+  const body = page.getByLabel("卡片正文", { exact: true });
+  const read = () =>
+    page.evaluate(
+      async (id) => (await fetch("/api/mapping/projects/" + id)).json(),
+      projectId,
+    );
+  const original = (await read()).cards[0];
+  const ack = gate();
+  let written = false;
+  let first = true;
+  await page.route("**/api/mapping/execute", async (route) => {
+    const c = route.request().postDataJSON();
+    if (c.type !== "body.edit" || c.payload.text !== "A" || !first)
+      return route.continue();
+    first = false;
+    const response = await route.fetch();
+    written = true;
+    await ack.promise;
+    await route.fulfill({ response });
+  });
+  try {
+    await body.pressSequentially("A");
+    await expect.poll(() => written).toBe(true);
+    expect((await read()).cards[0].body.blocks[0].text).toBe("A");
+    await body.pressSequentially("B");
+    await page
+      .getByRole("button", { name: "移动卡片：方向键调整位置" })
+      .press("ArrowRight");
+    await expect(page.locator(".react-flow__node")).toHaveCSS(
+      "transform",
+      `matrix(1, 0, 0, 1, ${original.item.pose.x + 10}, ${original.item.pose.y})`,
+    );
+    ack.release();
+    await expect(page.getByRole("status")).toHaveText("已保存到本机");
+    const history = await historyState(page);
+    const persisted = await read();
+    await testInfo.attach("ordered-body-pose", {
+      body: JSON.stringify({ history, persisted }),
+      contentType: "application/json",
+    });
+    expect(history.undo.map((a: { label: string }) => a.label)).toEqual([
+      "thought.create",
+      "body.edit",
+      "pose.move",
+    ]);
+    await page.getByRole("button", { name: "撤销", exact: true }).click();
+    await expect(body).toHaveValue("AB");
+    await expect
+      .poll(async () => (await read()).cards[0].item.pose)
+      .toEqual(original.item.pose);
+    await expect(
+      page.getByRole("button", { name: "撤销", exact: true }),
+    ).toBeEnabled();
+    await page.getByRole("button", { name: "撤销", exact: true }).click();
+    await expect(body).toHaveValue("");
+  } finally {
+    ack.release();
+    await page.unrouteAll({ behavior: "wait" });
+  }
+});
+for (const lostAck of [false, true]) {
+  test(`R2 已落盘正文${lostAck ? "丢ACK重试" : "迟ACK在拖动中返回"}不改变可见位置且正文先于布局`, async ({
+    page,
+  }) => {
+    await openWorkspace(page);
+    const projectId = await newCard(page);
+    const body = page.getByLabel("卡片正文", { exact: true });
+    const read = () =>
+      page.evaluate(
+        async (id) => (await fetch("/api/mapping/projects/" + id)).json(),
+        projectId,
+      );
+    const before = (await read()).cards[0];
+    const ack = gate();
+    let written = false;
+    let first = true;
+    const bodyKeys: string[] = [];
+    await page.route("**/api/mapping/execute", async (route) => {
+      const c = route.request().postDataJSON();
+      if (c.type === "body.edit" && c.payload.text === "A")
+        bodyKeys.push(c.commandId);
+      if (c.type !== "body.edit" || c.payload.text !== "A" || !first)
+        return route.continue();
+      first = false;
+      const response = await route.fetch();
+      written = true;
+      await ack.promise;
+      if (lostAck)
+        await route.fulfill({
+          status: 503,
+          contentType: "application/json",
+          body: JSON.stringify({ message: "测试丢失移动前正文确认" }),
+        });
+      else await route.fulfill({ response });
+    });
+    try {
+      await body.pressSequentially("A");
+      await expect.poll(() => written).toBe(true);
+      expect((await read()).cards[0].body.blocks[0].text).toBe("A");
+      await body.pressSequentially("B");
+      const box = (await page.locator(".thought-card").boundingBox())!;
+      await page.mouse.move(box.x + box.width - 15, box.y + 12);
+      await page.mouse.down();
+      await page.mouse.move(box.x + box.width - 95, box.y + 92, { steps: 12 });
+      const transform = await page
+        .locator(".react-flow__node")
+        .evaluate((n) => getComputedStyle(n).transform);
+      expect(transform).not.toBe(
+        `matrix(1, 0, 0, 1, ${before.item.pose.x}, ${before.item.pose.y})`,
+      );
+      if (!lostAck) {
+        ack.release();
+        await expect
+          .poll(async () => (await read()).cards[0].body.blocks[0].text)
+          .toBe("AB");
+        await expect(page.locator(".react-flow__node")).toHaveCSS(
+          "transform",
+          transform,
+        );
+      }
+      await page.mouse.up();
+      if (lostAck) {
+        ack.release();
+        await expect(page.getByRole("alert")).toContainText("确认此移动之前");
+        await expect(page.locator(".react-flow__node")).toHaveCSS(
+          "transform",
+          transform,
+        );
+        await page.getByRole("button", { name: "重试保存" }).click();
+      }
+      await expect(page.getByRole("status")).toHaveText("已保存到本机");
+      if (lostAck) {
+        expect(bodyKeys).toHaveLength(2);
+        expect(bodyKeys[0]).toBe(bodyKeys[1]);
+      }
+      expect(
+        (await historyState(page)).undo.map((a: { label: string }) => a.label),
+      ).toEqual(["thought.create", "body.edit", "pose.move"]);
+      await page.getByRole("button", { name: "撤销", exact: true }).click();
+      await expect
+        .poll(async () => (await read()).cards[0].item.pose)
+        .toEqual(before.item.pose);
+      await expect(body).toHaveValue("AB");
+      await expect(
+        page.getByRole("button", { name: "撤销", exact: true }),
+      ).toBeEnabled();
+      await page.getByRole("button", { name: "撤销", exact: true }).click();
+      await expect(body).toHaveValue("");
+    } finally {
+      ack.release();
+      await page.mouse.up();
+      await page.unrouteAll({ behavior: "wait" });
+    }
+  });
+}
+test("R2 撤销创建保留当前写字板删除态并恢复原卡身份", async ({
+  page,
+}, testInfo) => {
+  await openWorkspace(page);
+  const projectId = await newCard(page);
+  const read = () =>
+    page.evaluate(
+      async (id) => (await fetch("/api/mapping/projects/" + id)).json(),
+      projectId,
+    );
+  const original = (await read()).cards[0];
+  await expect(page.locator(".body-editor")).toHaveCount(1);
+  await page.getByRole("button", { name: "撤销", exact: true }).click();
+  await expect(page.locator(".react-flow__node")).toHaveCount(0);
+  await expect(page.locator(".body-editor")).toHaveCount(1);
+  await expect(page.getByText("这张卡片已删除", { exact: true })).toBeVisible();
+  await expect(page.getByLabel("卡片正文", { exact: true })).toHaveCount(0);
+  await expect(page.locator(".body-editor h2")).toHaveText("初始标题");
+  await page.screenshot({ path: testInfo.outputPath("deleted-panel.png") });
+  await page.getByRole("button", { name: "撤销删除", exact: true }).click();
+  await expect(page.getByLabel("卡片正文", { exact: true })).toHaveValue("");
+  const restored = (await read()).cards[0];
+  expect(restored.id).toBe(original.id);
+  expect(restored.body.id).toBe(original.body.id);
+  expect(restored.body.blocks).toEqual(original.body.blocks);
+  expect(restored.item.id).toBe(original.item.id);
+  await expect(page.locator(".body-editor")).toHaveCount(1);
+});
+test("R2 删除恢复预读后发生竞争不会重做无关对象，失效入口诚实停用", async ({
+  page,
+}) => {
+  await openWorkspace(page);
+  const projectId = await newCard(page);
+  await page.getByRole("button", { name: "撤销", exact: true }).click();
+  const restore = page.getByRole("button", { name: "撤销删除", exact: true });
+  await expect(restore).toBeEnabled();
+  const readAck = gate();
+  let captured = false;
+  let first = true;
+  await page.route(
+    `**/api/mapping/projects/${projectId}/history`,
+    async (route) => {
+      if (!first) return route.continue();
+      first = false;
+      const response = await route.fetch();
+      captured = true;
+      await readAck.promise;
+      await route.fulfill({ response });
+    },
+  );
+  try {
+    await restore.click();
+    await expect.poll(() => captured).toBe(true);
+    await page.evaluate(async (projectId) => {
+      const post = async (command: unknown) => {
+        const r = await fetch("/api/mapping/execute", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(command),
+        });
+        if (!r.ok) throw new Error("Concurrent write failed");
+        return r.json();
+      };
+      const created = await post({
+        projectId,
+        commandId: crypto.randomUUID(),
+        type: "thought.create",
+        expected: null,
+        payload: {
+          id: crypto.randomUUID(),
+          title: "不能误恢复的另一张卡",
+          text: "",
+          x: 20,
+          y: 20,
+        },
+      });
+      await post({
+        projectId,
+        commandId: crypto.randomUUID(),
+        type: "history.undo",
+        expected: created.revision,
+        payload: {},
+      });
+    }, projectId);
+    const before = await historyState(page);
+    expect(before.redo.at(-1).target.title).toBe("不能误恢复的另一张卡");
+    readAck.release();
+    await expect(page.getByRole("alert")).toContainText("项目历史已更新");
+    await expect(page.locator(".react-flow__node")).toHaveCount(0);
+    expect(await historyState(page)).toEqual(before);
+    await expect(restore).toBeDisabled();
+    await expect(
+      page.getByText("这次删除的恢复已不可用", { exact: true }),
+    ).toBeVisible();
+    await expect(page.locator(".body-editor h2")).toHaveText("初始标题");
+  } finally {
+    readAck.release();
+    await page.unrouteAll({ behavior: "wait" });
+  }
+});
+for (const written of [false, true]) {
+  test(`R2 删除${written ? "丢ACK" : "失败"}保留当前面板，原命令重试确认后才显示删除态`, async ({
+    page,
+  }) => {
+    await openWorkspace(page);
+    await newCard(page);
+    let first = true;
+    const keys: string[] = [];
+    await page.route("**/api/mapping/execute", async (route) => {
+      const c = route.request().postDataJSON();
+      if (c.type !== "history.undo") return route.continue();
+      keys.push(c.commandId);
+      if (!first) return route.continue();
+      first = false;
+      if (written) await route.fetch();
+      await route.fulfill({
+        status: 503,
+        contentType: "application/json",
+        body: JSON.stringify({ message: "测试未确认删除" }),
+      });
+    });
+    try {
+      await page.getByRole("button", { name: "撤销", exact: true }).click();
+      await expect(page.getByRole("alert")).toHaveText("测试未确认删除");
+      await expect(page.locator(".body-editor")).toHaveCount(1);
+      await expect(
+        page.getByText("这张卡片已删除", { exact: true }),
+      ).toHaveCount(0);
+      await expect(page.getByLabel("卡片正文", { exact: true })).toHaveValue(
+        "",
+      );
+      await page.getByRole("button", { name: "重试保存" }).click();
+      await expect(
+        page.getByText("这张卡片已删除", { exact: true }),
+      ).toBeVisible();
+      expect(keys).toHaveLength(2);
+      expect(keys[0]).toBe(keys[1]);
+      expect((await historyState(page)).redo).toHaveLength(1);
+      await expect(page.locator(".body-editor h2")).toHaveText("初始标题");
+    } finally {
+      await page.unrouteAll({ behavior: "wait" });
+    }
+  });
+}
+test("R2 旧正文no-opACK先确认再撤销创建，不复活删除对象或收起面板", async ({
+  page,
+}) => {
+  await openWorkspace(page);
+  await newCard(page);
+  const body = page.getByLabel("卡片正文", { exact: true });
+  const ack = gate();
+  let saved = false;
+  let first = true;
+  await page.route("**/api/mapping/execute", async (route) => {
+    const c = route.request().postDataJSON();
+    if (c.type !== "body.edit" || !first) return route.continue();
+    first = false;
+    const response = await route.fetch();
+    expect((await response.json()).changedIds).toEqual([]);
+    saved = true;
+    await ack.promise;
+    await route.fulfill({ response });
+  });
+  try {
+    // One synthetic composition keeps both intermediate inputs in one unsaved
+    // unit, so this command really confirms unchanged empty text.
+    await body.dispatchEvent("compositionstart");
+    await body.fill("暂改");
+    await body.fill("");
+    await body.dispatchEvent("compositionend");
+    await expect.poll(() => saved).toBe(true);
+    await body.press("Meta+z");
+    await expect(body).toHaveAttribute("readonly", "");
+    await expect(page.getByText("这张卡片已删除", { exact: true })).toHaveCount(
+      0,
+    );
+    ack.release();
+    await expect(
+      page.getByText("这张卡片已删除", { exact: true }),
+    ).toBeVisible();
+    await expect(page.locator(".react-flow__node")).toHaveCount(0);
+    await expect(page.locator(".body-editor")).toHaveCount(1);
+    await expect(page.getByLabel("卡片正文", { exact: true })).toHaveCount(0);
+    expect((await historyState(page)).redo).toHaveLength(1);
+  } finally {
+    ack.release();
+    await page.unrouteAll({ behavior: "wait" });
+  }
+});
+test("R2 后续研究编辑使原删除恢复失效，另一redo不能复活原卡", async ({
+  page,
+}) => {
+  await openWorkspace(page);
+  await newCard(page);
+  await page.getByRole("button", { name: "撤销", exact: true }).click();
+  await expect(
+    page.getByRole("button", { name: "撤销删除", exact: true }),
+  ).toBeEnabled();
+  await historyCard(page, "新卡片");
+  await expect(
+    page.getByRole("button", { name: "撤销删除", exact: true }),
+  ).toBeDisabled();
+  await expect(page.locator(".body-editor h2")).toHaveText("初始标题");
+  await page.getByRole("button", { name: "撤销", exact: true }).click();
+  await expect(page.locator(".react-flow__node")).toHaveCount(0);
+  expect((await historyState(page)).redo.at(-1).target.title).toBe("新卡片");
+  await expect(
+    page.getByRole("button", { name: "撤销删除", exact: true }),
+  ).toBeDisabled();
+  await expect(
+    page.getByText("这次删除的恢复已不可用", { exact: true }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "关闭正文" }).click();
+  await expect(page.locator(".body-editor")).toHaveCount(0);
 });
