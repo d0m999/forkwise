@@ -108,6 +108,14 @@ function Workspace() {
     saving = useRef<Promise<boolean> | null>(null);
   const flow = useReactFlow();
   const updateState = (value: ProjectState) => {
+    const current = authority.current;
+    // Concurrent action/save readbacks may arrive out of order. Never replace
+    // an acknowledged project revision with an older snapshot.
+    if (
+      current?.project.id === value.project.id &&
+      value.project.revision < current.project.revision
+    )
+      return;
     authority.current = value;
     setState(value);
   };

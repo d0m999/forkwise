@@ -378,3 +378,118 @@ test("等待目标项目读取时仍接收正文输入，完成保存后才交�
     await page.unrouteAll({ behavior: "wait" });
   }
 });
+
+test("创建回读乱序不能回退已保存正文，后续编辑继续成功", async ({
+  page,
+}, testInfo) => {
+  await openWorkspace(page);
+  const projectId = await newCard(page);
+  const body = page.getByLabel("卡片正文", { exact: true });
+  await body.fill("旧正文");
+  await expect(page.getByRole("status")).toHaveText("已保存到本机");
+  const oldRead = gate();
+  let captured = false;
+  let first = true;
+  await page.route(`**/api/mapping/projects/${projectId}`, async (route) => {
+    if (!first) return route.continue();
+    first = false;
+    const response = await route.fetch();
+    captured = true;
+    await oldRead.promise;
+    await route.fulfill({ response });
+  });
+  const read = () =>
+    page.evaluate(
+      async (id) => (await fetch("/api/mapping/projects/" + id)).json(),
+      projectId,
+    );
+  try {
+    await page
+      .getByRole("button", { name: "卡片", exact: true })
+      .press("Enter");
+    await expect.poll(() => captured).toBe(true);
+    await body.fill("已保存的新正文");
+    await expect(page.getByRole("status")).toHaveText("已保存到本机");
+    const before = await read();
+    expect(before.cards[0].body.blocks[0].text).toBe("已保存的新正文");
+    oldRead.release();
+    // The new card's title editor appears only after the create action finishes its readback.
+    await expect(page.getByLabel("卡片标题", { exact: true })).toBeVisible();
+    const after = await read();
+    expect(after.cards[0].body.blocks[0].text).toBe("已保存的新正文");
+    expect(await body.inputValue()).toBe("已保存的新正文");
+    await body.fill("回读乱序后继续输入");
+    await expect(page.getByRole("status")).toHaveText("已保存到本机");
+    await expect(page.getByRole("alert")).toHaveCount(0);
+    expect((await read()).cards[0].body.blocks[0].text).toBe(
+      "回读乱序后继续输入",
+    );
+    await page.screenshot({
+      path: testInfo.outputPath("reordered-read-continued-edit.png"),
+    });
+  } finally {
+    oldRead.release();
+    await page.unrouteAll({ behavior: "wait" });
+  }
+});
+
+test("创建回读到达时保留未确认正文的最新草稿，继续输入后正常保存", async ({
+  page,
+}) => {
+  await openWorkspace(page);
+  const projectId = await newCard(page);
+  const body = page.getByLabel("卡片正文", { exact: true });
+  await body.fill("旧正文");
+  await expect(page.getByRole("status")).toHaveText("已保存到本机");
+  const oldRead = gate(),
+    bodyAck = gate();
+  let captured = false,
+    written = false,
+    first = true;
+  await page.route(`**/api/mapping/projects/${projectId}`, async (route) => {
+    if (!first) return route.continue();
+    first = false;
+    const response = await route.fetch();
+    captured = true;
+    await oldRead.promise;
+    await route.fulfill({ response });
+  });
+  await page.route("**/api/mapping/execute", async (route) => {
+    const command = route.request().postDataJSON();
+    if (command.type !== "body.edit" || command.payload.text !== "正文 A")
+      return route.continue();
+    const response = await route.fetch();
+    written = true;
+    await bodyAck.promise;
+    await route.fulfill({ response });
+  });
+  try {
+    await page
+      .getByRole("button", { name: "卡片", exact: true })
+      .press("Enter");
+    await expect.poll(() => captured).toBe(true);
+    await body.fill("正文 A");
+    await expect.poll(() => written).toBe(true);
+    await body.fill("尚未确认的正文 AB");
+    oldRead.release();
+    // Seeing the second card proves that the refresh reached the real rendered UI.
+    // The body ACK is still held, so this is not a wait-until-saved workaround.
+    await expect(page.locator(".react-flow__node")).toHaveCount(2);
+    await expect(body).toHaveValue("尚未确认的正文 AB");
+    await body.press("End");
+    await body.pressSequentially("C");
+    await expect(body).toHaveValue("尚未确认的正文 ABC");
+    bodyAck.release();
+    await expect(page.getByRole("status")).toHaveText("已保存到本机");
+    await expect(page.getByRole("alert")).toHaveCount(0);
+    const persisted = await page.evaluate(
+      async (id) => (await fetch("/api/mapping/projects/" + id)).json(),
+      projectId,
+    );
+    expect(persisted.cards[0].body.blocks[0].text).toBe("尚未确认的正文 ABC");
+  } finally {
+    oldRead.release();
+    bodyAck.release();
+    await page.unrouteAll({ behavior: "wait" });
+  }
+});
