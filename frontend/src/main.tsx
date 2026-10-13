@@ -20,6 +20,7 @@ import {
   type ProjectState,
 } from "./api";
 import "./style.css";
+import { DraftRecovery, type Draft, type Recovery } from "./draft-recovery";
 import { usePoseSave } from "./pose-save";
 
 type CardData = {
@@ -100,16 +101,6 @@ function ThoughtCard({ data }: NodeProps<Node<CardData>>) {
   );
 }
 const nodeTypes = { thought: ThoughtCard };
-interface Draft {
-  projectId: string;
-  cardId: string;
-  field: "title" | "body";
-  value: string;
-  generation: number;
-  expected: string;
-  command?: Command;
-  editGroup?: string;
-}
 function draftKey(projectId: string, cardId: string, field: Draft["field"]) {
   return JSON.stringify([projectId, cardId, field]);
 }
@@ -141,6 +132,92 @@ function Workspace() {
   const [draftView, setDraftView] = useState<Record<string, Draft>>({}),
     drafts = useRef<Record<string, Draft>>({});
   const unconfirmed = useRef<Draft | null>(null);
+  const recovery = useRef<DraftRecovery | null>(null);
+  const [recoveries, setRecoveries] = useState<
+    { key: string; value: Recovery }[]
+  >([]);
+  const [recoveryError, setRecoveryError] = useState("");
+  const [deletedRecovery, setDeletedRecovery] = useState<{
+    projectId: string;
+    cardId: string;
+    actionId?: string;
+  } | null>(null);
+  function persistDrafts() {
+    try {
+      recovery.current ??= new DraftRecovery();
+      recovery.current.write(
+        Object.values(drafts.current),
+        closedDrafts.current,
+        unconfirmed.current,
+      );
+      setRecoveryError("");
+      return true;
+    } catch {
+      setRecoveryError(
+        "恢复区写入失败，请保留当前页面并重试；未确认输入可能无法在重开后恢复",
+      );
+      return false;
+    }
+  }
+  function scanRecovery() {
+    try {
+      recovery.current ??= new DraftRecovery();
+      setRecoveries(recovery.current.list());
+      if (recovery.current.damaged)
+        setRecoveryError("部分恢复记录损坏，原件已保留；其他草稿仍可恢复");
+    } catch {
+      setRecoveryError("恢复区无法读取，原始草稿已保留");
+    }
+  }
+  async function restoreDraft(entry: { key: string; value: Recovery }) {
+    if (historyBlocked || composition.current || !(await flush())) return;
+    const saved = entry.value;
+    try {
+      const identity = await api.cardIdentity(saved.projectId, saved.cardId);
+      if (identity.availability === "not_found")
+        throw new Error("草稿身份不属于此项目，原件已保留");
+      const latest = await api.project(saved.projectId);
+      const card = latest.cards.find((c) => c.id === saved.cardId);
+      if (!card) {
+        const timeline = await api.history(saved.projectId);
+        const target = timeline.redo.at(-1);
+        setDeletedRecovery({
+          projectId: saved.projectId,
+          cardId: saved.cardId,
+          ...(target?.target.id === saved.cardId &&
+          target.label === "thought.create"
+            ? { actionId: target.id }
+            : {}),
+        });
+        setRecoveryError("这张卡片已删除，恢复草稿已保留，不能自动复活");
+        return;
+      }
+      if (authority.current?.project.id !== saved.projectId) return;
+      updateState(latest);
+      for (const draft of [
+        ...saved.closed,
+        ...saved.drafts,
+        ...(saved.pending ? [saved.pending] : []),
+      ])
+        generation.current = Math.max(generation.current, draft.generation);
+      for (const draft of saved.drafts)
+        drafts.current[draftKey(draft.projectId, draft.cardId, draft.field)] =
+          draft;
+      closedDrafts.current.push(...saved.closed);
+      unconfirmed.current = saved.pending;
+      // Transfer ownership only after the full journal is durable at its new key.
+      if (!persistDrafts()) return;
+      recovery.current!.remove(entry.key);
+      scanRecovery();
+      setDraftView({ ...drafts.current });
+      bodyBinding.current = { projectId: saved.projectId, card };
+      setBodyCard(card.id);
+      setDeletedBody(null);
+      await flush();
+    } catch (e) {
+      fail(e);
+    }
+  }
   const closedDrafts = useRef<Draft[]>([]);
   const bodyGroup = useRef<{
     id: string;
@@ -163,6 +240,7 @@ function Workspace() {
       );
       if (
         draft &&
+        !draft.rejected &&
         draft.generation !== unconfirmed.current?.generation &&
         !closedDrafts.current.some((d) => d.generation === draft.generation)
       )
@@ -170,6 +248,23 @@ function Workspace() {
     }
     bodyGroup.current = null;
   }
+  useEffect(() => {
+    const beforeInput = (event: Event) => {
+      if (
+        !(event.target instanceof HTMLElement) ||
+        event.target.id !== "card-body"
+      )
+        return;
+      const input = event as InputEvent;
+      if (
+        !input.isComposing &&
+        /^(format|insertFromPaste|insertFromDrop)/.test(input.inputType)
+      )
+        breakBodyGroup();
+    };
+    document.addEventListener("beforeinput", beforeInput, true);
+    return () => document.removeEventListener("beforeinput", beforeInput, true);
+  });
   const conflictRef = useRef<{ draft: Draft; remote: Card } | null>(null);
   const [conflict, setConflict] = useState<{
     draft: Draft;
@@ -474,6 +569,7 @@ function Workspace() {
           });
     current.command = command;
     unconfirmed.current = current;
+    persistDrafts();
     setStatus("正在保存…");
     saving.current = (async () => {
       try {
@@ -505,6 +601,7 @@ function Workspace() {
         unconfirmed.current = null;
         if (drafts.current[key]?.generation === current.generation)
           delete drafts.current[key];
+        persistDrafts();
         setDraftView({ ...drafts.current });
         setStatus(
           Object.keys(drafts.current).length ? "等待保存…" : "已保存到本机",
@@ -512,6 +609,22 @@ function Workspace() {
         setError("");
         return true;
       } catch (e) {
+        if (
+          e instanceof MappingError &&
+          ["INVALID_COMMAND", "TOO_LARGE", "MEDIA_NOT_PERSISTED"].includes(
+            e.code,
+          )
+        ) {
+          // These replies explicitly reject before mutation. A corrected draft
+          // may use a new request; transport failures must retain the old one.
+          current.rejected = true;
+          delete current.command;
+          unconfirmed.current = null;
+          closedDrafts.current = closedDrafts.current.filter(
+            (d) => d.generation !== current.generation,
+          );
+          persistDrafts();
+        }
         if (e instanceof MappingError && e.code === "VERSION_CONFLICT") {
           try {
             const latest = await api.project(current.projectId);
@@ -610,44 +723,74 @@ function Workspace() {
             : card.body.versionId),
     };
     drafts.current[draftKey(next.projectId, card.id, field)] = next;
+    persistDrafts();
     setDraftView({ ...drafts.current });
     setStatus("等待保存…");
     scheduleSave();
   }
-  function resolveConflict() {
+  const resolving = useRef(false);
+  async function resolveConflict(choice: "mine" | "remote" = "mine") {
     const current = conflictRef.current;
-    if (!current) return;
-    const { draft, remote } = current;
-    const key = draftKey(draft.projectId, draft.cardId, draft.field);
-    const latest = drafts.current[key] ?? draft;
-    // The other caller's version remains in immutable history. Reapply only
-    // after this explicit choice and only against the version shown here.
-    const next: Draft = {
-      projectId: draft.projectId,
-      cardId: draft.cardId,
-      field: draft.field,
-      value: latest.value,
-      generation: ++generation.current,
-      expected:
-        draft.field === "title" ? remote.versionId : remote.body.versionId,
-    };
-    // Explicit conflict resolution replaces all unsaved groups of this field
-    // with the user's latest chosen value, against the shown remote version.
-    closedDrafts.current = closedDrafts.current.filter(
-      (d) => draftKey(d.projectId, d.cardId, d.field) !== key,
-    );
-    if (draft.field === "body" && bodyGroup.current?.cardId === draft.cardId)
-      bodyGroup.current = null;
-    // This explicit choice is a new action after any already-started move;
-    // never extend that move's captured prefix to include the resolution.
-    drafts.current[key] = next;
-    unconfirmed.current = null;
-    conflictRef.current = null;
-    setConflict(null);
-    setDraftView({ ...drafts.current });
-    void flush().then((ok) => {
-      if (ok && layoutBarrier.current) void pose.flush();
-    });
+    if (!current || resolving.current || composition.current) return;
+    resolving.current = true;
+    try {
+      const { draft, remote } = current;
+      const key = draftKey(draft.projectId, draft.cardId, draft.field);
+      const readback = await api.project(draft.projectId);
+      const checked = readback.cards.find((c) => c.id === draft.cardId);
+      if (!checked) {
+        updateState(readback);
+        throw new Error("这张卡片已删除，冲突草稿已保留");
+      }
+      const version = (card: Card) =>
+        draft.field === "title" ? card.versionId : card.body.versionId;
+      if (version(checked) !== version(remote)) {
+        conflictRef.current = { draft, remote: checked };
+        setConflict(conflictRef.current);
+        throw new Error("已保存内容再次更新，请比较后重新选择");
+      }
+      const latest = drafts.current[key] ?? draft;
+      const remoteValue =
+        draft.field === "title" ? remote.title : remote.body.blocks[0]!.text;
+      recovery.current ??= new DraftRecovery();
+      // A choice may discard many local groups. Preserve the complete alternative
+      // before changing any draft or issuing a version-checked write.
+      recovery.current.archive({
+        projectId: draft.projectId,
+        cardId: draft.cardId,
+        field: draft.field,
+        value: choice === "mine" ? remoteValue : latest.value,
+        expected: version(remote),
+        generation: ++generation.current,
+      });
+      const next: Draft = {
+        projectId: draft.projectId,
+        cardId: draft.cardId,
+        field: draft.field,
+        value: choice === "mine" ? latest.value : remoteValue,
+        generation: ++generation.current,
+        expected: version(remote),
+      };
+      closedDrafts.current = closedDrafts.current.filter(
+        (d) => draftKey(d.projectId, d.cardId, d.field) !== key,
+      );
+      if (draft.field === "body" && bodyGroup.current?.cardId === draft.cardId)
+        bodyGroup.current = null;
+      drafts.current[key] = next;
+      unconfirmed.current = null;
+      conflictRef.current = null;
+      setConflict(null);
+      persistDrafts();
+      scanRecovery();
+      setDraftView({ ...drafts.current });
+      if (await flush()) {
+        if (layoutBarrier.current) void pose.flush();
+      }
+    } catch (e) {
+      fail(e);
+    } finally {
+      resolving.current = false;
+    }
   }
   async function action(command: Command, onDone?: () => void) {
     if (historyLock.current || historyCommand.current) return;
@@ -723,8 +866,11 @@ function Workspace() {
   }
   async function editCard(id: string, field: "title" | "body") {
     if (historyLock.current || historyCommand.current) return;
+    if (composition.current) return;
     breakBodyGroup();
-    if (!(await flush())) return;
+    await flush();
+    // A failed save belongs to the old card; switching the visible editor
+    // never changes that draft's target or its pending command.
     titleGroup.current =
       field === "title" ? { cardId: id, id: crypto.randomUUID() } : null;
     setEditing(field === "title" ? id : null);
@@ -749,7 +895,10 @@ function Workspace() {
           const value = await api.project(first.id);
           if (active) updateState(value);
         }
-        if (active) setStatus("已保存到本机");
+        if (active) {
+          scanRecovery();
+          setStatus("已保存到本机");
+        }
       })
       .catch((e) => {
         if (active) fail(e);
@@ -998,15 +1147,15 @@ function Workspace() {
             </h2>
             <button
               aria-label="关闭正文"
-              onClick={() =>
-                void flush().then((ok) => {
-                  if (ok) {
-                    bodyBinding.current = null;
-                    setDeletedBody(null);
-                    setBodyCard(null);
-                  }
-                })
-              }
+              onClick={() => {
+                if (composition.current) return;
+                breakBodyGroup();
+                persistDrafts();
+                void flush();
+                bodyBinding.current = null;
+                setDeletedBody(null);
+                setBodyCard(null);
+              }}
             >
               关闭
             </button>
@@ -1081,7 +1230,7 @@ function Workspace() {
             已由其他调用者更新
           </h2>
           <p>
-            你的输入仍保留。确认后将保存你的内容，对方版本继续保留在历史中。
+            比较两份内容并明确选择。选择生效前，会先将另一份保存为可恢复副本。
           </p>
           <label>
             已保存的{conflict.draft.field === "body" ? "正文" : "标题"}
@@ -1094,10 +1243,70 @@ function Workspace() {
               }
             />
           </label>
-          <button onClick={resolveConflict}>
+          <label>
+            我的{conflict.draft.field === "body" ? "正文" : "标题"}
+            <textarea
+              readOnly
+              value={
+                draftView[
+                  draftKey(
+                    conflict.draft.projectId,
+                    conflict.draft.cardId,
+                    conflict.draft.field,
+                  )
+                ]?.value ?? conflict.draft.value
+              }
+            />
+          </label>
+          <button onClick={() => void resolveConflict("mine")}>
             确认保留我的{conflict.draft.field === "body" ? "正文" : "标题"}
           </button>
+          <button onClick={() => void resolveConflict("remote")}>
+            确认保留已保存的{conflict.draft.field === "body" ? "正文" : "标题"}
+          </button>
         </section>
+      )}
+      {recoveries.some((r) => r.value.projectId === state?.project.id) && (
+        <section className="recovery-panel" aria-label="草稿恢复">
+          <h2>可恢复草稿</h2>
+          {recoveries
+            .filter((r) => r.value.projectId === state?.project.id)
+            .map((entry) => (
+              <article key={entry.key}>
+                <p>
+                  {state?.cards.find((c) => c.id === entry.value.cardId)
+                    ?.title || "原卡片"}
+                </p>
+                <pre>{entry.value.drafts.map((d) => d.value).join("\n")}</pre>
+                <button onClick={() => void restoreDraft(entry)}>
+                  恢复草稿
+                </button>
+              </article>
+            ))}
+        </section>
+      )}
+      {deletedRecovery?.projectId === state?.project.id &&
+        !state?.cards.some((c) => c.id === deletedRecovery?.cardId) && (
+          <aside className="body-editor" aria-label="已删除卡片">
+            <h2>这张卡片已删除</h2>
+            <p>原草稿仍保留在恢复区。</p>
+            <button
+              disabled={historyBlocked || !deletedRecovery?.actionId}
+              onClick={() => {
+                if (deletedRecovery?.actionId)
+                  void travel("redo", deletedRecovery.actionId);
+              }}
+            >
+              撤销删除
+            </button>
+            {!deletedRecovery?.actionId && <p>这次删除的恢复已不可用</p>}
+            <button onClick={() => setDeletedRecovery(null)}>关闭</button>
+          </aside>
+        )}
+      {recoveryError && (
+        <p className="recovery-error" role="alert">
+          {recoveryError}
+        </p>
       )}
       {historyNotice && (
         <div className="history-notice" aria-live="polite">

@@ -8,6 +8,8 @@ import { requireThat } from '../domain/errors.js';
 import {
   MappingCommand,
   type Card,
+  type CardIdentity,
+  type IdentityQuery,
   type ProjectHistory,
   type Change,
   type Project,
@@ -33,6 +35,7 @@ export class Mapping {
     this.db.close();
   }
 
+  read(query: IdentityQuery, actor: Principal): CardIdentity;
   read(query: { type: 'projects' }, actor: Principal): Project[];
   read(query: { type: 'history'; projectId: string }, actor: Principal): ProjectHistory;
   read(query: { type: 'project'; projectId: string }, actor: Principal): ProjectState;
@@ -42,7 +45,7 @@ export class Mapping {
   read(
     query: ReadQuery,
     actor: Principal,
-  ): Project[] | ProjectState | ProjectHistory | Card['body'] | Card['item'] {
+  ): Project[] | ProjectState | ProjectHistory | Card['body'] | Card['item'] | CardIdentity {
     return this.db.transaction(() => {
       this.access.validate(actor);
       if (query.type === 'projects') {
@@ -58,6 +61,19 @@ export class Mapping {
         );
       }
       this.access.project(actor, query.projectId);
+      if (query.type === 'card.identity') {
+        this.project(query.projectId);
+        const identity = this.db
+          .prepare('SELECT 1 FROM mapping_card_ids WHERE id=? AND project_id=?')
+          .get(query.id, query.projectId);
+        if (!identity) return { availability: 'not_found' as const };
+        const row = this.db
+          .prepare('SELECT value FROM mapping_cards WHERE id=? AND project_id=?')
+          .get(query.id, query.projectId) as { value: string } | undefined;
+        return row
+          ? { availability: 'available' as const, card: JSON.parse(row.value) as Card }
+          : { availability: 'deleted' as const };
+      }
       if (query.type === 'version') {
         const row = this.db
           .prepare(
@@ -119,6 +135,15 @@ export class Mapping {
           );
           return JSON.parse(saved.receipt) as Receipt;
         }
+        // #16 will connect verified immutable assets to this gate. Until then,
+        // a reference is never mistaken for a persisted resource, even on no-op.
+        if (command.type === 'body.edit')
+          requireThat(
+            !command.payload.requiredAssetIds?.length,
+            'MEDIA_NOT_PERSISTED',
+            '所需媒体尚未持久保存，请完成或移除媒体后重试',
+            409,
+          );
         const unchanged = (revision: number): Receipt => {
           interruptGroup(this.db, command, actor.tokenHash);
           const receipt = {

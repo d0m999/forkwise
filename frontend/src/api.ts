@@ -1,4 +1,5 @@
 import type {
+  CardIdentity,
   Command,
   Project,
   ProjectState,
@@ -39,6 +40,10 @@ async function request<T>(path: string, body?: unknown): Promise<T> {
   return result as T;
 }
 export const api = {
+  cardIdentity: (projectId: string, cardId: string) =>
+    request<CardIdentity>(
+      `/projects/${encodeURIComponent(projectId)}/cards/${encodeURIComponent(cardId)}/identity`,
+    ),
   history: (id: string) =>
     request<ProjectHistory>("/projects/" + encodeURIComponent(id) + "/history"),
   projects: () => request<Project[]>("/projects"),

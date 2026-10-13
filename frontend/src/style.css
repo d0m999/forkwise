@@ -391,3 +391,29 @@ button[aria-current="true"] {
   overflow-wrap: anywhere;
   pointer-events: none;
 }
+
+.recovery-panel {
+  position: fixed;
+  z-index: 12;
+  left: 24px;
+  bottom: 64px;
+  max-width: 420px;
+  max-height: 40vh;
+  overflow: auto;
+  background: #fff;
+  border: 1px solid #b89d64;
+  padding: 16px;
+  border-radius: 12px;
+}
+.recovery-panel pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.recovery-error {
+  position: fixed;
+  bottom: 42px;
+  left: 24px;
+  z-index: 15;
+  background: #fff1de;
+  padding: 8px;
+}

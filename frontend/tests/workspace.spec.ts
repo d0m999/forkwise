@@ -2106,3 +2106,414 @@ test("R2 后续研究编辑使原删除恢复失效，另一redo不能复活原�
   await page.getByRole("button", { name: "关闭正文" }).click();
   await expect(page.locator(".body-editor")).toHaveCount(0);
 });
+
+test("D5 保存失败继续输入，刷新从原卡恢复最新草稿并真实落盘", async ({
+  page,
+}) => {
+  await openWorkspace(page);
+  await page.getByRole("button", { name: "新建研究", exact: true }).click();
+  await historyCard(page, "恢复原卡");
+  await page.getByRole("button", { name: "编辑正文" }).click();
+  const initial = await draftProject(page);
+  const card = initial.cards[0]!;
+  await page.route("**/api/mapping/execute", async (route) => {
+    if (route.request().postDataJSON().type === "body.edit")
+      await route.abort();
+    else await route.continue();
+  });
+  const body = page.getByLabel("卡片正文", { exact: true });
+  await body.fill("未确认第一稿");
+  await expect(page.getByRole("alert")).toBeVisible();
+  await body.fill("失败后继续写的最新草稿");
+  await page.reload();
+  await expect(
+    page.getByRole("button", { name: "恢复草稿", exact: true }),
+  ).toBeVisible();
+  await page.unroute("**/api/mapping/execute");
+  await page.getByRole("button", { name: "恢复草稿", exact: true }).click();
+  await expect(body).toHaveValue("失败后继续写的最新草稿");
+  await expect(page.getByRole("status")).toHaveText("已保存到本机");
+  expect(
+    (await draftProject(page)).cards.find((c: Card) => c.id === card.id)?.body
+      .blocks[0].text,
+  ).toBe("失败后继续写的最新草稿");
+  await page.reload();
+  await expect(
+    page.getByRole("button", { name: "恢复草稿", exact: true }),
+  ).toHaveCount(0);
+});
+
+async function draftProject(page: Page) {
+  return page.evaluate(async () => {
+    const id = document
+      .querySelector("[role=tab][aria-selected=true]")!
+      .getAttribute("title");
+    return (await fetch(`/api/mapping/projects/${id}`)).json();
+  });
+}
+
+test("D5 损坏恢复条目不阻断有效草稿，原始损坏内容保留", async ({ page }) => {
+  await openWorkspace(page);
+  await page.getByRole("button", { name: "新建研究", exact: true }).click();
+  await historyCard(page, "损坏隔离");
+  await page.getByRole("button", { name: "编辑正文" }).click();
+  await page.route("**/api/mapping/execute", (r) => r.abort());
+  await page.getByLabel("卡片正文", { exact: true }).fill("有效草稿");
+  await page.evaluate(() =>
+    localStorage.setItem("forkwise:recovery:v1:broken", "{broken"),
+  );
+  await page.reload();
+  await expect(
+    page.getByText("部分恢复记录损坏，原件已保留；其他草稿仍可恢复"),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "恢复草稿", exact: true }),
+  ).toBeVisible();
+  await page.unroute("**/api/mapping/execute");
+  await page.getByRole("button", { name: "恢复草稿", exact: true }).click();
+  await expect(page.getByLabel("卡片正文", { exact: true })).toHaveValue(
+    "有效草稿",
+  );
+  expect(
+    await page.evaluate(() =>
+      localStorage.getItem("forkwise:recovery:v1:broken"),
+    ),
+  ).toBe("{broken");
+});
+
+async function externalBody(page: Page, text: string) {
+  const state = await draftProject(page);
+  const card = state.cards[0];
+  const response = await page.request.post(origin + "/api/mapping/execute", {
+    headers: { Origin: origin },
+    data: {
+      commandId: crypto.randomUUID(),
+      projectId: state.project.id,
+      type: "body.edit",
+      expected: card.body.versionId,
+      payload: { id: card.id, text },
+    },
+  });
+  expect(response.ok()).toBe(true);
+}
+test("D5 冲突明确选择已保存正文，另一份先持久保存且重开可恢复", async ({
+  page,
+}) => {
+  await openWorkspace(page);
+  await newCard(page);
+  const body = page.getByLabel("卡片正文", { exact: true });
+  await body.dispatchEvent("compositionstart");
+  await body.fill("我的冲突草稿");
+  await externalBody(page, "外部已保存正文");
+  await body.dispatchEvent("compositionend");
+  await expect(page.getByLabel("保存冲突")).toBeVisible();
+  await page.getByRole("button", { name: "确认保留已保存的正文" }).click();
+  await expect(body).toHaveValue("外部已保存正文");
+  await expect(page.getByRole("status")).toHaveText("已保存到本机");
+  await page.reload();
+  await expect(page.getByLabel("草稿恢复")).toContainText("我的冲突草稿");
+  expect((await draftProject(page)).cards[0].body.blocks[0].text).toBe(
+    "外部已保存正文",
+  );
+});
+
+test("D5 关闭失败正文仍收起面板，切卡后重试只保存原卡", async ({ page }) => {
+  await openWorkspace(page);
+  await newCard(page);
+  const first = (await draftProject(page)).cards[0];
+  await page.getByRole("button", { name: "关闭正文" }).click();
+  await historyCard(page, "另一张卡");
+  const nodes = page.locator(".react-flow__node");
+  await nodes.first().getByRole("button", { name: "编辑正文" }).press("Enter");
+  await page.route("**/api/mapping/execute", async (r) => {
+    if (r.request().postDataJSON().type === "body.edit") await r.abort();
+    else await r.continue();
+  });
+  await page.getByLabel("卡片正文", { exact: true }).fill("原卡失败草稿");
+  await expect(page.getByRole("alert")).toBeVisible();
+  await page.getByRole("button", { name: "关闭正文" }).click();
+  await expect(page.getByLabel("卡片正文", { exact: true })).toHaveCount(0);
+  await nodes.last().getByRole("button", { name: "编辑正文" }).click();
+  await expect(page.getByLabel("卡片正文", { exact: true })).toHaveValue("");
+  await page.unroute("**/api/mapping/execute");
+  await page.getByRole("button", { name: "重试保存" }).click();
+  await expect(page.getByRole("status")).toHaveText("已保存到本机");
+  const saved = await draftProject(page);
+  expect(
+    saved.cards.find((c: Card) => c.id === first.id).body.blocks[0].text,
+  ).toBe("原卡失败草稿");
+  expect(saved.cards[1].body.blocks[0].text).toBe("");
+});
+
+test("D5 删除目标恢复入口显示删除态，保留草稿且不复活", async ({ page }) => {
+  await openWorkspace(page);
+  await newCard(page);
+  const state = await draftProject(page);
+  await page.route("**/api/mapping/execute", async (r) => {
+    if (r.request().postDataJSON().type === "body.edit") await r.abort();
+    else await r.continue();
+  });
+  await page.getByLabel("卡片正文", { exact: true }).fill("删除后仍可查的草稿");
+  await expect(page.getByRole("alert")).toBeVisible();
+  const timeline = await historyState(page);
+  const deleted = await page.request.post(origin + "/api/mapping/execute", {
+    headers: { Origin: origin },
+    data: {
+      commandId: crypto.randomUUID(),
+      projectId: state.project.id,
+      type: "history.undo",
+      expected: timeline.revision,
+      payload: {},
+    },
+  });
+  expect(deleted.ok()).toBe(true);
+  await page.reload();
+  await page.unroute("**/api/mapping/execute");
+  await page.getByRole("button", { name: "恢复草稿", exact: true }).click();
+  await expect(page.getByLabel("已删除卡片")).toBeVisible();
+  await expect(page.getByLabel("草稿恢复")).toContainText("删除后仍可查的草稿");
+  expect((await draftProject(page)).cards).toHaveLength(0);
+});
+
+test("D5 明确校验失败后修正输入提交最新草稿，不死循环旧无效请求", async ({
+  page,
+}) => {
+  await openWorkspace(page);
+  await newCard(page);
+  const body = page.getByLabel("卡片正文", { exact: true });
+  await body.fill("x".repeat(200001));
+  await expect(page.getByRole("alert")).toContainText("保存请求格式无效");
+  await body.fill("修正后的可保存正文");
+  await page.getByRole("button", { name: "重试保存" }).click();
+  await expect(page.getByRole("status")).toHaveText("已保存到本机");
+  expect((await draftProject(page)).cards[0].body.blocks[0].text).toBe(
+    "修正后的可保存正文",
+  );
+});
+
+test("D5 SQLite已提交但丢ACK，重开先原请求重试再保存新generation", async ({
+  page,
+}) => {
+  await openWorkspace(page);
+  const projectId = await newCard(page);
+  let original: unknown;
+  await page.route("**/api/mapping/execute", async (route) => {
+    const cmd = route.request().postDataJSON();
+    if (cmd.type !== "body.edit") {
+      await route.continue();
+      return;
+    }
+    original ??= cmd;
+    await route.fetch();
+    await route.abort();
+  });
+  const body = page.getByLabel("卡片正文", { exact: true });
+  await body.fill("已落盘但未确认");
+  await expect(page.getByRole("alert")).toBeVisible();
+  await body.fill("后来继续输入");
+  await page.reload();
+  await page.unroute("**/api/mapping/execute");
+  const replay: unknown[] = [];
+  await page.route("**/api/mapping/execute", async (route) => {
+    replay.push(route.request().postDataJSON());
+    await route.continue();
+  });
+  await page.getByRole("button", { name: "恢复草稿", exact: true }).click();
+  await expect(body).toHaveValue("后来继续输入");
+  await expect(page.getByRole("status")).toHaveText("已保存到本机");
+  expect(replay[0]).toEqual(original);
+  const changes = await (
+    await page.request.get(
+      origin + `/api/mapping/projects/${projectId}/changes?after=0`,
+    )
+  ).json();
+  expect(
+    changes.changes.filter(
+      (c: { commandId: string }) =>
+        c.commandId === (original as { commandId: string }).commandId,
+    ),
+  ).toHaveLength(1);
+});
+
+test("D5 真实localStorage容量耗尽时保留两份，释放容量后才允许冲突选择", async ({
+  page,
+}, testInfo) => {
+  await openWorkspace(page);
+  await newCard(page);
+  const body = page.getByLabel("卡片正文", { exact: true });
+  await body.dispatchEvent("compositionstart");
+  await body.fill("必须保护的本机草稿");
+  await externalBody(page, "必须保护的远端正文");
+  await body.dispatchEvent("compositionend");
+  await expect(page.getByLabel("保存冲突")).toBeVisible();
+  const full = await page.evaluate(() => {
+    let i = 0,
+      failed = false;
+    for (const size of [100000, 1000, 10, 1]) {
+      try {
+        for (;;) localStorage.setItem("quota-" + i++, "x".repeat(size));
+      } catch (e) {
+        failed = (e as DOMException).name === "QuotaExceededError";
+      }
+    }
+    return failed;
+  });
+  expect(full).toBe(true);
+  await body.fill("写满后仍继续输入".repeat(100));
+  await expect(page.getByText(/恢复区写入失败/)).toBeVisible();
+  await page.getByRole("button", { name: "确认保留我的正文" }).click();
+  await expect(
+    page
+      .getByRole("alert")
+      .filter({ hasText: "无法保存另一份恢复副本，请释放本机空间后重试" }),
+  ).toBeVisible();
+  await expect(page.getByLabel("保存冲突")).toBeVisible();
+  expect((await draftProject(page)).cards[0].body.blocks[0].text).toBe(
+    "必须保护的远端正文",
+  );
+  await expect(body).toHaveValue("写满后仍继续输入".repeat(100));
+  await page.screenshot({ path: testInfo.outputPath("quota-preserved.png") });
+  await page.evaluate(() => {
+    for (const key of Object.keys(localStorage))
+      if (key.startsWith("quota-")) localStorage.removeItem(key);
+  });
+  await page.getByRole("button", { name: "确认保留我的正文" }).click();
+  await expect(page.getByRole("status")).toHaveText("已保存到本机");
+  await page.reload();
+  await expect(page.getByLabel("草稿恢复")).toContainText("必须保护的远端正文");
+});
+
+test("D5 比较后远端再次变化必须重新选择，跨项目身份伪造不执行", async ({
+  page,
+}) => {
+  await openWorkspace(page);
+  await newCard(page);
+  const body = page.getByLabel("卡片正文", { exact: true });
+  await body.dispatchEvent("compositionstart");
+  await body.fill("我的正文");
+  await externalBody(page, "远端一");
+  await body.dispatchEvent("compositionend");
+  await expect(page.getByLabel("已保存的正文")).toHaveValue("远端一");
+  await externalBody(page, "远端二");
+  await page.getByRole("button", { name: "确认保留我的正文" }).click();
+  await expect(page.getByLabel("已保存的正文")).toHaveValue("远端二");
+  expect((await draftProject(page)).cards[0].body.blocks[0].text).toBe(
+    "远端二",
+  );
+  await page.getByRole("button", { name: "确认保留我的正文" }).click();
+  await expect(page.getByRole("status")).toHaveText("已保存到本机");
+  const state = await draftProject(page);
+  await page.evaluate(
+    ({ projectId }) => {
+      localStorage.setItem(
+        "forkwise:recovery:v1:forged",
+        JSON.stringify({
+          schema: 1,
+          projectId,
+          cardId: "other-project-card",
+          drafts: [
+            {
+              projectId,
+              cardId: "other-project-card",
+              field: "body",
+              value: "不能写入",
+              expected: "forged",
+              generation: 1,
+            },
+          ],
+          closed: [],
+          pending: null,
+        }),
+      );
+    },
+    { projectId: state.project.id },
+  );
+  await page.reload();
+  await page
+    .getByLabel("草稿恢复")
+    .locator("article")
+    .filter({ hasText: "不能写入" })
+    .getByRole("button")
+    .click();
+  await expect(page.getByRole("alert")).toContainText("草稿身份不属于此项目");
+  expect((await draftProject(page)).cards).toEqual(state.cards);
+});
+
+test("D5 synthetic格式边界结束动作组但不虚构格式内容", async ({ page }) => {
+  await openWorkspace(page);
+  await newCard(page);
+  const body = page.getByLabel("卡片正文", { exact: true });
+  await body.pressSequentially("A");
+  await body.evaluate((el) =>
+    el.dispatchEvent(
+      new InputEvent("beforeinput", { bubbles: true, inputType: "formatBold" }),
+    ),
+  );
+  await body.pressSequentially("B");
+  await body.press("Meta+z");
+  await expect(body).toHaveValue("A");
+});
+
+test("D5 400ms落盘与1s分组独立，长synthetic IME不被2s拆分", async ({
+  page,
+}) => {
+  await openWorkspace(page);
+  await newCard(page);
+  const clockStart = Date.now();
+  await page.clock.install({ time: clockStart });
+  await page.clock.pauseAt(clockStart + 1000);
+  const body = page.getByLabel("卡片正文", { exact: true });
+  await body.pressSequentially("A");
+  await page.clock.runFor(399);
+  expect((await draftProject(page)).cards[0].body.blocks[0].text).toBe("");
+  await page.clock.runFor(1);
+  await expect
+    .poll(async () => (await draftProject(page)).cards[0].body.blocks[0].text)
+    .toBe("A");
+  await page.clock.runFor(200);
+  await body.pressSequentially("B");
+  await page.clock.runFor(400);
+  await expect
+    .poll(async () => (await draftProject(page)).cards[0].body.blocks[0].text)
+    .toBe("AB");
+  expect((await historyState(page)).undo).toHaveLength(2);
+  await page.clock.runFor(1100);
+  await body.pressSequentially("C");
+  await page.clock.runFor(400);
+  await expect.poll(async () => (await historyState(page)).undo.length).toBe(3);
+  await body.dispatchEvent("compositionstart");
+  await body.fill("ABC中文组合");
+  await page.clock.runFor(2500);
+  expect((await draftProject(page)).cards[0].body.blocks[0].text).toBe("ABC");
+  await body.dispatchEvent("compositionend");
+  await page.clock.runFor(400);
+  await expect
+    .poll(async () => (await draftProject(page)).cards[0].body.blocks[0].text)
+    .toBe("ABC中文组合");
+  await body.press("Meta+z");
+  await expect(body).toHaveValue("ABC");
+});
+
+test("D5 synthetic粘贴边界和真实焦点边界各自可撤销", async ({ page }) => {
+  await openWorkspace(page);
+  await newCard(page);
+  const body = page.getByLabel("卡片正文", { exact: true });
+  await body.pressSequentially("A");
+  await body.evaluate((el) =>
+    el.dispatchEvent(
+      new InputEvent("beforeinput", {
+        bubbles: true,
+        inputType: "insertFromPaste",
+      }),
+    ),
+  );
+  await body.pressSequentially("P");
+  await body.press("Meta+z");
+  await expect(body).toHaveValue("A");
+  await body.press("Meta+Shift+z");
+  await expect(body).toHaveValue("AP");
+  await page.getByRole("button", { name: "项目导航" }).focus();
+  await body.pressSequentially("B");
+  await body.press("Meta+z");
+  await expect(body).toHaveValue("AP");
+});

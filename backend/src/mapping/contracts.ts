@@ -66,7 +66,13 @@ export const MappingCommand = z.discriminatedUnion('type', [
       type: z.literal('body.edit'),
       editGroup: Id.optional(),
       expected: Id,
-      payload: z.object({ id: Id, text: z.string().max(200000) }).strict(),
+      payload: z
+        .object({
+          id: Id,
+          text: z.string().max(200000),
+          requiredAssetIds: z.array(Id).max(128).optional(),
+        })
+        .strict(),
     })
     .strict(),
   z
@@ -133,7 +139,12 @@ export type VersionQuery = {
   id: string;
   versionId: string;
 };
+export type CardIdentity =
+  | { availability: 'available'; card: Card }
+  | { availability: 'deleted' | 'not_found' };
+export type IdentityQuery = { type: 'card.identity'; projectId: string; id: string };
 export type ReadQuery =
+  | IdentityQuery
   | { type: 'history'; projectId: string }
   | { type: 'projects' }
   | { type: 'project'; projectId: string }
