@@ -1,5 +1,6 @@
 import { test, expect, type Page } from "@playwright/test";
 import { spawn, type ChildProcess } from "node:child_process";
+import type { Card } from "../src/api";
 import { mkdtempSync, rmSync, readFileSync, lstatSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -676,3 +677,113 @@ test("布局竞争显式确认再保存；丢失布局 ACK 重试一次生效且
   expect(after.cards[0].item).toEqual(moved.cards[0].item);
   expect(after.project.revision).toBe(moved.project.revision + 1);
 });
+
+for (const field of ["body", "title"] as const) {
+  for (const updatedAgain of [false, true]) {
+    test(`冲突确认实际保存改回原值的${field}${updatedAgain ? "，再次更新仍须重新确认" : "并重开"}`, async ({
+      page,
+    }, testInfo) => {
+      await openWorkspace(page);
+      const projectId = await newCard(page);
+      const label = field === "body" ? "正文" : "标题";
+      const original = field === "body" ? "原文A" : "初始标题";
+      if (field === "title") {
+        await page.getByRole("button", { name: original, exact: true }).click();
+      }
+      const input = page.getByLabel(`卡片${label}`, { exact: true });
+      if (field === "body") {
+        await input.fill(original);
+        await expect(page.getByRole("status")).toHaveText("已保存到本机");
+      }
+      const read = () =>
+        page.evaluate(
+          async (id) => (await fetch("/api/mapping/projects/" + id)).json(),
+          projectId,
+        );
+      const value = (card: Card) =>
+        field === "body" ? card.body.blocks[0]!.text : card.title;
+      const externalSave = (text: string) =>
+        page.evaluate(
+          async ({ id, field, text }) => {
+            const state = await (
+              await fetch("/api/mapping/projects/" + id)
+            ).json();
+            const card = state.cards[0];
+            const response = await fetch("/api/mapping/execute", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                commandId: crypto.randomUUID(),
+                projectId: id,
+                type: field === "body" ? "body.edit" : "thought.title",
+                expected:
+                  field === "body" ? card.body.versionId : card.versionId,
+                payload: {
+                  id: card.id,
+                  [field === "body" ? "text" : "title"]: text,
+                },
+              }),
+            });
+            return response.ok;
+          },
+          { id: projectId, field, text },
+        );
+      // Synthetic composition pauses debounce only; it is not a real IME test.
+      await input.dispatchEvent("compositionstart");
+      await input.fill("我的草稿B");
+      expect(await externalSave("外部保存C")).toBe(true);
+      await input.dispatchEvent("compositionend");
+      await expect(page.getByLabel(`已保存的${label}`)).toHaveValue(
+        "外部保存C",
+      );
+      const remote = (await read()).cards[0];
+      await input.fill(original);
+      if (updatedAgain) expect(await externalSave("再次保存D")).toBe(true);
+      const commands: { expected: string }[] = [];
+      page.on("request", (request) => {
+        if (
+          request.method() === "POST" &&
+          request.url().endsWith("/api/mapping/execute")
+        ) {
+          commands.push(request.postDataJSON());
+        }
+      });
+      await page.getByRole("button", { name: `确认保留我的${label}` }).click();
+      await page.screenshot({
+        path: testInfo.outputPath("after-confirmation.png"),
+      });
+      await expect.poll(() => commands.length).toBe(1);
+      expect(commands[0]!.expected).toBe(
+        field === "body" ? remote.body.versionId : remote.versionId,
+      );
+      if (updatedAgain) {
+        await expect(page.getByLabel(`已保存的${label}`)).toHaveValue(
+          "再次保存D",
+        );
+        expect(value((await read()).cards[0])).toBe("再次保存D");
+        if (field === "body") await expect(input).toHaveValue(original);
+        else
+          await expect(
+            page.getByRole("button", { name: original, exact: true }),
+          ).toBeVisible();
+        await expect(page.getByRole("status")).not.toHaveText("已保存到本机");
+        await page
+          .getByRole("button", { name: `确认保留我的${label}` })
+          .click();
+        await expect.poll(() => commands.length).toBe(2);
+      }
+      await expect(page.getByRole("status")).toHaveText("已保存到本机");
+      expect(value((await read()).cards[0])).toBe(original);
+      await page.reload();
+      if (field === "body")
+        await page.getByRole("button", { name: "编辑正文" }).click();
+      else
+        await page.getByRole("button", { name: original, exact: true }).click();
+      await expect(input).toHaveValue(original);
+      expect(value((await read()).cards[0])).toBe(original);
+      await page.screenshot({
+        path: testInfo.outputPath("reopened-choice.png"),
+      });
+    });
+  }
+}

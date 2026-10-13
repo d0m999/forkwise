@@ -210,14 +210,8 @@ function Workspace() {
       fail(new Error("草稿对应的卡片尚未加载，请保留输入"));
       return false;
     }
-    const original =
-      current.field === "title" ? card.title : card.body.blocks[0]!.text;
-    if (current.value === original && !current.command) {
-      delete drafts.current[key];
-      setDraftView({ ...drafts.current });
-      if (!Object.keys(drafts.current).length) setStatus("已保存到本机");
-      return flush();
-    }
+    // Only execute can decide a no-op against current.expected. The displayed
+    // authority can predate the remote version explicitly chosen after a conflict.
     // Keep this exact command through a lost response; later typing is a new generation.
     const command: Command =
       current.command ??
