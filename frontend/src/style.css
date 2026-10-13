@@ -94,12 +94,65 @@ button[aria-current="true"] {
   right: 360px;
 }
 .thought-card {
-  width: 280px;
+  position: relative;
+  width: 100%;
+  height: 100%;
   border: 1px solid #d1d8e5;
   border-radius: 9px;
   background: #fff;
   box-shadow: 0 3px 12px #2331490a;
   overflow: hidden;
+}
+.card-resize {
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  padding: 0;
+  border: 1px solid #6888de;
+  border-radius: 2px;
+  background: white;
+  z-index: 3;
+  touch-action: none;
+}
+.card-resize.nw {
+  left: 0;
+  top: 0;
+  cursor: nwse-resize;
+}
+.card-resize.n {
+  left: calc(50% - 5px);
+  top: 0;
+  cursor: ns-resize;
+}
+.card-resize.ne {
+  right: 0;
+  top: 0;
+  cursor: nesw-resize;
+}
+.card-resize.e {
+  right: 0;
+  top: calc(50% - 5px);
+  cursor: ew-resize;
+}
+.card-resize.se {
+  right: 0;
+  bottom: 0;
+  cursor: nwse-resize;
+}
+.card-resize.s {
+  left: calc(50% - 5px);
+  bottom: 0;
+  cursor: ns-resize;
+}
+.card-resize.sw {
+  left: 0;
+  bottom: 0;
+  cursor: nesw-resize;
+}
+.card-resize.w {
+  left: 0;
+  top: calc(50% - 5px);
+  cursor: ew-resize;
 }
 .title-button,
 .card-title {
@@ -135,6 +188,14 @@ button[aria-current="true"] {
   font-size: 12px;
   margin: 6px 8px;
   color: #526075;
+}
+.card-actions {
+  display: flex;
+  padding: 4px;
+  border: 1px solid #dce0e7;
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 5px 18px #23314914;
 }
 .creation-tools {
   position: absolute;
@@ -306,6 +367,15 @@ button[aria-current="true"] {
 .react-flow__node:focus-visible {
   outline: 2px solid #365ec9;
   border-radius: 9px;
+}
+.react-flow__nodesselection-rect {
+  pointer-events: none;
+}
+.alignment-guide {
+  position: absolute;
+  background: #6888de;
+  pointer-events: none;
+  z-index: 10000;
 }
 @media (max-width: 760px) {
   .body-editor {

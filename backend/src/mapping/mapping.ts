@@ -11,6 +11,7 @@ import type {
 } from './compact-contracts.js';
 import { readHistory, recordAction, travelHistory, interruptGroup } from './history.js';
 import { retainCardVersions } from './versions.js';
+import { writeGeometry } from './geometry.js';
 import { canonical } from '../domain/canonical.js';
 import { randomUUID } from 'node:crypto';
 import { AccessService, type Principal } from '../services/access.js';
@@ -191,6 +192,7 @@ export class Mapping {
         };
         let before: Card | Project | null = null;
         let after: Card | Project | null;
+        let cardChanges: Change['cardChanges'];
         let travel: ReturnType<typeof travelHistory> | undefined;
         let revision: number;
         let changedIds: string[];
@@ -204,6 +206,17 @@ export class Mapping {
           );
           travel = travelHistory(this.db, project, command.type);
           ({ before, after, changedIds } = travel);
+          cardChanges = travel.cardChanges;
+          revision = project.revision + 1;
+          this.db
+            .prepare('UPDATE mapping_projects SET revision=? WHERE id=?')
+            .run(revision, project.id);
+        } else if (command.type === 'pose.batch') {
+          const project = this.project(command.projectId);
+          ({ cardChanges, changedIds } = writeGeometry(this.db, command));
+          if (!changedIds.length) return unchanged(project.revision);
+          before = cardChanges[0]!.before;
+          after = cardChanges[0]!.after;
           revision = project.revision + 1;
           this.db
             .prepare('UPDATE mapping_projects SET revision=? WHERE id=?')
@@ -338,6 +351,7 @@ export class Mapping {
             .run(revision, project.id);
         }
         if (after && 'body' in after) retainCardVersions(this.db, command.projectId, after);
+        for (const c of cardChanges ?? []) retainCardVersions(this.db, command.projectId, c.after);
         const receipt = {
           commandId: command.commandId,
           projectId: command.projectId,
@@ -358,6 +372,7 @@ export class Mapping {
           ...receipt,
           before,
           after,
+          ...(cardChanges ? { cardChanges } : {}),
           actor: actor.actor,
           writtenAt: new Date().toISOString(),
         };

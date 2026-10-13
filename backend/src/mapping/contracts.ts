@@ -8,6 +8,30 @@ export const MappingCommand = z.discriminatedUnion('type', [
   z
     .object({
       ...Envelope,
+      type: z.literal('pose.batch'),
+      expected: z.record(Id, Id),
+      payload: z
+        .object({
+          poses: z
+            .array(
+              z
+                .object({
+                  id: Id,
+                  x: z.number().finite(),
+                  y: z.number().finite(),
+                  width: z.number().finite().positive(),
+                  height: z.number().finite().positive(),
+                })
+                .strict(),
+            )
+            .min(1),
+        })
+        .strict(),
+    })
+    .strict(),
+  z
+    .object({
+      ...Envelope,
       type: z.literal('history.undo'),
       expected: z.number().int().nonnegative(),
       payload: z.object({}).strict(),
@@ -153,6 +177,7 @@ export type ReadQuery =
   | VersionQuery;
 
 export interface Change extends Receipt {
+  cardChanges?: { before: Card; after: Card }[];
   before: Project | Card | null;
   after: Project | Card | null;
   actor: { id: string; type: 'human' | 'agent' | 'system' };

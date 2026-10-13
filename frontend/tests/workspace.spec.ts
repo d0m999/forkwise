@@ -191,6 +191,9 @@ test("键盘建空卡后持续输入正文仍定期保存，不等到停止输�
   ).toBeEnabled();
   await page.getByRole("button", { name: "卡片", exact: true }).focus();
   await page.getByRole("button", { name: "卡片", exact: true }).press("Enter");
+  await page
+    .locator(".react-flow__pane")
+    .click({ position: { x: 350, y: 240 } });
   await page.getByLabel("卡片标题", { exact: true }).press("Escape");
   await expect(
     page.getByRole("button", { name: "未命名卡片", exact: true }),
@@ -235,6 +238,9 @@ async function newCard(page: Page) {
     page.getByRole("button", { name: "卡片", exact: true }),
   ).toBeEnabled();
   await page.getByRole("button", { name: "卡片", exact: true }).press("Enter");
+  await page
+    .locator(".react-flow__pane")
+    .click({ position: { x: 350, y: 240 } });
   await page.getByLabel("卡片标题", { exact: true }).fill("初始标题");
   await page.getByLabel("卡片标题", { exact: true }).press("Enter");
   await expect(page.getByRole("status")).toHaveText("已保存到本机");
@@ -309,7 +315,7 @@ test("标题成功 ACK 在途时继续改标题并转到已开正文，两字段
 }, testInfo) => {
   await openWorkspace(page);
   const projectId = await newCard(page);
-  await page.getByRole("button", { name: "初始标题", exact: true }).click();
+  await page.getByRole("button", { name: "初始标题", exact: true }).dblclick();
   const ack = gate();
   let written = false;
   await page.route("**/api/mapping/execute", async (route) => {
@@ -424,6 +430,9 @@ test("创建回读乱序不能回退已保存正文，后续编辑继续成功",
     await page
       .getByRole("button", { name: "卡片", exact: true })
       .press("Enter");
+    await page
+      .locator(".react-flow__pane")
+      .click({ position: { x: 350, y: 240 } });
     await expect.poll(() => captured).toBe(true);
     await body.fill("已保存的新正文");
     await expect(page.getByRole("status")).toHaveText("已保存到本机");
@@ -487,6 +496,9 @@ test("创建回读到达时保留未确认正文的最新草稿，继续输入�
     await page
       .getByRole("button", { name: "卡片", exact: true })
       .press("Enter");
+    await page
+      .locator(".react-flow__pane")
+      .click({ position: { x: 350, y: 240 } });
     await expect.poll(() => captured).toBe(true);
     await body.fill("正文 A");
     await expect.poll(() => written).toBe(true);
@@ -1051,6 +1063,9 @@ test("H4 创建与首次标题一次撤销，空卡和完整标题重做经服�
   ).toBeEnabled();
   await page.getByRole("button", { name: "卡片", exact: true }).focus();
   await page.keyboard.press("Enter");
+  await page
+    .locator(".react-flow__pane")
+    .click({ position: { x: 350, y: 240 } });
   await page.getByLabel("卡片标题", { exact: true }).fill("库存观察");
   await page.getByLabel("卡片标题", { exact: true }).press("Escape");
   await expect(page.getByRole("status")).toHaveText("已保存到本机");
@@ -1063,7 +1078,7 @@ test("H4 创建与首次标题一次撤销，空卡和完整标题重做经服�
   await page.getByRole("tab").last().click();
   await page.getByRole("button", { name: "重做", exact: true }).click();
   await expect(page.locator(".react-flow__node")).toContainText("库存观察");
-  await page.getByRole("button", { name: "库存观察", exact: true }).click();
+  await page.getByRole("button", { name: "库存观察", exact: true }).dblclick();
   await page.getByLabel("卡片标题", { exact: true }).fill("需求观察");
   await page.getByLabel("卡片标题", { exact: true }).press("Enter");
   await expect(page.getByRole("status")).toHaveText("已保存到本机");
@@ -1085,6 +1100,9 @@ async function historyCard(page: Page, title = "历史卡") {
   ).toBeEnabled();
   await page.getByRole("button", { name: "卡片", exact: true }).focus();
   await page.keyboard.press("Enter");
+  await page
+    .locator(".react-flow__pane")
+    .click({ position: { x: 350, y: 240 } });
   await page.getByLabel("卡片标题", { exact: true }).fill(title);
   await page.getByLabel("卡片标题", { exact: true }).press("Enter");
   await expect(page.getByRole("status")).toHaveText("已保存到本机");
@@ -1119,7 +1137,7 @@ test("H4 编辑中标题只走文本撤销，synthetic composition 不触发项�
 }) => {
   await openWorkspace(page);
   await newCard(page);
-  await page.getByRole("button", { name: "初始标题", exact: true }).click();
+  await page.getByRole("button", { name: "初始标题", exact: true }).dblclick();
   const title = page.getByLabel("卡片标题", { exact: true });
   await title.press("End");
   await title.pressSequentially("AB");
@@ -1477,7 +1495,7 @@ test("R2 no-op标题ACK不借回读版本静默覆盖并发标题", async ({
 }, testInfo) => {
   await openWorkspace(page);
   const projectId = await newCard(page);
-  await page.getByRole("button", { name: "初始标题", exact: true }).click();
+  await page.getByRole("button", { name: "初始标题", exact: true }).dblclick();
   const title = page.getByLabel("卡片标题", { exact: true });
   const read = () =>
     page.evaluate(

@@ -2,8 +2,10 @@ import type Database from 'better-sqlite3';
 import { randomUUID } from 'node:crypto';
 import type { Card, Change, Command, HistoryAction, Project, ProjectHistory } from './contracts.js';
 import { requireThat } from '../domain/errors.js';
+import { restoreGeometry } from './geometry.js';
 
 interface StoredAction extends HistoryAction {
+  cardChanges?: Change['cardChanges'];
   before: Card | Project | null;
   after: Card | Project;
   changedIds: string[];
@@ -96,6 +98,7 @@ export function recordAction(
       actor: change.actor,
       before: change.before,
       after,
+      ...(change.cardChanges ? { cardChanges: change.cardChanges } : {}),
       changedIds: change.changedIds,
     });
   stack.undo = stack.undo.slice(-40);
@@ -112,6 +115,19 @@ export function travelHistory(
   const action = from.pop();
   requireThat(action, 'HISTORY_EMPTY', '没有可撤销或重做的操作', 409);
   const desired = type === 'history.undo' ? action.before : action.after;
+  if (action.cardChanges) {
+    const cardChanges = restoreGeometry(db, project.id, action.cardChanges, type);
+    (type === 'history.undo' ? stack.redo : stack.undo).push(action);
+    save(db, project.id, stack);
+    return {
+      before: cardChanges[0]!.before,
+      after: cardChanges[0]!.after,
+      cardChanges,
+      changedIds: action.changedIds,
+      deletedIds: [],
+      target: { ...action.target, label: action.label },
+    };
+  }
   const row = db
     .prepare('SELECT value FROM mapping_cards WHERE id=? AND project_id=?')
     .get(action.target.id, project.id) as { value: string } | undefined;

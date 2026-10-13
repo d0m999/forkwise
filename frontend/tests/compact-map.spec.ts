@@ -91,6 +91,9 @@ test("实际工作台和授权 Agent 在并发写入期间核对同一固定 sna
     await page
       .getByRole("button", { name: "卡片", exact: true })
       .press("Enter");
+    await page
+      .locator(".react-flow__pane")
+      .click({ position: { x: 350, y: 240 } });
     await page.getByLabel("卡片标题", { exact: true }).fill("同快照卡片");
     await page.getByLabel("卡片标题", { exact: true }).press("Enter");
     await page.getByRole("button", { name: "编辑正文", exact: true }).click();

@@ -8,35 +8,40 @@ import {
 } from "./api";
 
 type Position = { x: number; y: number };
-type Move = Extract<Command, { type: "pose.move" }>;
+type Pose = Card["item"]["pose"];
+type GeometryCommand = Extract<Command, { type: "pose.move" | "pose.batch" }>;
 export interface MoveOrder {
   beforeSubmit: () => Promise<boolean>;
   afterAttempt: () => void;
 }
 interface Pending {
-  itemId: string;
-  command: Move;
+  cards: Card[];
+  command: GeometryCommand;
   order?: MoveOrder;
 }
 
-// Pose has its own in-flight command. Body ACKs cannot own or clear this draft.
+// One completed gesture owns one command. Body ACKs cannot clear its preview.
 export function usePoseSave(
   refresh: (projectId: string) => Promise<ProjectState>,
 ) {
-  const [positions, setPositions] = useState<Record<string, Position>>({});
+  const [positions, setPositions] = useState<Record<string, Pose>>({});
+  const previewPoses = useRef<Record<string, Pose>>({});
   const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
   const [conflict, setConflict] = useState<Card["item"] | null>(null);
+  const remote = useRef<Card[] | null>(null);
   const command = useRef<Pending | null>(null);
   const gesture = useRef<Pending | null>(null);
   const saving = useRef<Promise<boolean> | null>(null);
   const [dragging, setDragging] = useState(false);
-  const clearPosition = (id: string) =>
+  function clearPositions(cards: Card[]) {
+    for (const card of cards) delete previewPoses.current[card.item.id];
     setPositions((previous) => {
       const next = { ...previous };
-      delete next[id];
+      for (const card of cards) delete next[card.item.id];
       return next;
     });
+  }
   async function flush(): Promise<boolean> {
     if (gesture.current) return false;
     if (saving.current) return saving.current;
@@ -53,21 +58,25 @@ export function usePoseSave(
         }
         await refresh(current.command.projectId);
         command.current = null;
-        clearPosition(current.itemId);
+        clearPositions(current.cards);
         setPending(false);
         setError("");
         setConflict(null);
+        remote.current = null;
         return true;
       } catch (e) {
         if (e instanceof MappingError && e.code === "VERSION_CONFLICT") {
           try {
             const latest = await api.project(current.command.projectId);
-            setConflict(
-              latest.cards.find((c) => c.id === current.command.payload.id)
-                ?.item ?? null,
+            const cards = current.cards.map((c) =>
+              latest.cards.find((x) => x.id === c.id),
             );
+            if (cards.every((c): c is Card => !!c)) {
+              remote.current = cards;
+              setConflict(cards[0]!.item);
+            }
           } catch {
-            /* Preserve the attempted move; retry can reload the conflict. */
+            /* The original batch remains available for explicit retry. */
           }
         }
         setError(e instanceof Error ? e.message : "布局保存失败，请重试");
@@ -78,47 +87,130 @@ export function usePoseSave(
     saving.current = null;
     return result;
   }
-  function start(projectId: string, card: Card, order?: MoveOrder) {
+  function start(
+    projectId: string,
+    input: Card | Card[],
+    order?: MoveOrder,
+    fullGeometry = false,
+  ) {
     if (command.current || gesture.current) return false;
+    const cards = Array.isArray(input) ? input : [input];
+    const card = cards[0];
+    if (!card) return false;
+    const common = { commandId: crypto.randomUUID(), projectId };
     gesture.current = {
-      itemId: card.item.id,
+      cards,
       ...(order ? { order } : {}),
-      command: {
-        commandId: crypto.randomUUID(),
-        projectId,
-        type: "pose.move",
-        expected: card.item.versionId,
-        payload: { id: card.id, x: card.item.pose.x, y: card.item.pose.y },
-      },
+      command:
+        cards.length === 1 && !fullGeometry
+          ? {
+              ...common,
+              type: "pose.move",
+              expected: card.item.versionId,
+              payload: {
+                id: card.id,
+                x: card.item.pose.x,
+                y: card.item.pose.y,
+              },
+            }
+          : {
+              ...common,
+              type: "pose.batch",
+              expected: Object.fromEntries(
+                cards.map((c) => [c.id, c.item.versionId]),
+              ),
+              payload: {
+                poses: cards.map((c) => ({ id: c.id, ...c.item.pose })),
+              },
+            },
     };
     setDragging(true);
     return true;
   }
-  function preview(itemId: string, position: Position) {
-    if (gesture.current?.itemId === itemId)
-      setPositions((previous) => ({ ...previous, [itemId]: position }));
+  function preview(itemId: string, position: Partial<Pose>) {
+    const card = gesture.current?.cards.find((c) => c.item.id === itemId);
+    if (card) {
+      const pose = {
+        ...card.item.pose,
+        ...previewPoses.current[itemId],
+        ...position,
+      };
+      previewPoses.current[itemId] = pose;
+      setPositions((previous) => ({ ...previous, [itemId]: pose }));
+    }
   }
-  function finish(position: Position) {
+  function finish(position?: Position) {
     const current = gesture.current;
     if (!current) return;
     gesture.current = null;
     setDragging(false);
-    current.command.payload = { ...current.command.payload, ...position };
+    const anchor = current.cards[0]!;
+    const final =
+      position ?? previewPoses.current[anchor.item.id] ?? anchor.item.pose;
+    const dx = final.x - anchor.item.pose.x,
+      dy = final.y - anchor.item.pose.y;
+    const poses = current.cards.map((c) => ({
+      ...c.item.pose,
+      ...previewPoses.current[c.item.id],
+      ...(position ? { x: c.item.pose.x + dx, y: c.item.pose.y + dy } : {}),
+    }));
+    if (
+      poses.every((p, i) =>
+        Object.keys(p).every(
+          (key) =>
+            p[key as keyof Pose] ===
+            current.cards[i]!.item.pose[key as keyof Pose],
+        ),
+      )
+    ) {
+      clearPositions(current.cards);
+      current.order?.afterAttempt();
+      return;
+    }
+    if (current.command.type === "pose.move")
+      current.command.payload = {
+        ...current.command.payload,
+        x: final.x,
+        y: final.y,
+      };
+    else
+      current.command.payload.poses = current.cards.map((c, i) => ({
+        id: c.id,
+        ...poses[i]!,
+      }));
     command.current = current;
-    setPositions((previous) => ({ ...previous, [current.itemId]: position }));
+    setPositions((previous) => ({
+      ...previous,
+      ...Object.fromEntries(
+        current.cards.map((c, i) => [c.item.id, poses[i]!]),
+      ),
+    }));
     setPending(true);
     void flush();
   }
   function resolveConflict() {
-    if (!conflict || !command.current || saving.current) return;
-    command.current.command = {
-      ...command.current.command,
+    const current = command.current,
+      cards = remote.current;
+    if (!current || !cards || saving.current) return;
+    current.command = {
+      ...current.command,
       commandId: crypto.randomUUID(),
-      expected: conflict.versionId,
-    };
+      expected:
+        current.command.type === "pose.move"
+          ? cards[0]!.item.versionId
+          : Object.fromEntries(cards.map((c) => [c.id, c.item.versionId])),
+    } as GeometryCommand;
     setConflict(null);
     setError("");
     void flush();
+  }
+  function cancel() {
+    const current = gesture.current;
+    if (!current) return;
+    gesture.current = null;
+    setDragging(false);
+    clearPositions(current.cards);
+    current.order?.afterAttempt();
   }
   return {
     positions,
@@ -131,6 +223,7 @@ export function usePoseSave(
     start,
     preview,
     finish,
+    cancel,
     hasPending: () => !!(command.current || gesture.current || saving.current),
   };
 }

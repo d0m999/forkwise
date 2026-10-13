@@ -5,7 +5,11 @@ import {
   Controls,
   ReactFlow,
   ReactFlowProvider,
+  NodeToolbar,
+  SelectionMode,
+  ViewportPortal,
   useReactFlow,
+  useStoreApi,
   type Node,
   type NodeProps,
 } from "@xyflow/react";
@@ -29,6 +33,9 @@ import {
   type Recovery,
 } from "./draft-recovery";
 import { usePoseSave } from "./pose-save";
+import { alignMove, type Guide, type Position } from "./canvas-geometry";
+import { useCardResize } from "./card-resize";
+import { InlineTitle } from "./inline-title";
 
 type CardData = {
   card: Card;
@@ -42,10 +49,30 @@ type CardData = {
   onMove: (dx: number, dy: number) => void;
   movingDisabled: boolean;
   historyBlocked: boolean;
+  resizable: boolean;
+  onResize: (event: React.PointerEvent<HTMLElement>, direction: string) => void;
+  onResizeKey: (
+    event: React.KeyboardEvent<HTMLElement>,
+    direction: string,
+  ) => void;
 };
-function ThoughtCard({ data }: NodeProps<Node<CardData>>) {
+function ThoughtCard({ data, selected }: NodeProps<Node<CardData>>) {
   return (
     <article className="thought-card">
+      <NodeToolbar isVisible={selected}>
+        <div
+          className="card-actions nodrag"
+          role="toolbar"
+          aria-label="卡片操作"
+        >
+          <button disabled={data.historyBlocked} onClick={data.onEdit}>
+            编辑标题
+          </button>
+          <button disabled={data.historyBlocked} onClick={data.onBody}>
+            写字板
+          </button>
+        </div>
+      </NodeToolbar>
       <button
         className="move-handle nodrag"
         aria-label="移动卡片：方向键调整位置"
@@ -67,35 +94,26 @@ function ThoughtCard({ data }: NodeProps<Node<CardData>>) {
         移动
       </button>
       {data.editing ? (
-        <textarea
-          className="card-title nodrag nowheel"
-          aria-label="卡片标题"
-          autoFocus
-          readOnly={data.historyBlocked}
+        <InlineTitle
+          blocked={data.historyBlocked}
           value={data.title}
-          onChange={(e) => data.onTitle(e.target.value)}
-          onCompositionStart={() => data.onComposition(true)}
-          onCompositionEnd={() => data.onComposition(false)}
-          onBlur={data.onFinish}
-          onKeyDown={(e) => {
-            if (e.nativeEvent.isComposing || e.keyCode === 229) return;
-            if ((e.key === "Enter" && !e.shiftKey) || e.key === "Escape") {
-              e.preventDefault();
-              data.onFinish();
-            }
-          }}
+          onChange={data.onTitle}
+          onComposition={data.onComposition}
+          onFinish={data.onFinish}
         />
       ) : (
         <button
           className="title-button nodrag"
           disabled={data.historyBlocked}
-          onClick={data.onEdit}
+          onDoubleClick={data.onEdit}
         >
           {data.title || "未命名卡片"}
         </button>
       )}
       {data.card.body.blocks[0]?.text && (
-        <p className="preview">{data.card.body.blocks[0].text}</p>
+        <p className="preview" onDoubleClick={data.onBody}>
+          {data.card.body.blocks[0].text}
+        </p>
       )}
       <button
         className="body-button nodrag"
@@ -104,6 +122,26 @@ function ThoughtCard({ data }: NodeProps<Node<CardData>>) {
       >
         编辑正文
       </button>
+      {data.resizable &&
+        Object.entries({
+          nw: "左上",
+          n: "上",
+          ne: "右上",
+          e: "右",
+          se: "右下",
+          s: "下",
+          sw: "左下",
+          w: "左",
+        }).map(([direction, label]) => (
+          <button
+            key={direction}
+            className={`card-resize ${direction} nodrag nopan`}
+            aria-label={`调整卡片尺寸：${label}`}
+            disabled={data.movingDisabled}
+            onPointerDown={(event) => data.onResize(event, direction)}
+            onKeyDown={(event) => data.onResizeKey(event, direction)}
+          />
+        ))}
     </article>
   );
 }
@@ -112,6 +150,21 @@ function draftKey(projectId: string, cardId: string, field: Draft["field"]) {
   return JSON.stringify([projectId, cardId, field]);
 }
 function Workspace() {
+  const [selection, setSelection] = useState<string[]>([]);
+  const marqueeSelection = useRef<{
+    previous: string[];
+    shift: boolean;
+  } | null>(null);
+  const [panTool, setPanTool] = useState(false);
+  const [snap, setSnap] = useState(true);
+  const [guides, setGuides] = useState<Guide[]>([]);
+  const moving = useRef<{
+    cards: Card[];
+    anchor: Card;
+    raw?: Position;
+    aligned?: Position;
+  } | null>(null);
+  const bypass = useRef(false);
   const [dimensions, setDimensions] = useState<
     Record<string, { width: number; height: number }>
   >({});
@@ -337,6 +390,7 @@ function Workspace() {
     saving = useRef<Promise<boolean> | null>(null);
   const layoutBarrier = useRef<{ cutoff: number } | null>(null);
   const flow = useReactFlow();
+  const canvasStore = useStoreApi();
   const titleGroup = useRef<{ cardId: string; id: string } | null>(null);
   const historyLock = useRef(false);
   const [historyBusy, setHistoryBusy] = useState(false);
@@ -499,6 +553,11 @@ function Workspace() {
       }
     }
     authority.current = value;
+    setSelection((previous) =>
+      current?.project.id !== value.project.id
+        ? []
+        : previous.filter((id) => value.cards.some((c) => c.item.id === id)),
+    );
     setState(value);
   };
   const refresh = async (id: string) => {
@@ -572,7 +631,7 @@ function Workspace() {
     };
   }, [state?.project.id]);
   const pose = usePoseSave(refresh);
-  function startMove(projectId: string, card: Card) {
+  function startMove(projectId: string, card: Card, resizing = false) {
     // Geometry remains interactive while the prefix of input waits for ACK.
     // Reserve this boundary so later typing cannot overtake the move either.
     breakBodyGroup();
@@ -581,20 +640,133 @@ function Workspace() {
         ? compositionPrefixCutoff.current
         : generation.current,
     };
+    const cards =
+      !resizing && selection.includes(card.item.id)
+        ? [
+            card,
+            ...authority.current!.cards.filter(
+              (c) => c.id !== card.id && selection.includes(c.item.id),
+            ),
+          ]
+        : [card];
     if (
-      !pose.start(projectId, card, {
-        beforeSubmit: async () =>
-          (await drainCompletedPrefix(barrier.cutoff)) !== "unknown",
-        afterAttempt: () => {
-          if (layoutBarrier.current === barrier) layoutBarrier.current = null;
-          void flush();
+      !pose.start(
+        projectId,
+        cards,
+        {
+          beforeSubmit: async () =>
+            (await drainCompletedPrefix(barrier.cutoff)) !== "unknown",
+          afterAttempt: () => {
+            if (layoutBarrier.current === barrier) layoutBarrier.current = null;
+            void flush();
+          },
         },
-      })
+        resizing,
+      )
     )
       return false;
     layoutBarrier.current = barrier;
+    moving.current = resizing ? null : { cards, anchor: card };
     return true;
   }
+  const resize = useCardResize({
+    start: (card) =>
+      !!authority.current &&
+      startMove(authority.current.project.id, card, true),
+    preview: pose.preview,
+    finish: () => pose.finish(),
+    cancel: pose.cancel,
+    zoom: () => flow.getZoom(),
+  });
+  function cancelGesture() {
+    pose.cancel();
+    resize.cancel();
+    moving.current = null;
+    bypass.current = false;
+    setGuides([]);
+    const session = marqueeSelection.current;
+    if (session) {
+      setSelection(session.previous);
+      marqueeSelection.current = null;
+      // The engine releases capture on cancel but leaves its transient marquee.
+      // Reset only these UI fields through its exported store Interface.
+      canvasStore.setState({
+        userSelectionRect: null,
+        userSelectionActive: false,
+        nodesSelectionActive: false,
+      });
+    }
+  }
+  useEffect(() => {
+    const cancel = () => cancelGesture();
+    const hidden = () => {
+      if (document.visibilityState === "hidden") cancel();
+    };
+    const escape = (event: KeyboardEvent) => {
+      if (
+        event.key !== "Escape" ||
+        event.isComposing ||
+        event.keyCode === 229 ||
+        composition.current ||
+        (event.target as HTMLElement).closest(
+          "input, textarea, [contenteditable=true]",
+        )
+      )
+        return;
+      if (pose.dragging || marqueeSelection.current) {
+        event.preventDefault();
+        cancel();
+      }
+    };
+    window.addEventListener("pointercancel", cancel, true);
+    window.addEventListener("lostpointercapture", cancel, true);
+    window.addEventListener("blur", cancel);
+    window.addEventListener("pagehide", cancel);
+    window.addEventListener("keydown", escape);
+    document.addEventListener("visibilitychange", hidden);
+    return () => {
+      window.removeEventListener("pointercancel", cancel, true);
+      window.removeEventListener("lostpointercapture", cancel, true);
+      window.removeEventListener("blur", cancel);
+      window.removeEventListener("pagehide", cancel);
+      window.removeEventListener("keydown", escape);
+      document.removeEventListener("visibilitychange", hidden);
+    };
+  });
+  function previewMove(position: Position, temporaryBypass = bypass.current) {
+    const current = moving.current;
+    if (!current) return;
+    current.raw = position;
+    const result =
+      snap && !temporaryBypass
+        ? alignMove(
+            current.cards,
+            current.anchor,
+            position,
+            authority.current?.cards ?? [],
+            flow.getZoom(),
+          )
+        : { position, guides: [] };
+    current.aligned = result.position;
+    setGuides(result.guides);
+    const dx = result.position.x - current.anchor.item.pose.x,
+      dy = result.position.y - current.anchor.item.pose.y;
+    for (const c of current.cards)
+      pose.preview(c.item.id, { x: c.item.pose.x + dx, y: c.item.pose.y + dy });
+  }
+  useEffect(() => {
+    const keys = (event: KeyboardEvent) => {
+      if (event.key !== "Alt" || event.isComposing) return;
+      bypass.current = event.type === "keydown";
+      if (moving.current?.raw) previewMove(moving.current.raw);
+    };
+    window.addEventListener("keydown", keys);
+    window.addEventListener("keyup", keys);
+    return () => {
+      window.removeEventListener("keydown", keys);
+      window.removeEventListener("keyup", keys);
+    };
+  });
   const handoff = async (id: string) => {
     const value = await api.project(id);
     const all = await api.projects();
@@ -1034,6 +1206,8 @@ function Workspace() {
       },
       () => {
         setPlacing(false);
+        const card = authority.current?.cards.find((c) => c.id === id);
+        if (card) setSelection([card.item.id]);
         titleGroup.current = { cardId: id, id: editGroup };
         setEditing(id);
       },
@@ -1101,6 +1275,11 @@ function Workspace() {
   }, []);
   const nodes: Node<CardData>[] = (state?.cards ?? []).map((card) => ({
     id: card.item.id,
+    selected: selection.includes(card.item.id),
+    style: {
+      width: pose.positions[card.item.id]?.width ?? card.item.pose.width,
+      height: pose.positions[card.item.id]?.height ?? card.item.pose.height,
+    },
     type: "thought",
     initialWidth: 280,
     initialHeight: 160,
@@ -1111,7 +1290,8 @@ function Workspace() {
       x: card.item.pose.x,
       y: card.item.pose.y,
     },
-    draggable: !busy && !historyBlocked && !pose.pending,
+    draggable:
+      !busy && !historyBlocked && !pose.pending && !placing && !panTool,
     data: {
       card,
       editing: editing === card.id,
@@ -1132,9 +1312,14 @@ function Workspace() {
       onComposition: compose,
       movingDisabled: busy || historyBlocked || pose.pending,
       historyBlocked,
+      resizable: selection.length === 1 && selection.includes(card.item.id),
+      onResize: (event, direction) => resize.start(event, card, direction),
+      onResizeKey: (event, direction) => resize.key(event, card, direction),
       onMove: (dx, dy) => {
-        if (startMove(state!.project.id, card))
+        if (startMove(state!.project.id, card)) {
           pose.finish({ x: card.item.pose.x + dx, y: card.item.pose.y + dy });
+          moving.current = null;
+        }
       },
     },
   }));
@@ -1247,7 +1432,45 @@ function Workspace() {
           ))}
         </aside>
       )}
-      <main className={panelCard ? "canvas with-editor" : "canvas"}>
+      <main
+        className={panelCard ? "canvas with-editor" : "canvas"}
+        onClickCapture={(event) => {
+          if (
+            placing &&
+            !busy &&
+            !historyBlocked &&
+            (event.target as Element).closest(
+              ".react-flow__node, .react-flow__pane",
+            ) &&
+            !(event.target as Element).closest(
+              ".card-actions, .react-flow__controls",
+            )
+          ) {
+            event.preventDefault();
+            event.stopPropagation();
+            const point = flow.screenToFlowPosition({
+              x: event.clientX,
+              y: event.clientY,
+            });
+            void createCard(point.x, point.y);
+          }
+        }}
+        onPointerDownCapture={(event) => {
+          if (
+            event.button === 0 &&
+            (event.target as HTMLElement).classList.contains(
+              "react-flow__pane",
+            ) &&
+            !(event.target as HTMLElement).classList.contains("draggable") &&
+            !placing &&
+            !panTool
+          )
+            marqueeSelection.current = {
+              previous: selection,
+              shift: event.shiftKey,
+            };
+        }}
+      >
         {state ? (
           <ReactFlow
             ariaLabelConfig={{
@@ -1257,14 +1480,55 @@ function Workspace() {
               "controls.fitView.ariaLabel": "适应画布",
             }}
             nodes={nodes}
+            onNodeClick={(event, node) => {
+              if (event.shiftKey)
+                setSelection((previous) => [
+                  ...new Set([...previous, node.id]),
+                ]);
+              else if (!selection.includes(node.id)) setSelection([node.id]);
+            }}
+            nodeDragThreshold={0}
+            selectionOnDrag={!placing && !panTool}
+            selectionKeyCode={null}
+            multiSelectionKeyCode="Shift"
+            selectionMode={SelectionMode.Full}
+            panOnDrag={panTool ? [0, 1, 2] : [1, 2]}
+            zoomOnDoubleClick={false}
+            onSelectionEnd={() => {
+              marqueeSelection.current = null;
+            }}
             onNodeDragStart={(_, node) => {
               const card = authority.current?.cards.find(
                 (c) => c.item.id === node.id,
               );
               if (card) startMove(authority.current!.project.id, card);
             }}
-            onNodeDragStop={(_, node) => pose.finish(node.position)}
+            onNodeDrag={(event, node) =>
+              previewMove(node.position, "altKey" in event && event.altKey)
+            }
+            onNodeDragStop={(_, node) => {
+              pose.finish(moving.current?.aligned ?? node.position);
+              moving.current = null;
+              setGuides([]);
+            }}
             onNodesChange={(changes) => {
+              const selected = changes.filter(
+                (change) => change.type === "select",
+              );
+              const keep = marqueeSelection.current?.shift
+                ? marqueeSelection.current.previous
+                : [];
+              if (selected.length)
+                setSelection((previous) => {
+                  const next = new Set(previous);
+                  for (const change of selected)
+                    if (change.type === "select") {
+                      if (change.selected) next.add(change.id);
+                      else next.delete(change.id);
+                    }
+                  for (const id of keep) next.add(id);
+                  return [...next];
+                });
               for (const change of changes)
                 if (change.type === "position" && change.position)
                   pose.preview(change.id, change.position);
@@ -1293,11 +1557,36 @@ function Workspace() {
                   y: event.clientY,
                 });
                 void createCard(point.x, point.y);
-              }
+              } else if (!event.shiftKey) setSelection([]);
+              marqueeSelection.current = null;
             }}
           >
             <Background gap={24} color="#dce0e7" />
             <Controls showInteractive={false} />
+            <ViewportPortal>
+              {guides.map((guide, i) => (
+                <div
+                  key={i}
+                  className="alignment-guide"
+                  data-axis={guide.axis}
+                  style={
+                    guide.axis === "x"
+                      ? {
+                          left: guide.position,
+                          top: guide.start,
+                          width: 1,
+                          height: guide.end - guide.start,
+                        }
+                      : {
+                          left: guide.start,
+                          top: guide.position,
+                          height: 1,
+                          width: guide.end - guide.start,
+                        }
+                  }
+                />
+              ))}
+            </ViewportPortal>
           </ReactFlow>
         ) : (
           <div className="empty">
@@ -1307,25 +1596,38 @@ function Workspace() {
         )}
         {state && (
           <div className="creation-tools" aria-label="创作工具">
-            <button aria-pressed={!placing} onClick={() => setPlacing(false)}>
-              选择 / 移动
+            <button
+              aria-pressed={!placing && !panTool}
+              onClick={() => {
+                setPlacing(false);
+                setPanTool(false);
+              }}
+            >
+              选择
+            </button>
+            <button
+              aria-pressed={panTool}
+              onClick={() => {
+                setPlacing(false);
+                setPanTool(true);
+              }}
+            >
+              移动
+            </button>
+            <button
+              aria-label="对齐吸附"
+              aria-pressed={snap}
+              title="拖动时按住 Alt 临时关闭"
+              onClick={() => setSnap((value) => !value)}
+            >
+              对齐吸附：{snap ? "开" : "关"}
             </button>
             <button
               aria-pressed={placing}
               disabled={busy || historyBlocked}
-              onClick={() => setPlacing(true)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" && !event.nativeEvent.isComposing) {
-                  event.preventDefault();
-                  const rect = event.currentTarget
-                    .closest("main")!
-                    .getBoundingClientRect();
-                  const point = flow.screenToFlowPosition({
-                    x: rect.x + rect.width / 2 - 140,
-                    y: rect.y + rect.height / 2 - 80,
-                  });
-                  void createCard(point.x, point.y);
-                }
+              onClick={() => {
+                setPanTool(false);
+                setPlacing(true);
               }}
             >
               卡片

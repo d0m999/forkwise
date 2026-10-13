@@ -15,6 +15,12 @@ export interface ObserveOptions {
 
 function delta(change: Change): Delta {
   const domains: Delta['domains'] = [];
+  if (change.cardChanges) {
+    for (const c of change.cardChanges)
+      if (c.before.item.versionId !== c.after.item.versionId)
+        domains.push({ domain: 'pose', id: c.after.item.id });
+    return { ...change, domains, deletedIds: change.deletedIds ?? [] };
+  }
   const card = [change.after, change.before].find(
     (value): value is Card => !!value && 'body' in value,
   );
