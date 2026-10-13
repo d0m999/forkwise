@@ -1039,6 +1039,19 @@ function Workspace() {
     deletedBody.card.id === bodyCard
       ? deletedBody.card
       : undefined);
+  const hasRecovery = recoveries.some(
+    (r) => r.value.projectId === state?.project.id,
+  );
+  const recoveryAlert = (recoveryNotice || recoveryError) && (
+    <div
+      className="recovery-error"
+      role="alert"
+      style={hasRecovery ? { position: "static" } : undefined}
+    >
+      {recoveryNotice && <p style={{ margin: 0 }}>{recoveryNotice}</p>}
+      {recoveryError && <p style={{ margin: 0 }}>{recoveryError}</p>}
+    </div>
+  );
   return (
     <div className="workspace">
       <header className="topbar">
@@ -1336,9 +1349,10 @@ function Workspace() {
           </button>
         </section>
       )}
-      {recoveries.some((r) => r.value.projectId === state?.project.id) && (
+      {hasRecovery && (
         <section className="recovery-panel" aria-label="草稿恢复">
           <h2>可恢复草稿</h2>
+          {recoveryAlert}
           {recoveries
             .filter((r) => r.value.projectId === state?.project.id)
             .map((entry) => (
@@ -1373,12 +1387,7 @@ function Workspace() {
             <button onClick={() => setDeletedRecovery(null)}>关闭</button>
           </aside>
         )}
-      {(recoveryNotice || recoveryError) && (
-        <div className="recovery-error" role="alert">
-          {recoveryNotice && <p>{recoveryNotice}</p>}
-          {recoveryError && <p>{recoveryError}</p>}
-        </div>
-      )}
+      {!hasRecovery && recoveryAlert}
       {historyNotice && (
         <div className="history-notice" aria-live="polite">
           {historyNotice}
