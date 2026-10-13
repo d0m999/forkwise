@@ -543,7 +543,7 @@ for (const field of ["body", "title"] as const) {
         else
           await f.page
             .getByRole("button", { name: "同步卡片", exact: true })
-            .click();
+            .dblclick();
         const editor = f.page.getByLabel(
           field === "body" ? "卡片正文" : "卡片标题",
           { exact: true },

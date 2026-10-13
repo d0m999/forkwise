@@ -943,7 +943,9 @@ for (const field of ["body", "title"] as const) {
       const label = field === "body" ? "正文" : "标题";
       const original = field === "body" ? "原文A" : "初始标题";
       if (field === "title") {
-        await page.getByRole("button", { name: original, exact: true }).click();
+        await page
+          .getByRole("button", { name: original, exact: true })
+          .dblclick();
       }
       const input = page.getByLabel(`卡片${label}`, { exact: true });
       if (field === "body") {
@@ -1042,7 +1044,9 @@ for (const field of ["body", "title"] as const) {
       if (field === "body")
         await page.getByRole("button", { name: "编辑正文" }).click();
       else
-        await page.getByRole("button", { name: original, exact: true }).click();
+        await page
+          .getByRole("button", { name: original, exact: true })
+          .dblclick();
       await expect(input).toHaveValue(original);
       expect(value((await read()).cards[0])).toBe(original);
       await page.screenshot({
@@ -1094,15 +1098,17 @@ async function historyState(page: Page) {
     return (await fetch(`/api/mapping/projects/${id}/history`)).json();
   });
 }
-async function historyCard(page: Page, title = "历史卡") {
+async function historyCard(
+  page: Page,
+  title = "历史卡",
+  position = { x: 350, y: 240 },
+) {
   await expect(
     page.getByRole("button", { name: "卡片", exact: true }),
   ).toBeEnabled();
   await page.getByRole("button", { name: "卡片", exact: true }).focus();
   await page.keyboard.press("Enter");
-  await page
-    .locator(".react-flow__pane")
-    .click({ position: { x: 350, y: 240 } });
+  await page.locator(".react-flow__pane").click({ position });
   await page.getByLabel("卡片标题", { exact: true }).fill(title);
   await page.getByLabel("卡片标题", { exact: true }).press("Enter");
   await expect(page.getByRole("status")).toHaveText("已保存到本机");
@@ -2272,7 +2278,7 @@ test("D5 关闭失败正文仍收起面板，切卡后重试只保存原卡", as
   await newCard(page);
   const first = (await draftProject(page)).cards[0];
   await page.getByRole("button", { name: "关闭正文" }).click();
-  await historyCard(page, "另一张卡");
+  await historyCard(page, "另一张卡", { x: 700, y: 240 });
   const nodes = page.locator(".react-flow__node");
   await nodes.first().getByRole("button", { name: "编辑正文" }).press("Enter");
   await page.route("**/api/mapping/execute", async (r) => {
