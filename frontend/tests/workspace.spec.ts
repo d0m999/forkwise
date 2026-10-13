@@ -134,13 +134,15 @@ test("真实 React Flow 卡片经服务重启和新浏览器上下文保持项�
   await expect(page.locator(".react-flow__node")).toHaveCount(1);
   await page.screenshot({ path: testInfo.outputPath("before-restart.png") });
   // Release this fixture's active HTTP connections before waiting for graceful shutdown.
-  await page.goto("about:blank");
-  await stop();
-  await start();
+  await test.step("Close the original fixture context and its HTTP client", () =>
+    page.context().close());
+  await test.step("Await original fixture server exit", stop);
+  await test.step("Restart the same temporary SQLite service", start);
   // A new browser context has no localStorage, IndexedDB, cookies, or prototype archives.
   const context = await browser.newContext();
   const reopened = await context.newPage();
-  await openWorkspace(reopened);
+  await test.step("Authorize and load the empty new browser context", () =>
+    openWorkspace(reopened));
   await reopened.getByRole("tab", { name: /芯片研究/ }).click();
   await expect(reopened.locator(".react-flow__node")).toContainText("独立标题");
   await reopened.getByRole("button", { name: "编辑正文" }).click();
@@ -2561,7 +2563,7 @@ test("S5-R2 恢复identity迟到不覆盖同卡后来实际输入，旧草稿保
   await expect(page.getByRole("alert")).toBeVisible();
   await page.reload();
   await page.unroute("**/api/mapping/execute");
-  await expect(page.getByRole("status")).toHaveText("已保存到本机");
+  await expect(page.getByRole("status")).toHaveText("有待恢复的未确认草稿");
   await page.getByRole("button", { name: "编辑正文" }).click();
   const identityStarted = gate(),
     identityResponse = gate();
@@ -2666,7 +2668,7 @@ test("S5-R2 未持久化媒体拒绝后同generation重试保留原封请求和S
     ["pending-asset"],
   );
   await page.reload();
-  await expect(page.getByRole("status")).toHaveText("已保存到本机");
+  await expect(page.getByRole("status")).toHaveText("有待恢复的未确认草稿");
   const requests: unknown[] = [],
     replies: { code?: string }[] = [];
   await page.route("**/api/mapping/execute", async (route) => {
@@ -2725,7 +2727,7 @@ test("S5-R2 媒体依赖随新generation和重开继续保留，不能变成已�
     ["pending-asset"],
   );
   await page.reload();
-  await expect(page.getByRole("status")).toHaveText("已保存到本机");
+  await expect(page.getByRole("status")).toHaveText("有待恢复的未确认草稿");
   const requests: {
     commandId: string;
     expected: string;
@@ -2819,7 +2821,7 @@ for (const boundary of ["card", "project", "close"] as const) {
       "必须保留的原卡恢复草稿",
     );
     await page.reload();
-    await expect(page.getByRole("status")).toHaveText("已保存到本机");
+    await expect(page.getByRole("status")).toHaveText("有待恢复的未确认草稿");
     const openBody = (card: Card) =>
       page
         .locator(`[data-id="${card.item.id}"]`)
@@ -2995,7 +2997,7 @@ test("S5-R2 恢复project旧读取晚于新输入ACK到达也不得覆盖，恢�
     "旧读取绑定的恢复正文",
   );
   await page.reload();
-  await expect(page.getByRole("status")).toHaveText("已保存到本机");
+  await expect(page.getByRole("status")).toHaveText("有待恢复的未确认草稿");
   await page.getByRole("button", { name: "编辑正文" }).click();
   const readStarted = gate(),
     releaseRead = gate();
@@ -3074,7 +3076,7 @@ test("S5-R2 媒体拒绝响应在途时继续输入，新请求仍带原媒体�
     ["pending-asset"],
   );
   await page.reload();
-  await expect(page.getByRole("status")).toHaveText("已保存到本机");
+  await expect(page.getByRole("status")).toHaveText("有待恢复的未确认草稿");
   const pendingStarted = gate(),
     responseRelease = gate();
   const requests: {
