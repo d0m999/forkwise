@@ -518,16 +518,25 @@ function Workspace() {
       if (!active || running) return;
       const captured = authority.current;
       if (!captured || captured.project.id !== id) return;
+      const inputGeneration = generation.current;
+      const inputEpoch = editorEpoch.current;
+      const stillCurrent = () =>
+        active &&
+        authority.current === captured &&
+        generation.current === inputGeneration &&
+        editorEpoch.current === inputEpoch;
       running = true;
       clearTimeout(timer);
       try {
         const latest = await api.synchronize(captured);
-        if (!active || authority.current !== captured) return;
+        if (!stillCurrent()) return;
         if (latest !== captured) {
           const timeline = await api.history(id);
-          if (!active || authority.current !== captured) return;
+          if (!stillCurrent()) return;
+          const all = await api.projects();
+          if (!stillCurrent()) return;
           updateState(latest, timeline);
-          setProjects(await api.projects());
+          setProjects(all);
         }
         if (active) setSyncNotice("");
       } catch (error) {

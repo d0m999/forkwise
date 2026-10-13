@@ -486,3 +486,148 @@ test("授权撤销撤下派生地图，未确认草稿保留，重新授权完�
     await f.cleanup();
   }
 });
+
+for (const field of ["body", "title"] as const) {
+  for (const boundary of ["changes", "history", "projects"] as const) {
+    test(`D123 ${field} 新草稿使 ${boundary} await 中的旧轮失效，journal 保持`, async ({
+      browser,
+    }, info) => {
+      const f = await fixture(browser);
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      let held!: () => void;
+      const captured = new Promise<void>((resolve) => {
+        held = resolve;
+      });
+      let next!: () => void;
+      const settled = new Promise<void>((resolve) => {
+        next = resolve;
+      });
+      let armed = false;
+      let observeStarted = false;
+      let didHold = false;
+      try {
+        await f.page.route("**/api/mapping/**", async (route) => {
+          const path = new URL(route.request().url()).pathname;
+          if (path.endsWith("/changes")) {
+            if (!armed) return route.abort("connectionfailed");
+            if (observeStarted) {
+              next();
+              return route.abort("connectionfailed");
+            }
+            observeStarted = true;
+          }
+          const target =
+            boundary === "changes"
+              ? path.endsWith("/changes")
+              : boundary === "history"
+                ? path.endsWith("/history")
+                : path === "/api/mapping/projects";
+          if (!armed || !target || didHold) return route.continue();
+          didHold = true;
+          const response = await route.fetch();
+          const value = await response.json();
+          expect(
+            boundary === "projects" ? value[0].revision : value.revision,
+          ).toBe(3);
+          held();
+          await gate;
+          await route.fulfill({ response });
+        });
+        if (field === "body")
+          await f.page
+            .getByRole("button", { name: "编辑正文", exact: true })
+            .click();
+        else
+          await f.page
+            .getByRole("button", { name: "同步卡片", exact: true })
+            .click();
+        const editor = f.page.getByLabel(
+          field === "body" ? "卡片正文" : "卡片标题",
+          { exact: true },
+        );
+        // Start composition before the read: later input advances generation,
+        // without another composition event changing the editor epoch.
+        await editor.dispatchEvent("compositionstart");
+        await editor.fill("组合中的起始草稿");
+        const card = (await f.index()).items[0];
+        await f.execute({
+          commandId: "remote-before-read",
+          type: "body.edit",
+          expected: card.body.versionId,
+          payload: { id: "c", text: "读取开始前已提交的远端正文" },
+        });
+        armed = true;
+        await captured;
+        await expect(f.page.locator(".workspace")).toHaveAttribute(
+          "data-revision",
+          "2",
+        );
+        const input = `读取期间新增的${field}草稿🧠`;
+        await editor.fill(input);
+        const journal = await f.page.evaluate(() => {
+          const key = Object.keys(localStorage).find((k) =>
+            k.startsWith("forkwise:recovery:v1:"),
+          )!;
+          return { key, value: JSON.parse(localStorage.getItem(key)!) };
+        });
+        expect(journal.value.drafts[0]).toMatchObject({
+          projectId: "p",
+          cardId: "c",
+          field,
+          generation: 2,
+          expected: field === "body" ? card.body.versionId : card.versionId,
+          value: input,
+        });
+        release();
+        // The next serialized poll proves the old round has settled; its
+        // response is aborted so it cannot publish a later, fresh projection.
+        await settled;
+        const after = await f.page.evaluate(
+          (key) => JSON.parse(localStorage.getItem(key)!),
+          journal.key,
+        );
+        expect(after).toEqual(journal.value);
+        await expect(editor).toHaveValue(input);
+        expect((await f.index()).revision).toBe(3);
+        await info.attach("draft-invalidation-observation", {
+          body: JSON.stringify({
+            field,
+            boundary,
+            beforeAuthority: 2,
+            serverRevision: 3,
+            afterAuthority: await f.page
+              .locator(".workspace")
+              .getAttribute("data-revision"),
+            journalBefore: journal.value,
+            journalAfter: after,
+            syntheticComposition: true,
+          }),
+          contentType: "application/json",
+        });
+        await expect(f.page.locator(".workspace")).toHaveAttribute(
+          "data-revision",
+          "2",
+        );
+      } finally {
+        release();
+        await f.page.unrouteAll({ behavior: "wait" });
+        await f.cleanup();
+        await info.attach("owned-service-closeout", {
+          body: JSON.stringify({
+            identities: f.identities,
+            origin: f.origin,
+            temporaryDirectory: f.directory,
+            contextClosed: true,
+            servicesClosed: true,
+            portClosed: true,
+            temporaryDirectoryRemoved: true,
+          }),
+          contentType: "application/json",
+        });
+      }
+    });
+  }
+}
