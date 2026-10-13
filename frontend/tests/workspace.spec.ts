@@ -987,16 +987,23 @@ for (const field of ["body", "title"] as const) {
           "再次保存D",
         );
         expect(value((await read()).cards[0])).toBe("再次保存D");
+        expect(commands).toHaveLength(0);
         if (field === "body") await expect(input).toHaveValue(original);
         else
           await expect(
             page.getByRole("button", { name: original, exact: true }),
           ).toBeVisible();
         await expect(page.getByRole("status")).not.toHaveText("已保存到本机");
+        const recheckedRemote = (await read()).cards[0];
         await page
           .getByRole("button", { name: `确认保留我的${label}` })
           .click();
         await expect.poll(() => commands.length).toBe(1);
+        expect(commands[0]!.expected).toBe(
+          field === "body"
+            ? recheckedRemote.body.versionId
+            : recheckedRemote.versionId,
+        );
       }
       await expect(page.getByRole("status")).toHaveText("已保存到本机");
       expect(value((await read()).cards[0])).toBe(original);
@@ -2518,4 +2525,585 @@ test("D5 synthetic粘贴边界和真实焦点边界各自可撤销", async ({ pa
   await body.pressSequentially("B");
   await body.press("Meta+z");
   await expect(body).toHaveValue("AP");
+});
+
+test("S5-R2 恢复identity迟到不覆盖同卡后来实际输入，旧草稿保留到重开", async ({
+  page,
+}, testInfo) => {
+  page.on("pageerror", (error) =>
+    process.stderr.write("R2 browser error: " + error.message + "\n"),
+  );
+  await openWorkspace(page);
+  await newCard(page);
+  const body = page.getByLabel("卡片正文", { exact: true });
+  await page.route("**/api/mapping/execute", async (route) => {
+    if (route.request().postDataJSON().type === "body.edit")
+      await route.abort();
+    else await route.continue();
+  });
+  await body.fill("之前失败的恢复正文");
+  await expect(page.getByRole("alert")).toBeVisible();
+  await page.reload();
+  await page.unroute("**/api/mapping/execute");
+  await expect(page.getByRole("status")).toHaveText("已保存到本机");
+  await page.getByRole("button", { name: "编辑正文" }).click();
+  const identityStarted = gate(),
+    identityResponse = gate();
+  await page.route("**/cards/*/identity", async (route) => {
+    const response = await route.fetch();
+    identityStarted.release();
+    await identityResponse.promise;
+    await route.fulfill({ response });
+  });
+  try {
+    await page.getByRole("button", { name: "恢复草稿", exact: true }).click();
+    await identityStarted.promise;
+    await body.pressSequentially("恢复查询期间继续输入的新正文");
+    await page.screenshot({
+      path: testInfo.outputPath("before-identity-release.png"),
+    });
+    identityResponse.release();
+    await expect(page.getByRole("status")).toHaveText("已保存到本机");
+    expect((await draftProject(page)).cards[0].body.blocks[0].text).toBe(
+      "恢复查询期间继续输入的新正文",
+    );
+    await expect(body).toHaveValue("恢复查询期间继续输入的新正文");
+    await expect(
+      page.getByText(
+        "恢复检查期间内容或编辑对象已变化，原草稿仍保留，请重新选择恢复",
+      ),
+    ).toBeVisible();
+    await expect(page.getByLabel("草稿恢复")).toContainText(
+      "之前失败的恢复正文",
+    );
+    await page.reload();
+    await page.getByRole("button", { name: "编辑正文" }).click();
+    await expect(body).toHaveValue("恢复查询期间继续输入的新正文");
+    await expect(page.getByLabel("草稿恢复")).toContainText(
+      "之前失败的恢复正文",
+    );
+  } finally {
+    identityResponse.release();
+    await page.unroute("**/cards/*/identity");
+    await page.screenshot({
+      path: testInfo.outputPath("after-identity-release.png"),
+    });
+  }
+});
+
+async function seedRecoveryJournal(
+  page: Page,
+  projectId: string,
+  card: Card,
+  text: string,
+  requiredAssetIds?: string[],
+) {
+  const command = {
+    commandId: crypto.randomUUID(),
+    projectId,
+    type: "body.edit" as const,
+    expected: card.body.versionId,
+    payload: {
+      id: card.id,
+      text,
+      ...(requiredAssetIds ? { requiredAssetIds } : {}),
+    },
+  };
+  const draft = {
+    projectId,
+    cardId: card.id,
+    field: "body",
+    value: text,
+    generation: 1,
+    expected: card.body.versionId,
+    command,
+  };
+  await page.evaluate(
+    ({ key, value }) => localStorage.setItem(key, JSON.stringify(value)),
+    {
+      key: "forkwise:recovery:v1:" + crypto.randomUUID(),
+      value: {
+        schema: 1,
+        projectId,
+        cardId: card.id,
+        drafts: [draft],
+        closed: [],
+        pending: null,
+      },
+    },
+  );
+  return command;
+}
+
+test("S5-R2 未持久化媒体拒绝后同generation重试保留原封请求和SQLite状态", async ({
+  page,
+}, testInfo) => {
+  await openWorkspace(page);
+  const projectId = await newCard(page);
+  const before = await draftProject(page),
+    historyBefore = await historyState(page);
+  const original = await seedRecoveryJournal(
+    page,
+    projectId,
+    before.cards[0],
+    "等待真实媒体的恢复正文",
+    ["pending-asset"],
+  );
+  await page.reload();
+  await expect(page.getByRole("status")).toHaveText("已保存到本机");
+  const requests: unknown[] = [],
+    replies: { code?: string }[] = [];
+  await page.route("**/api/mapping/execute", async (route) => {
+    requests.push(route.request().postDataJSON());
+    const response = await route.fetch();
+    replies.push(await response.json());
+    await route.fulfill({ response });
+  });
+  try {
+    await page.getByRole("button", { name: "恢复草稿", exact: true }).click();
+    await expect(page.getByRole("alert")).toContainText("所需媒体尚未持久保存");
+    expect(requests[0]).toEqual(original);
+    expect(await draftProject(page)).toEqual(before);
+    await page.screenshot({
+      path: testInfo.outputPath("media-before-retry.png"),
+    });
+    await page.getByRole("button", { name: "重试保存", exact: true }).click();
+    await expect.poll(() => replies.length).toBe(2);
+    expect(replies[1]!.code).toBe("MEDIA_NOT_PERSISTED");
+    expect(requests[1]).toEqual(original);
+    await expect(page.getByRole("status")).not.toHaveText("已保存到本机");
+    expect(await draftProject(page)).toEqual(before);
+    expect(await historyState(page)).toEqual(historyBefore);
+  } finally {
+    await testInfo.attach("media-original-request-runtime", {
+      body: JSON.stringify({
+        original,
+        requests,
+        replies,
+        before,
+        after: await draftProject(page),
+        historyBefore,
+        historyAfter: await historyState(page),
+      }),
+      contentType: "application/json",
+    });
+    await page.unroute("**/api/mapping/execute");
+    await page.screenshot({
+      path: testInfo.outputPath("media-after-retry.png"),
+    });
+  }
+});
+
+test("S5-R2 媒体依赖随新generation和重开继续保留，不能变成已保存", async ({
+  page,
+}, testInfo) => {
+  await openWorkspace(page);
+  const projectId = await newCard(page);
+  const before = await draftProject(page),
+    historyBefore = await historyState(page);
+  const original = await seedRecoveryJournal(
+    page,
+    projectId,
+    before.cards[0],
+    "带未完成媒体的草稿",
+    ["pending-asset"],
+  );
+  await page.reload();
+  await expect(page.getByRole("status")).toHaveText("已保存到本机");
+  const requests: {
+    commandId: string;
+    expected: string;
+    payload: { text: string; requiredAssetIds?: string[] };
+  }[] = [];
+  const codes: (string | undefined)[] = [];
+  await page.route("**/api/mapping/execute", async (route) => {
+    requests.push(route.request().postDataJSON());
+    const response = await route.fetch();
+    codes.push((await response.json()).code);
+    await route.fulfill({ response });
+  });
+  await page.getByRole("button", { name: "恢复草稿", exact: true }).click();
+  await expect(page.getByRole("alert")).toContainText("所需媒体尚未持久保存");
+  const body = page.getByLabel("卡片正文", { exact: true });
+  await body.fill("媒体仍未完成，继续输入的新正文");
+  await page.getByRole("button", { name: "重试保存", exact: true }).click();
+  await expect.poll(() => codes.length).toBe(2);
+  expect(codes[1]).toBe("MEDIA_NOT_PERSISTED");
+  expect(requests[1]!.payload).toMatchObject({
+    text: "媒体仍未完成，继续输入的新正文",
+    requiredAssetIds: ["pending-asset"],
+  });
+  expect(requests[1]!.commandId).not.toBe(original.commandId);
+  expect(requests[1]!.expected).toBe(original.expected);
+  expect(await draftProject(page)).toEqual(before);
+  expect(await historyState(page)).toEqual(historyBefore);
+  await expect(page.getByRole("status")).not.toHaveText("已保存到本机");
+  await stop();
+  await start();
+  await page.reload();
+  await expect(
+    page.getByRole("button", { name: "恢复草稿", exact: true }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "恢复草稿", exact: true }).click();
+  await expect.poll(() => codes.length).toBe(3);
+  expect(requests[2]).toEqual(requests[1]);
+  expect(codes[2]).toBe("MEDIA_NOT_PERSISTED");
+  await expect(body).toHaveValue("媒体仍未完成，继续输入的新正文");
+  await body.pressSequentially("，重开后继续写");
+  await page.getByRole("button", { name: "重试保存", exact: true }).click();
+  await expect.poll(() => codes.length).toBe(4);
+  expect(requests[3]!.payload.requiredAssetIds).toEqual(["pending-asset"]);
+  expect(codes[3]).toBe("MEDIA_NOT_PERSISTED");
+  await testInfo.attach("media-generation-restart-runtime", {
+    body: JSON.stringify({
+      original,
+      requests,
+      codes,
+      before,
+      after: await draftProject(page),
+      historyBefore,
+      historyAfter: await historyState(page),
+    }),
+    contentType: "application/json",
+  });
+  expect(await draftProject(page)).toEqual(before);
+  expect(await historyState(page)).toEqual(historyBefore);
+  await expect(page.getByRole("status")).not.toHaveText("已保存到本机");
+});
+
+for (const boundary of ["card", "project", "close"] as const) {
+  test(`S5-R2 恢复读取跨${boundary}边界迟到时不交接，往返也不能复用旧授权`, async ({
+    page,
+  }) => {
+    await openWorkspace(page);
+    const projectId = await newCard(page);
+    const initial = await draftProject(page),
+      originalCard = initial.cards[0];
+    let otherCard: Card | undefined, otherProjectId: string | undefined;
+    if (boundary === "card") {
+      await historyCard(page, "另一张卡片");
+      otherCard = (await draftProject(page)).cards[1];
+    } else if (boundary === "project") {
+      await page.getByRole("button", { name: "新建研究", exact: true }).click();
+      await expect
+        .poll(() => new URL(page.url()).searchParams.get("project"))
+        .not.toBe(projectId);
+      otherProjectId = new URL(page.url()).searchParams.get("project")!;
+      await page.locator(`[role=tab][title="${projectId}"]`).click();
+      await expect(
+        page.locator(`[role=tab][title="${projectId}"]`),
+      ).toHaveAttribute("aria-selected", "true");
+    }
+    await seedRecoveryJournal(
+      page,
+      projectId,
+      originalCard,
+      "必须保留的原卡恢复草稿",
+    );
+    await page.reload();
+    await expect(page.getByRole("status")).toHaveText("已保存到本机");
+    const openBody = (card: Card) =>
+      page
+        .locator(`[data-id="${card.item.id}"]`)
+        .getByRole("button", { name: "编辑正文" })
+        .press("Enter");
+    await openBody(originalCard);
+    const readStarted = gate(),
+      release = gate();
+    const submitted: unknown[] = [];
+    await page.route("**/api/mapping/execute", async (route) => {
+      submitted.push(route.request().postDataJSON());
+      await route.continue();
+    });
+    await page.route("**/cards/*/identity", async (route) => {
+      const response = await route.fetch();
+      readStarted.release();
+      await release.promise;
+      await route.fulfill({ response });
+    });
+    try {
+      await page.getByRole("button", { name: "恢复草稿", exact: true }).click();
+      await readStarted.promise;
+      if (boundary === "card") {
+        await openBody(otherCard!);
+        await expect(page.locator(".body-editor h2")).toHaveText("另一张卡片");
+        await openBody(originalCard);
+        await expect(page.locator(".body-editor h2")).toHaveText(
+          originalCard.title,
+        );
+      } else if (boundary === "project") {
+        await page.locator(`[role=tab][title="${otherProjectId}"]`).click();
+        await expect(
+          page.locator(`[role=tab][title="${otherProjectId}"]`),
+        ).toHaveAttribute("aria-selected", "true");
+        await page.locator(`[role=tab][title="${projectId}"]`).click();
+        await expect(
+          page.locator(`[role=tab][title="${projectId}"]`),
+        ).toHaveAttribute("aria-selected", "true");
+        await openBody(originalCard);
+      } else {
+        await page.getByRole("button", { name: "关闭正文" }).click();
+        await expect(page.getByLabel("卡片正文", { exact: true })).toHaveCount(
+          0,
+        );
+      }
+      release.release();
+      await expect(
+        page.getByText(
+          "恢复检查期间内容或编辑对象已变化，原草稿仍保留，请重新选择恢复",
+        ),
+      ).toBeVisible();
+      expect(submitted).toEqual([]);
+      expect(
+        (await draftProject(page)).cards.find(
+          (c: Card) => c.id === originalCard.id,
+        ).body,
+      ).toEqual(originalCard.body);
+      await expect(page.getByLabel("草稿恢复")).toContainText(
+        "必须保留的原卡恢复草稿",
+      );
+      if (boundary === "close")
+        await expect(page.getByLabel("卡片正文", { exact: true })).toHaveCount(
+          0,
+        );
+      else
+        await expect(page.getByLabel("卡片正文", { exact: true })).toHaveValue(
+          originalCard.body.blocks[0].text,
+        );
+      await page.reload();
+      await expect(page.getByLabel("草稿恢复")).toContainText(
+        "必须保留的原卡恢复草稿",
+      );
+    } finally {
+      release.release();
+      await page.unroute("**/cards/*/identity");
+    }
+  });
+}
+
+for (const lateReply of ["success", "failure"] as const) {
+  test(`S5-R2 后发恢复完成后，先发identity晚到${lateReply}不覆盖其内容或状态`, async ({
+    page,
+  }) => {
+    await openWorkspace(page);
+    const projectId = await newCard(page),
+      before = await draftProject(page);
+    const first = await seedRecoveryJournal(
+      page,
+      projectId,
+      before.cards[0],
+      "先发恢复草稿",
+    );
+    const second = await seedRecoveryJournal(
+      page,
+      projectId,
+      before.cards[0],
+      "后发明确选择的草稿",
+    );
+    await page.reload();
+    await expect(page.getByLabel("草稿恢复")).toContainText(
+      "后发明确选择的草稿",
+    );
+    const firstStarted = gate(),
+      firstRelease = gate(),
+      firstDelivered = gate();
+    let identityCount = 0;
+    const requests: { commandId: string }[] = [];
+    await page.route("**/api/mapping/execute", async (route) => {
+      requests.push(route.request().postDataJSON());
+      await route.continue();
+    });
+    await page.route("**/cards/*/identity", async (route) => {
+      identityCount++;
+      if (identityCount === 1) {
+        const response = await route.fetch();
+        firstStarted.release();
+        await firstRelease.promise;
+        if (lateReply === "success") await route.fulfill({ response });
+        else
+          await route.fulfill({
+            status: 503,
+            contentType: "application/json",
+            body: JSON.stringify({
+              code: "UNAVAILABLE",
+              message: "先发请求晚到失败",
+            }),
+          });
+        firstDelivered.release();
+      } else await route.continue();
+    });
+    try {
+      const entry = (text: string) =>
+        page
+          .getByLabel("草稿恢复")
+          .locator("article")
+          .filter({ hasText: text })
+          .getByRole("button", { name: "恢复草稿" });
+      await entry("先发恢复草稿").click();
+      await firstStarted.promise;
+      await entry("后发明确选择的草稿").click();
+      await expect(page.getByRole("status")).toHaveText("已保存到本机");
+      await expect(page.getByLabel("卡片正文", { exact: true })).toHaveValue(
+        "后发明确选择的草稿",
+      );
+      firstRelease.release();
+      await firstDelivered.promise;
+      await expect(page.getByRole("alert")).toHaveCount(0);
+      expect(requests.map((r) => r.commandId)).toEqual([second.commandId]);
+      expect((await draftProject(page)).cards[0].body.blocks[0].text).toBe(
+        "后发明确选择的草稿",
+      );
+      await expect(page.getByLabel("草稿恢复")).toContainText("先发恢复草稿");
+      expect(requests.some((r) => r.commandId === first.commandId)).toBe(false);
+      await page.reload();
+      await expect(page.getByLabel("草稿恢复")).toContainText("先发恢复草稿");
+    } finally {
+      firstRelease.release();
+      await page.unroute("**/cards/*/identity");
+    }
+  });
+}
+
+test("S5-R2 恢复project旧读取晚于新输入ACK到达也不得覆盖，恢复记录仍在", async ({
+  page,
+}, testInfo) => {
+  await openWorkspace(page);
+  const projectId = await newCard(page),
+    before = await draftProject(page);
+  const original = await seedRecoveryJournal(
+    page,
+    projectId,
+    before.cards[0],
+    "旧读取绑定的恢复正文",
+  );
+  await page.reload();
+  await expect(page.getByRole("status")).toHaveText("已保存到本机");
+  await page.getByRole("button", { name: "编辑正文" }).click();
+  const readStarted = gate(),
+    releaseRead = gate();
+  let firstRead = true;
+  const requests: { commandId: string }[] = [];
+  await page.route("**/api/mapping/execute", async (route) => {
+    requests.push(route.request().postDataJSON());
+    await route.continue();
+  });
+  await page.route(
+    origin + "/api/mapping/projects/" + projectId,
+    async (route) => {
+      if (firstRead) {
+        firstRead = false;
+        const response = await route.fetch();
+        readStarted.release();
+        await releaseRead.promise;
+        await route.fulfill({ response });
+      } else await route.continue();
+    },
+  );
+  try {
+    await page.getByRole("button", { name: "恢复草稿", exact: true }).click();
+    await readStarted.promise;
+    await page
+      .getByLabel("卡片正文", { exact: true })
+      .pressSequentially("读取在途时实际输入并先获得ACK的正文");
+    await expect(page.getByRole("status")).toHaveText("已保存到本机");
+    releaseRead.release();
+    await expect(
+      page.getByText(
+        "恢复检查期间内容或编辑对象已变化，原草稿仍保留，请重新选择恢复",
+      ),
+    ).toBeVisible();
+    await expect(page.getByLabel("卡片正文", { exact: true })).toHaveValue(
+      "读取在途时实际输入并先获得ACK的正文",
+    );
+    expect((await draftProject(page)).cards[0].body.blocks[0].text).toBe(
+      "读取在途时实际输入并先获得ACK的正文",
+    );
+    expect(requests.some((r) => r.commandId === original.commandId)).toBe(
+      false,
+    );
+    await expect(page.getByLabel("草稿恢复")).toContainText(
+      "旧读取绑定的恢复正文",
+    );
+    await testInfo.attach("late-project-runtime", {
+      body: JSON.stringify({
+        original,
+        requests,
+        readback: await draftProject(page),
+      }),
+      contentType: "application/json",
+    });
+    await page.reload();
+    await expect(page.getByLabel("草稿恢复")).toContainText(
+      "旧读取绑定的恢复正文",
+    );
+  } finally {
+    releaseRead.release();
+    await page.unroute(origin + "/api/mapping/projects/" + projectId);
+  }
+});
+
+test("S5-R2 媒体拒绝响应在途时继续输入，新请求仍带原媒体依赖", async ({
+  page,
+}, testInfo) => {
+  await openWorkspace(page);
+  const projectId = await newCard(page),
+    before = await draftProject(page);
+  const original = await seedRecoveryJournal(
+    page,
+    projectId,
+    before.cards[0],
+    "在途媒体恢复正文",
+    ["pending-asset"],
+  );
+  await page.reload();
+  await expect(page.getByRole("status")).toHaveText("已保存到本机");
+  const pendingStarted = gate(),
+    responseRelease = gate();
+  const requests: {
+    commandId: string;
+    payload: { text: string; requiredAssetIds?: string[] };
+  }[] = [];
+  const codes: (string | undefined)[] = [];
+  await page.route("**/api/mapping/execute", async (route) => {
+    requests.push(route.request().postDataJSON());
+    const response = await route.fetch();
+    codes.push((await response.json()).code);
+    if (requests.length === 1) {
+      pendingStarted.release();
+      await responseRelease.promise;
+    }
+    await route.fulfill({ response });
+  });
+  try {
+    await page.getByRole("button", { name: "恢复草稿", exact: true }).click();
+    await pendingStarted.promise;
+    await page
+      .getByLabel("卡片正文", { exact: true })
+      .fill("旧媒体请求等待响应时的新正文");
+    responseRelease.release();
+    await expect(page.getByRole("alert")).toContainText("所需媒体尚未持久保存");
+    await page.getByRole("button", { name: "重试保存", exact: true }).click();
+    await expect.poll(() => codes.length).toBe(2);
+    expect(requests[0]).toEqual(original);
+    expect(requests[1]!.payload).toMatchObject({
+      text: "旧媒体请求等待响应时的新正文",
+      requiredAssetIds: ["pending-asset"],
+    });
+    expect(codes).toEqual(["MEDIA_NOT_PERSISTED", "MEDIA_NOT_PERSISTED"]);
+    expect(await draftProject(page)).toEqual(before);
+    await expect(page.getByRole("status")).not.toHaveText("已保存到本机");
+    await testInfo.attach("media-inflight-runtime", {
+      body: JSON.stringify({
+        original,
+        requests,
+        codes,
+        before,
+        after: await draftProject(page),
+      }),
+      contentType: "application/json",
+    });
+  } finally {
+    responseRelease.release();
+    await page.unroute("**/api/mapping/execute");
+  }
 });

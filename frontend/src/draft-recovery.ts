@@ -10,6 +10,7 @@ export interface Draft {
   command?: Command;
   editGroup?: string;
   rejected?: boolean;
+  requiredAssetIds?: string[];
 }
 export interface Recovery {
   schema: 1;
@@ -68,6 +69,17 @@ export class DraftRecovery {
         try {
           const value: unknown = JSON.parse(this.storage.getItem(key)!);
           if (!validRecovery(value)) throw new Error("Invalid recovery");
+          // Schema 1 journals may carry requirements only in the original
+          // command. Keep that request intact and retain its resource state
+          // independently for subsequent edits and definite rejections.
+          for (const draft of [
+            ...value.drafts,
+            ...value.closed,
+            ...(value.pending ? [value.pending] : []),
+          ]) {
+            const assets = draftAssetIds(draft);
+            if (assets) draft.requiredAssetIds = assets;
+          }
           result.push({ key, value });
         } catch {
           this.damaged = true;
@@ -129,7 +141,9 @@ function validRecovery(value: unknown): value is Recovery {
         !d.expected ||
         !Number.isSafeInteger(d.generation) ||
         d.generation < 1 ||
-        (d.editGroup !== undefined && typeof d.editGroup !== "string")
+        (d.editGroup !== undefined && typeof d.editGroup !== "string") ||
+        (d.requiredAssetIds !== undefined &&
+          (d.field !== "body" || !validAssetIds(d.requiredAssetIds)))
       )
         return false;
       if (!d.command) return true;
@@ -142,7 +156,9 @@ function validRecovery(value: unknown): value is Recovery {
         ((c.type === "body.edit" &&
           d.field === "body" &&
           c.payload.id === d.cardId &&
-          c.payload.text === d.value) ||
+          c.payload.text === d.value &&
+          (c.payload.requiredAssetIds === undefined ||
+            validAssetIds(c.payload.requiredAssetIds))) ||
           (c.type === "thought.title" &&
             d.field === "title" &&
             c.payload.id === d.cardId &&
@@ -150,4 +166,25 @@ function validRecovery(value: unknown): value is Recovery {
       );
     },
   );
+}
+
+function validAssetIds(value: unknown): value is string[] {
+  return (
+    Array.isArray(value) &&
+    value.length <= 128 &&
+    value.every(
+      (id) => typeof id === "string" && id.length > 0 && id.length <= 160,
+    )
+  );
+}
+export function draftAssetIds(draft: Draft): string[] | undefined {
+  const fromCommand =
+    draft.command?.type === "body.edit"
+      ? draft.command.payload.requiredAssetIds
+      : undefined;
+  if (draft.requiredAssetIds === undefined && fromCommand === undefined)
+    return undefined;
+  return [
+    ...new Set([...(draft.requiredAssetIds ?? []), ...(fromCommand ?? [])]),
+  ];
 }

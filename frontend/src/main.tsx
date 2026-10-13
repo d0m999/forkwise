@@ -20,7 +20,12 @@ import {
   type ProjectState,
 } from "./api";
 import "./style.css";
-import { DraftRecovery, type Draft, type Recovery } from "./draft-recovery";
+import {
+  DraftRecovery,
+  draftAssetIds,
+  type Draft,
+  type Recovery,
+} from "./draft-recovery";
 import { usePoseSave } from "./pose-save";
 
 type CardData = {
@@ -133,10 +138,13 @@ function Workspace() {
     drafts = useRef<Record<string, Draft>>({});
   const unconfirmed = useRef<Draft | null>(null);
   const recovery = useRef<DraftRecovery | null>(null);
+  const recoveryTask = useRef(0),
+    editorEpoch = useRef(0);
   const [recoveries, setRecoveries] = useState<
     { key: string; value: Recovery }[]
   >([]);
   const [recoveryError, setRecoveryError] = useState("");
+  const [recoveryNotice, setRecoveryNotice] = useState("");
   const [deletedRecovery, setDeletedRecovery] = useState<{
     projectId: string;
     cardId: string;
@@ -170,16 +178,47 @@ function Workspace() {
     }
   }
   async function restoreDraft(entry: { key: string; value: Recovery }) {
-    if (historyBlocked || composition.current || !(await flush())) return;
+    if (historyBlocked || composition.current) return;
     const saved = entry.value;
+    const task = ++recoveryTask.current;
+    setRecoveryNotice("");
+    const epoch = editorEpoch.current,
+      inputGeneration = generation.current;
+    const projectId = authority.current?.project.id;
+    const boundCardId = bodyBinding.current?.card.id;
+    // Authorization to recover is tied to this task and the editor state at
+    // the click, including edits that have already received an ACK by readback.
+    const stillCurrent = () => {
+      if (task !== recoveryTask.current) return false;
+      if (
+        epoch === editorEpoch.current &&
+        inputGeneration === generation.current &&
+        authority.current?.project.id === projectId &&
+        projectId === saved.projectId &&
+        bodyBinding.current?.card.id === boundCardId &&
+        !composition.current &&
+        !historyLock.current &&
+        !historyCommand.current &&
+        !pendingAction.current
+      )
+        return true;
+      setRecoveryNotice(
+        "恢复检查期间内容或编辑对象已变化，原草稿仍保留，请重新选择恢复",
+      );
+      return false;
+    };
     try {
+      if (!(await flush()) || !stillCurrent()) return;
       const identity = await api.cardIdentity(saved.projectId, saved.cardId);
+      if (!stillCurrent()) return;
       if (identity.availability === "not_found")
         throw new Error("草稿身份不属于此项目，原件已保留");
       const latest = await api.project(saved.projectId);
+      if (!stillCurrent()) return;
       const card = latest.cards.find((c) => c.id === saved.cardId);
       if (!card) {
         const timeline = await api.history(saved.projectId);
+        if (!stillCurrent()) return;
         const target = timeline.redo.at(-1);
         setDeletedRecovery({
           projectId: saved.projectId,
@@ -194,6 +233,7 @@ function Workspace() {
       }
       if (authority.current?.project.id !== saved.projectId) return;
       updateState(latest);
+      breakBodyGroup();
       for (const draft of [
         ...saved.closed,
         ...saved.drafts,
@@ -215,7 +255,7 @@ function Workspace() {
       setDeletedBody(null);
       await flush();
     } catch (e) {
-      fail(e);
+      if (stillCurrent()) fail(e);
     }
   }
   const closedDrafts = useRef<Draft[]>([]);
@@ -308,6 +348,7 @@ function Workspace() {
       (historyCommand.current ? direction !== "retry" : direction === "retry")
     )
       return;
+    editorEpoch.current++;
     historyLock.current = true;
     setHistoryBusy(true);
     try {
@@ -487,6 +528,7 @@ function Workspace() {
       fail(new Error("请先重试未完成的保存"));
       return;
     }
+    editorEpoch.current++;
     breakBodyGroup();
     if (!(await pose.flush()) || !(await flush())) return;
     if (id === authority.current?.project.id) return;
@@ -565,7 +607,13 @@ function Workspace() {
             type: "body.edit",
             ...(current.editGroup ? { editGroup: current.editGroup } : {}),
             expected: current.expected,
-            payload: { id: card.id, text: current.value },
+            payload: {
+              id: card.id,
+              text: current.value,
+              ...(draftAssetIds(current)
+                ? { requiredAssetIds: draftAssetIds(current)! }
+                : {}),
+            },
           });
     current.command = command;
     unconfirmed.current = current;
@@ -618,7 +666,9 @@ function Workspace() {
           // These replies explicitly reject before mutation. A corrected draft
           // may use a new request; transport failures must retain the old one.
           current.rejected = true;
-          delete current.command;
+          // A media refusal does not remove the draft's referenced resources.
+          // Without an edit, retry the same request with its full requirements.
+          if (e.code !== "MEDIA_NOT_PERSISTED") delete current.command;
           unconfirmed.current = null;
           closedDrafts.current = closedDrafts.current.filter(
             (d) => d.generation !== current.generation,
@@ -655,6 +705,7 @@ function Workspace() {
       maxTimer.current = setTimeout(() => void flush(), 2000);
   }
   function compose(value: boolean) {
+    editorEpoch.current++;
     if (value) {
       breakBodyGroup();
       compositionPrefixCutoff.current = generation.current;
@@ -702,12 +753,21 @@ function Workspace() {
           end: input?.end ?? 0,
         });
     }
+    const previous =
+      drafts.current[draftKey(state.project.id, card.id, field)] ??
+      (unconfirmed.current?.projectId === state.project.id &&
+      unconfirmed.current.cardId === card.id &&
+      unconfirmed.current.field === field
+        ? unconfirmed.current
+        : undefined);
+    const requiredAssetIds = previous ? draftAssetIds(previous) : undefined;
     const next: Draft = {
       projectId: state.project.id,
       cardId: card.id,
       field,
       value,
       generation: ++generation.current,
+      ...(requiredAssetIds ? { requiredAssetIds } : {}),
       ...(field === "title" && titleGroup.current?.cardId === card.id
         ? { editGroup: titleGroup.current.id }
         : field === "body" && bodyGroup.current
@@ -762,6 +822,9 @@ function Workspace() {
         value: choice === "mine" ? remoteValue : latest.value,
         expected: version(remote),
         generation: ++generation.current,
+        ...(choice === "remote" && draftAssetIds(latest)
+          ? { requiredAssetIds: draftAssetIds(latest)! }
+          : {}),
       });
       const next: Draft = {
         projectId: draft.projectId,
@@ -770,6 +833,9 @@ function Workspace() {
         value: choice === "mine" ? latest.value : remoteValue,
         generation: ++generation.current,
         expected: version(remote),
+        ...(choice === "mine" && draftAssetIds(latest)
+          ? { requiredAssetIds: draftAssetIds(latest)! }
+          : {}),
       };
       closedDrafts.current = closedDrafts.current.filter(
         (d) => draftKey(d.projectId, d.cardId, d.field) !== key,
@@ -801,6 +867,7 @@ function Workspace() {
       fail(new Error("请先重试未完成的保存"));
       return;
     }
+    editorEpoch.current++;
     breakBodyGroup();
     if (!(await pose.flush()) || !(await flush())) return;
     pendingAction.current = { command, ...(onDone ? { onDone } : {}) };
@@ -867,6 +934,7 @@ function Workspace() {
   async function editCard(id: string, field: "title" | "body") {
     if (historyLock.current || historyCommand.current) return;
     if (composition.current) return;
+    editorEpoch.current++;
     breakBodyGroup();
     await flush();
     // A failed save belongs to the old card; switching the visible editor
@@ -946,6 +1014,7 @@ function Workspace() {
       onTitle: (value) => change("title", card, value),
       onFinish: () => {
         if (!composition.current) {
+          editorEpoch.current++;
           setEditing(null);
           titleGroup.current = null;
           void flush();
@@ -1149,6 +1218,7 @@ function Workspace() {
               aria-label="关闭正文"
               onClick={() => {
                 if (composition.current) return;
+                editorEpoch.current++;
                 breakBodyGroup();
                 persistDrafts();
                 void flush();
@@ -1303,10 +1373,11 @@ function Workspace() {
             <button onClick={() => setDeletedRecovery(null)}>关闭</button>
           </aside>
         )}
-      {recoveryError && (
-        <p className="recovery-error" role="alert">
-          {recoveryError}
-        </p>
+      {(recoveryNotice || recoveryError) && (
+        <div className="recovery-error" role="alert">
+          {recoveryNotice && <p>{recoveryNotice}</p>}
+          {recoveryError && <p>{recoveryError}</p>}
+        </div>
       )}
       {historyNotice && (
         <div className="history-notice" aria-live="polite">
