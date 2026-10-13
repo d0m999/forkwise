@@ -148,6 +148,8 @@ function validRecovery(value: unknown): value is Recovery {
         return false;
       if (!d.command) return true;
       const c = d.command;
+      const commandAssets =
+        c.type === "body.edit" ? c.payload.requiredAssetIds : undefined;
       return (
         c.projectId === d.projectId &&
         c.expected === d.expected &&
@@ -157,12 +159,17 @@ function validRecovery(value: unknown): value is Recovery {
           d.field === "body" &&
           c.payload.id === d.cardId &&
           c.payload.text === d.value &&
-          (c.payload.requiredAssetIds === undefined ||
-            validAssetIds(c.payload.requiredAssetIds))) ||
+          (commandAssets === undefined || validAssetIds(commandAssets)) &&
+          // Never repair a weaker original request: it may already have run.
+          // Legacy command-only requirements remain valid; order is irrelevant.
+          (d.requiredAssetIds ?? []).every((id) =>
+            commandAssets?.includes(id),
+          )) ||
           (c.type === "thought.title" &&
             d.field === "title" &&
             c.payload.id === d.cardId &&
-            c.payload.title === d.value))
+            c.payload.title === d.value &&
+            !("requiredAssetIds" in c.payload)))
       );
     },
   );

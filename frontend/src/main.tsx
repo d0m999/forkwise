@@ -158,7 +158,11 @@ function Workspace() {
         closedDrafts.current,
         unconfirmed.current,
       );
-      setRecoveryError("");
+      setRecoveryError(
+        recovery.current.damaged
+          ? "部分恢复记录损坏，原件已保留；其他草稿仍可恢复"
+          : "",
+      );
       return true;
     } catch {
       setRecoveryError(
@@ -1399,7 +1403,9 @@ function Workspace() {
             ? "布局保存未完成"
             : pose.pending || pose.dragging
               ? "布局等待保存…"
-              : status}
+              : recovery.current?.damaged && status === "已保存到本机"
+                ? "部分恢复记录未确认"
+                : status}
         </span>
         {(error || pose.error) && (
           <>
