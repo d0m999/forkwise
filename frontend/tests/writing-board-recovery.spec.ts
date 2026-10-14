@@ -159,3 +159,34 @@ test('删除后的晚到正文请求不复活，直接撤销不把旧草稿或�
     await expect(page.getByRole('button', { name: '重试保存', exact: true })).toBeVisible();
   } finally { paused.release(); await page.unrouteAll({ behavior: 'wait' }); }
 });
+
+
+test('保存已真实成功但ACK在途时被外部删除，迟到ACK不得丢掉删除面板的当前完整内容', async ({ page, workspace }) => {
+  await place(page, 'ACK在途删除', 80, 120);
+  await page.getByRole('button', { name: '编辑正文', exact: true }).click();
+  const editor = page.getByRole('textbox', { name: '卡片正文', exact: true });
+  await editor.fill('已成功保存的第一段'); await editor.press('End'); await editor.press('Enter'); await page.keyboard.insertText('已成功保存的第二段');
+  await expect(page.getByRole('status')).toHaveText('已保存到本机');
+  const ack = gate(), reads = gate(); let written = false;
+  await page.route('**/api/mapping/projects/*/map?*', async route => { await reads.promise; await route.continue(); });
+  await page.route('**/api/mapping/execute', async route => {
+    if (route.request().postDataJSON().type !== 'body.edit') return route.continue();
+    const response = await route.fetch(); written = true; await ack.promise; await route.fulfill({ response });
+  });
+  try {
+    await editor.press('End'); await page.keyboard.insertText('尾');
+    await expect.poll(() => written).toBe(true);
+    const state = await workspace.state(), card = state.cards[0]!;
+    expect(card.body.blocks.map(b => b.text)).toEqual(['已成功保存的第一段', '已成功保存的第二段尾']);
+    await workspace.execute(page, { commandId: crypto.randomUUID(), projectId: state.project.id, type: 'thought.delete', expected: { thought: card.versionId, body: card.body.versionId, pose: card.item.versionId, appearance: card.appearance?.versionId ?? null }, payload: { id: card.id } });
+    ack.release(); reads.release();
+    await expect(page.getByLabel('已删除卡片')).toBeVisible();
+    await expect(page.getByRole('status')).toHaveText('已保存到本机');
+    await expect(editor).toHaveText('已成功保存的第一段已成功保存的第二段尾');
+    await expect(editor).not.toBeEditable();
+    expect((await workspace.state()).cards).toHaveLength(0);
+    await page.getByRole('button', { name: '撤销删除', exact: true }).click();
+    await expect(editor).toBeEditable();
+    expect((await workspace.state()).cards[0]!.body.blocks).toEqual(card.body.blocks);
+  } finally { ack.release(); reads.release(); await page.unrouteAll({ behavior: 'wait' }); }
+});

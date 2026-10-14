@@ -224,6 +224,7 @@ function Workspace() {
     removalActionId?: string;
     restoreDirection?: "undo" | "redo";
     wasDeleted?: boolean;
+    retainedContent?: Card;
   } | null>(null);
   const awaitBodySelection = useRef(false);
   const [deletedBody, setDeletedBody] = useState<{
@@ -604,10 +605,25 @@ function Workspace() {
       if (card) {
         binding.card = card;
         binding.wasDeleted = false;
+        delete binding.retainedContent;
         delete binding.removalActionId;
         delete binding.restoreDirection;
         setDeletedBody(null);
       } else {
+        if (!binding.retainedContent) {
+          // The readonly panel retains what the user was seeing at deletion,
+          // independently from ACK retirement of the original save request.
+          // This is a local projection, never a new authoritative Body version.
+          const retained = structuredClone(binding.card);
+          const input = [unconfirmed.current, ...closedDrafts.current, ...Object.values(drafts.current)]
+            .filter((draft): draft is Draft => !!draft && draft.projectId === binding.projectId && draft.cardId === binding.card.id)
+            .sort((a, b) => b.generation - a.generation);
+          const title = input.find(draft => draft.field === "title");
+          const body = input.find(draft => draft.field === "body");
+          if (title) retained.title = title.value;
+          if (body) retained.body.blocks = structuredClone(body.blocks ?? [{ ...retained.body.blocks[0]!, text: body.value }]);
+          binding.retainedContent = retained;
+        }
         // Filtering a deleted item out of a multi-selection is a system
         // cleanup, not an explicit selection of the surviving single card.
         if (!binding.wasDeleted) awaitBodySelection.current = true;
@@ -625,7 +641,7 @@ function Workspace() {
         setEditing(previous => previous === binding.card.id ? null : previous);
         setDeletedBody({
           projectId: binding.projectId,
-          card: binding.card,
+          card: binding.retainedContent,
           ...(binding.removalActionId
             ? { actionId: binding.removalActionId }
             : {}),

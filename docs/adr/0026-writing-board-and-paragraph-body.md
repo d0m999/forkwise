@@ -20,7 +20,7 @@ Body 仍是独立有版本实体，以完整 JSON blocks 数组往返 SQLite、H
 
 新增必要的 `thought.delete`，完整 thought/body/pose/appearance expected 在同一事务验证，删除当前 projection，保留身份、ordinal、immutable versions 与资源。沿用统一 40 步 action history，删除记录 before→null；恢复分配新的实体版本而保留实体身份，旧保存不能复活或覆盖恢复的版本。
 
-写字板删除态保留正文、退出编辑，显示这次删除 actionId 对应的直接撤销入口。入口要求当前历史顶仍是该操作、版本与权限仍有效；服务端 history.undo/redo 的可选 actionId 再验证，不能误撤后续操作。原创建撤销导致删除的恢复仍走绑定 redo。关闭仅收起，继续保存/保留恢复记录。文本原生 undo/redo 与项目历史各由既有单一路由处理，IME 优先；合成 composition 只验证事件处理，不证明真实 OSIME。
+首次确认删除时保留当时完整正文/标题的本地只读投影，独立于迟到ACK退休原草稿；该投影不构成权威Body版本，也不写回后端，恢复后使用新的权威卡片。写字板删除态保留正文、退出编辑，显示这次删除 actionId 对应的直接撤销入口。入口要求当前历史顶仍是该操作、版本与权限仍有效；服务端 history.undo/redo 的可选 actionId 再验证，不能误撤后续操作。原创建撤销导致删除的恢复仍走绑定 redo。关闭仅收起，继续保存/保留恢复记录。文本原生 undo/redo 与项目历史各由既有单一路由处理，IME 优先；合成 composition 只验证事件处理，不证明真实 OSIME。
 
 ## 几何与阅读状态
 
