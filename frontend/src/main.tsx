@@ -1365,8 +1365,10 @@ function Workspace() {
       height: pose.positions[card.item.id]?.height ?? card.item.pose.height,
     },
     type: "thought",
-    initialWidth: 280,
-    initialHeight: 160,
+    // Flow uses these before its first node measurement; keep that fallback
+    // on the same Pose/gesture projection as the rendered dimensions.
+    initialWidth: pose.positions[card.item.id]?.width ?? card.item.pose.width,
+    initialHeight: pose.positions[card.item.id]?.height ?? card.item.pose.height,
     ...(dimensions[card.item.id]
       ? { measured: dimensions[card.item.id]! }
       : {}),
