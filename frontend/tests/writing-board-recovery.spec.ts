@@ -6,7 +6,7 @@ function gate() {
   return { promise, release };
 }
 
-test('正文原生文本undo/redo一次按键只走文本，保存和重绘保持原生缓冲', async ({ page, workspace }) => {
+test('正文undo/redo由统一历史一次按键一次请求，保存和重绘保留正文与卡片', async ({ page, workspace }) => {
   await place(page, '原生正文', 80, 120);
   await page.getByRole('button', { name: '编辑正文', exact: true }).click();
   const editor = page.getByRole('textbox', { name: '卡片正文', exact: true });
@@ -19,8 +19,8 @@ test('正文原生文本undo/redo一次按键只走文本，保存和重绘保�
   await editor.press('Meta+Shift+z');
   await expect(editor).toHaveText('native');
   await expect(page.getByRole('status')).toHaveText('已保存到本机');
-  expect(requests).not.toContain('history.undo');
-  expect(requests).not.toContain('history.redo');
+  expect(requests.filter(type => type === 'history.undo')).toHaveLength(1);
+  expect(requests.filter(type => type === 'history.redo')).toHaveLength(1);
   expect((await workspace.state()).cards).toHaveLength(1);
 });
 

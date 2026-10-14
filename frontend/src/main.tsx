@@ -1872,6 +1872,7 @@ function Workspace() {
                   if (!composition.current && group && (cursor.start !== group.start || cursor.end !== group.end || cursor.blockId !== group.blockId)) breakBodyGroup();
                 }}
                 onComposition={compose}
+                onHistory={direction => travel(direction)}
                 onFinish={() => { breakBodyGroup(); void flush(); }}
               />
             </>
