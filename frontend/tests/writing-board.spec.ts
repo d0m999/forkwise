@@ -139,3 +139,18 @@ test('宽度基线、拖动调宽、展开还原和窄窗使用同一正文视�
   await page.getByRole('button', { name: '编辑正文', exact: true }).click();
   await expect(editor.locator('[data-block-id="paragraph-0"]')).toBeInViewport();
 });
+
+
+test('段落内空首行的Backspace先删除软换行，只有真正块首才合并前块', async ({ page, workspace }) => {
+  await place(page, '空首行退格', 80, 120);
+  await page.getByRole('button', { name: '编辑正文', exact: true }).click();
+  const editor = page.getByRole('textbox', { name: '卡片正文', exact: true });
+  await editor.click(); await page.keyboard.insertText('甲');
+  await editor.press('Enter'); await editor.press('Shift+Enter'); await page.keyboard.insertText('乙');
+  await expect.poll(async () => (await workspace.state()).cards[0]!.body.blocks.map(b => b.text)).toEqual(['甲', '\n乙']);
+  const before = (await workspace.state()).cards[0]!.body.blocks;
+  await editor.press('Home'); await editor.press('Backspace');
+  await expect.poll(async () => (await workspace.state()).cards[0]!.body.blocks).toEqual([{ ...before[0]! }, { ...before[1]!, text: '乙' }]);
+  await editor.press('Home'); await editor.press('Backspace');
+  await expect.poll(async () => (await workspace.state()).cards[0]!.body.blocks).toEqual([{ ...before[0]!, text: '甲乙' }]);
+});
