@@ -142,11 +142,14 @@ export const test = base.extend<{ workspace: Workspace }>({
         },
       });
     } finally {
-      await page.context().close();
-      await stop();
-      if (socket.listening)
-        await new Promise<void>((resolve) => socket.close(() => resolve()));
-      rmSync(directory, { recursive: true, force: true });
+      try {
+        await page.context().close();
+      } finally {
+        await stop();
+        if (socket.listening)
+          await new Promise<void>((resolve) => socket.close(() => resolve()));
+        rmSync(directory, { recursive: true, force: true });
+      }
     }
   },
 });

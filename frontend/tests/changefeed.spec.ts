@@ -124,19 +124,24 @@ async function fixture(browser: Browser) {
     return r.value;
   };
   const cleanup = async () => {
-    await context.close();
-    await stop();
-    await expect
-      .poll(async () => {
-        try {
-          await fetch(origin + "/api/mapping/projects");
-          return false;
-        } catch {
-          return true;
-        }
-      })
-      .toBe(true);
-    rmSync(directory, { recursive: true, force: true });
+    // Browser cleanup can reject after a failed route or closed worker. Its
+    // failure must not skip closure of this exact owned server identity.
+    try {
+      await context.close();
+    } finally {
+      await stop();
+      await expect
+        .poll(async () => {
+          try {
+            await fetch(origin + "/api/mapping/projects");
+            return false;
+          } catch {
+            return true;
+          }
+        })
+        .toBe(true);
+      rmSync(directory, { recursive: true, force: true });
+    }
   };
   try {
     await start();
