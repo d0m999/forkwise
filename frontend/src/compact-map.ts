@@ -95,6 +95,7 @@ export async function readCompactMap(
       title: item.title,
       versionId: item.versionId,
       item: item.item,
+      ...(item.appearance ? { appearance: item.appearance } : {}),
       body,
     });
   }

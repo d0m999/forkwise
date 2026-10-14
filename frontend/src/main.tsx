@@ -1,3 +1,4 @@
+import { DEFAULT_APPEARANCE } from "../../backend/src/mapping/presentation-values";
 import { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
@@ -5,7 +6,6 @@ import {
   Controls,
   ReactFlow,
   ReactFlowProvider,
-  NodeToolbar,
   SelectionMode,
   ViewportPortal,
   useReactFlow,
@@ -36,6 +36,10 @@ import { usePoseSave } from "./pose-save";
 import { alignMove, type Guide, type Position } from "./canvas-geometry";
 import { useCardResize } from "./card-resize";
 import { InlineTitle } from "./inline-title";
+import { CardMenu } from "./card-menu";
+import { bodyPreviewText, useCardPresentation } from "./card-presentation";
+import { useCardLayoutSave } from "./card-layout-save";
+import { useAppearanceSave, type AppearanceInput } from "./appearance-save";
 
 type CardData = {
   card: Card;
@@ -45,6 +49,10 @@ type CardData = {
   onFinish: () => void;
   onEdit: () => void;
   onBody: () => void;
+  onAppearance: (value: AppearanceInput) => void;
+  appearanceValue: AppearanceInput;
+  onMeasure: (card: Card, height: number) => void;
+  measurable: boolean;
   onComposition: (value: boolean) => void;
   onMove: (dx: number, dy: number) => void;
   movingDisabled: boolean;
@@ -57,22 +65,35 @@ type CardData = {
   ) => void;
 };
 function ThoughtCard({ data, selected }: NodeProps<Node<CardData>>) {
+  const anchor = useRef<HTMLElement>(null);
+  const lines = useCardPresentation(
+    anchor,
+    data.card,
+    data.onMeasure,
+    data.measurable && data.title === data.card.title,
+  );
+  const text = bodyPreviewText(data.card.body);
   return (
-    <article className="thought-card">
-      <NodeToolbar isVisible={selected}>
-        <div
-          className="card-actions nodrag"
-          role="toolbar"
-          aria-label="卡片操作"
-        >
-          <button disabled={data.historyBlocked} onClick={data.onEdit}>
-            编辑标题
-          </button>
-          <button disabled={data.historyBlocked} onClick={data.onBody}>
-            写字板
-          </button>
-        </div>
-      </NodeToolbar>
+    <article
+      ref={anchor}
+      className="thought-card"
+      style={
+        {
+          "--card-title-color": data.appearanceValue.titleColor,
+        } as React.CSSProperties
+      }
+    >
+      {selected && (
+        <CardMenu
+          anchor={anchor}
+          card={data.card}
+          value={data.appearanceValue}
+          blocked={data.historyBlocked}
+          onEdit={data.onEdit}
+          onBody={data.onBody}
+          onAppearance={data.onAppearance}
+        />
+      )}
       <button
         className="move-handle nodrag"
         aria-label="移动卡片：方向键调整位置"
@@ -103,17 +124,27 @@ function ThoughtCard({ data, selected }: NodeProps<Node<CardData>>) {
         />
       ) : (
         <button
-          className="title-button nodrag"
+          className="title-button"
           disabled={data.historyBlocked}
           onDoubleClick={data.onEdit}
         >
           {data.title || "未命名卡片"}
         </button>
       )}
-      {data.card.body.blocks[0]?.text && (
-        <p className="preview" onDoubleClick={data.onBody}>
-          {data.card.body.blocks[0].text}
-        </p>
+      {text && data.appearanceValue.showPreview && (
+        <div
+          className="preview-region"
+          style={{ display: lines > 0 ? undefined : "none" }}
+        >
+          <p
+            className="preview"
+            data-preview-lines={lines}
+            style={{ height: `${lines * 22}px`, WebkitLineClamp: lines }}
+            onDoubleClick={data.onBody}
+          >
+            {text}
+          </p>
+        </div>
       )}
       <button
         className="body-button nodrag"
@@ -419,7 +450,13 @@ function Workspace() {
     setHistoryBusy(true);
     try {
       breakBodyGroup();
-      if (!(await pose.flush()) || !(await flush())) return;
+      if (
+        !(await appearance.flush()) ||
+        !(await cardLayout.flush()) ||
+        !(await pose.flush()) ||
+        !(await flush())
+      )
+        return;
       setEditing(null);
       titleGroup.current = null;
       const projectId = authority.current?.project.id;
@@ -561,10 +598,14 @@ function Workspace() {
     setState(value);
   };
   const refresh = async (id: string) => {
+    const capturedProject = authority.current?.project.id;
     const value = await api.project(id);
     const timeline = await api.history(id);
-    updateState(value, timeline);
-    setProjects(await api.projects());
+    if (capturedProject === id && authority.current?.project.id === id) {
+      updateState(value, timeline);
+      const all = await api.projects();
+      if (authority.current?.project.id === id) setProjects(all);
+    }
     return value;
   };
   useEffect(() => {
@@ -631,6 +672,15 @@ function Workspace() {
     };
   }, [state?.project.id]);
   const pose = usePoseSave(refresh);
+  const cardLayout = useCardLayoutSave(refresh, () => authority.current);
+  const appearance = useAppearanceSave(
+    () => authority.current,
+    refresh,
+    async () => {
+      breakBodyGroup();
+      return await flush();
+    },
+  );
   function startMove(projectId: string, card: Card, resizing = false) {
     // Geometry remains interactive while the prefix of input waits for ACK.
     // Reserve this boundary so later typing cannot overtake the move either.
@@ -785,7 +835,13 @@ function Workspace() {
     }
     editorEpoch.current++;
     breakBodyGroup();
-    if (!(await pose.flush()) || !(await flush())) return;
+    if (
+      !(await appearance.flush()) ||
+      !(await cardLayout.flush()) ||
+      !(await pose.flush()) ||
+      !(await flush())
+    )
+      return;
     if (id === authority.current?.project.id) return;
     setBusy(true);
     try {
@@ -1149,7 +1205,13 @@ function Workspace() {
     }
     editorEpoch.current++;
     breakBodyGroup();
-    if (!(await pose.flush()) || !(await flush())) return;
+    if (
+      !(await appearance.flush()) ||
+      !(await cardLayout.flush()) ||
+      !(await pose.flush()) ||
+      !(await flush())
+    )
+      return;
     pendingAction.current = { command, ...(onDone ? { onDone } : {}) };
     setBusy(true);
     setStatus("正在保存…");
@@ -1259,6 +1321,8 @@ function Workspace() {
       if (
         Object.keys(drafts.current).length ||
         saving.current ||
+        appearance.hasPending() ||
+        cardLayout.hasPending() ||
         pose.hasPending()
       ) {
         event.preventDefault();
@@ -1309,6 +1373,21 @@ function Workspace() {
       },
       onEdit: () => void editCard(card.id, "title"),
       onBody: () => void editCard(card.id, "body"),
+      onMeasure: cardLayout.measure,
+      measurable: !busy && !historyBlocked && !pose.pending && !pose.dragging,
+      onAppearance: (value) => {
+        const current = authority.current;
+        const target = current?.cards.find((c) => c.id === card.id);
+        if (!current || !target || current.project.id !== state?.project.id)
+          return;
+        appearance.change(current.project.id, target.id, value);
+      },
+      appearanceValue: appearance.value(state!.project.id, card.id) ?? {
+        titleColor:
+          card.appearance?.titleColor ?? DEFAULT_APPEARANCE.titleColor,
+        showPreview:
+          card.appearance?.showPreview ?? DEFAULT_APPEARANCE.showPreview,
+      },
       onComposition: compose,
       movingDisabled: busy || historyBlocked || pose.pending,
       historyBlocked,
@@ -1813,14 +1892,51 @@ function Workspace() {
       )}
       <div className="save-state">
         <span role="status" aria-live="polite">
-          {pose.error
-            ? "布局保存未完成"
-            : pose.pending || pose.dragging
-              ? "布局等待保存…"
-              : recovery.current?.damaged && status === "已保存到本机"
-                ? "部分恢复记录未确认"
-                : status}
+          {appearance.error
+            ? "外观保存未完成"
+            : appearance.pending
+              ? "外观等待保存…"
+              : cardLayout.error
+                ? "卡面布局保存未完成"
+                : cardLayout.pending
+                  ? "卡面布局等待保存…"
+                  : pose.error
+                    ? "布局保存未完成"
+                    : pose.pending || pose.dragging
+                      ? "布局等待保存…"
+                      : recovery.current?.damaged && status === "已保存到本机"
+                        ? "部分恢复记录未确认"
+                        : status}
         </span>
+        {(appearance.error || appearance.pending || cardLayout.error) && (
+          <>
+            {(appearance.error || cardLayout.error) && (
+              <span role="alert">
+                {[appearance.error, cardLayout.error]
+                  .filter(Boolean)
+                  .join("；")}
+              </span>
+            )}
+            {appearance.pending && (
+              <button
+                onClick={() => void appearance.flush()}
+                disabled={!!appearance.conflict}
+              >
+                重试外观保存
+              </button>
+            )}
+            {appearance.conflict && (
+              <button onClick={() => void appearance.reapply()}>
+                确认保留我的外观
+              </button>
+            )}
+            {cardLayout.error && (
+              <button onClick={() => void cardLayout.flush()}>
+                重试卡面布局
+              </button>
+            )}
+          </>
+        )}
         {(error || pose.error) && (
           <>
             <span role="alert">

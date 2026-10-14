@@ -1,3 +1,4 @@
+import { DEFAULT_APPEARANCE, DEFAULT_PREVIEW_HEIGHT } from './presentation-values.js';
 import type Database from 'better-sqlite3';
 import { CompactMaps, type CompactOptions } from './compact.js';
 import { observeChanges, type ObserveOptions } from './observe.js';
@@ -60,7 +61,8 @@ export class Mapping {
   read(query: { type: 'project'; projectId: string }, actor: Principal): ProjectState;
   read(query: VersionQuery & { domain: 'body' }, actor: Principal): Card['body'];
   read(query: VersionQuery & { domain: 'pose' }, actor: Principal): Card['item'];
-  read(query: VersionQuery, actor: Principal): Card['body'] | Card['item'];
+  read(query: VersionQuery & { domain: 'appearance' }, actor: Principal): Card['appearance'];
+  read(query: VersionQuery, actor: Principal): Card['body'] | Card['item'] | Card['appearance'];
   read(
     query: ReadQuery,
     actor: Principal,
@@ -70,6 +72,7 @@ export class Mapping {
     | ProjectHistory
     | Card['body']
     | Card['item']
+    | Card['appearance']
     | CardIdentity
     | CompactPage {
     return this.db.transaction(() => {
@@ -172,7 +175,7 @@ export class Mapping {
             409,
           );
         const unchanged = (revision: number): Receipt => {
-          interruptGroup(this.db, command, actor.tokenHash);
+          if (command.type !== 'card.layout') interruptGroup(this.db, command, actor.tokenHash);
           const receipt = {
             commandId: command.commandId,
             projectId: command.projectId,
@@ -256,6 +259,7 @@ export class Mapping {
               id: randomUUID(),
               versionId: randomUUID(),
               pose: { x: p.x, y: p.y, width: 280, height: 160 },
+              heightPolicy: { manualHeight: null, necessaryHeight: 0 },
             },
           };
           this.db.prepare('INSERT INTO mapping_card_ids VALUES(?,?)').run(card.id, project.id);
@@ -291,7 +295,62 @@ export class Mapping {
             requireThat(row, 'NOT_FOUND', '卡片不存在于当前项目', 404);
             const card = JSON.parse(row.value) as Card;
             before = JSON.parse(row.value) as Card;
-            if (command.type === 'thought.title') {
+            if (command.type === 'card.layout') {
+              requireThat(
+                command.expected.thought === card.versionId &&
+                  command.expected.body === card.body.versionId &&
+                  command.expected.pose === card.item.versionId &&
+                  command.expected.appearance === (card.appearance?.versionId ?? null),
+                'VERSION_CONFLICT',
+                '卡面测量依据已更新，请重新读取',
+                409,
+              );
+              const policy = card.item.heightPolicy ?? {
+                manualHeight: card.item.pose.height,
+                necessaryHeight: 0,
+              };
+              const height = Math.max(
+                command.payload.necessaryHeight,
+                policy.manualHeight ??
+                  (card.body.blocks.some((b) => b.text.length > 0) ? DEFAULT_PREVIEW_HEIGHT : 0),
+              );
+              // Old records have no manual-height provenance. A fitting
+              // measurement must not stamp them merely because they were read.
+              if (!card.item.heightPolicy && height === card.item.pose.height)
+                return unchanged(project.revision);
+              if (
+                policy.necessaryHeight === command.payload.necessaryHeight &&
+                card.item.pose.height === height
+              )
+                return unchanged(project.revision);
+              card.item = {
+                ...card.item,
+                versionId: randomUUID(),
+                heightPolicy: { ...policy, necessaryHeight: command.payload.necessaryHeight },
+                pose: { ...card.item.pose, height },
+              };
+              changedIds = [card.item.id];
+            } else if (command.type === 'card.appearance') {
+              requireThat(
+                command.expected === (card.appearance?.versionId ?? null),
+                'VERSION_CONFLICT',
+                '外观已更新，请重新读取',
+                409,
+              );
+              const current = card.appearance ?? DEFAULT_APPEARANCE;
+              if (
+                current.titleColor === command.payload.titleColor &&
+                current.showPreview === command.payload.showPreview
+              )
+                return unchanged(project.revision);
+              card.appearance = {
+                id: card.appearance?.id ?? `appearance:${card.id}`,
+                versionId: randomUUID(),
+                titleColor: command.payload.titleColor,
+                showPreview: command.payload.showPreview,
+              };
+              changedIds = [card.appearance.id];
+            } else if (command.type === 'thought.title') {
               requireThat(
                 command.expected === card.versionId,
                 'VERSION_CONFLICT',
@@ -364,6 +423,7 @@ export class Mapping {
                   thought: after.versionId,
                   body: after.body.versionId,
                   pose: after.item.versionId,
+                  ...(after.appearance ? { appearance: after.appearance.versionId } : {}),
                 },
               }
             : {}),

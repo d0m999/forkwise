@@ -68,6 +68,35 @@ async function place(page: Page, title: string, x: number, y: number) {
   await page.getByLabel("卡片标题", { exact: true }).press("Enter");
   await expect(page.getByRole("status")).toHaveText("已保存到本机");
 }
+// These #8 scenarios exercise deliberate free geometry/overlap, not the #9
+// default title-only height. Establish real manual geometry through the same
+// authorized Mapping seam, then retain every original behavioral assertion.
+async function manualHeight(page: Page, height: number) {
+  const value = await state(page);
+  const response = await page.request.post(origin + "/api/mapping/execute", {
+    headers: { Origin: origin },
+    data: {
+      commandId: crypto.randomUUID(),
+      projectId: value.project.id,
+      type: "pose.batch",
+      expected: Object.fromEntries(
+        value.cards.map((c) => [c.id, c.item.versionId]),
+      ),
+      payload: {
+        poses: value.cards.map((c) => ({ id: c.id, ...c.item.pose, height })),
+      },
+    },
+  });
+  expect(response.status()).toBe(200);
+  for (let i = 0; i < value.cards.length; i++)
+    await expect
+      .poll(
+        async () =>
+          (await page.locator(".react-flow__node").nth(i).boundingBox())!
+            .height,
+      )
+      .toBe(height);
+}
 test.beforeEach(async ({ page }) => {
   directory = mkdtempSync(join(tmpdir(), "forkwise-free-canvas-"));
   const port = await new Promise<number>((resolve) => {
@@ -254,6 +283,7 @@ test("F8-05 尺寸调整可以覆盖邻卡，一次历史与服务重启保持�
 }, info) => {
   await place(page, "自由尺寸", 60, 100);
   await place(page, "邻卡不动", 400, 100);
+  await manualHeight(page, 160);
   await page.locator(".title-button").first().click();
   await expect(page.locator(".react-flow__node").first()).toHaveClass(
     /selected/,
@@ -442,6 +472,7 @@ test("F8-10 纯卡临时置前保内部顺序，取消恢复创建序位且不�
   await place(page, "底卡", 60, 100);
   await place(page, "中卡", 120, 140);
   await place(page, "新卡", 180, 180);
+  await manualHeight(page, 160);
   const before = await state(page),
     history = await timeline(page),
     pane = (await page.locator(".react-flow__pane").boundingBox())!;

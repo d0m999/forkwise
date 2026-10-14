@@ -36,6 +36,7 @@ export interface CardIndex {
   order: number;
   body: { id: string; versionId: string; blockCount: number; availability: 'not_fetched' };
   item: Card['item'];
+  appearance?: Card['appearance'];
 }
 export interface BodySlice {
   id: string;

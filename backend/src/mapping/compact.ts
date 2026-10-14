@@ -80,6 +80,7 @@ export class CompactMaps {
             title: card.title,
             versionId: card.versionId,
             item: card.item,
+            ...(card.appearance ? { appearance: card.appearance } : {}),
             body: {
               id: card.body.id,
               versionId: card.body.versionId,
@@ -123,6 +124,7 @@ export class CompactMaps {
           availability: 'not_fetched' as const,
         },
         item: card.item,
+        ...(card.appearance ? { appearance: card.appearance } : {}),
       }))
       .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
     let fidelity: CompactPage['fidelity'] = 'index';

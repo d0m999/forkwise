@@ -131,7 +131,7 @@ export function createWorkspaceApp(
         {
           type: 'version',
           projectId: c.req.param('id'),
-          domain: z.enum(['body', 'pose']).parse(c.req.param('domain')),
+          domain: z.enum(['body', 'pose', 'appearance']).parse(c.req.param('domain')),
           id: c.req.param('objectId'),
           versionId: c.req.param('versionId'),
         },

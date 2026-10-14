@@ -21,7 +21,7 @@ function resized(p: Pose, direction: string, dx: number, dy: number): Pose {
       (direction.includes("w") ? -dx : direction.includes("e") ? dx : 0),
   );
   const height = Math.max(
-    80,
+    direction.includes("n") || direction.includes("s") ? 80 : p.height,
     p.height +
       (direction.includes("n") ? -dy : direction.includes("s") ? dy : 0),
   );

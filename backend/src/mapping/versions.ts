@@ -8,6 +8,14 @@ export function retainCardVersions(db: Database.Database, projectId: string, car
   );
   insert.run(projectId, 'body', card.body.id, card.body.versionId, JSON.stringify(card.body));
   insert.run(projectId, 'pose', card.item.id, card.item.versionId, JSON.stringify(card.item));
+  if (card.appearance)
+    insert.run(
+      projectId,
+      'appearance',
+      card.appearance.id,
+      card.appearance.versionId,
+      JSON.stringify(card.appearance),
+    );
 }
 
 export function initializeVersions(db: Database.Database) {

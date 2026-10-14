@@ -1,3 +1,4 @@
+import { DEFAULT_PREVIEW_HEIGHT } from './presentation-values.js';
 import type Database from 'better-sqlite3';
 import { randomUUID } from 'node:crypto';
 import type { Card, Command } from './contracts.js';
@@ -36,10 +37,29 @@ export function writeGeometry(
       const changed = Object.keys(pose).some(
         (key) => pose[key as keyof typeof pose] !== before.item.pose[key as keyof typeof pose],
       );
+      const policy = before.item.heightPolicy;
+      const heightPolicy =
+        p.height !== before.item.pose.height
+          ? {
+              manualHeight: Math.max(p.height, policy?.necessaryHeight ?? 0),
+              necessaryHeight: policy?.necessaryHeight ?? 0,
+            }
+          : policy;
       return {
         before,
         after: changed
-          ? { ...before, item: { ...before.item, pose, versionId: randomUUID() } }
+          ? {
+              ...before,
+              item: {
+                ...before.item,
+                pose: {
+                  ...pose,
+                  height: Math.max(pose.height, heightPolicy?.necessaryHeight ?? 0),
+                },
+                ...(heightPolicy ? { heightPolicy } : {}),
+                versionId: randomUUID(),
+              },
+            }
           : before,
       };
     })
@@ -66,9 +86,29 @@ export function restoreGeometry(
       .get(desired.id, projectId) as { value: string } | undefined;
     requireThat(row, 'NOT_FOUND', '几何历史目标已不可用', 409);
     const before = JSON.parse(row.value) as Card;
+    const policy = desired.item.heightPolicy;
+    const necessaryHeight =
+      before.item.heightPolicy?.necessaryHeight ?? policy?.necessaryHeight ?? 0;
+    const heightPolicy = policy ? { ...policy, necessaryHeight } : undefined;
     const after = {
       ...before,
-      item: { ...before.item, pose: desired.item.pose, versionId: randomUUID() },
+      item: {
+        ...desired.item,
+        ...(heightPolicy ? { heightPolicy } : {}),
+        pose: {
+          ...desired.item.pose,
+          height: Math.max(
+            necessaryHeight,
+            heightPolicy?.manualHeight ??
+              (heightPolicy
+                ? before.body.blocks.some((b) => b.text.length > 0)
+                  ? DEFAULT_PREVIEW_HEIGHT
+                  : 0
+                : desired.item.pose.height),
+          ),
+        },
+        versionId: randomUUID(),
+      },
     };
     db.prepare('UPDATE mapping_cards SET value=? WHERE id=? AND project_id=?').run(
       JSON.stringify(after),

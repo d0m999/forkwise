@@ -487,3 +487,170 @@ button[aria-current="true"] {
   background: #fff1de;
   padding: 8px;
 }
+
+:root {
+  --card-menu-border: #dce0e7;
+  --card-menu-shadow: #23314914;
+  --card-color-edf1fa: #edf1fa;
+  --card-color-f7e9bd: #f7e9bd;
+  --card-color-dceee2: #dceee2;
+  --card-color-f3dfe5: #f3dfe5;
+  --card-color-e8e1f5: #e8e1f5;
+  --card-color-ffffff: #ffffff;
+}
+.title-button,
+.card-title {
+  background: var(--card-title-color, var(--card-color-edf1fa));
+}
+.preview {
+  background: var(--card-color-ffffff);
+}
+.card-floating {
+  position: fixed;
+  z-index: 30;
+}
+.card-actions button {
+  min-height: 32px;
+}
+.card-icon-wrap {
+  position: relative;
+  display: flex;
+}
+.card-icon-wrap button {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  padding: 6px;
+}
+.card-actions button[aria-pressed="true"] {
+  background: var(--card-color-edf1fa);
+}
+.card-tooltip {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  background: #252933;
+  color: #fff;
+  border-radius: 4px;
+  padding: 4px 8px;
+  font-size: 12px;
+  white-space: nowrap;
+  pointer-events: none;
+}
+.card-popup {
+  width: 248px;
+  max-width: calc(100vw - 16px);
+  max-height: calc(100dvh - 70px);
+  overflow: auto;
+  padding: 12px;
+  border: 1px solid var(--card-menu-border);
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 5px 18px var(--card-menu-shadow);
+  font-size: 13px;
+}
+.card-popup-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.card-popup fieldset {
+  border: 0;
+  margin: 12px 0;
+  padding: 0;
+}
+.card-popup legend {
+  margin-bottom: 8px;
+}
+.card-color-grid {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 5px;
+}
+.card-color {
+  width: 30px;
+  height: 30px;
+  padding: 0;
+}
+.card-color[aria-pressed="true"] {
+  outline: 2px solid #264aad;
+  outline-offset: 2px;
+}
+.card-color-edf1fa {
+  background: var(--card-color-edf1fa);
+}
+.card-color-f7e9bd {
+  background: var(--card-color-f7e9bd);
+}
+.card-color-dceee2 {
+  background: var(--card-color-dceee2);
+}
+.card-color-f3dfe5 {
+  background: var(--card-color-f3dfe5);
+}
+.card-color-e8e1f5 {
+  background: var(--card-color-e8e1f5);
+}
+.card-color-ffffff {
+  background: var(--card-color-ffffff);
+}
+.card-preview-toggle {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.card-title {
+  resize: none;
+  min-height: 0;
+  max-height: none;
+  overflow: hidden;
+}
+.move-handle,
+.body-button {
+  position: absolute;
+  bottom: 4px;
+  z-index: 2;
+  opacity: 0;
+  margin: 0;
+  padding: 2px 5px;
+  font-size: 11px;
+}
+.move-handle {
+  left: 6px;
+}
+.body-button {
+  right: 6px;
+}
+.thought-card:hover .move-handle,
+.thought-card:hover .body-button,
+.thought-card:focus-within .move-handle,
+.thought-card:focus-within .body-button {
+  opacity: 1;
+}
+.preview-region {
+  padding: 12px 16px;
+  background: var(--card-color-ffffff);
+}
+.preview {
+  padding: 0;
+  margin: 0;
+  font-size: 13px;
+  line-height: 22px;
+}
+
+/* Legacy card keyboard/body shortcuts fit in the title's existing bottom
+   padding. Primary actions remain in the accessible 32px floating toolbar. */
+.move-handle,
+.body-button {
+  font-size: 9px;
+  line-height: 12px;
+  padding: 0 4px;
+  border: 0;
+  bottom: 2px;
+  background: transparent;
+}
+.card-visible-tags {
+  background: var(--card-color-ffffff);
+}

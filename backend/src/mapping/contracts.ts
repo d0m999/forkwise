@@ -1,10 +1,29 @@
 import { z } from 'zod';
 import type { CompactQuery } from './compact-contracts.js';
+import { TITLE_COLORS } from './presentation-values.js';
 
 const Id = z.string().min(1).max(160);
 const Name = z.string().trim().min(1).max(240);
 const Envelope = { commandId: Id, projectId: Id };
 export const MappingCommand = z.discriminatedUnion('type', [
+  z
+    .object({
+      ...Envelope,
+      type: z.literal('card.layout'),
+      expected: z.object({ thought: Id, body: Id, pose: Id, appearance: Id.nullable() }).strict(),
+      payload: z.object({ id: Id, necessaryHeight: z.number().finite().positive() }).strict(),
+    })
+    .strict(),
+  z
+    .object({
+      ...Envelope,
+      type: z.literal('card.appearance'),
+      expected: Id.nullable(),
+      payload: z
+        .object({ id: Id, titleColor: z.enum(TITLE_COLORS), showPreview: z.boolean() })
+        .strict(),
+    })
+    .strict(),
   z
     .object({
       ...Envelope,
@@ -137,11 +156,18 @@ export interface Card {
   id: string;
   title: string;
   versionId: string;
+  appearance?: {
+    id: string;
+    versionId: string;
+    titleColor: Extract<Command, { type: 'card.appearance' }>['payload']['titleColor'];
+    showPreview: boolean;
+  };
   body: { id: string; versionId: string; blocks: { id: string; type: 'text'; text: string }[] };
   item: {
     id: string;
     versionId: string;
     pose: { x: number; y: number; width: number; height: number };
+    heightPolicy?: { manualHeight: number | null; necessaryHeight: number };
   };
 }
 export interface ProjectState {
@@ -155,12 +181,12 @@ export interface Receipt {
   changedIds: string[];
   deletedIds?: string[];
   historyTarget?: { id: string; title: string; label: string };
-  versions?: { thought: string; body: string; pose: string };
+  versions?: { thought: string; body: string; pose: string; appearance?: string };
 }
 export type VersionQuery = {
   type: 'version';
   projectId: string;
-  domain: 'body' | 'pose';
+  domain: 'body' | 'pose' | 'appearance';
   id: string;
   versionId: string;
 };

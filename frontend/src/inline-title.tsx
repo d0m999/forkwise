@@ -21,8 +21,11 @@ export function InlineTitle({
   const element = useRef<HTMLTextAreaElement>(null);
   const initial = useRef(value);
   useLayoutEffect(() => {
-    if (element.current && element.current.value !== value)
-      element.current.value = value;
+    if (element.current) {
+      if (element.current.value !== value) element.current.value = value;
+      element.current.style.height = "auto";
+      element.current.style.height = `${element.current.scrollHeight}px`;
+    }
   }, [value]);
   return (
     <textarea

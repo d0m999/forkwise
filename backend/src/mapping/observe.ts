@@ -32,6 +32,8 @@ function delta(change: Change): Delta {
       domains.push({ domain: 'body', id: card.body.id });
     if (before?.item.versionId !== after?.item.versionId)
       domains.push({ domain: 'pose', id: card.item.id });
+    if (before?.appearance?.versionId !== after?.appearance?.versionId)
+      domains.push({ domain: 'appearance', id: `appearance:${card.id}` });
   } else domains.push({ domain: 'project', id: change.projectId });
   return { ...change, domains, deletedIds: change.deletedIds ?? [] };
 }
