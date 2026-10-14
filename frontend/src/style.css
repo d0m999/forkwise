@@ -274,7 +274,7 @@ body:has(.workspace[data-board-full="true"]) .card-tooltip { display: none; }
 .original-body pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
 .board-toolbar { flex: 0 0 auto; padding: 16px 20px 12px; border-bottom: 1px solid #e8ebf0; }
 .board-identity { flex: 1; min-width: 0; }
-.board-identity h2 { margin: 0 0 6px; font-size: 18px; line-height: 28px; }
+.board-identity h2 { margin: 0 0 6px; font-size: 18px; line-height: 28px; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
 .board-identity small { display: block; overflow-wrap: anywhere; color: #697386; font-size: 11px; }
 .board-identity p { font-size: 12px; margin: 6px 0 0; color: #697386; }
 .board-scroll { flex: 1; min-height: 0; overflow: auto; overflow-anchor: none; padding: 24px 24px 80px; }

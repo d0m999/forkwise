@@ -54,3 +54,22 @@ test('自动窄窗与主动展开分别恢复，项目宽度记忆、最大/最�
   await page.screenshot({ path: info.outputPath('board-wide.png') });
   expect((await workspace.state()).cards).toHaveLength(1);
 });
+
+
+test('长标题在窄且短的窗口仍保留完整身份，正文与返回按钮可达', async ({ page, workspace }, info) => {
+  await place(page, '长标题原卡', 80, 120);
+  await page.getByRole('button', { name: '编辑正文', exact: true }).click();
+  const state = await workspace.state(), card = state.cards[0]!;
+  const title = '保留完整标题且不挤走正文'.repeat(300);
+  await workspace.execute(page, { commandId: crypto.randomUUID(), projectId: state.project.id, type: 'thought.title', expected: card.versionId, payload: { id: card.id, title } });
+  await expect(page.locator('.body-editor h2')).toHaveText('正在编辑：' + title);
+  await page.setViewportSize({ width: 390, height: 500 });
+  await expect(page.getByRole('textbox', { name: '卡片正文', exact: true })).toBeInViewport();
+  await expect(page.getByRole('button', { name: '返回画布', exact: true })).toBeInViewport();
+  await expect(page.getByRole('button', { name: '关闭正文', exact: true })).toBeInViewport();
+  await page.getByRole('textbox', { name: '卡片正文', exact: true }).fill('窄且短窗口仍可实际编辑');
+  await expect(page.getByRole('status')).toHaveText('已保存到本机');
+  expect((await workspace.state()).cards[0]!.title).toBe(title);
+  expect((await workspace.state()).cards[0]!.body.blocks[0]!.text).toBe('窄且短窗口仍可实际编辑');
+  await page.screenshot({ path: info.outputPath('board-long-title-390x500.png') });
+});

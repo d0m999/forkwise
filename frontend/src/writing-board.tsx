@@ -82,7 +82,7 @@ export function WritingBoard({ projectId, cardId, opened, title, status, onClose
       onKeyDown={e => { if (e.key === "Escape") { e.preventDefault(); stop(); } else if (["ArrowLeft", "ArrowRight"].includes(e.key)) { e.preventDefault(); anchor.current ??= captureReadingAnchor(scroll.current!); remember(Math.max(360, Math.min(max, width + (e.key === "ArrowLeft" ? 20 : -20)))); } }}
     />}
     <header className="board-toolbar">
-      <div className="board-identity"><h2>正在编辑：{title || "未命名卡片"}</h2><small title={cardId}>卡片 {cardId}</small><p aria-live="polite">{status}</p></div>
+      <div className="board-identity"><h2 title={title || "未命名卡片"}>正在编辑：{title || "未命名卡片"}</h2><small title={cardId}>卡片 {cardId}</small><p aria-live="polite">{status}</p></div>
       <button aria-label={expanded ? "还原写字板" : "展开写字板"} onClick={() => { anchor.current ??= captureReadingAnchor(scroll.current!); setExpanded(value => !value); }}>{expanded ? "还原" : "展开"}</button>
       <button aria-label="关闭正文" onClick={onClose}>关闭</button>
     </header>
