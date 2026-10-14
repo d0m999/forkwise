@@ -82,6 +82,10 @@ function close() {
     mapping.close();
   });
   if ('closeIdleConnections' in server) server.closeIdleConnections();
+  // Accepted preconnections/incomplete HTTP requests are not classified as
+  // idle by Node. Explicit shutdown closes them after synchronous Mapping
+  // transactions have completed; it must not wait for a browser context.
+  if ('closeAllConnections' in server) server.closeAllConnections();
 }
 process.on('SIGTERM', close);
 process.on('SIGINT', close);

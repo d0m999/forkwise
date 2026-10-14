@@ -584,7 +584,27 @@ test("F8-12 移动工具与空格临时平移，缩放只改视口，输入空�
 test("F8-13 标题内原生逐步undo只有输入路由，外部点击保留原标题目标，正文双击沿已有入口", async ({
   page,
 }, info) => {
-  await place(page, "原标题", 120, 160);
+  // This native-undo/preview scenario starts with real Body content so its
+  // initial geometry has preview space. Later Body edits never manufacture it.
+  const initial = await state(page);
+  const created = await page.request.post(origin + "/api/mapping/execute", {
+    headers: { Origin: origin },
+    data: {
+      commandId: crypto.randomUUID(),
+      projectId: initial.project.id,
+      type: "thought.create",
+      expected: null,
+      payload: {
+        id: crypto.randomUUID(),
+        title: "原标题",
+        text: "初始准备正文",
+        x: 120,
+        y: 160,
+      },
+    },
+  });
+  expect(created.status()).toBe(200);
+  await expect(page.locator(".title-button")).toHaveText("原标题");
   await page.getByRole("button", { name: "编辑正文", exact: true }).click();
   await page.getByLabel("卡片正文", { exact: true }).fill("保留原正文");
   await expect(page.getByRole("status")).toHaveText("已保存到本机");

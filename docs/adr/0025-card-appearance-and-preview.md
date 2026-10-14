@@ -40,6 +40,8 @@
 
 ## 验证边界
 
-主要验证通过 Mapping +真实临时SQLite，补回环 HTTP、MCP SDK及正式 workspace-server 的真实本机 Chromium 指针/键盘、菜单、原请求、冲突、必要高度、完整行、历史、重启与授权。旧 #8 几何/原生标题断言继续保留；其依赖160高度与三卡重叠的两项场景，准备阶段显式通过真实 Mapping 设定手调160，再执行原断言，不能把默认卡收紧误写为原几何能力失效。workspace 创建 fixture 等真实测量已落盘后再开始旧场景；changefeed 的严格时间线以实际测量后的 revision3 开始，原创建 receipt 仍为2，同snapshot、迟到轮次、草稿generation和撤销序列断言保留。
+主要验证通过 Mapping +真实临时SQLite，补回环 HTTP、MCP SDK及正式 workspace-server 的真实本机 Chromium 指针/键盘、菜单、原请求、冲突、必要高度、完整行、历史、重启与授权。旧 #8 几何/原生标题断言继续保留；其依赖160高度与三卡重叠的两项场景，准备阶段显式通过真实 Mapping 设定手调160，再执行原断言，不能把默认卡收紧误写为原几何能力失效。workspace 创建 fixture 等真实测量已落盘后再开始旧场景；changefeed 的严格时间线以实际测量后的 revision3 开始，预览双击/原生undo场景通过真实 Mapping 创建时带正文的卡片准备初始预览空间，仍保留原双击和两步历史断言；空卡零行预算不强行显示预览。原创建 receipt 仍为2，同snapshot、迟到轮次、草稿generation和撤销序列断言保留。
 
 固定候选七组、工具 SHA256/mode、资源归属、私有证据权限和两轴审查的实际状态见本票私有记录。真实 OS IME、系统 clipboard、物理设备、本人 UX、第二 OS、生产用户数据/备份、未来富文与完整标签未由这些检查证明。
+
+本机明确关闭沿原 SIGTERM/SIGINT 路径，先停止监听，再关闭 idle 与已接受但未完成 HTTP 请求的连接；Mapping 的同步事务已结束后才进入信号回调，随后关闭 SQLite。不靠浏览器 context 销毁来放行退出，不 force kill 安装工具或主机进程。真实 compiled workspace-server 的 TCP preconnection 回归需要同 SHA build 先完成，因此本票七组顺序为 check→build→backend test→frontend Chromium，加独立 public-data-core/R2；没有构建时该回归明确失败，不跳过或冒用旧 build。
