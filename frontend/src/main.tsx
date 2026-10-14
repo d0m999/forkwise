@@ -1950,7 +1950,8 @@ function Workspace() {
             ))}
         </section>
       )}
-      {deletedRecovery?.projectId === state?.project.id &&
+      {state && deletedRecovery &&
+        deletedRecovery.projectId === state.project.id &&
         !state?.cards.some((c) => c.id === deletedRecovery?.cardId) && (
           <aside className="body-editor" aria-label="已删除卡片">
             <h2>这张卡片已删除</h2>
