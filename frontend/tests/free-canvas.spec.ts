@@ -685,7 +685,7 @@ test("F8-14 真实UI与Agent HTTP用同snapshot读取同SQLite正文与移动几
     detail.items.map((i: { jsonText: string }) => i.jsonText).join(""),
   );
   expect(body).toEqual(current.cards[0]!.body);
-  expect(body.blocks[0].text).toBe(text);
+  expect(body.blocks.map((b: { text: string }) => b.text).join("\n")).toBe(text);
   const rendered = (await page.locator(".react-flow__node").boundingBox())!,
     pane = (await page.locator(".react-flow__pane").boundingBox())!;
   expect(rendered.x - pane.x).toBe(170);

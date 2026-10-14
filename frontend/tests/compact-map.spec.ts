@@ -111,12 +111,13 @@ test("实际工作台和授权 Agent 在并发写入期间核对同一固定 sna
       [projectId],
     );
     mapping.close();
-    const read = async (view: string, snapshot?: string, cardId?: string) => {
+    const read = async (view: string, snapshot?: string, cardId?: string, cursor?: string) => {
       const query = new URLSearchParams({
         view,
         budget: "131072",
         ...(snapshot ? { snapshot } : {}),
         ...(cardId ? { cardId } : {}),
+        ...(cursor ? { cursor } : {}),
       });
       const response = await context.request.get(
         origin + `/api/mapping/projects/${projectId}/map?${query}`,
@@ -124,6 +125,19 @@ test("实际工作台和授权 Agent 在并发写入期间核对同一固定 sna
       );
       expect(response.status()).toBe(200);
       return response.json();
+    };
+    const readDetail = async (snapshot: string, cardId: string) => {
+      const first = await read("detail", snapshot, cardId);
+      const items = [...first.items];
+      let cursor = first.nextCursor;
+      while (cursor) {
+        const page = await read("detail", snapshot, cardId, cursor);
+        expect(page.snapshot).toBe(first.snapshot);
+        expect(page.revision).toBe(first.revision);
+        items.push(...page.items);
+        cursor = page.nextCursor;
+      }
+      return { ...first, items, nextCursor: null };
     };
     // Hold the actual UI index response, write from another authorized caller,
     // then let the UI complete detail reads using the captured snapshot.
@@ -145,6 +159,8 @@ test("实际工作台和授权 Agent 在并发写入期间核对同一固定 sna
       const same = await read("index", captured.snapshot);
       expect(same).toEqual(captured);
       const card = same.items[0];
+      const initialDetail = await readDetail(captured.snapshot, card.id);
+      const initialBody = JSON.parse(initialDetail.items.map((i: any) => i.jsonText).join(""));
       const write = await context.request.post(
         origin + "/api/mapping/execute",
         {
@@ -156,7 +172,7 @@ test("实际工作台和授权 Agent 在并发写入期间核对同一固定 sna
             expected: { body: card.body.versionId, pose: card.item.versionId },
             payload: {
               id: card.id,
-              text: "并发更新后持久正文",
+              blocks: [{ ...initialBody.blocks[0], text: "并发更新后持久正文" }],
               x: 430,
               y: 260,
             },
@@ -179,11 +195,11 @@ test("实际工作台和授权 Agent 在并发写入期间核对同一固定 sna
       expect(
         (await read("index", captured.snapshot)).items[0].item.pose,
       ).toEqual(card.item.pose);
-      const detail = await read("detail", captured.snapshot, card.id);
+      const detail = await readDetail(captured.snapshot, card.id);
       const body = JSON.parse(
         detail.items.map((i: any) => i.jsonText).join(""),
       );
-      expect(body.blocks[0].text).toBe(text);
+      expect(body.blocks.map((b: { text: string }) => b.text).join("\n")).toBe(text);
       await page.screenshot({ path: info.outputPath("same-snapshot.png") });
       await info.attach("same-snapshot", {
         body: JSON.stringify({

@@ -55,7 +55,7 @@ test("A9-04 同一完整Body的预览只显示整行，放大显示更多，全�
     ),
   ).toBe(0);
   const full = await workspace.state();
-  expect(full.cards[0]!.body.blocks[0]!.text).toBe(text);
+  expect(full.cards[0]!.body.blocks.map(b => b.text).join("\n")).toBe(text);
   await page.getByRole("button", { name: "外观", exact: true }).click();
   await page.getByLabel("显示正文预览", { exact: true }).uncheck();
   await expect(preview).toHaveCount(0);

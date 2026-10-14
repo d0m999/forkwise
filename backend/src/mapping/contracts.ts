@@ -7,6 +7,10 @@ const Name = z.string().trim().min(1).max(240);
 const Envelope = { commandId: Id, projectId: Id };
 export const BodyBlock = z.object({ id: Id, type: z.string().min(1), text: z.string().optional(), inlineId: Id.optional() }).passthrough();
 export type Block = z.infer<typeof BodyBlock>;
+const BodyInput = {
+  text: z.string().max(200000).optional(),
+  blocks: z.array(BodyBlock).min(1).refine(blocks => blocks.reduce((n, b) => n + (b.text?.length ?? 0), Math.max(0, blocks.length - 1)) <= 200000, '正文文字不能超过200000').optional(),
+};
 export const MappingCommand = z.discriminatedUnion('type', [
   z.object({
     ...Envelope,
@@ -80,11 +84,11 @@ export const MappingCommand = z.discriminatedUnion('type', [
       payload: z
         .object({
           id: Id,
-          text: z.string().max(200000),
+          ...BodyInput,
           x: z.number().finite(),
           y: z.number().finite(),
         })
-        .strict(),
+        .strict().refine((p) => (p.text === undefined) !== (p.blocks === undefined), '正文须提供text或blocks之一'),
     })
     .strict(),
   z
@@ -121,8 +125,7 @@ export const MappingCommand = z.discriminatedUnion('type', [
       payload: z
         .object({
           id: Id,
-          text: z.string().max(200000).optional(),
-          blocks: z.array(BodyBlock).min(1).refine(blocks => blocks.reduce((n, b) => n + (b.text?.length ?? 0), Math.max(0, blocks.length - 1)) <= 200000, '正文文字不能超过200000').optional(),
+          ...BodyInput,
           requiredAssetIds: z.array(Id).max(128).optional(),
         })
         .strict().refine((p) => (p.text === undefined) !== (p.blocks === undefined), '正文须提供text或blocks之一'),

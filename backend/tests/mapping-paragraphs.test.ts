@@ -76,10 +76,37 @@ it('段落和行内身份不能借用另一正文的身份，也不能跨版本�
     const original = read();
     expect(() => run({ type: 'body.edit', expected: a!.body.versionId, payload: { id: 'a', blocks: [{ ...b!.body.blocks[0]!, text: '借用身份' }] } })).toThrow('身份');
     expect(read()).toEqual(original);
-    run({ type: 'body.edit', expected: b!.body.versionId, payload: { id: 'b', blocks: [{ ...b!.body.blocks[0]!, inlineId: 'owned-inline' }] } });
+    run({ type: 'body.edit', expected: b!.body.versionId, payload: { id: 'b', blocks: [{ ...b!.body.blocks[0]!, text: '真实变更建立身份归属', inlineId: 'owned-inline' }] } });
     expect(() => run({ type: 'body.edit', expected: a!.body.versionId, payload: { id: 'a', blocks: [{ ...a!.body.blocks[0]!, inlineId: 'owned-inline' }] } })).toThrow('身份');
     const now = read().cards.find(c => c.id === 'b')!;
     run({ type: 'body.edit', expected: now.body.versionId, payload: { id: 'b', blocks: [{ id: 'new-b', type: 'text', text: '保留旧版本', inlineId: 'new-b-inline' }] } });
     expect(() => run({ type: 'body.edit', expected: a!.body.versionId, payload: { id: 'a', blocks: [{ ...a!.body.blocks[0]!, inlineId: 'owned-inline' }] } })).toThrow('身份');
+  } finally { host?.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+
+it('完整段落与布局沿既有card.edit原子更新，任何版本冲突均不写部分结果', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'forkwise-paragraph-atomic-'));
+  let host: ReturnType<typeof openMapping> | undefined;
+  try {
+    host = openMapping(directory);
+    const human = host.access.authenticate(host.access.issue('human', ['*']));
+    const run = (c: Record<string, unknown>) => host!.execute({ commandId: randomUUID(), projectId: 'p', ...c }, human);
+    const read = () => host!.read({ type: 'project', projectId: 'p' }, human);
+    run({ type: 'project.create', expected: null, payload: { name: '原子完整正文' } });
+    run({ type: 'thought.create', expected: null, payload: { id: 'a', title: '原卡', text: '完整原文', x: 10, y: 20 } });
+    const original = read(), card = original.cards[0]!;
+    const blocks = [{ ...card.body.blocks[0]!, inlineId: 'atomic-inline', text: '原子第一段' }, { id: 'atomic-second', type: 'text', text: '原子第二段', inlineId: 'atomic-second-inline' }];
+    const command = { type: 'card.edit', expected: { body: card.body.versionId, pose: card.item.versionId }, payload: { id: 'a', blocks, x: 30, y: 40 } };
+    expect(() => run({ ...command, expected: { ...command.expected, pose: 'stale-pose' } })).toThrow();
+    expect(read()).toEqual(original);
+    const receipt = run(command), saved = read();
+    expect(saved.cards[0]!.body.blocks).toEqual(blocks);
+    expect(saved.cards[0]!.item.pose).toEqual({ ...card.item.pose, x: 30, y: 40 });
+    expect(receipt.changedIds).toEqual([card.body.id, card.item.id]);
+    expect(saved.project.revision).toBe(original.project.revision + 1);
+    run({ type: 'history.undo', expected: saved.project.revision, payload: {} });
+    expect(read().cards[0]!.body.blocks).toEqual(card.body.blocks);
+    expect(read().cards[0]!.item.pose).toEqual(card.item.pose);
   } finally { host?.close(); rmSync(directory, { recursive: true, force: true }); }
 });

@@ -10,7 +10,7 @@
 
 Body 仍是独立有版本实体，以完整 JSON blocks 数组往返 SQLite、HTTP、MCP、草稿与历史；不另建摘要或 HTML 权威。段落顺序由数组保存，块内软换行是 text 中的 `\n`，段落界限是相邻块，末尾空段独立保留。Enter 在光标处分块，Shift+Enter 仍同块，块首 Backspace 合并相邻兼容段落。基础文本 paste 仅输入 literal plain text；复杂 paste 属于 #14。
 
-`body.edit` 接受完整 blocks 或旧 text 二选一，沿用原 Body expected、commandId 重试和 editGroup；旧 text 仅能编辑已有单一普通文本块，不能截断多段或未知内容。全正文文字及段落界限合计沿用 200000 UTF-16 单元上限。旧草稿 schema 与原 command 保持可读；新增草稿携带完整 blocks，明确恢复仍提交原卡、原 expected、原请求。预览从同一完整 Body/当前完整草稿派生，沿用卡片尺寸预算。
+`body.edit` 与既有 `card.edit` 接受完整 blocks 或旧 text 二选一，后者仍在同一事务中验证并更新 Body 与 Pose，沿用原 Body expected、commandId 重试和 editGroup；旧 text 仅能编辑已有单一普通文本块，不能截断多段或未知内容。全正文文字及段落界限合计沿用 200000 UTF-16 单元上限。旧草稿 schema 与原 command 保持可读；新增草稿携带完整 blocks，明确恢复仍提交原卡、原 expected、原请求。预览从同一完整 Body/当前完整草稿派生，沿用卡片尺寸预算。
 
 未知类型、媒体、未知内联字段或其他扩展内容在 read DTO 中透传 JSON；完整正文 UI 显示只读原件，禁止自动迁移、截断或降级。服务端 blocks 编辑要求未知块及扩展内容逐项保持；旧字符串写入未知/多块正文明确拒绝。保全是 JSON 数据值、身份与顺序，不承诺 JSON 对象键顺序或旧序列化字节一致。媒体资源仍经过既有 requiredAssetIds 保存门禁，本票不实现媒体显示/编辑。
 

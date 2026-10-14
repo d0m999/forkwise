@@ -15,7 +15,7 @@ test("A9-12 收紧卡后续保存完整正文不自动增高或写Pose，预览�
   await page.getByLabel("卡片正文", { exact: true }).fill(full);
   await expect(page.getByRole("status")).toHaveText("已保存到本机");
   await expect
-    .poll(async () => (await workspace.state()).cards[0]!.body.blocks[0]!.text)
+    .poll(async () => (await workspace.state()).cards[0]!.body.blocks.map(b => b.text).join("\n"))
     .toBe(full);
   await expect
     .poll(async () => (await workspace.state()).cards[0]!.item)
