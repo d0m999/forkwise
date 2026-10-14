@@ -538,13 +538,33 @@ function Workspace() {
       if (event.isComposing || event.keyCode === 229 || composition.current)
         return;
       const target = event.target as HTMLElement;
-      // Title editing retains the browser text undo route until the round ends.
-      if (target.closest("input, .card-title, [contenteditable=true]")) return;
+      // Text inputs and title rounds own native text undo; non-text controls
+      // such as the appearance checkbox use the project's action history.
+      const input = target.closest("input");
+      if (
+        (input &&
+          ["text", "search", "email", "url", "tel", "password", "number"].includes(
+            input.type,
+          )) ||
+        target.closest(".card-title, [contenteditable=true]")
+      )
+        return;
       event.preventDefault();
       event.stopPropagation();
       void travel(
         event.shiftKey || event.key.toLowerCase() === "y" ? "redo" : "undo",
-      );
+      ).finally(() => {
+        // History temporarily disables non-text inputs. Restore only the
+        // surviving control, without stealing focus after a selection change.
+        requestAnimationFrame(() => {
+          if (
+            input?.isConnected &&
+            !input.disabled &&
+            document.activeElement === document.body
+          )
+            input.focus();
+        });
+      });
     };
     window.addEventListener("keydown", keydown, true);
     return () => window.removeEventListener("keydown", keydown, true);
