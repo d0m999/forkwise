@@ -70,6 +70,11 @@ test('真实段落输入在光标处分块，软换行仍同块，末尾空段�
   await expect.poll(async () => (await workspace.state()).cards[0]!.body.blocks).toEqual(saved.slice(0, 2));
   await editor.press('Meta+Shift+z');
   await expect.poll(async () => (await workspace.state()).cards[0]!.body.blocks).toEqual(saved);
+  // SQLite commits before the history response restores the editable UI.
+  await expect(editor).toHaveAttribute('aria-readonly', 'false');
+  await expect(editor).toBeFocused();
+  await editor.locator('[data-block-id]').last().click();
+  await editor.press('Home');
   await page.keyboard.press('Backspace');
   await expect.poll(async () => (await workspace.state()).cards[0]!.body.blocks.map(b => b.text)).toEqual(['AB', 'CD\n尾']);
   await page.keyboard.press('Home');
@@ -80,6 +85,8 @@ test('真实段落输入在光标处分块，软换行仍同块，末尾空段�
   await page.keyboard.press('Escape');
   await expect(editor).not.toBeFocused();
   await expect(page.locator('.body-editor')).toBeVisible();
+  await expect(page.getByRole('status')).toHaveText('已保存到本机');
+  await expect.poll(() => page.evaluate(() => Object.keys(localStorage).filter(key => key.startsWith('forkwise:recovery:v1:')))).toEqual([]);
   await workspace.restart();
   await workspace.open(page);
   await page.getByRole('button', { name: '段落卡', exact: true }).click();
