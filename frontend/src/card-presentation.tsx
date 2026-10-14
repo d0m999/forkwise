@@ -1,11 +1,12 @@
 import { useLayoutEffect, useRef, useState, type RefObject } from "react";
 import type { Card } from "./api";
+import { bodyText } from "../../backend/src/mapping/body-text";
 
 // Current Body adapter: full text blocks, with their boundaries. Future rich
 // blocks must supply their own explicit projection here, never a second summary
 // or the editor's folded/visible DOM. No HTML is interpreted as markup.
 export function bodyPreviewText(body: Card["body"]) {
-  return body.blocks.map((block) => block.text).join("\n");
+  return bodyText(body);
 }
 
 // A future tag owner renders its single visible row in .card-visible-tags;

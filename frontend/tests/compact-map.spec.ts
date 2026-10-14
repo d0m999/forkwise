@@ -1,3 +1,4 @@
+import { expectTextValue } from "./text-editor-assertions";
 import { test, expect } from "@playwright/test";
 import { spawn, execFileSync, type ChildProcess } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
@@ -174,9 +175,7 @@ test("实际工作台和授权 Agent 在并发写入期间核对同一固定 sna
         String(captured.revision),
       );
       await page.getByRole("button", { name: "编辑正文", exact: true }).click();
-      await expect(page.getByLabel("卡片正文", { exact: true })).toHaveValue(
-        text,
-      );
+      await expectTextValue(page.getByLabel("卡片正文", { exact: true }), text);
       expect(
         (await read("index", captured.snapshot)).items[0].item.pose,
       ).toEqual(card.item.pose);
@@ -213,9 +212,7 @@ test("实际工作台和授权 Agent 在并发写入期间核对同一固定 sna
     await newPage
       .getByRole("button", { name: "编辑正文", exact: true })
       .click();
-    await expect(newPage.getByLabel("卡片正文", { exact: true })).toHaveValue(
-      "并发更新后持久正文",
-    );
+    await expectTextValue(newPage.getByLabel("卡片正文", { exact: true }), "并发更新后持久正文");
     await newPage.screenshot({ path: info.outputPath("reopened-current.png") });
   } finally {
     for (const context of contexts) await context.close();

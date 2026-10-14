@@ -1,3 +1,4 @@
+import { expectTextValue } from "./text-editor-assertions";
 import { test, expect, place } from "./card-appearance-fixture";
 
 test("A9-01 同栏四图标具名，外观连续即时保存，Esc单路由还焦点并保留写字板", async ({
@@ -60,9 +61,7 @@ test("A9-01 同栏四图标具名，外观连续即时保存，Esc单路由还�
   await expect(
     toolbar.getByRole("button", { name: "外观", exact: true }),
   ).toBeFocused();
-  await expect(page.getByLabel("卡片正文", { exact: true })).toHaveValue(
-    "白底完整正文",
-  );
+  await expectTextValue(page.getByLabel("卡片正文", { exact: true }), "白底完整正文");
   expect(await workspace.state()).toEqual(saved);
   await page.screenshot({ path: info.outputPath("appearance-focus.png") });
 });

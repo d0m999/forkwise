@@ -1,3 +1,4 @@
+import { expectTextValue } from "./text-editor-assertions";
 import { test, expect, type Page } from "@playwright/test";
 import { spawn, type ChildProcess } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -192,9 +193,7 @@ test("F8-03 完整框选替换和Shift追加，从任一已选卡原子移动且
   await expect(page.getByRole("status")).toHaveText("已保存到本机");
   await marquee(page, { x: 40, y: 80 }, { x: 705, y: 300 }, true);
   await expect(page.locator(".react-flow__node.selected")).toHaveCount(2);
-  await expect(page.getByLabel("卡片正文", { exact: true })).toHaveValue(
-    "仅甲正在编辑",
-  );
+  await expectTextValue(page.getByLabel("卡片正文", { exact: true }), "仅甲正在编辑");
   const historyBefore = (await timeline(page)).undo.length;
   const node = page.locator(".react-flow__node").nth(1);
   const b = (await node.boundingBox())!;
@@ -577,7 +576,7 @@ test("F8-12 移动工具与空格临时平移，缩放只改视口，输入空�
   await body.fill("输入空格");
   const view = await transform();
   await body.press("Space");
-  await expect(body).toHaveValue("输入空格 ");
+  await expectTextValue(body, "输入空格 ");
   expect(await transform()).toBe(view);
 });
 
@@ -631,9 +630,7 @@ test("F8-13 标题内原生逐步undo只有输入路由，外部点击保留原�
   await expect(page.getByRole("status")).toHaveText("已保存到本机");
   expect((await state(page)).cards[0]!.body.blocks[0]!.text).toBe("保留原正文");
   await page.locator(".preview").dblclick();
-  await expect(page.getByLabel("卡片正文", { exact: true })).toHaveValue(
-    "保留原正文",
-  );
+  await expectTextValue(page.getByLabel("卡片正文", { exact: true }), "保留原正文");
   await expect(title).toHaveCount(0);
 });
 

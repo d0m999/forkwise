@@ -46,6 +46,7 @@ button[aria-current="true"] {
   color: #264aad;
 }
 .workspace {
+  position: relative;
   height: 100dvh;
   overflow: hidden;
 }
@@ -91,8 +92,11 @@ button[aria-current="true"] {
   inset: 44px 0 0;
 }
 .canvas.with-editor {
-  right: 360px;
+  right: var(--board-width, 544px);
 }
+.workspace[data-board-full="true"] .canvas.with-editor { visibility: hidden; pointer-events: none; }
+body:has(.workspace[data-board-full="true"]) .card-floating,
+body:has(.workspace[data-board-full="true"]) .card-tooltip { display: none; }
 .thought-card {
   position: relative;
   width: 100%;
@@ -227,7 +231,9 @@ button[aria-current="true"] {
   border-left: 1px solid #dce0e7;
   display: flex;
   flex-direction: column;
-  padding: 22px 24px 72px;
+  padding: 0;
+  min-width: 0;
+  z-index: 6;
 }
 .body-editor header {
   display: flex;
@@ -253,6 +259,31 @@ button[aria-current="true"] {
   line-height: 1.85;
   min-height: 100px;
 }
+.paragraph-editor {
+  flex: 1;
+  min-height: 100px;
+  overflow: visible;
+  font-size: 16px;
+  line-height: 28px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.paragraph-editor p { margin: 0 0 8px; min-height: 28px; }
+.paragraph-editor:focus-visible { outline: 2px solid #365ec9; outline-offset: 3px; }
+.original-body { overflow: auto; }
+.original-body pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
+.board-toolbar { flex: 0 0 auto; padding: 16px 20px 12px; border-bottom: 1px solid #e8ebf0; }
+.board-identity { flex: 1; min-width: 0; }
+.board-identity h2 { margin: 0 0 6px; font-size: 18px; line-height: 28px; }
+.board-identity small { display: block; overflow-wrap: anywhere; color: #697386; font-size: 11px; }
+.board-identity p { font-size: 12px; margin: 6px 0 0; color: #697386; }
+.board-scroll { flex: 1; min-height: 0; overflow: auto; overflow-anchor: none; padding: 24px 24px 80px; }
+.board-document { max-width: 760px; margin: auto; }
+.board-full { left: 0; border-left: 0; }
+.board-narrow .board-scroll { padding-left: 16px; padding-right: 16px; }
+.board-resizer { position: absolute; left: -4px; top: 0; bottom: 0; width: 8px; cursor: col-resize; touch-action: none; z-index: 2; }
+.board-resizer:hover, .board-resizer:focus-visible { background: #365ec933; outline: 2px solid #365ec9; }
+.board-back { align-self: flex-start; margin-left: 12px; }
 .save-state {
   position: absolute;
   bottom: 8px;
@@ -378,14 +409,7 @@ button[aria-current="true"] {
   z-index: 10000;
 }
 @media (max-width: 760px) {
-  .body-editor {
-    width: min(360px, 88vw);
-    z-index: 6;
-    box-shadow: -8px 0 25px #23314912;
-  }
-  .canvas.with-editor {
-    right: 0;
-  }
+  .board-toolbar { padding: 12px 16px; }
   .creation-tools {
     bottom: 55px;
   }

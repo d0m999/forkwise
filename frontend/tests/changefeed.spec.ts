@@ -1,3 +1,4 @@
+import { expectTextValue } from "./text-editor-assertions";
 import { test, expect, type Browser } from "@playwright/test";
 import { spawn, execFileSync, type ChildProcess } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
@@ -193,17 +194,13 @@ test("断连重连后 UI 和 Agent 恢复同一地图，删除不留幽灵对象
       expected: { body: card.body.versionId, pose: card.item.versionId },
       payload: { id: "c", text: "断连期间完整中文🧠正文", x: 380, y: 220 },
     });
-    await expect(f.page.getByLabel("卡片正文", { exact: true })).toHaveValue(
-      "初始正文",
-    );
+    await expectTextValue(f.page.getByLabel("卡片正文", { exact: true }), "初始正文");
     await f.page.unroute("**/changes?**");
     await expect(f.page.locator(".workspace")).toHaveAttribute(
       "data-revision",
       "4",
     );
-    await expect(f.page.getByLabel("卡片正文", { exact: true })).toHaveValue(
-      "断连期间完整中文🧠正文",
-    );
+    await expectTextValue(f.page.getByLabel("卡片正文", { exact: true }), "断连期间完整中文🧠正文");
     const same = await f.index(
       (await f.page.locator(".workspace").getAttribute("data-snapshot"))!,
     );
@@ -297,9 +294,7 @@ test("真正服务重启使旧缓存 token 失效，同页面及新 context 完�
         current,
       );
       await page.getByRole("button", { name: "编辑正文", exact: true }).click();
-      await expect(page.getByLabel("卡片正文", { exact: true })).toHaveValue(
-        "初始正文",
-      );
+      await expectTextValue(page.getByLabel("卡片正文", { exact: true }), "初始正文");
     } finally {
       await context.close();
     }
@@ -595,7 +590,7 @@ for (const field of ["body", "title"] as const) {
           journal.key,
         );
         expect(after).toEqual(journal.value);
-        await expect(editor).toHaveValue(input);
+        await expectTextValue(editor, input);
         expect((await f.index()).revision).toBe(4);
         await info.attach("draft-invalidation-observation", {
           body: JSON.stringify({

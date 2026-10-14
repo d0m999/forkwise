@@ -1,3 +1,4 @@
+import { expectTextValue } from "./text-editor-assertions";
 import { test, expect, place } from "./card-appearance-fixture";
 
 test("A9-08 外观失败刷新后保留输入并重试原请求，真实服务重启与新context往返完整状态", async ({
@@ -63,9 +64,7 @@ test("A9-08 外观失败刷新后保留输入并重试原请求，真实服务�
       "rgb(247, 233, 189)",
     );
     await reopened.getByRole("button", { name: "编辑正文" }).click();
-    await expect(reopened.getByLabel("卡片正文", { exact: true })).toHaveValue(
-      "完整正文\n重开不截断\n独立Body身份",
-    );
+    await expectTextValue(reopened.getByLabel("卡片正文", { exact: true }), "完整正文\n重开不截断\n独立Body身份");
     await reopened.screenshot({
       path: info.outputPath("reopened-appearance-sqlite.png"),
     });

@@ -1,4 +1,8 @@
 import { DEFAULT_APPEARANCE } from "../../backend/src/mapping/presentation-values";
+import { bodyText } from "../../backend/src/mapping/body-text";
+import { WritingBoard } from "./writing-board";
+import { ParagraphEditor, type TextCursor } from "./paragraph-editor";
+import type { Block } from "../../backend/src/mapping/contracts";
 import { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
@@ -43,12 +47,14 @@ import { useAppearanceSave, type AppearanceInput } from "./appearance-save";
 
 type CardData = {
   card: Card;
+  previewBody: Card["body"];
   editing: boolean;
   title: string;
   onTitle: (value: string) => void;
   onFinish: () => void;
   onEdit: () => void;
   onBody: () => void;
+  onDelete: () => void;
   onAppearance: (value: AppearanceInput) => void;
   appearanceValue: AppearanceInput;
   onMeasure: (card: Card, height: number) => void;
@@ -72,7 +78,7 @@ function ThoughtCard({ data, selected }: NodeProps<Node<CardData>>) {
     data.onMeasure,
     data.measurable && data.title === data.card.title,
   );
-  const text = bodyPreviewText(data.card.body);
+  const text = bodyPreviewText(data.previewBody);
   return (
     <article
       ref={anchor}
@@ -91,6 +97,7 @@ function ThoughtCard({ data, selected }: NodeProps<Node<CardData>>) {
           blocked={data.historyBlocked}
           onEdit={data.onEdit}
           onBody={data.onBody}
+          onDelete={data.onDelete}
           onAppearance={data.onAppearance}
         />
       )}
@@ -210,16 +217,21 @@ function Workspace() {
   const [placing, setPlacing] = useState(false),
     [editing, setEditing] = useState<string | null>(null),
     [bodyCard, setBodyCard] = useState<string | null>(null);
+  const [bodyOpened, setBodyOpened] = useState(0);
   const bodyBinding = useRef<{
     projectId: string;
     card: Card;
     removalActionId?: string;
+    restoreDirection?: "undo" | "redo";
+    wasDeleted?: boolean;
   } | null>(null);
+  const awaitBodySelection = useRef(false);
   const [deletedBody, setDeletedBody] = useState<{
     projectId: string;
     card: Card;
     actionId?: string;
     canRestore: boolean;
+    direction: "undo" | "redo";
   } | null>(null);
   const [draftView, setDraftView] = useState<Record<string, Draft>>({}),
     drafts = useRef<Record<string, Draft>>({});
@@ -236,6 +248,7 @@ function Workspace() {
     projectId: string;
     cardId: string;
     actionId?: string;
+    direction?: "undo" | "redo";
   } | null>(null);
   function persistDrafts() {
     try {
@@ -315,13 +328,14 @@ function Workspace() {
       if (!card) {
         const timeline = await api.history(saved.projectId);
         if (!stillCurrent()) return;
-        const target = timeline.redo.at(-1);
+        const deletion = [...timeline.undo].reverse().find(a => a.target.id === saved.cardId && a.label === "thought.delete");
+        const target = deletion ?? timeline.redo.at(-1);
         setDeletedRecovery({
           projectId: saved.projectId,
           cardId: saved.cardId,
           ...(target?.target.id === saved.cardId &&
-          target.label === "thought.create"
-            ? { actionId: target.id }
+          ["thought.create", "thought.delete"].includes(target.label)
+            ? { actionId: target.id, direction: deletion ? "undo" as const : "redo" as const }
             : {}),
         });
         setRecoveryError("这张卡片已删除，恢复草稿已保留，不能自动复活");
@@ -362,6 +376,7 @@ function Workspace() {
     inputType: string;
     start: number;
     end: number;
+    blockId?: string;
   } | null>(null);
   function breakBodyGroup() {
     // Focus changes must not split an unfinished IME unit into saved fragments.
@@ -450,11 +465,12 @@ function Workspace() {
     setHistoryBusy(true);
     try {
       breakBodyGroup();
+      const excluded = restoreActionId ? (deletedBody?.actionId === restoreActionId ? deletedBody.card.id : deletedRecovery?.actionId === restoreActionId ? deletedRecovery.cardId : undefined) : undefined;
       if (
         !(await appearance.flush()) ||
         !(await cardLayout.flush()) ||
         !(await pose.flush()) ||
-        !(await flush())
+        !(await flush(Infinity, false, excluded))
       )
         return;
       setEditing(null);
@@ -481,7 +497,7 @@ function Workspace() {
           projectId,
           type: direction === "undo" ? "history.undo" : "history.redo",
           expected: timeline.revision,
-          payload: {},
+          payload: restoreActionId ? { actionId: restoreActionId } : {},
         };
       }
       const command = historyCommand.current;
@@ -493,19 +509,20 @@ function Workspace() {
         receipt.deletedIds?.includes(binding.card.id) &&
         historyActionId.current
       )
-        binding.removalActionId = historyActionId.current;
+        { binding.removalActionId = historyActionId.current; binding.restoreDirection = command.type === "history.undo" ? "redo" : "undo"; }
       await refresh(projectId);
       historyCommand.current = null;
       historyActionId.current = null;
       setHistoryNotice(
         `${command.type === "history.undo" ? "已撤销" : "已重做"}：${receipt.historyTarget?.title || "未命名卡片"}`,
       );
-      setStatus("已保存到本机");
-      setError("");
+      const retained = !!unconfirmed.current || closedDrafts.current.length > 0 || Object.keys(drafts.current).length > 0;
+      setStatus(retained ? "保存未完成" : "已保存到本机");
+      setError(retained ? "原卡草稿仍未确认，请重试原请求或明确处理版本冲突" : "");
     } catch (e) {
       if (
         e instanceof MappingError &&
-        ["VERSION_CONFLICT", "HISTORY_EMPTY"].includes(e.code)
+        ["VERSION_CONFLICT", "HISTORY_EMPTY", "HISTORY_TARGET_CHANGED"].includes(e.code)
       ) {
         const projectId = historyCommand.current?.projectId;
         historyCommand.current = null;
@@ -586,17 +603,26 @@ function Workspace() {
       const card = value.cards.find((c) => c.id === binding.card.id);
       if (card) {
         binding.card = card;
+        binding.wasDeleted = false;
         delete binding.removalActionId;
+        delete binding.restoreDirection;
         setDeletedBody(null);
       } else {
-        const removed = timeline?.redo.at(-1);
+        // Filtering a deleted item out of a multi-selection is a system
+        // cleanup, not an explicit selection of the surviving single card.
+        if (!binding.wasDeleted) awaitBodySelection.current = true;
+        binding.wasDeleted = true;
+        const deletion = timeline && [...timeline.undo].reverse().find(a => a.target.id === binding.card.id && a.label === "thought.delete");
+        const removed = deletion ?? timeline?.redo.at(-1);
         if (
           !binding.removalActionId &&
           timeline?.revision === value.project.revision &&
-          removed?.label === "thought.create" &&
+          removed && ["thought.create", "thought.delete"].includes(removed.label) &&
           removed.target.id === binding.card.id
         )
-          binding.removalActionId = removed.id;
+          { binding.removalActionId = removed.id; binding.restoreDirection = deletion ? "undo" : "redo"; }
+        if (composition.current) compose(false);
+        setEditing(previous => previous === binding.card.id ? null : previous);
         setDeletedBody({
           projectId: binding.projectId,
           card: binding.card,
@@ -605,7 +631,8 @@ function Workspace() {
             : {}),
           canRestore:
             !!binding.removalActionId &&
-            timeline?.redo.at(-1)?.id === binding.removalActionId,
+            (binding.restoreDirection === "undo" ? timeline?.undo : timeline?.redo)?.at(-1)?.id === binding.removalActionId,
+          direction: binding.restoreDirection ?? "redo",
         });
       }
     }
@@ -896,6 +923,7 @@ function Workspace() {
   async function flush(
     limit = Infinity,
     completedPrefix = false,
+    excludedCard?: string,
   ): Promise<boolean> {
     limit = Math.min(limit, layoutBarrier.current?.cutoff ?? Infinity);
     clearTimeout(timer.current);
@@ -904,13 +932,11 @@ function Workspace() {
     if ((!completedPrefix && composition.current) || conflictRef.current)
       return false;
     if (saving.current) {
-      if (!(await saving.current)) return false;
-      return flush(limit, completedPrefix);
+      const target = unconfirmed.current?.cardId;
+      if (!(await saving.current) && target !== excludedCard) return false;
+      return flush(limit, completedPrefix, excludedCard);
     }
-    const current =
-      unconfirmed.current ??
-      closedDrafts.current[0] ??
-      Object.values(drafts.current)[0];
+    const current = [unconfirmed.current, ...closedDrafts.current, ...Object.values(drafts.current)].find(d => d && d.cardId !== excludedCard);
     if (!current || current.generation > limit) return true;
     const key = draftKey(current.projectId, current.cardId, current.field);
     const card = authority.current?.cards.find((c) => c.id === current.cardId);
@@ -940,7 +966,7 @@ function Workspace() {
             expected: current.expected,
             payload: {
               id: card.id,
-              text: current.value,
+              ...(current.blocks ? { blocks: current.blocks } : { text: current.value }),
               ...(draftAssetIds(current)
                 ? { requiredAssetIds: draftAssetIds(current)! }
                 : {}),
@@ -1051,7 +1077,7 @@ function Workspace() {
     saving.current = null;
     // A completed command only confirms its own generation. Drain newer input
     // before allowing a project switch or any other editor handoff.
-    return result ? flush(limit, completedPrefix) : false;
+    return result ? flush(limit, completedPrefix, excludedCard) : false;
   }
   function scheduleSave() {
     clearTimeout(timer.current);
@@ -1077,7 +1103,8 @@ function Workspace() {
     field: Draft["field"],
     card: Card,
     value: string,
-    input?: { inputType: string; start: number; end: number },
+    input?: { inputType: string; start: number; end: number; blockId?: string },
+    blocks?: Block[],
   ) {
     if (!state || historyLock.current || historyCommand.current) return;
     if (field === "body") {
@@ -1091,6 +1118,7 @@ function Workspace() {
         (!composition.current &&
           (Date.now() - group.at > 1000 ||
             group.inputType !== type ||
+            group.blockId !== input?.blockId ||
             type === "insertFromPaste"))
       ) {
         breakBodyGroup();
@@ -1101,6 +1129,7 @@ function Workspace() {
           inputType: type,
           start: input?.start ?? 0,
           end: input?.end ?? 0,
+          ...(input?.blockId ? { blockId: input.blockId } : {}),
         };
       } else
         Object.assign(group, {
@@ -1122,6 +1151,7 @@ function Workspace() {
       cardId: card.id,
       field,
       value,
+      ...(blocks ? { blocks } : {}),
       generation: ++generation.current,
       ...(requiredAssetIds ? { requiredAssetIds } : {}),
       ...(field === "title" && titleGroup.current?.cardId === card.id
@@ -1167,7 +1197,7 @@ function Workspace() {
       }
       const latest = drafts.current[key] ?? draft;
       const remoteValue =
-        draft.field === "title" ? remote.title : remote.body.blocks[0]!.text;
+        draft.field === "title" ? remote.title : bodyText(remote.body);
       recovery.current ??= new DraftRecovery();
       // A choice may discard many local groups. Preserve the complete alternative
       // before changing any draft or issuing a version-checked write.
@@ -1176,6 +1206,7 @@ function Workspace() {
         cardId: draft.cardId,
         field: draft.field,
         value: choice === "mine" ? remoteValue : latest.value,
+        ...(draft.field === "body" ? (choice === "mine" ? { blocks: remote.body.blocks } : latest.blocks ? { blocks: latest.blocks } : {}) : {}),
         expected: version(remote),
         generation: ++generation.current,
         ...(choice === "remote" && draftAssetIds(latest)
@@ -1187,6 +1218,7 @@ function Workspace() {
         cardId: draft.cardId,
         field: draft.field,
         value: choice === "mine" ? latest.value : remoteValue,
+        ...(draft.field === "body" ? (choice === "remote" ? { blocks: remote.body.blocks } : latest.blocks ? { blocks: latest.blocks } : {}) : {}),
         generation: ++generation.current,
         expected: version(remote),
         ...(choice === "mine" && draftAssetIds(latest)
@@ -1248,6 +1280,10 @@ function Workspace() {
       pendingAction.current = null;
       onDone?.();
     } catch (e) {
+      if (command.type === "thought.delete" && e instanceof MappingError && ["VERSION_CONFLICT", "NOT_FOUND", "UNAUTHORIZED", "PROJECT_FORBIDDEN", "UNTRUSTED_PRINCIPAL"].includes(e.code)) {
+        pendingAction.current = null;
+        try { await refresh(command.projectId); } catch { /* Keep the unconfirmed view; authorization polling owns retraction. */ }
+      }
       fail(e);
     } finally {
       setBusy(false);
@@ -1273,6 +1309,16 @@ function Workspace() {
       },
     );
   }
+  async function removeCard(id: string) {
+    if (composition.current || busy || historyBlocked) return;
+    const projectId = authority.current?.project.id;
+    if (!projectId) return;
+    breakBodyGroup();
+    if (!(await appearance.flush()) || !(await cardLayout.flush()) || !(await pose.flush()) || !(await flush())) return;
+    const card = authority.current?.project.id === projectId ? authority.current.cards.find(c => c.id === id) : undefined;
+    if (!card) return;
+    await action({ commandId: crypto.randomUUID(), projectId, type: "thought.delete", expected: { thought: card.versionId, body: card.body.versionId, pose: card.item.versionId, appearance: card.appearance?.versionId ?? null }, payload: { id } });
+  }
   async function createCard(x: number, y: number) {
     if (!state) return;
     const id = crypto.randomUUID();
@@ -1289,31 +1335,53 @@ function Workspace() {
       () => {
         setPlacing(false);
         const card = authority.current?.cards.find((c) => c.id === id);
-        if (card) setSelection([card.item.id]);
+        if (card) { awaitBodySelection.current = false; setSelection([card.item.id]); }
         titleGroup.current = { cardId: id, id: editGroup };
         setEditing(id);
       },
     );
   }
-  async function editCard(id: string, field: "title" | "body") {
+  async function editCard(id: string, field: "title" | "body", valid = () => true, followingSelection = false) {
     if (historyLock.current || historyCommand.current) return;
     if (composition.current) return;
-    editorEpoch.current++;
+    const epoch = ++editorEpoch.current;
+    const projectId = authority.current?.project.id;
     breakBodyGroup();
     await flush();
+    if (authority.current?.project.id !== projectId || (field === "body" && epoch !== editorEpoch.current) || !valid()) return;
     // A failed save belongs to the old card; switching the visible editor
     // never changes that draft's target or its pending command.
-    titleGroup.current =
-      field === "title" ? { cardId: id, id: crypto.randomUUID() } : null;
-    setEditing(field === "title" ? id : null);
+    if (!followingSelection) {
+      titleGroup.current = field === "title" ? { cardId: id, id: crypto.randomUUID() } : null;
+      setEditing(field === "title" ? id : null);
+    }
     if (field === "body") {
       const card = authority.current?.cards.find((c) => c.id === id);
       if (!card || !authority.current) return;
       bodyBinding.current = { projectId: authority.current.project.id, card };
+      awaitBodySelection.current = false;
       setDeletedBody(null);
       setBodyCard(id);
+      setBodyOpened(value => value + 1);
     }
   }
+  const following = useRef<string | null>(null);
+  const selectedCards = useRef(selection);
+  selectedCards.current = selection;
+  useEffect(() => {
+    if (!bodyCard || awaitBodySelection.current || selection.length !== 1 || composition.current || historyBlocked) return;
+    const card = authority.current?.cards.find((c) => c.item.id === selection[0]);
+    if (!card || card.id === bodyCard || following.current === card.id) return;
+    const frame = requestAnimationFrame(() => {
+      const valid = () => !awaitBodySelection.current && selectedCards.current.length === 1 && selectedCards.current[0] === card.item.id;
+      if (!valid()) return;
+      following.current = card.id;
+      void editCard(card.id, "body", valid, true).finally(() => {
+        if (following.current === card.id) following.current = null;
+      });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [selection, bodyCard, historyBlocked, status]);
   useEffect(() => {
     let active = true;
     void authorizeLocalSession()
@@ -1380,6 +1448,10 @@ function Workspace() {
       !busy && !historyBlocked && !pose.pending && !placing && !panTool,
     data: {
       card,
+      previewBody: (() => {
+        const draft = draftView[draftKey(state!.project.id, card.id, "body")];
+        return draft ? { ...card.body, blocks: draft.blocks ?? [{ ...card.body.blocks[0]!, text: draft.value }] } : card.body;
+      })(),
       editing: editing === card.id,
       title:
         draftView[draftKey(state!.project.id, card.id, "title")]?.value ??
@@ -1395,6 +1467,7 @@ function Workspace() {
       },
       onEdit: () => void editCard(card.id, "title"),
       onBody: () => void editCard(card.id, "body"),
+      onDelete: () => void removeCard(card.id),
       onMeasure: cardLayout.measure,
       measurable: !busy && !historyBlocked && !pose.pending && !pose.dragging,
       onAppearance: (value) => {
@@ -1565,11 +1638,13 @@ function Workspace() {
             !(event.target as HTMLElement).classList.contains("draggable") &&
             !placing &&
             !panTool
-          )
+          ) {
+            awaitBodySelection.current = false;
             marqueeSelection.current = {
               previous: selection,
               shift: event.shiftKey,
             };
+          }
         }}
       >
         {state ? (
@@ -1582,11 +1657,12 @@ function Workspace() {
             }}
             nodes={nodes}
             onNodeClick={(event, node) => {
+              awaitBodySelection.current = false;
               if (event.shiftKey)
                 setSelection((previous) => [
                   ...new Set([...previous, node.id]),
                 ]);
-              else if (!selection.includes(node.id)) setSelection([node.id]);
+              else if (!selection.includes(node.id) || selection.length === 1) setSelection([node.id]);
             }}
             nodeDragThreshold={0}
             selectionOnDrag={!placing && !panTool}
@@ -1738,30 +1814,18 @@ function Workspace() {
         )}
       </main>
       {panelCard && (
-        <aside className="body-editor">
-          <header>
-            <h2>
-              {(draftView[draftKey(state!.project.id, panelCard.id, "title")]
-                ?.value ??
-                panelCard.title) ||
-                "未命名卡片"}
-            </h2>
-            <button
-              aria-label="关闭正文"
-              onClick={() => {
-                if (composition.current) return;
-                editorEpoch.current++;
-                breakBodyGroup();
-                persistDrafts();
-                void flush();
-                bodyBinding.current = null;
-                setDeletedBody(null);
-                setBodyCard(null);
-              }}
-            >
-              关闭
-            </button>
-          </header>
+        <WritingBoard
+          key={state!.project.id}
+          projectId={state!.project.id} cardId={panelCard.id} opened={bodyOpened}
+          title={draftView[draftKey(state!.project.id, panelCard.id, "title")]?.value ?? panelCard.title}
+          status={!currentBody ? "已删除 · 内容保留" : status}
+          onClose={() => {
+            if (composition.current) return;
+            editorEpoch.current++;
+            breakBodyGroup(); persistDrafts(); void flush();
+            bodyBinding.current = null; setDeletedBody(null); setBodyCard(null);
+          }}
+        >
           {!currentBody ? (
             <section className="deleted-body" aria-label="已删除卡片">
               <p>这张卡片已删除</p>
@@ -1769,51 +1833,33 @@ function Workspace() {
                 disabled={historyBlocked || !deletedBody?.canRestore}
                 onClick={() => {
                   const actionId = deletedBody?.actionId;
-                  if (actionId) void travel("redo", actionId);
+                  if (actionId) void travel(deletedBody!.direction, actionId);
                 }}
               >
                 撤销删除
               </button>
               {!deletedBody?.canRestore && <p>这次删除的恢复已不可用</p>}
             </section>
-          ) : (
+          ) : null}
             <>
               <label htmlFor="card-body">卡片正文</label>
-              <textarea
-                id="card-body"
-                readOnly={historyBlocked}
-                value={
-                  draftView[draftKey(state!.project.id, currentBody.id, "body")]
-                    ?.value ?? currentBody.body.blocks[0]!.text
-                }
-                onChange={(e) =>
-                  change("body", currentBody, e.target.value, {
-                    inputType: (e.nativeEvent as InputEvent).inputType,
-                    start: e.target.selectionStart,
-                    end: e.target.selectionEnd,
-                  })
-                }
-                onSelect={(e) => {
+              <ParagraphEditor
+                key={state!.project.id + ":" + panelCard.id}
+                blocks={(() => {
+                  const draft = draftView[draftKey(state!.project.id, panelCard.id, "body")];
+                  return draft?.blocks ?? (draft ? [{ ...panelCard.body.blocks[0]!, text: draft.value }] : panelCard.body.blocks);
+                })()}
+                readOnly={historyBlocked || !currentBody}
+                onChange={(blocks, inputType, cursor) => { if (currentBody) change("body", currentBody, bodyText({ blocks }), { inputType, ...cursor }, blocks); }}
+                onSelect={(cursor: TextCursor) => {
                   const group = bodyGroup.current;
-                  if (
-                    !composition.current &&
-                    group &&
-                    (e.currentTarget.selectionStart !== group.start ||
-                      e.currentTarget.selectionEnd !== group.end)
-                  )
-                    breakBodyGroup();
+                  if (!composition.current && group && (cursor.start !== group.start || cursor.end !== group.end || cursor.blockId !== group.blockId)) breakBodyGroup();
                 }}
-                onCompositionStart={() => compose(true)}
-                onCompositionEnd={() => compose(false)}
-                onBlur={() => {
-                  breakBodyGroup();
-                  void flush();
-                }}
-                placeholder="写下你的想法…"
+                onComposition={compose}
+                onFinish={() => { breakBodyGroup(); void flush(); }}
               />
             </>
-          )}
-        </aside>
+        </WritingBoard>
       )}
       {pose.conflict && !conflict && (
         <section className="conflict-panel" aria-label="布局冲突">
@@ -1840,7 +1886,7 @@ function Workspace() {
               readOnly
               value={
                 conflict.draft.field === "body"
-                  ? conflict.remote.body.blocks[0]!.text
+                  ? bodyText(conflict.remote.body)
                   : conflict.remote.title
               }
             />
@@ -1897,7 +1943,7 @@ function Workspace() {
               disabled={historyBlocked || !deletedRecovery?.actionId}
               onClick={() => {
                 if (deletedRecovery?.actionId)
-                  void travel("redo", deletedRecovery.actionId);
+                  void travel(deletedRecovery.direction ?? "redo", deletedRecovery.actionId);
               }}
             >
               撤销删除

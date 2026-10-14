@@ -1,3 +1,4 @@
+import { expectTextValue, readTextValue, commandBodyText } from "./text-editor-assertions";
 import { test, expect, type Page } from "@playwright/test";
 import { spawn, type ChildProcess } from "node:child_process";
 import type { Card, Command } from "../src/api";
@@ -146,9 +147,7 @@ test("真实 React Flow 卡片经服务重启和新浏览器上下文保持项�
   await reopened.getByRole("tab", { name: /芯片研究/ }).click();
   await expect(reopened.locator(".react-flow__node")).toContainText("独立标题");
   await reopened.getByRole("button", { name: "编辑正文" }).click();
-  await expect(reopened.getByLabel("卡片正文")).toHaveValue(
-    "正文第一行\n正文第二行，保持原文。",
-  );
+  await expectTextValue(reopened.getByLabel("卡片正文"), "正文第一行\n正文第二行，保持原文。");
   const restored = await reopened.evaluate(
     async (id) => (await fetch("/api/mapping/projects/" + id)).json(),
     initial.project.id,
@@ -278,7 +277,7 @@ test("切项目等待连续三批输入的最新确认，第二批 ACK 不能放
     const command = route.request().postDataJSON();
     if (command.type !== "body.edit") return route.continue();
     const response = await route.fetch(); // Write really succeeds; only the ACK is delayed.
-    const value = command.payload.text;
+    const value = commandBodyText(command);
     seen.add(value);
     if (value === "A") await a.promise;
     if (value === "AB") await ab.promise;
@@ -306,9 +305,7 @@ test("切项目等待连续三批输入的最新确认，第二批 ACK 不能放
       .toBe(true);
     expect(new URL(page.url()).searchParams.get("project")).toBe(source);
     await expect(page.getByRole("status")).not.toHaveText("已保存到本机");
-    await expect(page.getByLabel("卡片正文", { exact: true })).toHaveValue(
-      "ABC",
-    );
+    await expectTextValue(page.getByLabel("卡片正文", { exact: true }), "ABC");
     abc.release();
     await expect(page).toHaveURL(new RegExp(`project=${target}`));
     const persisted = await page.evaluate(
@@ -362,9 +359,7 @@ test("标题成功 ACK 在途时继续改标题并转到已开正文，两字段
       page.getByRole("button", { name: "标题 AB 应当保留", exact: true }),
     ).toBeVisible();
     await page.getByRole("button", { name: "编辑正文" }).click();
-    await expect(page.getByLabel("卡片正文", { exact: true })).toHaveValue(
-      "正文也需要保存",
-    );
+    await expectTextValue(page.getByLabel("卡片正文", { exact: true }), "正文也需要保存");
     await page.screenshot({
       path: testInfo.outputPath("both-fields-reopened.png"),
     });
@@ -446,7 +441,7 @@ test("创建回读乱序不能回退已保存正文，后续编辑继续成功",
       .press("Enter");
     await page
       .locator(".react-flow__pane")
-      .click({ position: { x: 350, y: 240 } });
+      .click({ position: { x: 80, y: 100 } });
     await expect.poll(() => captured).toBe(true);
     await body.fill("已保存的新正文");
     await expect(page.getByRole("status")).toHaveText("已保存到本机");
@@ -457,7 +452,10 @@ test("创建回读乱序不能回退已保存正文，后续编辑继续成功",
     await expect(page.getByLabel("卡片标题", { exact: true })).toBeVisible();
     const after = await read();
     expect(after.cards[0].body.blocks[0].text).toBe("已保存的新正文");
-    expect(await body.inputValue()).toBe("已保存的新正文");
+    await page.getByLabel("卡片标题", { exact: true }).press("Enter");
+    await page.getByRole("button", { name: "初始标题", exact: true }).click();
+    await expectTextValue(body, "已保存的新正文");
+    expect(await readTextValue(body)).toBe("已保存的新正文");
     await body.fill("回读乱序后继续输入");
     await expect(page.getByRole("status")).toHaveText("已保存到本机");
     await expect(page.getByRole("alert")).toHaveCount(0);
@@ -499,7 +497,7 @@ test("创建回读到达时保留未确认正文的最新草稿，继续输入�
   );
   await page.route("**/api/mapping/execute", async (route) => {
     const command = route.request().postDataJSON();
-    if (command.type !== "body.edit" || command.payload.text !== "正文 A")
+    if (command.type !== "body.edit" || commandBodyText(command) !== "正文 A")
       return route.continue();
     const response = await route.fetch();
     written = true;
@@ -521,10 +519,10 @@ test("创建回读到达时保留未确认正文的最新草稿，继续输入�
     // Seeing the second card proves that the refresh reached the real rendered UI.
     // The body ACK is still held, so this is not a wait-until-saved workaround.
     await expect(page.locator(".react-flow__node")).toHaveCount(2);
-    await expect(body).toHaveValue("尚未确认的正文 AB");
+    await expectTextValue(body, "尚未确认的正文 AB");
     await body.press("End");
     await body.pressSequentially("C");
-    await expect(body).toHaveValue("尚未确认的正文 ABC");
+    await expectTextValue(body, "尚未确认的正文 ABC");
     bodyAck.release();
     await expect(page.getByRole("status")).toHaveText("已保存到本机");
     await expect(page.getByRole("alert")).toHaveCount(0);
@@ -555,7 +553,7 @@ test("正文请求在途仍可真实拖动，旧正文确认不覆盖布局或�
   let sending = false;
   await page.route("**/api/mapping/execute", async (route) => {
     const command = route.request().postDataJSON();
-    if (command.type === "body.edit" && command.payload.text === "正在写正文") {
+    if (command.type === "body.edit" && commandBodyText(command) === "正在写正文") {
       sending = true;
       await pending.promise;
     }
@@ -596,9 +594,7 @@ test("正文请求在途仍可真实拖动，旧正文确认不覆盖布局或�
     expect(moved.x).toBeLessThan(before.cards[0].item.pose.x - 60);
     await page.reload();
     await page.getByRole("button", { name: "编辑正文" }).click();
-    await expect(page.getByLabel("卡片正文", { exact: true })).toHaveValue(
-      "正在写正文，继续输入",
-    );
+    await expectTextValue(page.getByLabel("卡片正文", { exact: true }), "正在写正文，继续输入");
     expect((await read()).cards[0]).toEqual(after.cards[0]);
     await page.screenshot({
       path: testInfo.outputPath("body-pose-reopened.png"),
@@ -658,10 +654,10 @@ test("布局回读不替换正文草稿的起始版本，同正文冲突保留�
         ).cards[0].item.pose.x,
     )
     .toBe(before.cards[0].item.pose.x + 10);
-  await expect(body).toHaveValue("我的待保存正文");
+  await expectTextValue(body, "我的待保存正文");
   await body.dispatchEvent("compositionend");
   await expect(page.getByRole("alert")).toContainText("正文已更新");
-  await expect(body).toHaveValue("我的待保存正文");
+  await expectTextValue(body, "我的待保存正文");
   await expect(page.getByLabel("已保存的正文")).toHaveValue(
     "另一个调用者的正文",
   );
@@ -675,7 +671,7 @@ test("布局回读不替换正文草稿的起始版本，同正文冲突保留�
   expect(current.cards[0].item.pose.x).toBe(before.cards[0].item.pose.x + 10);
   await page.reload();
   await page.getByRole("button", { name: "编辑正文" }).click();
-  await expect(body).toHaveValue("我的待保存正文");
+  await expectTextValue(body, "我的待保存正文");
 });
 
 for (const delayedPose of [false, true]) {
@@ -753,7 +749,7 @@ for (const delayedPose of [false, true]) {
         .poll(async () => (await read()).cards[0].item.pose.x)
         .toBe(original.item.pose.x + 10);
       if (!delayedPose) {
-        await expect(body).toHaveValue("我的冲突草稿");
+        await expectTextValue(body, "我的冲突草稿");
         await expect(page.getByLabel("已保存的正文")).toHaveValue(
           "对方已保存正文",
         );
@@ -762,7 +758,7 @@ for (const delayedPose of [false, true]) {
           "对方已保存正文",
         );
         expect(
-          submitted.filter((c) => c.payload.text === "我的冲突草稿"),
+          submitted.filter((c) => commandBodyText(c) === "我的冲突草稿"),
         ).toEqual([
           expect.objectContaining({ expected: original.body.versionId }),
         ]);
@@ -806,7 +802,7 @@ test("R3 正文未知转明确冲突后，可独立重试布局且重复点击�
   await page.route("**/api/mapping/execute", async (route) => {
     const command = route.request().postDataJSON();
     commands.push(command);
-    if (command.type === "body.edit" && command.payload.text === "A" && first) {
+    if (command.type === "body.edit" && commandBodyText(command) === "A" && first) {
       first = false;
       bodyStarted = true;
       await failedBody.promise;
@@ -863,10 +859,10 @@ test("R3 正文未知转明确冲突后，可独立重试布局且重复点击�
       .poll(async () => (await read()).cards[0].item.pose.x)
       .toBe(original.item.pose.x + 10);
     await expect(page.getByRole("status")).toHaveText("保存未完成");
-    await expect(body).toHaveValue("本地后续AB");
+    await expectTextValue(body, "本地后续AB");
     await expect(page.getByLabel("已保存的正文")).toHaveValue("另一调用者C");
     expect((await read()).cards[0].body.blocks[0].text).toBe("另一调用者C");
-    const attempts = commands.filter((c) => c.payload.text === "A");
+    const attempts = commands.filter((c) => commandBodyText(c) === "A");
     expect(attempts).toHaveLength(2);
     expect(attempts[0]).toEqual(attempts[1]);
     expect(attempts[0]!.expected).toBe(original.body.versionId);
@@ -1035,7 +1031,7 @@ for (const field of ["body", "title"] as const) {
         );
         expect(value((await read()).cards[0])).toBe("再次保存D");
         expect(commands).toHaveLength(0);
-        if (field === "body") await expect(input).toHaveValue(original);
+        if (field === "body") await expectTextValue(input, original);
         else
           await expect(
             page.getByRole("button", { name: original, exact: true }),
@@ -1061,7 +1057,7 @@ for (const field of ["body", "title"] as const) {
         await page
           .getByRole("button", { name: original, exact: true })
           .dblclick();
-      await expect(input).toHaveValue(original);
+      await expectTextValue(input, original);
       expect(value((await read()).cards[0])).toBe(original);
       await page.screenshot({
         path: testInfo.outputPath("reopened-choice.png"),
@@ -1138,18 +1134,18 @@ test("H4 连续正文跨两秒落盘仍一步撤销，停顿和选区改变分�
   await body.pressSequentially("abcdefghi", { delay: 310 });
   await expect(page.getByRole("status")).toHaveText("已保存到本机");
   expect((await historyState(page)).undo).toHaveLength(2);
-  await body.press("Meta+z");
-  await expect(body).toHaveValue("");
-  await body.press("Meta+Shift+z");
-  await expect(body).toHaveValue("abcdefghi");
+  await page.getByRole("button", { name: "撤销", exact: true }).click();
+  await expectTextValue(body, "");
+  await page.getByRole("button", { name: "重做", exact: true }).click();
+  await expectTextValue(body, "abcdefghi");
   await body.press("End");
   await body.pressSequentially("j");
   await expect(page.getByRole("status")).toHaveText("已保存到本机");
   // The next edit changes selection and must not merge, even inside one save batch.
   await body.press("Home");
   await body.pressSequentially("X");
-  await body.press("Meta+z");
-  await expect(body).toHaveValue("abcdefghij");
+  await page.getByRole("button", { name: "撤销", exact: true }).click();
+  await expectTextValue(body, "abcdefghij");
   await expect(page.locator(".react-flow__node")).toHaveCount(1);
 });
 test("H4 编辑中标题只走文本撤销，synthetic composition 不触发项目撤销", async ({
@@ -1221,10 +1217,10 @@ test("H4 跨卡撤销提示实际目标，保留当前正文面板及项目独�
       }),
     });
   }, projectId);
-  await page.getByLabel("卡片正文", { exact: true }).press("Meta+z");
+  await page.getByRole("button", { name: "撤销", exact: true }).click();
   await expect(page.locator(".history-notice")).toHaveText("已撤销：初始标题");
-  await expect(page.locator(".body-editor h2")).toHaveText("当前卡B");
-  await expect(page.getByLabel("卡片正文", { exact: true })).toHaveValue("");
+  await expect(page.locator(".body-editor h2")).toHaveText("正在编辑：" + ("当前卡B"));
+  await expectTextValue(page.getByLabel("卡片正文", { exact: true }), "");
   const originalHistory = await historyState(page);
   await page.getByRole("button", { name: "新建研究", exact: true }).click();
   await historyCard(page, "独立项目卡");
@@ -1264,12 +1260,12 @@ test("H4 在途正文确认后才撤销且不复活，布局待确认按同一�
   try {
     await body.fill("等待确认的正文");
     await expect.poll(() => written).toBe(true);
-    await body.press("Meta+z");
-    await expect(body).toHaveAttribute("readonly", "");
+    await page.getByRole("button", { name: "撤销", exact: true }).click();
+    await expect(body).not.toBeEditable();
     expect(historyRequests).toBe(0);
     ack.release();
-    await expect(body).toHaveValue("");
-    await expect(body).not.toHaveAttribute("readonly", "");
+    await expectTextValue(body, "");
+    await expect(body).toBeEditable();
     expect(historyRequests).toBe(1);
     expect((await historyState(page)).redo).toHaveLength(1);
   } finally {
@@ -1492,16 +1488,16 @@ test("H4 待确认期间连续结束多个正文组，撤销按每组原值恢�
     await body.pressSequentially("B");
     await body.press("End");
     await body.pressSequentially("C");
-    await expect(body).toHaveValue("BAC");
-    await body.press("Meta+z");
+    await expectTextValue(body, "BAC");
+    await page.getByRole("button", { name: "撤销", exact: true }).click();
     ack.release();
-    await expect(body).toHaveValue("BA");
-    await expect(body).not.toHaveAttribute("readonly", "");
-    await body.press("Meta+z");
-    await expect(body).toHaveValue("A");
-    await expect(body).not.toHaveAttribute("readonly", "");
-    await body.press("Meta+z");
-    await expect(body).toHaveValue("");
+    await expectTextValue(body, "BA");
+    await expect(body).toBeEditable();
+    await page.getByRole("button", { name: "撤销", exact: true }).click();
+    await expectTextValue(body, "A");
+    await expect(body).toBeEditable();
+    await page.getByRole("button", { name: "撤销", exact: true }).click();
+    await expectTextValue(body, "");
     expect((await historyState(page)).redo).toHaveLength(3);
     await expect(page.locator(".react-flow__node")).toHaveCount(1);
   } finally {
@@ -1611,11 +1607,11 @@ for (const lostAck of [false, true]) {
       const c = route.request().postDataJSON();
       if (c.type === "body.edit")
         submitted.push({
-          value: c.payload.text,
+          value: commandBodyText(c),
           expected: c.expected,
           commandId: c.commandId,
         });
-      if (c.type !== "body.edit" || c.payload.text !== "原正文A" || !first)
+      if (c.type !== "body.edit" || commandBodyText(c) !== "原正文A" || !first)
         return route.continue();
       first = false;
       const response = await route.fetch();
@@ -1638,7 +1634,7 @@ for (const lostAck of [false, true]) {
       await body.pressSequentially("B");
       await body.press("Home");
       await body.pressSequentially("X");
-      const local = await body.inputValue();
+      const local = await readTextValue(body);
       await page.evaluate(
         async ({ projectId, card }) => {
           const r = await fetch("/api/mapping/execute", {
@@ -1665,7 +1661,7 @@ for (const lostAck of [false, true]) {
         expect(retries[0]!.commandId).toBe(retries[1]!.commandId);
       }
       await expect(page.getByRole("alert")).toContainText("正文已更新");
-      await expect(body).toHaveValue(local);
+      await expectTextValue(body, local);
       await expect(page.getByLabel("已保存的正文")).toHaveValue(
         "另一调用者正文C",
       );
@@ -1700,7 +1696,7 @@ test("R2 已落盘正文ACK延迟时后续输入先于方向键移动入历史",
   let first = true;
   await page.route("**/api/mapping/execute", async (route) => {
     const c = route.request().postDataJSON();
-    if (c.type !== "body.edit" || c.payload.text !== "A" || !first)
+    if (c.type !== "body.edit" || commandBodyText(c) !== "A" || !first)
       return route.continue();
     first = false;
     const response = await route.fetch();
@@ -1734,7 +1730,7 @@ test("R2 已落盘正文ACK延迟时后续输入先于方向键移动入历史",
       "pose.move",
     ]);
     await page.getByRole("button", { name: "撤销", exact: true }).click();
-    await expect(body).toHaveValue("AB");
+    await expectTextValue(body, "AB");
     await expect
       .poll(async () => (await read()).cards[0].item.pose)
       .toEqual(original.item.pose);
@@ -1742,7 +1738,7 @@ test("R2 已落盘正文ACK延迟时后续输入先于方向键移动入历史",
       page.getByRole("button", { name: "撤销", exact: true }),
     ).toBeEnabled();
     await page.getByRole("button", { name: "撤销", exact: true }).click();
-    await expect(body).toHaveValue("");
+    await expectTextValue(body, "");
   } finally {
     ack.release();
     await page.unrouteAll({ behavior: "wait" });
@@ -1774,7 +1770,7 @@ for (const lostAck of [false, true]) {
       submitted.push(command);
       if (
         command.type !== "body.edit" ||
-        command.payload.text !== "A" ||
+        commandBodyText(command) !== "A" ||
         !first
       )
         return route.continue();
@@ -1809,7 +1805,7 @@ for (const lostAck of [false, true]) {
         await expect(page.getByRole("alert")).toContainText("确认此移动之前");
         expect((await read()).cards[0].item.pose).toEqual(original.item.pose);
         expect((await read()).cards[0].body.blocks[0].text).toBe("A");
-        await expect(body).toHaveValue("ABC");
+        await expectTextValue(body, "ABC");
         await page.getByRole("button", { name: "重试保存" }).click();
       }
       await expect
@@ -1821,18 +1817,18 @@ for (const lostAck of [false, true]) {
         : ["A", "AB", "pose.move"];
       expect(
         submitted.map((c) =>
-          c.type === "body.edit" ? c.payload.text : c.type,
+          c.type === "body.edit" ? commandBodyText(c) : c.type,
         ),
       ).toEqual(prefix);
       if (lostAck) expect(submitted[0]).toEqual(submitted[1]);
-      await expect(body).toHaveValue("ABC");
+      await expectTextValue(body, "ABC");
       await expect(page.getByRole("status")).not.toHaveText("已保存到本机");
       await body.fill("ABCD");
       await body.dispatchEvent("compositionend");
       await expect(page.getByRole("status")).toHaveText("已保存到本机");
       expect(
         submitted.map((c) =>
-          c.type === "body.edit" ? c.payload.text : c.type,
+          c.type === "body.edit" ? commandBodyText(c) : c.type,
         ),
       ).toEqual([...prefix, "ABCD"]);
       const timeline = await historyState(page);
@@ -1847,7 +1843,7 @@ for (const lostAck of [false, true]) {
         contentType: "application/json",
       });
       await page.getByRole("button", { name: "撤销", exact: true }).click();
-      await expect(body).toHaveValue("AB");
+      await expectTextValue(body, "AB");
       expect((await read()).cards[0].item.pose.x).toBe(
         original.item.pose.x + 10,
       );
@@ -1858,7 +1854,7 @@ for (const lostAck of [false, true]) {
       await expect
         .poll(async () => (await read()).cards[0].item.pose)
         .toEqual(original.item.pose);
-      await expect(body).toHaveValue("AB");
+      await expectTextValue(body, "AB");
     } finally {
       ack.release();
       await page.unrouteAll({ behavior: "wait" });
@@ -1885,9 +1881,9 @@ for (const lostAck of [false, true]) {
     const bodyKeys: string[] = [];
     await page.route("**/api/mapping/execute", async (route) => {
       const c = route.request().postDataJSON();
-      if (c.type === "body.edit" && c.payload.text === "A")
+      if (c.type === "body.edit" && commandBodyText(c) === "A")
         bodyKeys.push(c.commandId);
-      if (c.type !== "body.edit" || c.payload.text !== "A" || !first)
+      if (c.type !== "body.edit" || commandBodyText(c) !== "A" || !first)
         return route.continue();
       first = false;
       const response = await route.fetch();
@@ -1948,12 +1944,12 @@ for (const lostAck of [false, true]) {
       await expect
         .poll(async () => (await read()).cards[0].item.pose)
         .toEqual(before.item.pose);
-      await expect(body).toHaveValue("AB");
+      await expectTextValue(body, "AB");
       await expect(
         page.getByRole("button", { name: "撤销", exact: true }),
       ).toBeEnabled();
       await page.getByRole("button", { name: "撤销", exact: true }).click();
-      await expect(body).toHaveValue("");
+      await expectTextValue(body, "");
     } finally {
       ack.release();
       await page.mouse.up();
@@ -1977,11 +1973,12 @@ test("R2 撤销创建保留当前写字板删除态并恢复原卡身份", async
   await expect(page.locator(".react-flow__node")).toHaveCount(0);
   await expect(page.locator(".body-editor")).toHaveCount(1);
   await expect(page.getByText("这张卡片已删除", { exact: true })).toBeVisible();
-  await expect(page.getByLabel("卡片正文", { exact: true })).toHaveCount(0);
-  await expect(page.locator(".body-editor h2")).toHaveText("初始标题");
+  await expect(page.getByLabel("卡片正文", { exact: true })).not.toBeEditable();
+  await expect(page.locator(".body-editor h2")).toHaveText("正在编辑：" + ("初始标题"));
   await page.screenshot({ path: testInfo.outputPath("deleted-panel.png") });
   await page.getByRole("button", { name: "撤销删除", exact: true }).click();
-  await expect(page.getByLabel("卡片正文", { exact: true })).toHaveValue("");
+  await expectTextValue(page.getByLabel("卡片正文", { exact: true }), "");
+  await expect(page.getByLabel("卡片正文", { exact: true })).toBeEditable();
   const restored = (await read()).cards[0];
   expect(restored.id).toBe(original.id);
   expect(restored.body.id).toBe(original.body.id);
@@ -2055,7 +2052,7 @@ test("R2 删除恢复预读后发生竞争不会重做无关对象，失效入�
     await expect(
       page.getByText("这次删除的恢复已不可用", { exact: true }),
     ).toBeVisible();
-    await expect(page.locator(".body-editor h2")).toHaveText("初始标题");
+    await expect(page.locator(".body-editor h2")).toHaveText("正在编辑：" + ("初始标题"));
   } finally {
     readAck.release();
     await page.unrouteAll({ behavior: "wait" });
@@ -2089,9 +2086,7 @@ for (const written of [false, true]) {
       await expect(
         page.getByText("这张卡片已删除", { exact: true }),
       ).toHaveCount(0);
-      await expect(page.getByLabel("卡片正文", { exact: true })).toHaveValue(
-        "",
-      );
+      await expectTextValue(page.getByLabel("卡片正文", { exact: true }), "");
       await page.getByRole("button", { name: "重试撤销" }).click();
       await expect(
         page.getByText("这张卡片已删除", { exact: true }),
@@ -2099,7 +2094,7 @@ for (const written of [false, true]) {
       expect(keys).toHaveLength(2);
       expect(keys[0]).toBe(keys[1]);
       expect((await historyState(page)).redo).toHaveLength(1);
-      await expect(page.locator(".body-editor h2")).toHaveText("初始标题");
+      await expect(page.locator(".body-editor h2")).toHaveText("正在编辑：" + ("初始标题"));
     } finally {
       await page.unrouteAll({ behavior: "wait" });
     }
@@ -2132,8 +2127,8 @@ test("R2 旧正文no-opACK先确认再撤销创建，不复活删除对象或收
     await body.fill("");
     await body.dispatchEvent("compositionend");
     await expect.poll(() => saved).toBe(true);
-    await body.press("Meta+z");
-    await expect(body).toHaveAttribute("readonly", "");
+    await page.getByRole("button", { name: "撤销", exact: true }).click();
+    await expect(body).not.toBeEditable();
     await expect(page.getByText("这张卡片已删除", { exact: true })).toHaveCount(
       0,
     );
@@ -2143,7 +2138,7 @@ test("R2 旧正文no-opACK先确认再撤销创建，不复活删除对象或收
     ).toBeVisible();
     await expect(page.locator(".react-flow__node")).toHaveCount(0);
     await expect(page.locator(".body-editor")).toHaveCount(1);
-    await expect(page.getByLabel("卡片正文", { exact: true })).toHaveCount(0);
+    await expect(page.getByLabel("卡片正文", { exact: true })).not.toBeEditable();
     expect((await historyState(page)).redo).toHaveLength(1);
   } finally {
     ack.release();
@@ -2159,11 +2154,16 @@ test("R2 后续研究编辑使原删除恢复失效，另一redo不能复活原�
   await expect(
     page.getByRole("button", { name: "撤销删除", exact: true }),
   ).toBeEnabled();
-  await historyCard(page, "新卡片");
+  const state = await draftProject(page);
+  await page.evaluate(async ({ projectId }) => {
+    const response = await fetch("/api/mapping/execute", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ commandId: crypto.randomUUID(), projectId, type: "thought.create", expected: null, payload: { id: crypto.randomUUID(), title: "新卡片", text: "", x: 350, y: 240 } }) });
+    if (!response.ok) throw new Error(await response.text());
+  }, { projectId: state.project.id });
+  await expect(page.locator(".react-flow__node")).toHaveCount(1);
   await expect(
     page.getByRole("button", { name: "撤销删除", exact: true }),
   ).toBeDisabled();
-  await expect(page.locator(".body-editor h2")).toHaveText("初始标题");
+  await expect(page.locator(".body-editor h2")).toHaveText("正在编辑：" + ("初始标题"));
   await page.getByRole("button", { name: "撤销", exact: true }).click();
   await expect(page.locator(".react-flow__node")).toHaveCount(0);
   expect((await historyState(page)).redo.at(-1).target.title).toBe("新卡片");
@@ -2201,7 +2201,7 @@ test("D5 保存失败继续输入，刷新从原卡恢复最新草稿并真实�
   ).toBeVisible();
   await page.unroute("**/api/mapping/execute");
   await page.getByRole("button", { name: "恢复草稿", exact: true }).click();
-  await expect(body).toHaveValue("失败后继续写的最新草稿");
+  await expectTextValue(body, "失败后继续写的最新草稿");
   await expect(page.getByRole("status")).toHaveText("已保存到本机");
   expect(
     (await draftProject(page)).cards.find((c: Card) => c.id === card.id)?.body
@@ -2241,9 +2241,7 @@ test("D5 损坏恢复条目不阻断有效草稿，原始损坏内容保留", as
   ).toBeVisible();
   await page.unroute("**/api/mapping/execute");
   await page.getByRole("button", { name: "恢复草稿", exact: true }).click();
-  await expect(page.getByLabel("卡片正文", { exact: true })).toHaveValue(
-    "有效草稿",
-  );
+  await expectTextValue(page.getByLabel("卡片正文", { exact: true }), "有效草稿");
   expect(
     await page.evaluate(() =>
       localStorage.getItem("forkwise:recovery:v1:broken"),
@@ -2278,7 +2276,7 @@ test("D5 冲突明确选择已保存正文，另一份先持久保存且重开�
   await body.dispatchEvent("compositionend");
   await expect(page.getByLabel("保存冲突")).toBeVisible();
   await page.getByRole("button", { name: "确认保留已保存的正文" }).click();
-  await expect(body).toHaveValue("外部已保存正文");
+  await expectTextValue(body, "外部已保存正文");
   await expect(page.getByRole("status")).toHaveText("已保存到本机");
   await page.reload();
   await expect(page.getByLabel("草稿恢复")).toContainText("我的冲突草稿");
@@ -2304,7 +2302,7 @@ test("D5 关闭失败正文仍收起面板，切卡后重试只保存原卡", as
   await page.getByRole("button", { name: "关闭正文" }).click();
   await expect(page.getByLabel("卡片正文", { exact: true })).toHaveCount(0);
   await nodes.last().getByRole("button", { name: "编辑正文" }).click();
-  await expect(page.getByLabel("卡片正文", { exact: true })).toHaveValue("");
+  await expectTextValue(page.getByLabel("卡片正文", { exact: true }), "");
   await page.unroute("**/api/mapping/execute");
   await page.getByRole("button", { name: "重试保存" }).click();
   await expect(page.getByRole("status")).toHaveText("已保存到本机");
@@ -2393,7 +2391,7 @@ test("D5 SQLite已提交但丢ACK，重开先原请求重试再保存新generati
     await route.continue();
   });
   await page.getByRole("button", { name: "恢复草稿", exact: true }).click();
-  await expect(body).toHaveValue("后来继续输入");
+  await expectTextValue(body, "后来继续输入");
   await expect(page.getByRole("status")).toHaveText("已保存到本机");
   expect(replay[0]).toEqual(original);
   const changes = await (
@@ -2445,7 +2443,7 @@ test("D5 真实localStorage容量耗尽时保留两份，释放容量后才允�
   expect((await draftProject(page)).cards[0].body.blocks[0].text).toBe(
     "必须保护的远端正文",
   );
-  await expect(body).toHaveValue("写满后仍继续输入".repeat(100));
+  await expectTextValue(body, "写满后仍继续输入".repeat(100));
   await page.screenshot({ path: testInfo.outputPath("quota-preserved.png") });
   await page.evaluate(() => {
     for (const key of Object.keys(localStorage))
@@ -2524,8 +2522,8 @@ test("D5 synthetic格式边界结束动作组但不虚构格式内容", async ({
     ),
   );
   await body.pressSequentially("B");
-  await body.press("Meta+z");
-  await expect(body).toHaveValue("A");
+  await page.getByRole("button", { name: "撤销", exact: true }).click();
+  await expectTextValue(body, "A");
 });
 
 test("D5 400ms落盘与1s分组独立，长synthetic IME不被2s拆分", async ({
@@ -2564,8 +2562,8 @@ test("D5 400ms落盘与1s分组独立，长synthetic IME不被2s拆分", async (
   await expect
     .poll(async () => (await draftProject(page)).cards[0].body.blocks[0].text)
     .toBe("ABC中文组合");
-  await body.press("Meta+z");
-  await expect(body).toHaveValue("ABC");
+  await page.getByRole("button", { name: "撤销", exact: true }).click();
+  await expectTextValue(body, "ABC");
 });
 
 test("D5 synthetic粘贴边界和真实焦点边界各自可撤销", async ({ page }) => {
@@ -2582,14 +2580,14 @@ test("D5 synthetic粘贴边界和真实焦点边界各自可撤销", async ({ pa
     ),
   );
   await body.pressSequentially("P");
-  await body.press("Meta+z");
-  await expect(body).toHaveValue("A");
-  await body.press("Meta+Shift+z");
-  await expect(body).toHaveValue("AP");
+  await page.getByRole("button", { name: "撤销", exact: true }).click();
+  await expectTextValue(body, "A");
+  await page.getByRole("button", { name: "重做", exact: true }).click();
+  await expectTextValue(body, "AP");
   await page.getByRole("button", { name: "项目导航" }).focus();
   await body.pressSequentially("B");
-  await body.press("Meta+z");
-  await expect(body).toHaveValue("AP");
+  await page.getByRole("button", { name: "撤销", exact: true }).click();
+  await expectTextValue(body, "AP");
 });
 
 test("S5-R2 恢复identity迟到不覆盖同卡后来实际输入，旧草稿保留到重开", async ({
@@ -2632,7 +2630,7 @@ test("S5-R2 恢复identity迟到不覆盖同卡后来实际输入，旧草稿保
     expect((await draftProject(page)).cards[0].body.blocks[0].text).toBe(
       "恢复查询期间继续输入的新正文",
     );
-    await expect(body).toHaveValue("恢复查询期间继续输入的新正文");
+    await expectTextValue(body, "恢复查询期间继续输入的新正文");
     await expect(
       page.getByText(
         "恢复检查期间内容或编辑对象已变化，原草稿仍保留，请重新选择恢复",
@@ -2643,7 +2641,7 @@ test("S5-R2 恢复identity迟到不覆盖同卡后来实际输入，旧草稿保
     );
     await page.reload();
     await page.getByRole("button", { name: "编辑正文" }).click();
-    await expect(body).toHaveValue("恢复查询期间继续输入的新正文");
+    await expectTextValue(body, "恢复查询期间继续输入的新正文");
     await expect(page.getByLabel("草稿恢复")).toContainText(
       "之前失败的恢复正文",
     );
@@ -2794,10 +2792,8 @@ test("S5-R2 媒体依赖随新generation和重开继续保留，不能变成已�
   await page.getByRole("button", { name: "重试保存", exact: true }).click();
   await expect.poll(() => codes.length).toBe(2);
   expect(codes[1]).toBe("MEDIA_NOT_PERSISTED");
-  expect(requests[1]!.payload).toMatchObject({
-    text: "媒体仍未完成，继续输入的新正文",
-    requiredAssetIds: ["pending-asset"],
-  });
+  expect(commandBodyText(requests[1]!)).toBe("媒体仍未完成，继续输入的新正文");
+  expect(requests[1]!.payload.requiredAssetIds).toEqual(["pending-asset"]);
   expect(requests[1]!.commandId).not.toBe(original.commandId);
   expect(requests[1]!.expected).toBe(original.expected);
   expect(await draftProject(page)).toEqual(before);
@@ -2815,7 +2811,7 @@ test("S5-R2 媒体依赖随新generation和重开继续保留，不能变成已�
   await expect.poll(() => codes.length).toBe(3);
   expect(requests[2]).toEqual(requests[1]);
   expect(codes[2]).toBe("MEDIA_NOT_PERSISTED");
-  await expect(body).toHaveValue("媒体仍未完成，继续输入的新正文");
+  await expectTextValue(body, "媒体仍未完成，继续输入的新正文");
   await body.pressSequentially("，重开后继续写");
   await page.getByRole("button", { name: "重试保存", exact: true }).click();
   await expect.poll(() => codes.length).toBe(4);
@@ -2893,10 +2889,10 @@ for (const boundary of ["card", "project", "close"] as const) {
       await readStarted.promise;
       if (boundary === "card") {
         await openBody(otherCard!);
-        await expect(page.locator(".body-editor h2")).toHaveText("另一张卡片");
+        await expect(page.locator(".body-editor h2")).toHaveText("正在编辑：" + ("另一张卡片"));
         await openBody(originalCard);
         await expect(page.locator(".body-editor h2")).toHaveText(
-          originalCard.title,
+          "正在编辑：" + (originalCard.title),
         );
       } else if (boundary === "project") {
         await page.locator(`[role=tab][title="${otherProjectId}"]`).click();
@@ -2934,9 +2930,7 @@ for (const boundary of ["card", "project", "close"] as const) {
           0,
         );
       else
-        await expect(page.getByLabel("卡片正文", { exact: true })).toHaveValue(
-          originalCard.body.blocks[0].text,
-        );
+        await expectTextValue(page.getByLabel("卡片正文", { exact: true }), originalCard.body.blocks[0].text);
       await page.reload();
       await expect(page.getByLabel("草稿恢复")).toContainText(
         "必须保留的原卡恢复草稿",
@@ -3010,9 +3004,7 @@ for (const lateReply of ["success", "failure"] as const) {
       await firstStarted.promise;
       await entry("后发明确选择的草稿").click();
       await expect(page.getByRole("status")).toHaveText("已保存到本机");
-      await expect(page.getByLabel("卡片正文", { exact: true })).toHaveValue(
-        "后发明确选择的草稿",
-      );
+      await expectTextValue(page.getByLabel("卡片正文", { exact: true }), "后发明确选择的草稿");
       firstRelease.release();
       await firstDelivered.promise;
       await expect(page.getByRole("alert")).toHaveCount(0);
@@ -3079,9 +3071,7 @@ test("S5-R2 恢复project旧读取晚于新输入ACK到达也不得覆盖，恢�
         "恢复检查期间内容或编辑对象已变化，原草稿仍保留，请重新选择恢复",
       ),
     ).toBeVisible();
-    await expect(page.getByLabel("卡片正文", { exact: true })).toHaveValue(
-      "读取在途时实际输入并先获得ACK的正文",
-    );
+    await expectTextValue(page.getByLabel("卡片正文", { exact: true }), "读取在途时实际输入并先获得ACK的正文");
     expect((await draftProject(page)).cards[0].body.blocks[0].text).toBe(
       "读取在途时实际输入并先获得ACK的正文",
     );
@@ -3154,10 +3144,8 @@ test("S5-R2 媒体拒绝响应在途时继续输入，新请求仍带原媒体�
     await page.getByRole("button", { name: "重试保存", exact: true }).click();
     await expect.poll(() => codes.length).toBe(2);
     expect(requests[0]).toEqual(original);
-    expect(requests[1]!.payload).toMatchObject({
-      text: "旧媒体请求等待响应时的新正文",
-      requiredAssetIds: ["pending-asset"],
-    });
+    expect(commandBodyText(requests[1]!)).toBe("旧媒体请求等待响应时的新正文");
+    expect(requests[1]!.payload.requiredAssetIds).toEqual(["pending-asset"]);
     expect(codes).toEqual(["MEDIA_NOT_PERSISTED", "MEDIA_NOT_PERSISTED"]);
     expect(await draftProject(page)).toEqual(before);
     await expect(page.getByRole("status")).not.toHaveText("已保存到本机");
@@ -3204,7 +3192,7 @@ test("S5-R3 原请求缺省媒体要求的损坏恢复隔离原字节，合法�
             projectId,
             cardId: card.id,
             field: "body",
-            value: command.payload.text,
+            value: commandBodyText(command),
             generation: 1,
             expected: command.expected,
             requiredAssetIds: ["missing-resource"],
@@ -3258,9 +3246,7 @@ test("S5-R3 原请求缺省媒体要求的损坏恢复隔离原字节，合法�
     await page.reload();
     await expect(restore).toHaveCount(1);
     await restore.click();
-    await expect(page.getByLabel("卡片正文", { exact: true })).toHaveValue(
-      "同库合法恢复正文",
-    );
+    await expectTextValue(page.getByLabel("卡片正文", { exact: true }), "同库合法恢复正文");
     await expect
       .poll(async () => (await draftProject(page)).cards[0].body.blocks[0].text)
       .toBe("同库合法恢复正文");
@@ -3492,7 +3478,7 @@ for (const compatibility of [
           projectId,
           cardId: card.id,
           field: "body",
-          value: original.payload.text,
+          value: commandBodyText(original),
           expected: original.expected,
           generation: 7,
           ...(compatibility === "legacy-command-only"
@@ -3547,9 +3533,7 @@ for (const compatibility of [
       ]);
       await expect(page.getByRole("status")).not.toHaveText("已保存到本机");
       expect(await draftProject(page)).toEqual(before);
-      await expect(page.getByLabel("卡片正文", { exact: true })).toHaveValue(
-        original.payload.text,
-      );
+      await expectTextValue(page.getByLabel("卡片正文", { exact: true }), commandBodyText(original));
     } finally {
       writeFileSync(
         testInfo.outputPath("compatible-media-runtime.json"),
@@ -3730,10 +3714,8 @@ test("S5-R3 合法后来媒体generation冲突明确选择远端，先存本机�
       .getByRole("button", { name: "确认保留已保存的正文", exact: true })
       .click();
     await expect(page.getByRole("status")).toHaveText("已保存到本机");
-    expect(requests[1].payload).toEqual({
-      id: card.id,
-      text: "实际已保存的远端正文",
-    });
+    expect(requests[1].payload).toEqual({ id: card.id, blocks: remote.cards[0].body.blocks });
+    expect(commandBodyText(requests[1])).toBe("实际已保存的远端正文");
     expect(requests[1].expected).toBe(remote.cards[0].body.versionId);
     const copies = await page.evaluate(() =>
       Object.keys(localStorage)
@@ -3798,7 +3780,7 @@ test("S5-R4 同目标generation不同文本的journal保留原件隔离，合法
     projectId,
     cardId: card.id,
     field: "body",
-    value: command.payload.text,
+    value: commandBodyText(command),
     expected: command.expected,
     generation: 1,
     command,
@@ -3918,7 +3900,7 @@ test("S5-R4 同文本generation不同原commandId隔离，不能确认未执行�
     projectId,
     cardId: card.id,
     field: "body",
-    value: command.payload.text,
+    value: commandBodyText(command),
     expected: command.expected,
     generation: 1,
     command,
@@ -4040,7 +4022,7 @@ test("S5-R4 同generation无command投影的expected不同须隔离", async ({
     projectId,
     cardId: card.id,
     field: "body",
-    value: command.payload.text,
+    value: commandBodyText(command),
     expected: command.expected,
     generation: 1,
     command,
@@ -4175,7 +4157,7 @@ test("S5-R4 同卡不同field同generation各自确认，不吞掉标题原请�
         projectId,
         cardId: card.id,
         field: "body",
-        value: bodyCommand.payload.text,
+        value: commandBodyText(bodyCommand),
         expected: bodyCommand.expected,
         generation: 1,
         command: bodyCommand,
@@ -4335,7 +4317,7 @@ test("S5-R4 同generation跨投影媒体要求不得被较弱原请求确认", a
     projectId,
     cardId: card.id,
     field: "body",
-    value: command.payload.text,
+    value: commandBodyText(command),
     expected: command.expected,
     generation: 1,
     command,
@@ -4477,7 +4459,7 @@ test("S5-R4 正常pending和drafts重复投影原封重放，旧ACK只确认原g
   });
   try {
     await page.getByRole("button", { name: "恢复草稿", exact: true }).click();
-    await expect(body).toHaveValue("最新generation必须实际保存");
+    await expectTextValue(body, "最新generation必须实际保存");
     await expect(page.getByRole("status")).toHaveText("已保存到本机");
     expect(requests).toHaveLength(2);
     expect(requests[0]).toEqual(original);
@@ -4624,7 +4606,7 @@ test("S5-R4 不同generation复用commandId却改变原请求须隔离", async (
     projectId,
     cardId: card.id,
     field: "body",
-    value: command.payload.text,
+    value: commandBodyText(command),
     expected: command.expected,
     generation: 1,
     command,
@@ -4822,7 +4804,7 @@ test("S5-R4 非法command占位不能当作尚未生成的合法重复投影", a
     projectId,
     cardId: card.id,
     field: "body",
-    value: command.payload.text,
+    value: commandBodyText(command),
     expected: command.expected,
     generation: 1,
     command,
@@ -5080,7 +5062,7 @@ test("S5-R5 closed-only媒体拒绝保留可见输入和缓存，原请求重试
     expect(requests).toEqual([original]);
     expect(await draftProject(page)).toEqual(before);
     expect(await history()).toEqual(historyBefore);
-    await expect(body).toHaveValue(text);
+    await expectTextValue(body, text);
     expect((await cache()).some((x) => x.raw.includes(text))).toBe(true);
     await expect(page.getByRole("status")).toHaveText("保存未完成");
     await page.getByRole("button", { name: "重试保存", exact: true }).click();
@@ -5088,7 +5070,7 @@ test("S5-R5 closed-only媒体拒绝保留可见输入和缓存，原请求重试
       .poll(() => codes)
       .toEqual(["MEDIA_NOT_PERSISTED", "MEDIA_NOT_PERSISTED"]);
     expect(requests).toEqual([original, original]);
-    await expect(body).toHaveValue(text);
+    await expectTextValue(body, text);
     expect((await cache()).some((x) => x.raw.includes(text))).toBe(true);
     await page.reload();
     await expect(page.getByRole("tab", { selected: true })).toHaveAttribute(
@@ -5102,7 +5084,7 @@ test("S5-R5 closed-only媒体拒绝保留可见输入和缓存，原请求重试
       .poll(() => codes)
       .toEqual(Array(3).fill("MEDIA_NOT_PERSISTED"));
     expect(requests).toEqual([original, original, original]);
-    await expect(body).toHaveValue(text);
+    await expectTextValue(body, text);
     expect(await draftProject(page)).toEqual(before);
     expect(await history()).toEqual(historyBefore);
     expect((await cache()).some((x) => x.raw.includes(text))).toBe(true);
@@ -5120,7 +5102,7 @@ test("S5-R5 closed-only媒体拒绝保留可见输入和缓存，原请求重试
         historyAfter: await history(),
         visible: await page.evaluate(
           () =>
-            document.querySelector<HTMLTextAreaElement>("#card-body")?.value ??
+            document.querySelector<HTMLElement>("#card-body")?.innerText ??
             null,
         ),
         cache: await cache(),
@@ -5176,7 +5158,7 @@ test("S5-R5 queued-only丢ACK保留可见输入，明确重试原请求只持久
     expect(requests).toEqual([original]);
     const committed = await draftProject(page);
     expect(committed.cards[0].body.blocks[0].text).toBe(text);
-    await expect(body).toHaveValue(text);
+    await expectTextValue(body, text);
     await page.unroute("**/api/mapping/execute");
     await page.getByRole("button", { name: "重试保存", exact: true }).click();
     await expect(page.getByRole("status")).toHaveText("已保存到本机");
@@ -5203,7 +5185,7 @@ test("S5-R5 queued-only丢ACK保留可见输入，明确重试原请求只持久
       projectId,
     );
     await page.getByRole("button", { name: "编辑正文", exact: true }).click();
-    await expect(body).toHaveValue("未知原请求确认后的新一代正文");
+    await expectTextValue(body, "未知原请求确认后的新一代正文");
     expect((await draftProject(page)).cards[0].body.blocks[0].text).toBe(
       "未知原请求确认后的新一代正文",
     );
@@ -5221,7 +5203,7 @@ test("S5-R5 queued-only丢ACK保留可见输入，明确重试原请求只持久
         after: await draftProject(page),
         visible: await page.evaluate(
           () =>
-            document.querySelector<HTMLTextAreaElement>("#card-body")?.value ??
+            document.querySelector<HTMLElement>("#card-body")?.innerText ??
             null,
         ),
         cache: await page.evaluate(() =>
@@ -5309,7 +5291,7 @@ for (const refusal of [
       await page.getByRole("button", { name: "恢复草稿", exact: true }).click();
       await expect.poll(() => codes).toEqual([refusal]);
       expect(requests).toEqual([original]);
-      await expect(body).toHaveValue(text);
+      await expectTextValue(body, text);
       await expect(page.getByRole("status")).toHaveText("保存未完成");
       expect((await cache()).some((x) => x.raw.includes(text))).toBe(true);
       expect(await draftProject(page)).toEqual(before);
@@ -5331,13 +5313,13 @@ for (const refusal of [
       expect(latest.expected).toBe(original.expected);
       expect(latest.type).toBe("body.edit");
       if (latest.type !== "body.edit") throw new Error("Expected a body edit");
-      expect(latest.payload.text).toBe(corrected);
+      expect(commandBodyText(latest)).toBe(corrected);
       if (refusal === "MEDIA_NOT_PERSISTED") {
         expect(latest.payload.requiredAssetIds).toEqual(["pending-resource"]);
         expect(codes).toEqual(Array(3).fill(refusal));
         expect(await draftProject(page)).toEqual(before);
         expect(await history()).toEqual(historyBefore);
-        await expect(body).toHaveValue(corrected);
+        await expectTextValue(body, corrected);
         await page.reload();
         await expect(page.getByLabel("草稿恢复")).toContainText(corrected);
         await expect(page.getByRole("status")).not.toHaveText("已保存到本机");
@@ -5346,7 +5328,7 @@ for (const refusal of [
           .click();
         await expect.poll(() => codes).toEqual(Array(4).fill(refusal));
         expect(requests.at(-1)).toEqual(latest);
-        await expect(body).toHaveValue(corrected);
+        await expectTextValue(body, corrected);
         expect((await cache()).some((x) => x.raw.includes(corrected))).toBe(
           true,
         );
@@ -5423,9 +5405,7 @@ for (const refusal of [
               .getByLabel("卡片正文", { exact: true })
               .count(),
           });
-          await expect(
-            reopened.getByLabel("卡片正文", { exact: true }),
-          ).toHaveValue(corrected);
+          await expectTextValue(reopened.getByLabel("卡片正文", { exact: true }), corrected);
           expect(await draftProject(reopened)).toEqual(saved);
           await expect(
             reopened.getByRole("button", { name: "恢复草稿", exact: true }),
@@ -5472,8 +5452,8 @@ for (const refusal of [
           historyAfter: page.url() === "about:blank" ? null : await history(),
           visible: await page.evaluate(
             () =>
-              document.querySelector<HTMLTextAreaElement>("#card-body")
-                ?.value ?? null,
+              document.querySelector<HTMLElement>("#card-body")
+                ?.innerText ?? null,
           ),
           cache: page.url() === "about:blank" ? null : await cache(),
         }),
@@ -5565,7 +5545,7 @@ for (const refusal of ["MEDIA_NOT_PERSISTED", "INVALID_COMMAND"] as const) {
       hold.release();
       await expect(page.getByRole("alert")).toBeVisible();
       await expect.poll(() => codes).toEqual([refusal]);
-      await expect(body).toHaveValue(latestText);
+      await expectTextValue(body, latestText);
       expect((await cache()).some((x) => x.raw.includes(latestText))).toBe(
         true,
       );
@@ -5577,12 +5557,12 @@ for (const refusal of ["MEDIA_NOT_PERSISTED", "INVALID_COMMAND"] as const) {
       expect(latest.commandId).not.toBe(original.commandId);
       expect(latest.expected).toBe(original.expected);
       if (latest.type !== "body.edit") throw new Error("Expected a body edit");
-      expect(latest.payload.text).toBe(latestText);
+      expect(commandBodyText(latest)).toBe(latestText);
       if (refusal === "MEDIA_NOT_PERSISTED") {
         expect(latest.payload.requiredAssetIds).toEqual(["pending-resource"]);
         expect(codes).toEqual([refusal, refusal]);
         await expect(page.getByRole("status")).toHaveText("保存未完成");
-        await expect(body).toHaveValue(latestText);
+        await expectTextValue(body, latestText);
         await page
           .getByRole("button", { name: "重试保存", exact: true })
           .click();
@@ -5597,7 +5577,7 @@ for (const refusal of ["MEDIA_NOT_PERSISTED", "INVALID_COMMAND"] as const) {
           .click();
         await expect.poll(() => codes.length).toBe(4);
         expect(requests[3]).toEqual(latest);
-        await expect(body).toHaveValue(latestText);
+        await expectTextValue(body, latestText);
         expect(await draftProject(page)).toEqual(before);
         expect(await history()).toEqual(historyBefore);
       } else {
@@ -5629,7 +5609,7 @@ for (const refusal of ["MEDIA_NOT_PERSISTED", "INVALID_COMMAND"] as const) {
         await page
           .getByRole("button", { name: "编辑正文", exact: true })
           .click();
-        await expect(body).toHaveValue(latestText);
+        await expectTextValue(body, latestText);
         await expect(
           page.getByRole("button", { name: "恢复草稿", exact: true }),
         ).toHaveCount(0);
@@ -5655,8 +5635,8 @@ for (const refusal of ["MEDIA_NOT_PERSISTED", "INVALID_COMMAND"] as const) {
           historyAfter: await history(),
           visible: await page.evaluate(
             () =>
-              document.querySelector<HTMLTextAreaElement>("#card-body")
-                ?.value ?? null,
+              document.querySelector<HTMLElement>("#card-body")
+                ?.innerText ?? null,
           ),
           cache: await cache(),
         }),
@@ -5697,7 +5677,7 @@ test("S5-R6 active同字段不同generation逆序须隔离原字节，不能执�
     field: "body",
     generation,
     expected: command.expected,
-    value: command.payload.text,
+    value: commandBodyText(command),
     command,
   });
   const journal = {
@@ -5788,7 +5768,7 @@ test("S5-R6 active同字段不同generation逆序须隔离原字节，不能执�
         retained: await page.evaluate((key) => localStorage.getItem(key), key),
         visible: await page.evaluate(
           () =>
-            document.querySelector<HTMLTextAreaElement>("#card-body")?.value ??
+            document.querySelector<HTMLElement>("#card-body")?.innerText ??
             null,
         ),
       }),
@@ -6102,11 +6082,11 @@ for (const queue of ["pending", "closed"] as const) {
       expect(recovered).toHaveLength(2);
       expect(recovered[0]).toEqual(original);
       expect(recovered[1].commandId).not.toBe(original.commandId);
-      expect(recovered[1].payload.text).toBe(latestText);
+      expect(commandBodyText(recovered[1])).toBe(latestText);
       expect(recovered[1].expected).toBe(
         persistedPrefix.cards[0].body.versionId,
       );
-      await expect(body).toHaveValue(latestText);
+      await expectTextValue(body, latestText);
       const saved = await draftProject(page);
       expect(saved.cards[0].body.blocks[0].text).toBe(latestText);
       const changes = await (
@@ -6137,7 +6117,7 @@ for (const queue of ["pending", "closed"] as const) {
         projectId,
       );
       await page.getByRole("button", { name: "编辑正文", exact: true }).click();
-      await expect(body).toHaveValue(latestText);
+      await expectTextValue(body, latestText);
       expect(await draftProject(page)).toEqual(saved);
       await expect(
         page.getByRole("button", { name: "恢复草稿", exact: true }),
@@ -6154,8 +6134,8 @@ for (const queue of ["pending", "closed"] as const) {
           after: await draftProject(page),
           visible: await page.evaluate(
             () =>
-              document.querySelector<HTMLTextAreaElement>("#card-body")
-                ?.value ?? null,
+              document.querySelector<HTMLElement>("#card-body")
+                ?.innerText ?? null,
           ),
           cache: await page.evaluate(() =>
             Object.keys(localStorage)

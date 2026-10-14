@@ -155,7 +155,7 @@ export class CompactMaps {
         if (query.view === 'body') {
           fidelity = 'partial_body';
           items = body.blocks.map((block): BodySlice => {
-            const points = Array.from(block.text);
+            const points = Array.from(typeof block.text === 'string' ? block.text : '');
             return {
               id: block.id,
               type: block.type,

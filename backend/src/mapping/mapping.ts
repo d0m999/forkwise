@@ -14,6 +14,8 @@ import { readHistory, recordAction, travelHistory, interruptGroup } from './hist
 import { retainCardVersions } from './versions.js';
 import { writeGeometry } from './geometry.js';
 import { canonical } from '../domain/canonical.js';
+import { editedBlocks, requireBlockOwnership, bodyContentUnchanged } from './body.js';
+import { deleteCard } from './lifecycle.js';
 import { randomUUID } from 'node:crypto';
 import { AccessService, type Principal } from '../services/access.js';
 import { requireThat } from '../domain/errors.js';
@@ -207,13 +209,18 @@ export class Mapping {
             '项目历史已更新，请重新读取',
             409,
           );
-          travel = travelHistory(this.db, project, command.type);
+          travel = travelHistory(this.db, project, command.type, command.payload.actionId);
           ({ before, after, changedIds } = travel);
           cardChanges = travel.cardChanges;
           revision = project.revision + 1;
           this.db
             .prepare('UPDATE mapping_projects SET revision=? WHERE id=?')
             .run(revision, project.id);
+        } else if (command.type === 'thought.delete') {
+          const project = this.project(command.projectId);
+          ({ before, after, changedIds } = deleteCard(this.db, command));
+          revision = project.revision + 1;
+          this.db.prepare('UPDATE mapping_projects SET revision=? WHERE id=?').run(revision, project.id);
         } else if (command.type === 'pose.batch') {
           const project = this.project(command.projectId);
           ({ cardChanges, changedIds } = writeGeometry(this.db, command));
@@ -313,7 +320,7 @@ export class Mapping {
                 manualHeight: card.item.pose.height,
                 necessaryHeight: 0,
               };
-              const previewFloor = card.body.blocks.some((b) => b.text.length > 0)
+              const previewFloor = card.body.blocks.some((b) => typeof b.text === 'string' && b.text.length > 0)
                 ? (policy.previewFloor ?? 0)
                 : 0;
               const height = Math.max(
@@ -390,13 +397,14 @@ export class Mapping {
                   409,
                 );
               changedIds = [];
-              if (
-                command.type !== 'pose.move' &&
-                command.payload.text !== card.body.blocks[0]!.text
-              ) {
-                card.body.blocks[0]!.text = command.payload.text;
-                card.body.versionId = randomUUID();
-                changedIds.push(card.body.id);
+              if (command.type !== 'pose.move') {
+                const blocks = editedBlocks(card.body, command.payload);
+                requireBlockOwnership(this.db, card.body, blocks);
+                if (!bodyContentUnchanged(card.body.blocks, blocks)) {
+                  card.body.blocks = blocks;
+                  card.body.versionId = randomUUID();
+                  changedIds.push(card.body.id);
+                }
               }
               if (
                 command.type !== 'body.edit' &&
@@ -426,6 +434,7 @@ export class Mapping {
           projectId: command.projectId,
           revision,
           changedIds,
+          ...(command.type === 'thought.delete' ? { deletedIds: changedIds, historyTarget: { id: command.payload.id, title: before && 'body' in before ? before.title : '', label: command.type } } : {}),
           ...(travel ? { deletedIds: travel.deletedIds, historyTarget: travel.target } : {}),
           ...(after && 'body' in after
             ? {

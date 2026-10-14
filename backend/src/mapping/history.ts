@@ -4,11 +4,12 @@ import { randomUUID } from 'node:crypto';
 import type { Card, Change, Command, HistoryAction, Project, ProjectHistory } from './contracts.js';
 import { requireThat } from '../domain/errors.js';
 import { restoreGeometry } from './geometry.js';
+import { bodyContentUnchanged } from './body.js';
 
 interface StoredAction extends HistoryAction {
   cardChanges?: Change['cardChanges'];
   before: Card | Project | null;
-  after: Card | Project;
+  after: Card | Project | null;
   changedIds: string[];
   editGroup?: string;
   lastRevision: number;
@@ -56,9 +57,11 @@ export function recordAction(
   change: Change,
   session: string,
 ) {
-  if (command.type === 'project.create' || !change.after) return;
+  if (command.type === 'project.create') return;
   const stack = load(db, command.projectId);
   const after = change.after;
+  const target = after ?? change.before;
+  if (!target) return;
   const previous = stack.undo.at(-1);
   if (command.type === 'card.layout') {
     // Measured presentation is derived state, not another research action.
@@ -68,7 +71,7 @@ export function recordAction(
       // Recreating this action must restore its measured projection rather than
       // the unmeasured creation placeholder. It remains one create/title step.
       if (
-        'body' in previous.after &&
+        previous.after && after && 'body' in previous.after &&
         'body' in after &&
         previous.after.id === after.id &&
         previous.changedIds.includes(after.item.id)
@@ -85,7 +88,7 @@ export function recordAction(
     previous.session === session &&
     previous.actor.id === change.actor.id &&
     previous.actor.type === change.actor.type &&
-    previous.target.id === after.id &&
+    after && previous.target.id === after.id &&
     (previous.label === command.type ||
       (previous.label === 'thought.create' && command.type === 'thought.title')) &&
     previous.lastRevision === change.revision - 1 &&
@@ -103,7 +106,7 @@ export function recordAction(
         previous.label === 'thought.title' &&
         before.title === after.title) ||
         (command.type === 'body.edit' &&
-          JSON.stringify(before.body.blocks) === JSON.stringify(after.body.blocks)))
+          bodyContentUnchanged(before.body.blocks, after.body.blocks)))
     )
       stack.undo.pop();
   } else
@@ -113,7 +116,7 @@ export function recordAction(
       ...(editGroup ? { editGroup } : {}),
       id: command.commandId,
       label: command.type,
-      target: { id: after.id, title: 'body' in after ? after.title : after.name },
+      target: { id: target.id, title: 'body' in target ? target.title : target.name },
       actor: change.actor,
       before: change.before,
       after,
@@ -128,9 +131,11 @@ export function travelHistory(
   db: Database.Database,
   project: Project,
   type: 'history.undo' | 'history.redo',
+  actionId?: string,
 ) {
   const stack = load(db, project.id);
   const from = type === 'history.undo' ? stack.undo : stack.redo;
+  requireThat(!actionId || from.at(-1)?.id === actionId, 'HISTORY_TARGET_CHANGED', '历史目标已变化，不能撤销其他操作', 409);
   const action = from.pop();
   requireThat(action, 'HISTORY_EMPTY', '没有可撤销或重做的操作', 409);
   const desired = type === 'history.undo' ? action.before : action.after;
@@ -150,7 +155,8 @@ export function travelHistory(
   const row = db
     .prepare('SELECT value FROM mapping_cards WHERE id=? AND project_id=?')
     .get(action.target.id, project.id) as { value: string } | undefined;
-  const before = 'body' in action.after ? (row ? (JSON.parse(row.value) as Card) : null) : project;
+  const identity = action.after ?? action.before!;
+  const before = 'body' in identity ? (row ? (JSON.parse(row.value) as Card) : null) : project;
   let after: Card | Project | null = desired ? structuredClone(desired) : null;
   if (after && 'body' in after) {
     if (before && 'body' in before) {
@@ -203,7 +209,7 @@ export function travelHistory(
   (type === 'history.undo' ? stack.redo : stack.undo).push(action);
   save(db, project.id, stack);
   const lifecycleAppearance =
-    (!before || !after) && 'body' in action.after
+    (!before || !after) && 'body' in identity
       ? ((before && 'body' in before ? before.appearance?.id : undefined) ??
         (after && 'body' in after ? after.appearance?.id : undefined))
       : undefined;

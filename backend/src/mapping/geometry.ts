@@ -93,7 +93,7 @@ export function restoreGeometry(
       ? {
           ...policy,
           necessaryHeight,
-          previewFloor: before.body.blocks.some((b) => b.text.length > 0)
+          previewFloor: before.body.blocks.some((b) => typeof b.text === 'string' && b.text.length > 0)
             ? (policy.previewFloor ?? 0)
             : 0,
         }
@@ -109,7 +109,7 @@ export function restoreGeometry(
             necessaryHeight,
             heightPolicy?.manualHeight ??
               (heightPolicy
-                ? before.body.blocks.some((b) => b.text.length > 0)
+                ? before.body.blocks.some((b) => typeof b.text === 'string' && b.text.length > 0)
                   ? (heightPolicy.previewFloor ?? 0)
                   : 0
                 : desired.item.pose.height),

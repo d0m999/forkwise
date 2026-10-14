@@ -1,10 +1,13 @@
 import type { Command } from "./api";
+import type { Block } from "../../backend/src/mapping/contracts";
+import { bodyText, validBlocks } from "../../backend/src/mapping/body-text";
 
 export interface Draft {
   projectId: string;
   cardId: string;
   field: "title" | "body";
   value: string;
+  blocks?: Block[];
   generation: number;
   expected: string;
   command?: Command;
@@ -172,6 +175,7 @@ function validRecovery(value: unknown): value is Recovery {
           (d.field !== "body" || !validAssetIds(d.requiredAssetIds)))
       )
         return false;
+      if (d.blocks !== undefined && (d.field !== "body" || !validBlocks(d.blocks) || bodyText({ blocks: d.blocks }) !== d.value)) return false;
       if (d.command === undefined) return true;
       const c = d.command;
       if (
@@ -191,7 +195,7 @@ function validRecovery(value: unknown): value is Recovery {
         ((c.type === "body.edit" &&
           d.field === "body" &&
           c.payload.id === d.cardId &&
-          c.payload.text === d.value &&
+          (d.blocks ? c.payload.text === undefined && requestIdentity(c.payload.blocks) === requestIdentity(d.blocks) : c.payload.blocks === undefined && c.payload.text === d.value) &&
           (commandAssets === undefined || validAssetIds(commandAssets)) &&
           // Never repair a weaker original request: it may already have run.
           // Legacy command-only requirements remain valid; order is irrelevant.
@@ -303,6 +307,7 @@ export function sameDraftInput(a: Draft, b: Draft): boolean {
     a.field === b.field &&
     a.generation === b.generation &&
     a.value === b.value &&
+    requestIdentity(a.blocks ?? null) === requestIdentity(b.blocks ?? null) &&
     a.expected === b.expected
   );
 }

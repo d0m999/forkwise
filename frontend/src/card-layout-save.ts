@@ -80,7 +80,7 @@ export function useCardLayoutSave(
     const policy = card.item.heightPolicy;
     const floor = policy
       ? (policy.manualHeight ??
-        (card.body.blocks.some((b) => b.text.length > 0)
+        (card.body.blocks.some((b) => typeof b.text === 'string' && b.text.length > 0)
           ? (policy.previewFloor ?? 0)
           : 0))
       : card.item.pose.height;

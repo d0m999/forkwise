@@ -40,7 +40,7 @@ export interface CardIndex {
 }
 export interface BodySlice {
   id: string;
-  type: 'text';
+  type: string;
   text: string;
   coverage: { returnedCodePoints: number; totalCodePoints: number; complete: boolean };
 }

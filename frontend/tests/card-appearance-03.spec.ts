@@ -1,3 +1,4 @@
+import { expectTextValue } from "./text-editor-assertions";
 import { test, expect, place } from "./card-appearance-fixture";
 
 test("A9-03 丢ACK时外观立即可见并保留更新输入，原请求恢复不覆盖新选择/正文草稿", async ({
@@ -74,9 +75,7 @@ test("A9-03 丢ACK时外观立即可见并保留更新输入，原请求恢复�
         async () => (await workspace.state()).cards[0]!.appearance?.titleColor,
       )
       .toBe("#dceee2");
-    await expect(page.getByLabel("卡片正文", { exact: true })).toHaveValue(
-      "另一卡的新草稿不会被旧外观ACK清除",
-    );
+    await expectTextValue(page.getByLabel("卡片正文", { exact: true }), "另一卡的新草稿不会被旧外观ACK清除");
     const after = await workspace.state();
     expect(after.cards[1]!.id).toBe(other.id);
     expect(after.cards[1]!.appearance).toBeUndefined();
