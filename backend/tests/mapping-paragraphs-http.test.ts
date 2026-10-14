@@ -52,7 +52,7 @@ it('段落完整Body经实际HTTP保存，HTTP与MCP固定同snapshot往返且�
     expect((await client.callTool({ name: 'forkwise_read_map', arguments: { projectId: 'p', view: 'detail', cardId: 'a', snapshot: index.snapshot } })).isError).toBe(true);
   } finally {
     try { await client?.close(); } finally { try { await mcp?.close(); } finally {
-      try { if (http) await new Promise<void>((resolve, reject) => { http!.close(e => e ? reject(e) : resolve()); http!.closeAllConnections(); }); }
+      try { if (http) await new Promise<void>((resolve, reject) => { http!.close(e => e ? reject(e) : resolve()); if ('closeAllConnections' in http!) http!.closeAllConnections(); }); }
       finally { host?.close(); rmSync(directory, { recursive: true, force: true }); }
     } }
   }
