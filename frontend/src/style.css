@@ -717,3 +717,7 @@ body:has(.workspace[data-board-full="true"]) .card-tooltip { display: none; }
 .card-visible-tags {
   background: var(--card-color-ffffff);
 }
+.paragraph-editor [data-block-selected="true"] { background-color: #e1ebf9; outline: 1px solid #88a6d1; }
+.fold-controls { position: absolute; inset: 0; pointer-events: none; }
+.fold-toggle { position: absolute; left: 42px; width: 20px; min-height: 24px; padding: 0; pointer-events: auto; border: 0; background: transparent; }
+.paragraph-editor [hidden] { display: none !important; }

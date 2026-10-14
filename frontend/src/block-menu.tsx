@@ -1,14 +1,27 @@
 import type { Block } from '../../backend/src/mapping/contracts';
 import { useLayoutEffect, useRef } from 'react';
 
-export const BLOCK_OPTIONS: { name: string; group: string; shape: Partial<Block> }[] = [
+export const BLOCK_OPTIONS: {
+  name: string;
+  group: string;
+  shape: Partial<Block>;
+  disabled?: boolean;
+}[] = [
   { name: '段落', group: '文字', shape: { type: 'text' } },
   { name: '一级标题', group: '文字', shape: { type: 'heading', level: 1 } },
   { name: '二级标题', group: '文字', shape: { type: 'heading', level: 2 } },
   { name: '三级标题', group: '文字', shape: { type: 'heading', level: 3 } },
   { name: '引用', group: '文字', shape: { type: 'quote' } },
-  { name: '无序列表', group: '列表', shape: { type: 'listItem', listType: 'bullet' } },
-  { name: '有序列表', group: '列表', shape: { type: 'listItem', listType: 'ordered' } },
+  {
+    name: '无序列表',
+    group: '列表',
+    shape: { type: 'listItem', listType: 'bullet' },
+  },
+  {
+    name: '有序列表',
+    group: '列表',
+    shape: { type: 'listItem', listType: 'ordered' },
+  },
   {
     name: '待办列表',
     group: '列表',
@@ -27,6 +40,8 @@ export function BlockMenu({
   onKeyDown,
   left,
   top,
+  explanation,
+  children,
 }: {
   options: typeof BLOCK_OPTIONS;
   selected: number;
@@ -38,6 +53,8 @@ export function BlockMenu({
   onKeyDown: React.KeyboardEventHandler<HTMLDivElement>;
   left: number;
   top: number;
+  explanation?: string | undefined;
+  children?: React.ReactNode;
 }) {
   const menu = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
@@ -64,6 +81,8 @@ export function BlockMenu({
           onChange={(e) => onQuery(e.target.value)}
         />
       )}
+      {explanation && <p>{explanation}</p>}
+      {children}
       {[...new Set(options.map((o) => o.group))].map((group) => (
         <div className="block-option-group" role="group" aria-label={group} key={group}>
           <span>{group}</span>
@@ -76,6 +95,7 @@ export function BlockMenu({
                   role="menuitem"
                   tabIndex={i === selected ? 0 : -1}
                   aria-current={i === selected}
+                  disabled={item.disabled}
                   key={item.name}
                   onMouseDown={(e) => e.preventDefault()}
                   onClick={() => onChoose(i)}

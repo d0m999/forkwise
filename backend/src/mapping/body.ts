@@ -4,6 +4,7 @@ import { canonical } from '../domain/canonical.js';
 
 import { plainParagraph } from './body-text.js';
 import { editableBlock } from './general-blocks.js';
+import { validListStructure } from './list-structure.js';
 import type Database from 'better-sqlite3';
 
 export function requireBlockOwnership(db: Database.Database, body: Card['body'], blocks: Block[]) {
@@ -59,6 +60,14 @@ export function editedBlocks(
     return [{ ...body.blocks[0]!, text: payload.text! }];
   }
   const blocks = structuredClone(payload.blocks);
+  requireThat(
+    validListStructure(
+      blocks.map((block) => (editableBlock(block) ? block : { id: block.id, type: 'opaque' })),
+    ),
+    'INVALID_LIST_STRUCTURE',
+    '列表父项必须在前且后代连续，不能置入自身后代',
+    409,
+  );
   const ids = new Set<string>(),
     inlineIds = new Set<string>();
   for (const block of blocks) {

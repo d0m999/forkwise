@@ -59,6 +59,11 @@ export function editableBlock(block: Block): boolean {
   } else if (block.type === 'listItem') {
     if (!['bullet', 'ordered', 'todo'].includes(block.listType as string)) return false;
     keys.push('listType');
+    if (block.parentId !== undefined) {
+      if (typeof block.parentId !== 'string' || !block.parentId || block.parentId.length > 160)
+        return false;
+      keys.push('parentId');
+    }
     if (block.listType === 'todo') {
       if (typeof block.checked !== 'boolean') return false;
       keys.push('checked');

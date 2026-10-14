@@ -29,6 +29,7 @@ export function renderBlock(block: Block): HTMLElement {
   }
   if (block.type === 'listItem') {
     p.dataset.listType = String(block.listType);
+    if (typeof block.parentId === 'string') p.dataset.parentId = block.parentId;
     if (block.listType === 'todo') p.dataset.checked = String(block.checked);
   }
   const value = block.text ?? '';
@@ -113,6 +114,7 @@ export function readBlock(element: HTMLElement, id: string, inlineId: string): B
     ...(type === 'listItem'
       ? {
           listType: element.dataset.listType,
+          ...(element.dataset.parentId ? { parentId: element.dataset.parentId } : {}),
           ...(element.dataset.listType === 'todo'
             ? { checked: element.dataset.checked === 'true' }
             : {}),
@@ -151,7 +153,10 @@ export function selectionPoints(
     const prefix = document.createRange();
     prefix.selectNodeContents(block);
     prefix.setEnd(node, offset);
-    return { blockId: block.dataset.blockId!, offset: nodeText(prefix.cloneContents()).length };
+    return {
+      blockId: block.dataset.blockId!,
+      offset: nodeText(prefix.cloneContents()).length,
+    };
   };
   const start = point(range.startContainer, range.startOffset),
     end = point(range.endContainer, range.endOffset);
@@ -203,5 +208,9 @@ export function sliceTextBlock(block: Block, start: number, end: number): Block 
       end: Math.min(end, m.end) - start,
     }));
   const { marks: ignored, ...rest } = block;
-  return { ...rest, text: block.text!.slice(start, end), ...(marks.length ? { marks } : {}) };
+  return {
+    ...rest,
+    text: block.text!.slice(start, end),
+    ...(marks.length ? { marks } : {}),
+  };
 }

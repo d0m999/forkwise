@@ -1861,6 +1861,7 @@ function Workspace() {
               <label htmlFor="card-body">卡片正文</label>
               <ParagraphEditor
                 key={state!.project.id + ":" + panelCard.id}
+                readingIdentity={state!.project.id + ":" + panelCard.id}
                 blocks={(() => {
                   const draft = draftView[draftKey(state!.project.id, panelCard.id, "body")];
                   return draft?.blocks ?? (draft ? [{ ...panelCard.body.blocks[0]!, text: draft.value }] : panelCard.body.blocks);
