@@ -191,3 +191,110 @@ test("A9-G1 首次节点测量未完成时手调尺寸与同版本Pose一致，�
     });
   }
 });
+
+test("A9-G2 历史请求在途时复选框保留焦点且不提交外观，完成后使用当前版本", async ({
+  page,
+  workspace,
+}, info) => {
+  await place(page, "在途历史焦点");
+  await page.getByRole("button", { name: "外观", exact: true }).click();
+  const checkbox = page.getByRole("checkbox", { name: "显示正文预览" });
+  await checkbox.uncheck();
+  await expect(page.getByRole("status")).toHaveText("已保存到本机");
+  const before = await workspace.state();
+  let release!: () => void, arrived!: () => void, completed!: () => void;
+  const responseGate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const requestArrived = new Promise<void>((resolve) => {
+    arrived = resolve;
+  });
+  const requestCompleted = new Promise<void>((resolve) => {
+    completed = resolve;
+  });
+  let intercepted = false;
+  const commands: { type: string; expected: unknown }[] = [];
+  const observations: unknown[] = [];
+  await page.route("**/api/mapping/execute", async (route) => {
+    const command = route.request().postDataJSON();
+    commands.push(command);
+    if (command.type !== "history.undo" || intercepted) {
+      await route.continue();
+      return;
+    }
+    intercepted = true;
+    try {
+      const response = await route.fetch();
+      arrived();
+      await responseGate;
+      await route.fulfill({ response });
+    } finally {
+      completed();
+    }
+  });
+  try {
+    await checkbox.press("Control+z");
+    await requestArrived;
+    observations.push(
+      await checkbox.evaluate((element) => ({
+        nativeDisabled: (element as HTMLInputElement).disabled,
+        ariaDisabled: element.getAttribute("aria-disabled"),
+        focused: document.activeElement === element,
+        activeTag: document.activeElement?.tagName,
+        revision:
+          document.querySelector<HTMLElement>(".workspace")!.dataset.revision,
+      })),
+    );
+    await expect(checkbox).toBeFocused();
+    await expect(checkbox).toHaveAttribute("aria-disabled", "true");
+    await page.keyboard.press("Space");
+    expect(commands.filter((c) => c.type === "card.appearance")).toHaveLength(
+      0,
+    );
+    const during = await workspace.state();
+    expect(during.project.revision).toBe(before.project.revision + 1);
+    expect(during.cards[0]!.appearance!.showPreview).toBe(true);
+    release();
+    await expect(checkbox).toBeChecked();
+    await expect(checkbox).toBeFocused();
+    await expect(checkbox).toHaveAttribute("aria-disabled", "false");
+    await page.keyboard.press("Space");
+    await expect(page.getByRole("status")).toHaveText("已保存到本机");
+    await expect
+      .poll(
+        async () => (await workspace.state()).cards[0]!.appearance!.showPreview,
+      )
+      .toBe(false);
+    expect(commands.filter((c) => c.type === "card.appearance")).toHaveLength(
+      1,
+    );
+    expect(commands.find((c) => c.type === "card.appearance")!.expected).toBe(
+      during.cards[0]!.appearance!.versionId,
+    );
+    expect((await workspace.state()).cards[0]!.body).toEqual(
+      before.cards[0]!.body,
+    );
+    expect((await workspace.state()).cards[0]!.item).toEqual(
+      before.cards[0]!.item,
+    );
+  } finally {
+    release();
+    if (intercepted) await requestCompleted;
+    if (!page.isClosed()) await page.unroute("**/api/mapping/execute");
+    const path = info.outputPath("inflight-history-focus.json");
+    await writeFile(
+      path,
+      JSON.stringify({
+        before,
+        observations,
+        commands,
+        after: await workspace.state(),
+      }),
+      { mode: 0o600 },
+    );
+    await info.attach("inflight-history-focus", {
+      path,
+      contentType: "application/json",
+    });
+  }
+});

@@ -236,10 +236,13 @@ export function CardMenu({
                 <input
                   type="checkbox"
                   checked={value.showPreview}
-                  disabled={blocked}
-                  onChange={(e) =>
-                    onAppearance({ ...value, showPreview: e.target.checked })
-                  }
+                  aria-disabled={blocked}
+                  onChange={(e) => {
+                    // Native disabled clears keyboard focus during history
+                    // travel. Keep focus and guard the write until it ends.
+                    if (!blocked)
+                      onAppearance({ ...value, showPreview: e.target.checked });
+                  }}
                 />
                 显示正文预览
               </label>
