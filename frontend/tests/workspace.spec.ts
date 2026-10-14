@@ -1,4 +1,5 @@
 import { expectTextValue, readTextValue, commandBodyText } from "./text-editor-assertions";
+import { observeBodyInput, bodyInputObservations } from "./body-input-fixture";
 import { test, expect, type Page } from "@playwright/test";
 import { spawn, type ChildProcess } from "node:child_process";
 import type { Card, Command } from "../src/api";
@@ -1587,7 +1588,7 @@ test("R2 no-op标题ACK不借回读版本静默覆盖并发标题", async ({
 for (const lostAck of [false, true]) {
   test(`R2 no-op正文${lostAck ? "丢ACK重试" : "延迟ACK"}保持原版本与待确认输入组`, async ({
     page,
-  }) => {
+  }, testInfo) => {
     await openWorkspace(page);
     const projectId = await newCard(page);
     const body = page.getByLabel("卡片正文", { exact: true });
@@ -1598,24 +1599,47 @@ for (const lostAck of [false, true]) {
       projectId,
     );
     const card = initial.cards[0];
+    const originalHistory = await historyState(page);
+    await observeBodyInput(page);
     const ack = gate();
     let noOpWritten = false;
     let first = true;
     const submitted: { value: string; expected: string; commandId: string }[] =
       [];
+    const bodyCommands: Command[] = [];
+    const premises: unknown[] = [];
     await page.route("**/api/mapping/execute", async (route) => {
       const c = route.request().postDataJSON();
-      if (c.type === "body.edit")
+      if (c.type === "body.edit") {
+        bodyCommands.push(c);
         submitted.push({
           value: commandBodyText(c),
           expected: c.expected,
           commandId: c.commandId,
         });
-      if (c.type !== "body.edit" || commandBodyText(c) !== "原正文A" || !first)
+      }
+      if (c.type !== "body.edit" || !first)
         return route.continue();
       first = false;
+      const prior = await page.evaluate(
+        async (id) => (await fetch("/api/mapping/projects/" + id)).json(),
+        projectId,
+      );
+      expect(bodyCommands).toHaveLength(1);
+      expect(c.payload.blocks).toEqual(card.body.blocks);
+      expect(c.expected).toBe(card.body.versionId);
+      expect(prior.cards[0]).toEqual(card);
+      expect(await historyState(page)).toEqual(originalHistory);
       const response = await route.fetch();
-      expect((await response.json()).changedIds).toEqual([]);
+      const receipt = await response.json();
+      expect(receipt.changedIds).toEqual([]);
+      const afterNoOp = await page.evaluate(
+        async (id) => (await fetch("/api/mapping/projects/" + id)).json(),
+        projectId,
+      );
+      expect(afterNoOp.cards[0]).toEqual(card);
+      expect(await historyState(page)).toEqual(originalHistory);
+      premises.push({ command: c, prior, receipt, afterNoOp, originalHistory });
       noOpWritten = true;
       await ack.promise;
       if (lostAck)
@@ -1627,7 +1651,8 @@ for (const lostAck of [false, true]) {
       else await route.fulfill({ response });
     });
     try {
-      await body.fill("临时正文");
+      // An actual same-value input, with full blocks/version/authority checked
+      // before forwarding. Two different fills do not establish this premise.
       await body.fill("原正文A");
       await expect.poll(() => noOpWritten).toBe(true);
       await body.press("End");
@@ -1659,6 +1684,11 @@ for (const lostAck of [false, true]) {
         const retries = submitted.filter((c) => c.value === "原正文A");
         expect(retries).toHaveLength(2);
         expect(retries[0]!.commandId).toBe(retries[1]!.commandId);
+        const originalRetries = bodyCommands.filter(
+          (c) => c.commandId === bodyCommands[0]!.commandId,
+        );
+        expect(originalRetries).toHaveLength(2);
+        expect(originalRetries[1]).toEqual(originalRetries[0]);
       }
       await expect(page.getByRole("alert")).toContainText("正文已更新");
       await expectTextValue(body, local);
@@ -1670,12 +1700,26 @@ for (const lostAck of [false, true]) {
         projectId,
       );
       expect(after.cards[0].body.blocks[0].text).toBe("另一调用者正文C");
+      expect(after.cards[0].id).toBe(card.id);
+      expect(after.cards[0].body.id).toBe(card.body.id);
+      expect(after.cards[0].body.blocks).toEqual(card.body.blocks.map((block: any) => ({
+        ...block, text: "另一调用者正文C",
+      })));
+      expect(after.cards[0].body.versionId).not.toBe(card.body.versionId);
+      expect(after.cards[0].item.pose).toEqual(card.item.pose);
+      expect((await historyState(page)).undo.map((a: { label: string }) => a.label))
+        .toEqual([...originalHistory.undo.map((a: { label: string }) => a.label), "body.edit"]);
       expect(submitted.find((c) => c.value === "原正文AB")!.expected).toBe(
         card.body.versionId,
       );
     } finally {
       ack.release();
       await page.unrouteAll({ behavior: "wait" });
+      await testInfo.attach("complete-body-no-op-and-input-premises", {
+        body: JSON.stringify({ card, premises, bodyCommands,
+          inputs: await bodyInputObservations(page) }),
+        contentType: "application/json",
+      });
     }
   });
 }
@@ -1865,7 +1909,9 @@ for (const lostAck of [false, true]) {
 for (const lostAck of [false, true]) {
   test(`R2 已落盘正文${lostAck ? "丢ACK重试" : "迟ACK在拖动中返回"}不改变可见位置且正文先于布局`, async ({
     page,
-  }) => {
+  }, testInfo) => {
+    const inputClock = Date.now();
+    await page.clock.setFixedTime(inputClock);
     await openWorkspace(page);
     const projectId = await newCard(page);
     const body = page.getByLabel("卡片正文", { exact: true });
@@ -1875,12 +1921,15 @@ for (const lostAck of [false, true]) {
         projectId,
       );
     const before = (await read()).cards[0];
+    await observeBodyInput(page);
     const ack = gate();
     let written = false;
     let first = true;
     const bodyKeys: string[] = [];
+    const submitted: Command[] = [];
     await page.route("**/api/mapping/execute", async (route) => {
       const c = route.request().postDataJSON();
+      submitted.push(c);
       if (c.type === "body.edit" && commandBodyText(c) === "A")
         bodyKeys.push(c.commandId);
       if (c.type !== "body.edit" || commandBodyText(c) !== "A" || !first)
@@ -1900,8 +1949,31 @@ for (const lostAck of [false, true]) {
     try {
       await body.pressSequentially("A");
       await expect.poll(() => written).toBe(true);
-      expect((await read()).cards[0].body.blocks[0].text).toBe("A");
+      const savedA = (await read()).cards[0];
+      expect(savedA.body.blocks[0].text).toBe("A");
+      expect(savedA.body.blocks[0].id).toBe(before.body.blocks[0].id);
+      expect(savedA.body.blocks[0].inlineId).toBeTruthy();
+      // Fix Date.now only; real timers, keyboard, HTTP/SQLite and pointer input
+      // still run. Host/network waits cannot expire D283's input-group premise.
+      await page.clock.setFixedTime(inputClock + 200);
       await body.pressSequentially("B");
+      const inputs = await bodyInputObservations(page);
+      const a = inputs.find((i) => i.type === "input" && i.text === "A")!;
+      const bBefore = inputs.find((i) => i.type === "beforeinput" && i.text === "A")!;
+      const b = inputs.find((i) => i.type === "input" && i.text === "AB")!;
+      expect([a.trusted, bBefore.trusted, b.trusted]).toEqual([true, true, true]);
+      expect([a.inputType, bBefore.inputType, b.inputType]).toEqual([
+        "insertText", "insertText", "insertText",
+      ]);
+      expect(b.clock - a.clock).toBe(200);
+      expect(bBefore.selection).toEqual(a.selection);
+      expect(a.selection!.start).toBe(a.selection!.end);
+      expect(b.selection!.blockId).toBe(a.selection!.blockId);
+      const draftA = a.drafts.find((d) => d.field === "body" && d.value === "A")!;
+      const draftB = b.drafts.find((d) => d.field === "body" && d.value === "AB")!;
+      expect(draftA.editGroup).toBeTruthy();
+      expect(draftB.editGroup).toBe(draftA.editGroup);
+      expect(draftB.generation).toBeGreaterThan(draftA.generation);
       const box = (await page.locator(".thought-card").boundingBox())!;
       await page.mouse.move(box.x + box.width - 15, box.y + 12);
       await page.mouse.down();
@@ -1936,7 +2008,25 @@ for (const lostAck of [false, true]) {
       if (lostAck) {
         expect(bodyKeys).toHaveLength(2);
         expect(bodyKeys[0]).toBe(bodyKeys[1]);
+        expect(submitted[1]).toEqual(submitted[0]);
       }
+      expect(submitted.map((c) => c.type === "body.edit" ? commandBodyText(c) : c.type))
+        .toEqual(lostAck ? ["A", "A", "AB", "pose.move"] : ["A", "AB", "pose.move"]);
+      const bodyWrites = submitted.filter((c) => c.type === "body.edit");
+      expect(bodyWrites.every((c) => c.editGroup === draftA.editGroup)).toBe(true);
+      const saved = (await read()).cards[0];
+      expect(saved.id).toBe(before.id);
+      expect(saved.body.id).toBe(before.body.id);
+      expect(saved.body.versionId).not.toBe(before.body.versionId);
+      expect(saved.body.blocks).toEqual(savedA.body.blocks.map((block: any) => ({ ...block, text: "AB" })));
+      expect(saved.body.blocks).toEqual(bodyWrites.at(-1)!.payload.blocks);
+      expect(saved.item.pose).not.toEqual(before.item.pose);
+      await expect(page.locator(".react-flow__node")).toHaveCSS("transform", transform);
+      await testInfo.attach("saved-body-before-pose-undo", {
+        body: JSON.stringify({ saved, submitted, inputs, timeline: await historyState(page) }),
+        contentType: "application/json",
+      });
+      await testInfo.attach("saved-drag", { body: await page.screenshot(), contentType: "image/png" });
       expect(
         (await historyState(page)).undo.map((a: { label: string }) => a.label),
       ).toEqual(["thought.create", "body.edit", "pose.move"]);
@@ -1950,10 +2040,21 @@ for (const lostAck of [false, true]) {
       ).toBeEnabled();
       await page.getByRole("button", { name: "撤销", exact: true }).click();
       await expectTextValue(body, "");
+      const undone = (await read()).cards[0];
+      expect(undone.id).toBe(before.id);
+      expect(undone.body.id).toBe(before.body.id);
+      expect(undone.body.blocks).toEqual(before.body.blocks);
+      expect(undone.body.versionId).not.toBe(before.body.versionId);
     } finally {
       ack.release();
       await page.mouse.up();
       await page.unrouteAll({ behavior: "wait" });
+      await testInfo.attach("body-input-clock-selection-groups-and-drag", {
+        body: JSON.stringify({ before, inputClock, submitted,
+          inputs: await bodyInputObservations(page),
+          timeline: await historyState(page), persisted: await read() }),
+        contentType: "application/json",
+      });
     }
   });
 }
