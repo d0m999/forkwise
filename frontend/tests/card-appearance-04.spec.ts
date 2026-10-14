@@ -5,6 +5,15 @@ test("A9-04 同一完整Body的预览只显示整行，放大显示更多，全�
   workspace,
 }, info) => {
   await place(page, "有限预览");
+  const space = page.getByRole("button", {
+    name: "调整卡片尺寸：下",
+    exact: true,
+  });
+  await space.focus();
+  while ((await workspace.state()).cards[0]!.item.pose.height < 160) {
+    await space.press("ArrowDown");
+    await expect(page.getByRole("status")).toHaveText("已保存到本机");
+  }
   await page.getByRole("button", { name: "写字板", exact: true }).click();
   const text = Array.from(
     { length: 60 },

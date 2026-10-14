@@ -149,7 +149,7 @@ async function fixture(browser: Browser) {
     await page.goto(url.toString());
     await expect(page.locator(".workspace")).toHaveAttribute(
       "data-revision",
-      "2",
+      "3",
     );
     return {
       page,
@@ -194,7 +194,7 @@ test("断连重连后 UI 和 Agent 恢复同一地图，删除不留幽灵对象
     await f.page.unroute("**/changes?**");
     await expect(f.page.locator(".workspace")).toHaveAttribute(
       "data-revision",
-      "3",
+      "4",
     );
     await expect(f.page.getByLabel("卡片正文", { exact: true })).toHaveValue(
       "断连期间完整中文🧠正文",
@@ -202,13 +202,13 @@ test("断连重连后 UI 和 Agent 恢复同一地图，删除不留幽灵对象
     const same = await f.index(
       (await f.page.locator(".workspace").getAttribute("data-snapshot"))!,
     );
-    expect(same.revision).toBe(3);
+    expect(same.revision).toBe(4);
     expect(same.items[0].item.pose).toMatchObject({ x: 380, y: 220 });
     await f.execute(
       {
         commandId: "undo-edit",
         type: "history.undo",
-        expected: 3,
+        expected: 4,
         payload: {},
       },
       f.humanToken,
@@ -217,14 +217,14 @@ test("断连重连后 UI 和 Agent 恢复同一地图，删除不留幽灵对象
       {
         commandId: "undo-create",
         type: "history.undo",
-        expected: 4,
+        expected: 5,
         payload: {},
       },
       f.humanToken,
     );
     await expect(f.page.locator(".workspace")).toHaveAttribute(
       "data-revision",
-      "5",
+      "6",
     );
     await expect(f.page.locator(".react-flow__node")).toHaveCount(0);
     await expect(
@@ -244,7 +244,7 @@ test("断连重连后 UI 和 Agent 恢复同一地图，删除不留幽灵对象
     await f.page.getByRole("button", { name: "撤销删除", exact: true }).click();
     await expect(f.page.locator(".workspace")).toHaveAttribute(
       "data-revision",
-      "6",
+      "7",
     );
     expect((await f.index()).items[0].id).toBe("c");
   } finally {
@@ -279,7 +279,7 @@ test("真正服务重启使旧缓存 token 失效，同页面及新 context 完�
     const current = (await f.page
       .locator(".workspace")
       .getAttribute("data-snapshot"))!;
-    expect((await f.index(current)).revision).toBe(2);
+    expect((await f.index(current)).revision).toBe(3);
     const context = await browser.newContext();
     try {
       const page = await context.newPage();
@@ -341,21 +341,21 @@ test("过旧真实游标 RESET_REQUIRED 后 UI 完整重读，原幂等与旧版
       mapping.close();
     }
     const reset = await f.request(
-      "/projects/p/changes?after=2&baseSnapshot=" + old.snapshot,
+      "/projects/p/changes?after=3&baseSnapshot=" + old.snapshot,
     );
     expect(reset).toMatchObject({
       status: 200,
       value: {
         status: "RESET_REQUIRED",
         reason: "CURSOR_TOO_OLD",
-        revision: 1003,
+        revision: 1004,
         changes: [],
       },
     });
     await f.page.unroute("**/changes?**");
     await expect(f.page.locator(".workspace")).toHaveAttribute(
       "data-revision",
-      "1003",
+      "1004",
     );
     const same = await f.index(
       (await f.page.locator(".workspace").getAttribute("data-snapshot"))!,
@@ -415,7 +415,7 @@ test("晚到和重复变化响应不能覆盖新 revision 或复活已删除卡�
     });
     await expect.poll(() => !!captured).toBe(true);
     await f.execute(
-      { commandId: "delete", type: "history.undo", expected: 2, payload: {} },
+      { commandId: "delete", type: "history.undo", expected: 3, payload: {} },
       f.humanToken,
     );
     // A local project refresh publishes deletion before the older response arrives.
@@ -423,7 +423,7 @@ test("晚到和重复变化响应不能覆盖新 revision 或复活已删除卡�
     release();
     await expect(f.page.locator(".workspace")).toHaveAttribute(
       "data-revision",
-      "3",
+      "4",
     );
     await expect(f.page.locator(".react-flow__node")).toHaveCount(0);
     await f.page.unrouteAll({ behavior: "wait" });
@@ -477,7 +477,7 @@ test("授权撤销撤下派生地图，未确认草稿保留，重新授权完�
     );
     await expect(f.page.locator(".workspace")).toHaveAttribute(
       "data-revision",
-      "2",
+      "3",
     );
     await expect(
       f.page.getByRole("button", { name: "恢复草稿", exact: true }),
@@ -531,7 +531,7 @@ for (const field of ["body", "title"] as const) {
           const value = await response.json();
           expect(
             boundary === "projects" ? value[0].revision : value.revision,
-          ).toBe(3);
+          ).toBe(4);
           held();
           await gate;
           await route.fulfill({ response });
@@ -563,7 +563,7 @@ for (const field of ["body", "title"] as const) {
         await captured;
         await expect(f.page.locator(".workspace")).toHaveAttribute(
           "data-revision",
-          "2",
+          "3",
         );
         const input = `读取期间新增的${field}草稿🧠`;
         await editor.fill(input);
@@ -591,7 +591,7 @@ for (const field of ["body", "title"] as const) {
         );
         expect(after).toEqual(journal.value);
         await expect(editor).toHaveValue(input);
-        expect((await f.index()).revision).toBe(3);
+        expect((await f.index()).revision).toBe(4);
         await info.attach("draft-invalidation-observation", {
           body: JSON.stringify({
             field,
@@ -609,7 +609,7 @@ for (const field of ["body", "title"] as const) {
         });
         await expect(f.page.locator(".workspace")).toHaveAttribute(
           "data-revision",
-          "2",
+          "3",
         );
       } finally {
         release();

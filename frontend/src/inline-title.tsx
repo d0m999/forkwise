@@ -23,8 +23,10 @@ export function InlineTitle({
   useLayoutEffect(() => {
     if (element.current) {
       if (element.current.value !== value) element.current.value = value;
-      element.current.style.height = "auto";
-      element.current.style.height = `${element.current.scrollHeight}px`;
+      element.current.style.height = "0px";
+      const border =
+        element.current.offsetHeight - element.current.clientHeight;
+      element.current.style.height = `${element.current.scrollHeight + border}px`;
     }
   }, [value]);
   return (
@@ -32,6 +34,7 @@ export function InlineTitle({
       ref={element}
       className="card-title nodrag nowheel"
       aria-label="卡片标题"
+      rows={1}
       autoFocus
       readOnly={blocked}
       defaultValue={initial.current}

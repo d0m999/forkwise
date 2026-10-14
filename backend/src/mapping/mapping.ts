@@ -259,7 +259,11 @@ export class Mapping {
               id: randomUUID(),
               versionId: randomUUID(),
               pose: { x: p.x, y: p.y, width: 280, height: 160 },
-              heightPolicy: { manualHeight: null, necessaryHeight: 0 },
+              heightPolicy: {
+                manualHeight: null,
+                necessaryHeight: 0,
+                previewFloor: p.text.length ? DEFAULT_PREVIEW_HEIGHT : 0,
+              },
             },
           };
           this.db.prepare('INSERT INTO mapping_card_ids VALUES(?,?)').run(card.id, project.id);
@@ -309,10 +313,12 @@ export class Mapping {
                 manualHeight: card.item.pose.height,
                 necessaryHeight: 0,
               };
+              const previewFloor = card.body.blocks.some((b) => b.text.length > 0)
+                ? (policy.previewFloor ?? 0)
+                : 0;
               const height = Math.max(
                 command.payload.necessaryHeight,
-                policy.manualHeight ??
-                  (card.body.blocks.some((b) => b.text.length > 0) ? DEFAULT_PREVIEW_HEIGHT : 0),
+                policy.manualHeight ?? previewFloor,
               );
               // Old records have no manual-height provenance. A fitting
               // measurement must not stamp them merely because they were read.
@@ -326,7 +332,11 @@ export class Mapping {
               card.item = {
                 ...card.item,
                 versionId: randomUUID(),
-                heightPolicy: { ...policy, necessaryHeight: command.payload.necessaryHeight },
+                heightPolicy: {
+                  ...policy,
+                  necessaryHeight: command.payload.necessaryHeight,
+                  previewFloor,
+                },
                 pose: { ...card.item.pose, height },
               };
               changedIds = [card.item.id];

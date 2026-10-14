@@ -244,8 +244,22 @@ async function newCard(page: Page) {
   await page.getByLabel("卡片标题", { exact: true }).fill("初始标题");
   await page.getByLabel("卡片标题", { exact: true }).press("Enter");
   await expect(page.getByRole("status")).toHaveText("已保存到本机");
+  const projectId = new URL(page.url()).searchParams.get("project")!;
+  // The fixture begins after the real measured Pose is durable. No later test
+  // mistakes that initial derived write for its own draft/history request.
+  await expect
+    .poll(async () =>
+      page.evaluate(async (id) => {
+        const state = await (await fetch("/api/mapping/projects/" + id)).json();
+        return state.cards.every(
+          (c: Card) => (c.item.heightPolicy?.necessaryHeight ?? 0) > 0,
+        );
+      }, projectId),
+    )
+    .toBe(true);
+  await expect(page.getByRole("status")).toHaveText("已保存到本机");
   await page.getByRole("button", { name: "编辑正文" }).click();
-  return new URL(page.url()).searchParams.get("project")!;
+  return projectId;
 }
 
 test("切项目等待连续三批输入的最新确认，第二批 ACK 不能放行切换", async ({

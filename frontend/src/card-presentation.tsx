@@ -22,7 +22,9 @@ export function useCardPresentation(
   useLayoutEffect(() => {
     const element = anchor.current;
     if (!element) return;
+    let active = true;
     function measure() {
+      if (!active) return;
       const title = element!.querySelector<HTMLElement>(
         ".title-button,.card-title",
       );
@@ -57,7 +59,10 @@ export function useCardPresentation(
     const tags = element.querySelector(".card-visible-tags");
     if (tags) observer.observe(tags);
     document.fonts.ready.then(measure);
-    return () => observer.disconnect();
+    return () => {
+      active = false;
+      observer.disconnect();
+    };
   }, [card, anchor, enabled]);
   return lines;
 }

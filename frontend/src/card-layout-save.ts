@@ -1,4 +1,3 @@
-import { DEFAULT_PREVIEW_HEIGHT } from "../../backend/src/mapping/presentation-values";
 import { useRef, useState } from "react";
 import {
   api,
@@ -82,7 +81,7 @@ export function useCardLayoutSave(
     const floor = policy
       ? (policy.manualHeight ??
         (card.body.blocks.some((b) => b.text.length > 0)
-          ? DEFAULT_PREVIEW_HEIGHT
+          ? (policy.previewFloor ?? 0)
           : 0))
       : card.item.pose.height;
     if (!policy && card.item.pose.height >= necessaryHeight) return;

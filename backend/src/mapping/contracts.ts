@@ -167,7 +167,7 @@ export interface Card {
     id: string;
     versionId: string;
     pose: { x: number; y: number; width: number; height: number };
-    heightPolicy?: { manualHeight: number | null; necessaryHeight: number };
+    heightPolicy?: { manualHeight: number | null; necessaryHeight: number; previewFloor?: number };
   };
 }
 export interface ProjectState {

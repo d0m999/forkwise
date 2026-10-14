@@ -5,6 +5,15 @@ test("A9-01 同栏四图标具名，外观连续即时保存，Esc单路由还�
   workspace,
 }, info) => {
   await place(page, "颜色标题");
+  const space = page.getByRole("button", {
+    name: "调整卡片尺寸：下",
+    exact: true,
+  });
+  await space.focus();
+  while ((await workspace.state()).cards[0]!.item.pose.height < 160) {
+    await space.press("ArrowDown");
+    await expect(page.getByRole("status")).toHaveText("已保存到本机");
+  }
   const toolbar = page.getByRole("toolbar", { name: "卡片操作" });
   await expect(
     toolbar.getByRole("button", { name: "编辑标题", exact: true }),

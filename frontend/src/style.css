@@ -569,6 +569,7 @@ button[aria-current="true"] {
   gap: 5px;
 }
 .card-color {
+  border: 1px solid var(--card-menu-border);
   width: 30px;
   height: 30px;
   padding: 0;
@@ -577,22 +578,22 @@ button[aria-current="true"] {
   outline: 2px solid #264aad;
   outline-offset: 2px;
 }
-.card-color-edf1fa {
+.card-color.card-color-edf1fa {
   background: var(--card-color-edf1fa);
 }
-.card-color-f7e9bd {
+.card-color.card-color-f7e9bd {
   background: var(--card-color-f7e9bd);
 }
-.card-color-dceee2 {
+.card-color.card-color-dceee2 {
   background: var(--card-color-dceee2);
 }
-.card-color-f3dfe5 {
+.card-color.card-color-f3dfe5 {
   background: var(--card-color-f3dfe5);
 }
-.card-color-e8e1f5 {
+.card-color.card-color-e8e1f5 {
   background: var(--card-color-e8e1f5);
 }
-.card-color-ffffff {
+.card-color.card-color-ffffff {
   background: var(--card-color-ffffff);
 }
 .card-preview-toggle {

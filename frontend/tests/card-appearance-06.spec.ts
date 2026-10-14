@@ -76,6 +76,9 @@ test("A9-06 真实外观冲突保留我的输入，明确采用期间的新输�
     // actual toolbar before continuing input during the outstanding ACK.
     await page.getByRole("button", { name: "外观", exact: true }).click();
     await page.getByRole("button", { name: "淡紫色", exact: true }).click();
+    await expect(
+      page.getByRole("button", { name: "淡紫色", exact: true }),
+    ).toHaveCSS("background-color", "rgb(232, 225, 245)");
     await expect(page.locator(".title-button")).toHaveCSS(
       "background-color",
       "rgb(232, 225, 245)",

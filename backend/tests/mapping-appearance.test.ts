@@ -244,3 +244,45 @@ it('外观撤销回默认和创建删除/重做均写新版本，初始null expe
     rmSync(directory, { recursive: true, force: true });
   }
 });
+
+it('创建历史保留实际测量投影，删除重做不恢复未测高度或额外推进revision', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'forkwise-measured-create-'));
+  const mapping = openMapping(directory);
+  try {
+    const human = mapping.access.authenticate(mapping.access.issue('human', ['*']));
+    const run = (command: Record<string, unknown>) =>
+      mapping.execute({ commandId: randomUUID(), projectId: 'p', ...command }, human);
+    const state = () => mapping.read({ type: 'project', projectId: 'p' }, human);
+    run({ type: 'project.create', expected: null, payload: { name: '测量创建' } });
+    run({
+      type: 'thought.create',
+      expected: null,
+      payload: { id: 'a', title: '短', text: '', x: 10, y: 20 },
+    });
+    function measure() {
+      const c = state().cards[0]!;
+      return run({
+        type: 'card.layout',
+        expected: {
+          thought: c.versionId,
+          body: c.body.versionId,
+          pose: c.item.versionId,
+          appearance: c.appearance?.versionId ?? null,
+        },
+        payload: { id: c.id, necessaryHeight: 59 },
+      });
+    }
+    measure();
+    const measured = state().cards[0]!;
+    run({ type: 'history.undo', expected: state().project.revision, payload: {} });
+    expect(state().cards).toEqual([]);
+    run({ type: 'history.redo', expected: state().project.revision, payload: {} });
+    expect(state().cards[0]!.item.pose).toEqual(measured.item.pose);
+    expect(state().cards[0]!.item.heightPolicy).toEqual(measured.item.heightPolicy);
+    const revision = state().project.revision;
+    expect(measure().revision).toBe(revision);
+  } finally {
+    mapping.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});

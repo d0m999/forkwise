@@ -1,4 +1,3 @@
-import { DEFAULT_PREVIEW_HEIGHT } from './presentation-values.js';
 import type Database from 'better-sqlite3';
 import { randomUUID } from 'node:crypto';
 import type { Card, Command } from './contracts.js';
@@ -41,6 +40,7 @@ export function writeGeometry(
       const heightPolicy =
         p.height !== before.item.pose.height
           ? {
+              ...policy,
               manualHeight: Math.max(p.height, policy?.necessaryHeight ?? 0),
               necessaryHeight: policy?.necessaryHeight ?? 0,
             }
@@ -89,7 +89,15 @@ export function restoreGeometry(
     const policy = desired.item.heightPolicy;
     const necessaryHeight =
       before.item.heightPolicy?.necessaryHeight ?? policy?.necessaryHeight ?? 0;
-    const heightPolicy = policy ? { ...policy, necessaryHeight } : undefined;
+    const heightPolicy = policy
+      ? {
+          ...policy,
+          necessaryHeight,
+          previewFloor: before.body.blocks.some((b) => b.text.length > 0)
+            ? (policy.previewFloor ?? 0)
+            : 0,
+        }
+      : undefined;
     const after = {
       ...before,
       item: {
@@ -102,7 +110,7 @@ export function restoreGeometry(
             heightPolicy?.manualHeight ??
               (heightPolicy
                 ? before.body.blocks.some((b) => b.text.length > 0)
-                  ? DEFAULT_PREVIEW_HEIGHT
+                  ? (heightPolicy.previewFloor ?? 0)
                   : 0
                 : desired.item.pose.height),
           ),

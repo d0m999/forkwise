@@ -63,7 +63,18 @@ export function recordAction(
   if (command.type === 'card.layout') {
     // Measured presentation is derived state, not another research action.
     // It must not split a title/create typing group on the project timeline.
-    if (previous?.lastRevision === change.revision - 1) previous.lastRevision = change.revision;
+    if (previous?.lastRevision === change.revision - 1) {
+      previous.lastRevision = change.revision;
+      // Recreating this action must restore its measured projection rather than
+      // the unmeasured creation placeholder. It remains one create/title step.
+      if (
+        'body' in previous.after &&
+        'body' in after &&
+        previous.after.id === after.id &&
+        previous.changedIds.includes(after.item.id)
+      )
+        previous.after.item = after.item;
+    }
     save(db, command.projectId, stack);
     return;
   }
