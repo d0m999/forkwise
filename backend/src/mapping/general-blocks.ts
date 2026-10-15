@@ -1,5 +1,6 @@
 import type { Block } from './contracts.js';
 import { plainParagraph } from './body-text.js';
+import { invalidListStructureIds } from './list-structure.js';
 
 export const INLINE_TYPES = [
   'bold',
@@ -79,4 +80,17 @@ export function editableBlock(block: Block): boolean {
 
 export function editableTextBlock(block: Block): block is TextBlock {
   return editableBlock(block) && typeof block.text === 'string';
+}
+
+// A recognized list shape may still be an unsupported legacy original when its
+// parent cannot be interpreted in this body. Do not reinterpret that JSON.
+export function unsupportedBlockIds(blocks: Block[]): Set<string> {
+  const unsupported = new Set(
+    blocks.filter((block) => !editableBlock(block)).map((block) => block.id),
+  );
+  const structure = blocks.map((block) =>
+    unsupported.has(block.id) ? { id: block.id, type: 'opaque' } : block,
+  );
+  for (const id of invalidListStructureIds(structure)) unsupported.add(id);
+  return unsupported;
 }

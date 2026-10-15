@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { Block } from '../../backend/src/mapping/contracts';
 import { plainParagraph } from '../../backend/src/mapping/body-text';
 import {
-  editableBlock,
+  unsupportedBlockIds,
   editableTextBlock,
   type InlineMark,
 } from '../../backend/src/mapping/general-blocks';
@@ -121,7 +121,7 @@ export function ParagraphEditor({
     { id: string; name: string; top: number; collapsed: boolean }[]
   >([]);
   const [formatTarget, setFormatTarget] = useState<FormatTarget | null>(null);
-  const supported = blocks.every(editableBlock);
+  const supported = unsupportedBlockIds(blocks).size === 0;
   useLayoutEffect(() => {
     for (const node of Array.from(element.current?.children ?? [])) {
       const child = node as HTMLElement;

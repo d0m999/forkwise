@@ -3,7 +3,7 @@ import { requireThat } from '../domain/errors.js';
 import { canonical } from '../domain/canonical.js';
 
 import { plainParagraph } from './body-text.js';
-import { editableBlock } from './general-blocks.js';
+import { editableBlock, unsupportedBlockIds } from './general-blocks.js';
 import { validListStructure } from './list-structure.js';
 import type Database from 'better-sqlite3';
 
@@ -60,9 +60,15 @@ export function editedBlocks(
     return [{ ...body.blocks[0]!, text: payload.text! }];
   }
   const blocks = structuredClone(payload.blocks);
+  const originalIds = unsupportedBlockIds(body.blocks);
+  const nextUnsupported = unsupportedBlockIds(blocks);
   requireThat(
     validListStructure(
-      blocks.map((block) => (editableBlock(block) ? block : { id: block.id, type: 'opaque' })),
+      blocks.map((block) =>
+        editableBlock(block) && !originalIds.has(block.id)
+          ? block
+          : { id: block.id, type: 'opaque' },
+      ),
     ),
     'INVALID_LIST_STRUCTURE',
     '列表父项必须在前且后代连续，不能置入自身后代',
@@ -80,7 +86,7 @@ export function editedBlocks(
     const previous = body.blocks.find((b) => b.id === block.id);
     if (previous?.type === 'divider')
       requireThat(block.type === 'divider', 'BODY_FORMAT_UNSUPPORTED', '分隔线不支持文字转换', 409);
-    if (!editableBlock(block) || (previous && !editableBlock(previous)))
+    if (!editableBlock(block) || originalIds.has(block.id))
       requireThat(
         previous && canonical(previous) === canonical(block),
         'BODY_FORMAT_UNSUPPORTED',
@@ -89,15 +95,17 @@ export function editedBlocks(
       );
   }
   for (const block of body.blocks)
-    if (!editableBlock(block))
+    if (originalIds.has(block.id))
       requireThat(
-        blocks.some((b) => b.id === block.id && canonical(b) === canonical(block)),
+        nextUnsupported.has(block.id) &&
+          blocks.some((b) => b.id === block.id && canonical(b) === canonical(block)),
         'BODY_FORMAT_UNSUPPORTED',
         '尚不支持的内容原件不能删除或降级',
         409,
       );
-  const originals = body.blocks.filter((block) => !editableBlock(block)).map((block) => block.id);
-  const originalIds = new Set(originals);
+  const originals = body.blocks
+    .filter((block) => originalIds.has(block.id))
+    .map((block) => block.id);
   requireThat(
     canonical(blocks.filter((block) => originalIds.has(block.id)).map((block) => block.id)) ===
       canonical(originals),

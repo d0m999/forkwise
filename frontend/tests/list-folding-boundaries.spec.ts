@@ -228,3 +228,100 @@ test('单独移动标题不搬正文并重新计算H3范围，列表移入折叠
   await expect(editor.locator('[data-block-id="t"]')).toBeHidden();
   expect(await page.locator('.board-scroll').evaluate((el) => el.scrollTop)).toBe(0);
 });
+
+test('旧列表parent原件只读保护，旁段HTTP保存及同版本MCP和重启完整保全', async ({
+  page,
+  workspace,
+}, info) => {
+  await place(page, '旧列表兼容', 80, 120);
+  const initial = await workspace.state(),
+    card = initial.cards[0]!;
+  const originals = [
+    {
+      id: 'legacy',
+      type: 'listItem',
+      listType: 'bullet',
+      text: '旧列表原文',
+      parentId: 'vendor-owner',
+    },
+    {
+      id: 'legacy',
+      type: 'listItem',
+      listType: 'vendor',
+      text: '旧列表原文',
+      parentId: 'vendor-owner',
+    },
+    {
+      id: 'legacy',
+      type: 'listItem',
+      listType: 'bullet',
+      text: '旧列表原文',
+      parentId: 'vendor-owner',
+      vendorJSON: { all: [null, '保留中文🚀', { keep: true }] },
+    },
+  ];
+  for (const original of originals) {
+    const blocks = [
+      { id: 'editable', type: 'text', text: '旁段原文', inlineId: 'inline' },
+      original,
+    ];
+    await workspace.installOriginalBody(card.id, blocks);
+    await workspace.open(page);
+    await page.getByRole('button', { name: '旧列表兼容', exact: true }).click();
+    await page.getByRole('button', { name: '编辑正文', exact: true }).click();
+    const view = page.getByLabel('只读正文原件');
+    await expect(view).toContainText('vendor-owner');
+    await expect(view).toContainText('旧列表原文');
+    await expect(page.getByRole('textbox', { name: '卡片正文', exact: true })).toHaveCount(0);
+    await view.click();
+    await page.keyboard.press('Backspace');
+    const before = await workspace.state();
+    expect(before.cards[0]!.body.blocks).toEqual(blocks);
+    const next = [{ ...blocks[0]!, text: '旁段正式保存' }, original];
+    await workspace.execute(page, {
+      commandId: crypto.randomUUID(),
+      projectId: initial.project.id,
+      type: 'body.edit',
+      expected: before.cards[0]!.body.versionId,
+      payload: { id: card.id, blocks: next },
+    });
+    await expect(view).toContainText('旁段正式保存');
+    const saved = await workspace.state();
+    await expect(page.locator('.workspace')).toHaveAttribute(
+      'data-revision',
+      String(saved.project.revision),
+    );
+    const snapshot = await page.locator('.workspace').getAttribute('data-snapshot');
+    const agent = await workspace.agentBody(initial.project.id, card.id, snapshot!);
+    expect(agent.revision).toBe(saved.project.revision);
+    expect(agent.body).toEqual(saved.cards[0]!.body);
+    expect(agent.body.blocks).toEqual(next);
+    await workspace.execute(page, {
+      commandId: crypto.randomUUID(),
+      projectId: initial.project.id,
+      type: 'history.undo',
+      expected: saved.project.revision,
+      payload: {},
+    });
+    await expect(view).toContainText('旁段原文');
+    expect((await workspace.state()).cards[0]!.body.blocks).toEqual(blocks);
+    const undone = await workspace.state();
+    await workspace.execute(page, {
+      commandId: crypto.randomUUID(),
+      projectId: initial.project.id,
+      type: 'history.redo',
+      expected: undone.project.revision,
+      payload: {},
+    });
+    await expect(view).toContainText('旁段正式保存');
+    const persisted = await workspace.state();
+    await workspace.restart();
+    await workspace.open(page);
+    expect((await workspace.state()).cards[0]!.body).toEqual(persisted.cards[0]!.body);
+    await page.getByRole('button', { name: '旧列表兼容', exact: true }).click();
+    await page.getByRole('button', { name: '编辑正文', exact: true }).click();
+    const displayed = await view.locator('[data-block-id="legacy"] pre').textContent();
+    expect(JSON.parse(displayed!)).toEqual(original);
+  }
+  await page.screenshot({ path: info.outputPath('legacy-list-originals.png') });
+});

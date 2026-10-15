@@ -164,3 +164,158 @@ it('拒绝自身后代、缺失父项和跨组层级且不产生版本或历史'
     rmSync(directory, { recursive: true, force: true });
   }
 });
+
+it('旧列表parent扩展及vendor控制保全完整JSON，旁段保存经同版本读取、observe、历史和重开恢复', () => {
+  const originals = [
+    {
+      id: 'legacy',
+      type: 'listItem',
+      listType: 'bullet',
+      text: '旧列表原文',
+      parentId: 'vendor-owner',
+    },
+    {
+      id: 'legacy',
+      type: 'listItem',
+      listType: 'vendor',
+      text: '旧列表原文',
+      parentId: 'vendor-owner',
+    },
+    {
+      id: 'legacy',
+      type: 'listItem',
+      listType: 'bullet',
+      text: '旧列表原文',
+      parentId: 'vendor-owner',
+      vendorJSON: { all: [null, '保留中文🚀', { keep: true }] },
+    },
+  ];
+  for (const original of originals) {
+    const directory = mkdtempSync(join(tmpdir(), 'forkwise-legacy-list-roundtrip-'));
+    let host = openMapping(directory);
+    try {
+      const token = host.access.issue('human', ['*']);
+      const human = host.access.authenticate(token);
+      const run = (command: Record<string, unknown>) =>
+        host.execute({ commandId: randomUUID(), projectId: 'p', ...command }, human);
+      const read = () => host.read({ type: 'project', projectId: 'p' }, human);
+      run({ type: 'project.create', expected: null, payload: { name: '旧原件兼容' } });
+      run({
+        type: 'thought.create',
+        expected: null,
+        payload: { id: 'a', title: '原卡', text: '旁段原文', x: 0, y: 0 },
+      });
+      const card = read().cards[0]!;
+      card.body = {
+        ...card.body,
+        versionId: randomUUID(),
+        blocks: [{ id: 'editable', type: 'text', text: '旁段原文', inlineId: 'inline' }, original],
+      };
+      host.close();
+      const fixture = new Database(join(directory, 'workspace.sqlite'));
+      try {
+        fixture
+          .prepare('UPDATE mapping_cards SET value=? WHERE id=?')
+          .run(JSON.stringify(card), card.id);
+        fixture
+          .prepare('INSERT INTO mapping_versions VALUES(?,?,?,?,?)')
+          .run('p', 'body', card.body.id, card.body.versionId, JSON.stringify(card.body));
+      } finally {
+        fixture.close();
+      }
+      host = openMapping(directory);
+      const agent = host.access.authenticate(host.access.issue('agent', ['p']));
+      const full = () => {
+        const state = read();
+        const snapshot = host.read({ type: 'map', view: 'index', projectId: 'p' }, agent);
+        let cursor: string | undefined,
+          json = '';
+        do {
+          const page = host.read(
+            {
+              type: 'map',
+              view: 'detail',
+              projectId: 'p',
+              cardId: 'a',
+              snapshot: snapshot.snapshot,
+              ...(cursor ? { cursor } : {}),
+            },
+            agent,
+          );
+          expect(page.revision).toBe(state.project.revision);
+          json += page.items.map((chunk) => chunk.jsonText).join('');
+          cursor = page.nextCursor ?? undefined;
+        } while (cursor);
+        expect(JSON.parse(json)).toEqual(state.cards[0]!.body);
+        return state;
+      };
+      expect(full().cards[0]!.body).toEqual(card.body);
+      const before = read();
+      const next = [{ ...card.body.blocks[0]!, text: '旁段明确修改' }, original];
+      run({ type: 'body.edit', expected: card.body.versionId, payload: { id: 'a', blocks: next } });
+      const saved = full();
+      expect(saved.cards[0]!.body.blocks).toEqual(next);
+      expect(
+        host
+          .observe({ projectId: 'p', afterRevision: before.project.revision }, agent)
+          .changes.at(-1)!.revision,
+      ).toBe(saved.project.revision);
+      for (const invalid of [
+        [next[0]!],
+        [next[0]!, { ...original, text: '不许改写原件' }],
+        [next[0]!, { ...original, id: 'new-invalid' }, original],
+        ...(original === originals[0]
+          ? [
+              [
+                next[0]!,
+                {
+                  id: 'vendor-owner',
+                  type: 'listItem',
+                  listType: 'bullet',
+                  text: '不能自动解释旧parent',
+                },
+                original,
+              ],
+            ]
+          : []),
+      ]) {
+        expect(() =>
+          run({
+            type: 'body.edit',
+            expected: saved.cards[0]!.body.versionId,
+            payload: { id: 'a', blocks: invalid },
+          }),
+        ).toThrow();
+        expect(read()).toEqual(saved);
+      }
+      run({ type: 'history.undo', expected: read().project.revision, payload: {} });
+      expect(full().cards[0]!.body.blocks).toEqual(card.body.blocks);
+      run({ type: 'history.redo', expected: read().project.revision, payload: {} });
+      expect(full().cards[0]!.body.blocks).toEqual(next);
+      const withLists = [
+        ...next,
+        { id: 'new-parent', type: 'listItem', listType: 'bullet', text: '新父项' },
+        {
+          id: 'new-child',
+          type: 'listItem',
+          listType: 'ordered',
+          text: '新子项',
+          parentId: 'new-parent',
+        },
+      ];
+      run({
+        type: 'body.edit',
+        expected: read().cards[0]!.body.versionId,
+        payload: { id: 'a', blocks: withLists },
+      });
+      const persisted = full();
+      expect(persisted.cards[0]!.body.blocks).toEqual(withLists);
+      host.close();
+      host = openMapping(directory);
+      expect(full().cards[0]!.body).toEqual(persisted.cards[0]!.body);
+    } finally {
+      host.close();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  }
+});

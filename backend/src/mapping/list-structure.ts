@@ -2,18 +2,26 @@ import type { Block } from './contracts.js';
 
 // Body order is preorder. Only list items can be parents; a closed subtree
 // cannot be resumed later in the document.
-export function validListStructure(blocks: Block[]): boolean {
+export function invalidListStructureIds(blocks: Block[]): Set<string> {
   const ancestors: string[] = [];
+  const invalid = new Set<string>();
   for (const block of blocks) {
     if (block.parentId !== undefined) {
-      if (block.type !== 'listItem' || typeof block.parentId !== 'string') return false;
-      const parent = ancestors.indexOf(block.parentId);
-      if (parent < 0) return false;
+      const parent = typeof block.parentId === 'string' ? ancestors.indexOf(block.parentId) : -1;
+      if (block.type !== 'listItem' || parent < 0) {
+        invalid.add(block.id);
+        ancestors.length = 0;
+        continue;
+      }
       ancestors.length = parent + 1;
     } else ancestors.length = 0;
     if (block.type === 'listItem') ancestors.push(block.id);
   }
-  return true;
+  return invalid;
+}
+
+export function validListStructure(blocks: Block[]): boolean {
+  return invalidListStructureIds(blocks).size === 0;
 }
 
 export function listEnd(blocks: Block[], index: number): number {
