@@ -25,12 +25,201 @@ async function paste(page: Page, text: string, html = '') {
       clipboardData.setData('text/plain', data.text);
       if (data.html) clipboardData.setData('text/html', data.html);
       el.dispatchEvent(
-        new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData }),
+        new ClipboardEvent('paste', {
+          bubbles: true,
+          cancelable: true,
+          clipboardData,
+        }),
       );
     },
     { text, html },
   );
 }
+
+test('C14-AC1 HTML预设文字色与高亮保留等价CSS和MARK语义，未知颜色降为文字', async ({
+  page,
+  workspace,
+}) => {
+  await place(page, '预设色');
+  await page.getByRole('button', { name: '编辑正文', exact: true }).click();
+  const editor = page.getByRole('textbox', { name: '卡片正文', exact: true });
+  await editor.click();
+  await paste(
+    page,
+    'preset\nhex\nrgb\nmark\ncustom',
+    '<p><span style="color:#ad343e;background-color:#fff0b5">preset</span></p>' +
+      '<p><span style="color:#AD343E;background-color:#FFF0B5">hex</span></p>' +
+      '<p><span style="color:rgb(173, 52, 62);background-color:rgb(255, 240, 181)">rgb</span></p>' +
+      '<p><mark>mark</mark></p><p><span style="color:#123456;background-color:#654321">custom</span></p>' +
+      '<p style="color:#AD343E;background-color:rgb(255,240,181)">wrapper</p>' +
+      '<ul><li style="color:#ad343e">list</li></ul>' +
+      '<table><tr><td style="background-color:#FFF0B5">cell</td></tr></table>',
+  );
+  await expect
+    .poll(async () => (await workspace.state()).cards[0]!.body.blocks[0]!.marks)
+    .toEqual(
+      expect.arrayContaining([
+        { type: 'textColor', start: 0, end: 6, value: 'red' },
+        { type: 'highlight', start: 0, end: 6, value: 'yellow' },
+      ]),
+    );
+  const saved = await workspace.state(),
+    blocks = saved.cards[0]!.body.blocks;
+  for (const text of ['hex', 'rgb']) {
+    const marks = blocks.find((b) => b.text === text)!.marks;
+    expect(marks).toHaveLength(2);
+    expect(marks).toEqual(
+      expect.arrayContaining([
+        { type: 'textColor', start: 0, end: 3, value: 'red' },
+        { type: 'highlight', start: 0, end: 3, value: 'yellow' },
+      ]),
+    );
+  }
+  expect(blocks.find((b) => b.text === 'mark')!.marks).toEqual([
+    { type: 'highlight', start: 0, end: 4, value: 'yellow' },
+  ]);
+  expect(blocks.find((b) => b.text === 'custom')!.marks ?? []).toEqual([]);
+  expect(blocks.find((b) => b.text === 'wrapper')!.marks).toEqual(
+    expect.arrayContaining([
+      { type: 'textColor', start: 0, end: 7, value: 'red' },
+      { type: 'highlight', start: 0, end: 7, value: 'yellow' },
+    ]),
+  );
+  expect(blocks.find((b) => b.text === 'list')!.marks).toEqual([
+    { type: 'textColor', start: 0, end: 4, value: 'red' },
+  ]);
+  expect((blocks.find((b) => b.type === 'table')!.rows as any[][])[0]![0]!.marks).toEqual([
+    { type: 'highlight', start: 0, end: 4, value: 'yellow' },
+  ]);
+  await expect(editor.locator('.textColor-red')).toHaveText([
+    'preset',
+    'hex',
+    'rgb',
+    'wrapper',
+    'list',
+  ]);
+  await editor.press('Meta+z');
+  await expect
+    .poll(async () => (await workspace.state()).cards[0]!.body.blocks.map((b) => b.text))
+    .toEqual(['']);
+  await editor.press('Meta+Shift+z');
+  await expect.poll(async () => (await workspace.state()).cards[0]!.body.blocks).toEqual(blocks);
+  const beforeRestart = await page.locator('.workspace').getAttribute('data-snapshot');
+  await workspace.restart();
+  await workspace.open(page);
+  await expect(page.locator('.workspace')).not.toHaveAttribute('data-snapshot', beforeRestart!);
+  await page.getByRole('button', { name: '预设色', exact: true }).click();
+  const snapshot = await page.locator('.workspace').getAttribute('data-snapshot');
+  const agent = await workspace.agentBody(saved.project.id, saved.cards[0]!.id, snapshot!);
+  expect(agent.body.blocks).toEqual(blocks);
+  expect(agent.revision).toBe((await workspace.state()).project.revision);
+});
+
+test('C14-AC2 HTML列表和引用内段落保留段界及行内格式，历史与SQLite重开保真', async ({
+  page,
+  workspace,
+}) => {
+  await place(page, '嵌入段界');
+  await page.getByRole('button', { name: '编辑正文', exact: true }).click();
+  const editor = page.getByRole('textbox', { name: '卡片正文', exact: true });
+  await editor.click();
+  await paste(
+    page,
+    '',
+    '<ul><li><p><strong>first</strong></p><p>second</p></li></ul>' +
+      '<blockquote><p>alpha</p><p><em>beta</em></p></blockquote>',
+  );
+  await expect
+    .poll(async () => (await workspace.state()).cards[0]!.body.blocks.map((b) => [b.type, b.text]))
+    .toEqual([
+      ['listItem', 'first\nsecond'],
+      ['quote', 'alpha\nbeta'],
+    ]);
+  const saved = await workspace.state(),
+    blocks = saved.cards[0]!.body.blocks;
+  expect(blocks[0]!.marks).toEqual([{ type: 'bold', start: 0, end: 5 }]);
+  expect(blocks[1]!.marks).toEqual([{ type: 'italic', start: 6, end: 10 }]);
+  await expect(editor.locator('strong')).toHaveText('first');
+  await expect(editor.locator('em')).toHaveText('beta');
+  await editor.press('Meta+z');
+  await expect
+    .poll(async () => (await workspace.state()).cards[0]!.body.blocks.map((b) => b.text))
+    .toEqual(['']);
+  await editor.press('Meta+Shift+z');
+  await expect.poll(async () => (await workspace.state()).cards[0]!.body.blocks).toEqual(blocks);
+  const beforeRestart = await page.locator('.workspace').getAttribute('data-snapshot');
+  await workspace.restart();
+  await workspace.open(page);
+  await expect(page.locator('.workspace')).not.toHaveAttribute('data-snapshot', beforeRestart!);
+  await page.getByRole('button', { name: '嵌入段界', exact: true }).click();
+  const snapshot = await page.locator('.workspace').getAttribute('data-snapshot');
+  const agent = await workspace.agentBody(saved.project.id, saved.cards[0]!.id, snapshot!);
+  expect(agent.body.blocks).toEqual(blocks);
+  expect(agent.revision).toBe((await workspace.state()).project.revision);
+});
+
+test('图片暂存超限保留原剪贴板夹具、正文revision及可恢复草稿', async ({ page, workspace }) => {
+  await place(page, '图片上限');
+  await page.getByRole('button', { name: '编辑正文', exact: true }).click();
+  const editor = page.getByRole('textbox', { name: '卡片正文', exact: true });
+  await editor.fill('已保存');
+  await expect
+    .poll(async () => (await workspace.state()).cards[0]!.body.blocks[0]!.text)
+    .toBe('已保存');
+  const before = await workspace.state();
+  await page.route('**/api/mapping/execute', (route) => {
+    if (route.request().postDataJSON()?.type === 'body.edit')
+      return route.fulfill({
+        status: 503,
+        contentType: 'application/json',
+        body: JSON.stringify({ error: '受控保存失败' }),
+      });
+    return route.continue();
+  });
+  await editor.fill('仍可恢复的原草稿');
+  for (const input of [
+    { size: 524289, text: '原剪贴板' },
+    { size: 512000, text: '文'.repeat(60000) },
+  ]) {
+    await editor.evaluate((el, input) => {
+      el.focus();
+      const clipboardData = new DataTransfer();
+      clipboardData.setData('text/plain', input.text);
+      const bytes = new Uint8Array(input.size).fill(7);
+      clipboardData.items.add(new File([bytes], '超限.png', { type: 'image/png' }));
+      (window as any).oversizeClipboard = clipboardData;
+      el.dispatchEvent(
+        new ClipboardEvent('paste', {
+          bubbles: true,
+          cancelable: true,
+          clipboardData,
+        }),
+      );
+    }, input);
+    await expect(page.getByRole('alert').filter({ hasText: /超过.*上限/ })).toBeVisible();
+    await expect(editor).toHaveText('仍可恢复的原草稿');
+    expect((await workspace.state()).cards[0]!.body).toEqual(before.cards[0]!.body);
+    expect((await workspace.state()).project.revision).toBe(before.project.revision);
+    expect(
+      await page.evaluate(async () => {
+        const data = (window as any).oversizeClipboard as DataTransfer;
+        const bytes = new Uint8Array(await data.files[0]!.arrayBuffer());
+        return {
+          text: data.getData('text/plain'),
+          size: bytes.length,
+          intact: bytes.every((b) => b === 7),
+        };
+      }),
+    ).toEqual({ text: input.text, size: input.size, intact: true });
+  }
+  await page.reload();
+  await expect(page.getByRole('button', { name: '恢复草稿', exact: true })).toBeVisible();
+  await page.unroute('**/api/mapping/execute');
+  await page.getByRole('button', { name: '恢复草稿', exact: true }).click();
+  await expect
+    .poll(async () => (await workspace.state()).cards[0]!.body.blocks[0]!.text)
+    .toBe('仍可恢复的原草稿');
+});
 
 test('导入表格保留后方正文输入位置，复制同时保留可读纯文本和完整结构', async ({
   page,
@@ -135,7 +324,11 @@ test('图片文件字节保留为尚未支持状态，不上传或解码，撤�
       }),
     );
     el.dispatchEvent(
-      new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData }),
+      new ClipboardEvent('paste', {
+        bubbles: true,
+        cancelable: true,
+        clipboardData,
+      }),
     );
   }, bytes);
   await expect(editor).toContainText('像素.png');
@@ -307,7 +500,12 @@ test('粘贴结构化内容替换普通文字选区，纯文本换行与空行�
     JSON.stringify({
       format: 'forkwise-body-blocks-v1',
       blocks: [
-        { id: 'copied', type: 'text', text: 'X', marks: [{ type: 'bold', start: 0, end: 1 }] },
+        {
+          id: 'copied',
+          type: 'text',
+          text: 'X',
+          marks: [{ type: 'bold', start: 0, end: 1 }],
+        },
       ],
       readonlyIds: [],
     }),

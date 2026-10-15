@@ -1,7 +1,7 @@
 import type { Block } from '../../backend/src/mapping/contracts';
 import { blockPlainText } from '../../backend/src/mapping/body-text';
 import { editableTextBlock, type InlineMark } from '../../backend/src/mapping/general-blocks';
-import { validListStructure } from '../../backend/src/mapping/list-structure';
+import { listEnd, validListStructure } from '../../backend/src/mapping/list-structure';
 import { sliceTextBlock, type BlockPoint } from './general-block-dom';
 
 export function plainTextBlocks(text: string): Block[] {
@@ -26,7 +26,11 @@ function join(left: Block, right: Block): Block {
     })),
   ];
   const { marks: oldMarks, ...rest } = left;
-  return { ...rest, text: left.text! + right.text!, ...(marks.length ? { marks } : {}) };
+  return {
+    ...rest,
+    text: left.text! + right.text!,
+    ...(marks.length ? { marks } : {}),
+  };
 }
 
 export function replaceTextSelection(
@@ -46,7 +50,10 @@ export function replaceTextSelection(
       ...a,
       text: a.text!.slice(0, selection.start.offset) + text + a.text!.slice(selection.end.offset),
     };
-    return { blocks, point: { blockId: a.id, offset: selection.start.offset + text.length } };
+    return {
+      blocks,
+      point: { blockId: a.id, offset: selection.start.offset + text.length },
+    };
   }
   if (!current.slice(first, last + 1).every(editableTextBlock)) return null;
   const before = sliceTextBlock(a, 0, selection.start.offset),
@@ -54,7 +61,19 @@ export function replaceTextSelection(
   const content = structuredClone(inserted);
   if (a.type === 'listItem' && content.every((b) => b.type === 'text'))
     for (let i = 0; i < content.length; i++)
-      content[i] = { ...a, ...content[i], type: 'listItem', marks: content[i]!.marks };
+      content[i] = {
+        ...a,
+        ...content[i],
+        type: 'listItem',
+        marks: content[i]!.marks,
+      };
+  if (
+    a.type === 'listItem' &&
+    a.parentId &&
+    content.every((b) => b.type === 'listItem' && editableTextBlock(b))
+  )
+    for (let i = 0; i < content.length; i++)
+      if (!content[i]!.parentId) content[i] = { ...content[i]!, parentId: a.parentId };
   const replacement: Block[] = [];
   if (
     content[0]!.type === 'text' ||
@@ -62,22 +81,48 @@ export function replaceTextSelection(
       content[0]!.type === 'listItem' &&
       content[0]!.parentId === a.parentId)
   ) {
+    const incomingId = content[0]!.id;
     content[0] = join(before, content[0]!);
+    // The joined root keeps the destination identity. Its copied children
+    // must follow that surviving root, not the incoming identity it replaced.
+    for (let i = 1; i < content.length; i++)
+      if (
+        editableTextBlock(content[i]!) &&
+        content[i]!.type === 'listItem' &&
+        content[i]!.parentId === incomingId
+      )
+        content[i] = { ...content[i]!, parentId: content[0]!.id };
   } else if (before.text) replacement.push(before);
   replacement.push(...content);
   const tail = replacement.at(-1)!;
   let point = { blockId: tail.id, offset: tail.text?.length ?? 0 };
-  if (after.text) {
-    if (tail.type === 'text' || (tail.type === 'listItem' && tail.parentId === z.parentId))
+  const hasFollowingChildren = listEnd(current, last) > last + 1;
+  let endpointParent = z.id;
+  let suffixAfterChildren: Block | undefined;
+  if (after.text || hasFollowingChildren) {
+    if (
+      (tail.type === 'text' || (tail.type === 'listItem' && tail.parentId === z.parentId)) &&
+      (!hasFollowingChildren || tail.type === 'listItem')
+    ) {
       replacement[replacement.length - 1] = join(tail, after);
-    else {
-      const following = {
+      endpointParent = tail.id;
+    } else {
+      const following: Block = {
         ...after,
         ...(replacement.some((b) => b.id === after.id)
           ? { id: crypto.randomUUID(), inlineId: crypto.randomUUID() }
           : {}),
       };
-      replacement.push(following);
+      if (
+        hasFollowingChildren &&
+        first === last &&
+        following.type === 'listItem' &&
+        following.parentId === z.parentId &&
+        replacement.some((b) => b.id === z.id)
+      )
+        suffixAfterChildren = following;
+      else replacement.push(following);
+      endpointParent = following.id;
       if (['table', 'pendingImage', 'divider'].includes(tail.type))
         point = { blockId: following.id, offset: 0 };
     }
@@ -88,6 +133,25 @@ export function replaceTextSelection(
   }
   const blocks = [...current];
   blocks.splice(first, last - first + 1, ...replacement);
+  // As with splitting a list item at the caret, the original unselected
+  // subtree stays with that item. Its new sibling suffix follows the group.
+  if (suffixAfterChildren)
+    blocks.splice(
+      first + replacement.length + listEnd(current, last) - last - 1,
+      0,
+      suffixAfterChildren,
+    );
+  // A continuous text selection does not select the endpoint's descendants.
+  // If compatible text merged away that endpoint, its unselected children
+  // belong to the surviving list item; their own IDs and subtrees stay intact.
+  if (hasFollowingChildren && endpointParent !== z.id && !blocks.some((b) => b.id === z.id))
+    for (let i = first + replacement.length; i < blocks.length; i++)
+      if (
+        editableTextBlock(blocks[i]!) &&
+        blocks[i]!.type === 'listItem' &&
+        blocks[i]!.parentId === z.id
+      )
+        blocks[i] = { ...blocks[i]!, parentId: endpointParent };
   if (!validListStructure(blocks)) return null;
   return { blocks, point };
 }

@@ -9,6 +9,22 @@ import { embeddedImage } from './clipboard-images';
 import { PENDING_IMAGE_MAX_BYTES } from '../../backend/src/mapping/pending-image';
 
 const ignored = new Set(['SCRIPT', 'STYLE', 'LINK', 'META', 'BASE', 'TITLE']);
+// Exact existing editor presets only. Reading detached CSS declarations
+// normalizes hex case and rgb spellings without mounting resource nodes.
+const textPresets: Record<string, string> = {
+  'rgb(105,115,134)': 'gray',
+  'rgb(173,52,62)': 'red',
+  'rgb(156,79,22)': 'orange',
+  'rgb(38,115,77)': 'green',
+  'rgb(36,87,173)': 'blue',
+  'rgb(110,64,154)': 'purple',
+};
+const highlightPresets: Record<string, string> = {
+  'rgb(255,240,181)': 'yellow',
+  'rgb(220,238,226)': 'green',
+  'rgb(222,235,255)': 'blue',
+  'rgb(248,221,232)': 'pink',
+};
 const blockTags = new Set([
   'P',
   'DIV',
@@ -50,6 +66,21 @@ function htmlPlain(root: ParentNode): string {
 function inline(nodes: Node[]): TableCell {
   let text = '';
   const marks: InlineMark[] = [];
+  const children = (nodes: Node[]) => {
+    let previousBlock = false,
+      seen = false;
+    for (const node of nodes) {
+      const tag = node instanceof Element ? node.tagName : '';
+      if (ignored.has(tag) || tag === 'UL' || tag === 'OL') continue;
+      const block = blockTags.has(tag);
+      // Lists/quotes/cells have a single text field: preserve their paragraph
+      // boundaries as literal line breaks, with marks measured after the break.
+      if (seen && (block || previousBlock)) text += '\n';
+      visit(node);
+      previousBlock = block;
+      seen = true;
+    }
+  };
   const visit = (node: Node) => {
     if (node.nodeType === Node.TEXT_NODE) {
       text += node.textContent;
@@ -73,7 +104,7 @@ function inline(nodes: Node[]): TableCell {
       } else text += alt || '[图片尚未支持]';
       return;
     }
-    Array.from(el.childNodes).forEach(visit);
+    children(Array.from(el.childNodes));
     if (text.length === start) return;
     const types: Record<string, InlineMark['type']> = {
       STRONG: 'bold',
@@ -87,7 +118,12 @@ function inline(nodes: Node[]): TableCell {
       CODE: 'code',
     };
     const add = (type: InlineMark['type'], value?: string) =>
-      marks.push({ type, start, end: text.length, ...(value ? { value } : {}) });
+      marks.push({
+        type,
+        start,
+        end: text.length,
+        ...(value ? { value } : {}),
+      });
     if (types[tag]) add(types[tag]);
     if (tag === 'A' && safeLink(el.getAttribute('href') ?? ''))
       add('link', el.getAttribute('href')!);
@@ -97,8 +133,12 @@ function inline(nodes: Node[]): TableCell {
     if (/(?:^|;)\s*text-decoration(?:-line)?\s*:[^;]*underline/i.test(style)) add('underline');
     if (/(?:^|;)\s*text-decoration(?:-line)?\s*:[^;]*line-through/i.test(style))
       add('strikethrough');
+    const color = textPresets[el.style.color.replace(/\s/g, '')];
+    const highlight = highlightPresets[el.style.backgroundColor.replace(/\s/g, '')];
+    if (color) add('textColor', color);
+    if (highlight || tag === 'MARK') add('highlight', highlight ?? 'yellow');
   };
-  nodes.forEach(visit);
+  children(nodes);
   return { text, ...(marks.length ? { marks } : {}) };
 }
 
@@ -125,7 +165,10 @@ export function htmlBlocks(html: string, plain: string): { blocks: Block[]; noti
   if (root.querySelector('iframe,object,embed,form,svg,math,canvas,video,audio,template'))
     return fallback();
   const blocks: Block[] = [];
-  const identity = () => ({ id: crypto.randomUUID(), inlineId: crypto.randomUUID() });
+  const identity = () => ({
+    id: crypto.randomUUID(),
+    inlineId: crypto.randomUUID(),
+  });
   const paragraph = (nodes: Node[], shape: Partial<Block> = {}) => {
     const fragment = inert.createDocumentFragment();
     nodes.forEach((n) => fragment.append(n.cloneNode(true)));
@@ -156,7 +199,7 @@ export function htmlBlocks(html: string, plain: string): { blocks: Block[]; noti
         type: 'listItem',
         listType: el.tagName === 'OL' ? 'ordered' : 'bullet',
         ...(parentId ? { parentId } : {}),
-        ...inline(Array.from(child.childNodes)),
+        ...inline([child]),
       };
       blocks.push(block);
       for (const nested of Array.from(child.children).filter((c) =>
@@ -201,7 +244,7 @@ export function htmlBlocks(html: string, plain: string): { blocks: Block[]; noti
           ...identity(),
           type: 'table',
           header: cells[0]!.every((c) => c.tagName === 'TH'),
-          rows: cells.map((row) => row.map((cell) => inline(Array.from(cell.childNodes)))),
+          rows: cells.map((row) => row.map((cell) => inline([cell]))),
         });
       } else if (tag === 'PRE')
         blocks.push({
@@ -219,7 +262,7 @@ export function htmlBlocks(html: string, plain: string): { blocks: Block[]; noti
         visit(node);
       else
         paragraph(
-          Array.from(node.childNodes),
+          [node],
           /^H[1-3]$/.test(tag)
             ? { type: 'heading', level: Number(tag[1]) }
             : tag === 'BLOCKQUOTE'
