@@ -167,6 +167,8 @@ test('加号和slash共用有限清单，空段复用、取消保原输入及顶
     '有序列表',
     '待办列表',
     '分隔线',
+    '简单表格',
+    '代码块',
   ]);
   await page.getByRole('menuitem', { name: '有序列表', exact: true }).click();
   await page.keyboard.insertText('条目');

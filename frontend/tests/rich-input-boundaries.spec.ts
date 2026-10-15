@@ -90,10 +90,18 @@ test('C14-AC3 列表文字选区粘贴结构化父子保留两端文字、独立
   await expect(editor).toHaveAttribute('aria-readonly', 'false');
   await editor.press('Meta+Shift+z');
   await expect.poll(async () => (await workspace.state()).cards[0]!.body.blocks).toEqual(blocks);
-  const beforeRestart = await page.locator('.workspace').getAttribute('data-snapshot');
+  // A committed redo can precede its browser ACK. This scenario reopens
+  // confirmed input, so wait for the actual UI projection before shutdown.
+  const afterRedo = await workspace.state();
+  await expect(editor).toHaveAttribute('aria-readonly', 'false');
+  await expect(page.getByRole('status')).toHaveText('已保存到本机');
+  await expect(page.locator('.workspace')).toHaveAttribute('data-revision', String(afterRedo.project.revision));
   await workspace.restart();
   await workspace.open(page);
-  await expect(page.locator('.workspace')).not.toHaveAttribute('data-snapshot', beforeRestart!);
+  // The old DOM can survive hash navigation while the new token loads.
+  // Require the new service's fixed snapshot, not a transient DOM change.
+  const freshIndex = await (await page.request.get(workspace.origin + `/api/mapping/projects/${saved.project.id}/map?view=index`)).json();
+  await expect(page.locator('.workspace')).toHaveAttribute('data-snapshot', freshIndex.snapshot);
   await page.getByRole('button', { name: '父子粘贴', exact: true }).click();
   const snapshot = await page.locator('.workspace').getAttribute('data-snapshot');
   const agent = await workspace.agentBody(saved.project.id, card.id, snapshot!);
@@ -181,10 +189,18 @@ test('C14-AC4 跨列表文字替换保留未选子项的文字身份与有效所
   await expect(editor).toHaveAttribute('aria-readonly', 'false');
   await editor.press('Meta+Shift+z');
   await expect.poll(async () => (await workspace.state()).cards[0]!.body.blocks).toEqual(blocks);
-  const beforeRestart = await page.locator('.workspace').getAttribute('data-snapshot');
+  // A committed redo can precede its browser ACK. This scenario reopens
+  // confirmed input, so wait for the actual UI projection before shutdown.
+  const afterRedo = await workspace.state();
+  await expect(editor).toHaveAttribute('aria-readonly', 'false');
+  await expect(page.getByRole('status')).toHaveText('已保存到本机');
+  await expect(page.locator('.workspace')).toHaveAttribute('data-revision', String(afterRedo.project.revision));
   await workspace.restart();
   await workspace.open(page);
-  await expect(page.locator('.workspace')).not.toHaveAttribute('data-snapshot', beforeRestart!);
+  // The old DOM can survive hash navigation while the new token loads.
+  // Require the new service's fixed snapshot, not a transient DOM change.
+  const freshIndex = await (await page.request.get(workspace.origin + `/api/mapping/projects/${saved.project.id}/map?view=index`)).json();
+  await expect(page.locator('.workspace')).toHaveAttribute('data-snapshot', freshIndex.snapshot);
   await page.getByRole('button', { name: '跨列表保留', exact: true }).click();
   const snapshot = await page.locator('.workspace').getAttribute('data-snapshot');
   const agent = await workspace.agentBody(saved.project.id, card.id, snapshot!);
@@ -310,10 +326,18 @@ test('C14-AC3 嵌套目标粘贴父子保持目的层级，原后代留原父项
   await expect(editor).toHaveAttribute('aria-readonly', 'false');
   await editor.press('Meta+Shift+z');
   await expect.poll(async () => (await workspace.state()).cards[0]!.body.blocks).toEqual(blocks);
-  const beforeRestart = await page.locator('.workspace').getAttribute('data-snapshot');
+  // A committed redo can precede its browser ACK. This scenario reopens
+  // confirmed input, so wait for the actual UI projection before shutdown.
+  const afterRedo = await workspace.state();
+  await expect(editor).toHaveAttribute('aria-readonly', 'false');
+  await expect(page.getByRole('status')).toHaveText('已保存到本机');
+  await expect(page.locator('.workspace')).toHaveAttribute('data-revision', String(afterRedo.project.revision));
   await workspace.restart();
   await workspace.open(page);
-  await expect(page.locator('.workspace')).not.toHaveAttribute('data-snapshot', beforeRestart!);
+  // The old DOM can survive hash navigation while the new token loads.
+  // Require the new service's fixed snapshot, not a transient DOM change.
+  const freshIndex = await (await page.request.get(workspace.origin + `/api/mapping/projects/${saved.project.id}/map?view=index`)).json();
+  await expect(page.locator('.workspace')).toHaveAttribute('data-snapshot', freshIndex.snapshot);
   await page.getByRole('button', { name: '嵌套结构粘贴', exact: true }).click();
   const snapshot = await page.locator('.workspace').getAttribute('data-snapshot');
   const agent = await workspace.agentBody(saved.project.id, card.id, snapshot!);

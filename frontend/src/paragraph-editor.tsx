@@ -474,7 +474,7 @@ export function ParagraphEditor({
   function tableChange(table: Block, cell: string) {
     const next = read(),
       index = next.findIndex((b) => b.id === table.id);
-    if (index < 0 || !sameBlock(next[index]!, blocks.find((b) => b.id === table.id)!)) {
+    if (index < 0 || !sameBlock(blocks.find((b) => b.id === table.id)!, next[index]!)) {
       setNotice('原表格已变化，请重新选择单元格');
       return;
     }
@@ -494,7 +494,7 @@ export function ParagraphEditor({
   function codeChange(code: Block) {
     const next = read(),
       index = next.findIndex((b) => b.id === code.id);
-    if (index < 0 || !sameBlock(next[index]!, blocks.find((b) => b.id === code.id)!)) {
+    if (index < 0 || !sameBlock(blocks.find((b) => b.id === code.id)!, next[index]!)) {
       setNotice('原代码块已变化，请重新选择');
       return;
     }
@@ -1625,7 +1625,16 @@ export function ParagraphEditor({
         }}
         onPointerMove={(event) => {
           const block = (event.target as Element).closest<HTMLElement>('[data-block-id]');
-          if (!menu && block) setActiveId(block.dataset.blockId!);
+          if (!menu && block) {
+            const id = block.dataset.blockId!;
+            // A hovered table has its own cell coordinates. Keep the selected
+            // cell within a table, but never carry another table's range over.
+            if (id !== activeId) {
+              const cell = (event.target as Element).closest<HTMLElement>('[data-cell]');
+              setActiveCell(cell?.dataset.cell ?? '0,0');
+            }
+            setActiveId(id);
+          }
         }}
         onInput={(event) => {
           if (readOnly) return;
