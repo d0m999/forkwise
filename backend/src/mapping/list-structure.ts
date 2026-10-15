@@ -7,7 +7,8 @@ export function invalidListStructureIds(blocks: Block[]): Set<string> {
   const invalid = new Set<string>();
   for (const block of blocks) {
     if (block.parentId !== undefined) {
-      const parent = typeof block.parentId === 'string' ? ancestors.indexOf(block.parentId) : -1;
+      const parent =
+        typeof block.parentId === 'string' ? ancestors.indexOf(block.parentId) : -1;
       if (block.type !== 'listItem' || parent < 0) {
         invalid.add(block.id);
         ancestors.length = 0;
@@ -117,5 +118,28 @@ export function moveBlockRange(blocks: Block[], ids: string[], direction: -1 | 1
   const next = [...blocks],
     group = next.splice(first, ids.length);
   next.splice(direction === 1 ? target - group.length : target, 0, ...group);
+  return validListStructure(next) ? next : blocks;
+}
+
+export function indentBlockRange(blocks: Block[], ids: string[], decrease: boolean): Block[] {
+  const first = blocks.findIndex((b) => b.id === ids[0]),
+    end = first + ids.length;
+  if (first < 0 || !ids.every((id, i) => blocks[first + i]?.id === id)) return blocks;
+  const roots = blocks.slice(first, end).filter((b) => !ids.includes(b.parentId as string));
+  const parent = blocks[first]!.parentId;
+  if (!roots.length || roots.some((b) => b.type !== 'listItem' || b.parentId !== parent))
+    return blocks;
+  const previous = previousListSibling(blocks, first);
+  const parentIndex = blocks.findIndex((b) => b.id === parent);
+  if ((!decrease && previous < 0) || (decrease && parentIndex < 0)) return blocks;
+  const next = [...blocks];
+  const group = next
+    .splice(first, ids.length)
+    .map((b) =>
+      roots.includes(b)
+        ? withListParent(b, decrease ? blocks[parentIndex]!.parentId : blocks[previous]!.id)
+        : b,
+    );
+  next.splice(decrease ? listEnd(blocks, parentIndex) - group.length : first, 0, ...group);
   return validListStructure(next) ? next : blocks;
 }

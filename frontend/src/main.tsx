@@ -1325,6 +1325,16 @@ function Workspace() {
       },
     );
   }
+  async function copyOriginalBody(cardId: string, before: Block[], after: Block[]) {
+    const projectId=authority.current?.project.id;
+    if (!projectId || !(await flush())) return;
+    const current=authority.current;
+    const card=current?.cards.find(card=>card.id===cardId);
+    if (!card || current!.project.id!==projectId || JSON.stringify(card.body.blocks)!==JSON.stringify(before)) {
+      fail(new Error('原正文已变化，复制操作已取消')); return;
+    }
+    await action({commandId:crypto.randomUUID(),projectId,type:'body.edit',expected:card.body.versionId,payload:{id:cardId,blocks:after,copyOriginals:true}});
+  }
   async function removeCard(id: string) {
     if (composition.current || busy || historyBlocked) return;
     const projectId = authority.current?.project.id;
@@ -1868,6 +1878,7 @@ function Workspace() {
                 })()}
                 readOnly={historyBlocked || !currentBody}
                 onChange={(blocks, inputType, cursor) => { if (currentBody) change("body", currentBody, bodyText({ blocks }), { inputType, ...cursor }, blocks); }}
+                onOriginalCopy={(before,after)=>{ if (currentBody) void copyOriginalBody(currentBody.id,before,after); }}
                 onSelect={(cursor: TextCursor) => {
                   const group = bodyGroup.current;
                   if (!composition.current && group && (cursor.start !== group.start || cursor.end !== group.end || cursor.blockId !== group.blockId)) breakBodyGroup();

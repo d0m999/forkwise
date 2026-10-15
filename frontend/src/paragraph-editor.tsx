@@ -14,10 +14,13 @@ import {
   previousListSibling,
   promoteListChildren,
   moveBlockRange,
+  indentBlockRange,
 } from '../../backend/src/mapping/list-structure';
 import { InlineToolbar } from './inline-toolbar';
 import { BodyReadingState, foldEnd } from './body-reading-state';
 import { CardIcon } from './card-icons';
+import { useBlockDrag } from './block-drag';
+import { clipboardBlocks, independentBlocks, writeBlocks } from './block-clipboard';
 import {
   blockText,
   readBlock,
@@ -94,6 +97,7 @@ export function ParagraphEditor({
   onComposition,
   onFinish,
   onHistory,
+  onOriginalCopy,
 }: {
   readingIdentity: string;
   blocks: Block[];
@@ -103,6 +107,7 @@ export function ParagraphEditor({
   onComposition: (value: boolean) => void;
   onFinish: () => void;
   onHistory: (direction: 'undo' | 'redo') => Promise<void>;
+  onOriginalCopy: (before: Block[], after: Block[]) => void;
 }) {
   const element = useRef<HTMLDivElement>(null),
     wrapper = useRef<HTMLDivElement>(null);
@@ -111,6 +116,16 @@ export function ParagraphEditor({
   const nativeIds = useRef(new WeakMap<Node, { id: string; inlineId: string }>());
   const selectFrame = useRef<number | undefined>(undefined);
   const interaction = useRef(0);
+  const selectionAnchor = useRef('');
+  const mounted = useRef(true),
+    latestReadOnly = useRef(readOnly);
+  latestReadOnly.current = readOnly;
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
   const [activeId, setActiveId] = useState(''),
     [menu, setMenu] = useState<Menu | null>(null);
   const [notice, setNotice] = useState('');
@@ -120,8 +135,31 @@ export function ParagraphEditor({
   const [foldControls, setFoldControls] = useState<
     { id: string; name: string; top: number; collapsed: boolean }[]
   >([]);
+  const [blockControls, setBlockControls] = useState<
+    { id: string; name: string; top: number }[]
+  >([]);
   const [formatTarget, setFormatTarget] = useState<FormatTarget | null>(null);
   const supported = unsupportedBlockIds(blocks).size === 0;
+  const drag = useBlockDrag({
+    editor: element,
+    blocks,
+    disabled: readOnly || composing.current,
+    read,
+    selected: () => menu?.scope,
+    start: () => {
+      setMenu(null);
+      setFormatTarget(null);
+      onFinish();
+    },
+    commit: (next, id) => apply(next, { blockId: id, offset: 0 }, 'insertFromDrop'),
+  });
+  useLayoutEffect(() => {
+    for (const node of Array.from(element.current?.children ?? [])) {
+      (node as HTMLElement).dataset.blockDragging = String(
+        drag.preview?.ids.includes((node as HTMLElement).dataset.blockId!) ?? false,
+      );
+    }
+  }, [drag.preview]);
   useLayoutEffect(() => {
     for (const node of Array.from(element.current?.children ?? [])) {
       const child = node as HTMLElement;
@@ -131,6 +169,7 @@ export function ParagraphEditor({
     }
   }, [menu, blocks]);
   function read(): Block[] {
+    if (!supported) return blocks;
     const editor = element.current!;
     const children = Array.from(editor.children).filter(
       (e): e is HTMLElement => e instanceof HTMLElement && e.tagName !== 'BR',
@@ -232,6 +271,23 @@ export function ParagraphEditor({
     }
     const measure = () => {
       const top = wrap.getBoundingClientRect().top;
+      setBlockControls((current) => {
+        const next = blocks.flatMap((block) => {
+          const node = Array.from(editor.children).find(
+            (n) => (n as HTMLElement).dataset.blockId === block.id,
+          );
+          return !hidden.has(block.id) && node
+            ? [
+                {
+                  id: block.id,
+                  name: block.text || block.type,
+                  top: node.getBoundingClientRect().top - top,
+                },
+              ]
+            : [];
+        });
+        return JSON.stringify(current) === JSON.stringify(next) ? current : next;
+      });
       setFoldControls(
         blocks.flatMap((block, i) => {
           if (hidden.has(block.id) || foldEnd(blocks, i) <= i + 1) return [];
@@ -293,7 +349,9 @@ export function ParagraphEditor({
       if (
         !composing.current &&
         e.target instanceof Node &&
-        !wrapper.current?.querySelector('.block-menu')?.contains(e.target)
+        !(e.target instanceof Element && e.target.closest('[data-block-selector]')) &&
+        !wrapper.current?.querySelector('.block-menu')?.contains(e.target) &&
+        !(e.target instanceof Element && e.target.closest('[aria-label="块原件操作"]'))
       )
         setMenu(null);
     };
@@ -302,6 +360,11 @@ export function ParagraphEditor({
   }, [menu]);
   function apply(next: Block[], start: BlockPoint, inputType: string, end = start) {
     if (readOnly || composing.current) return;
+    if (unsupportedBlockIds(next).size) {
+      onOriginalCopy(read(), next);
+      setMenu(null);
+      return;
+    }
     const editor = element.current!;
     onFinish();
     reading.current.reveal(next, [start.blockId, end.blockId]);
@@ -390,20 +453,29 @@ export function ParagraphEditor({
       originals: actual.slice(first, last + 1),
     });
   }
-  function openMenu(mode: Menu['mode'], id = activeId) {
+  function openMenu(mode: Menu['mode'], id = activeId, extend = false) {
     if (readOnly || composing.current) return;
     const current = read(),
       index = current.findIndex((b) => b.id === id),
       block = current[index];
-    if (!block || (mode === 'convert' && !editableTextBlock(block))) return;
+    if (!block) return;
     onFinish();
     setNotice('');
     setFormatTarget(null);
     const hiddenIds = [...reading.current.hidden(current)];
+    const extending = extend && !!menu?.scope;
+    const anchorIndex = extending
+      ? current.findIndex((b) => b.id === selectionAnchor.current)
+      : index;
+    const first = anchorIndex < 0 ? index : Math.min(anchorIndex, index);
+    let last = anchorIndex < 0 ? index + 1 : Math.max(anchorIndex, index) + 1;
+    for (let i = first; i < last; i++) last = Math.max(last, listEnd(current, i));
+    const scope = current.slice(first, last);
+    if (!extending || anchorIndex < 0) selectionAnchor.current = id;
     if (mode === 'convert') {
       reading.current.reveal(
         current,
-        current.slice(index + 1, foldEnd(current, index)).map((b) => b.id),
+        current.slice(first, Math.max(last, foldEnd(current, index))).map((b) => b.id),
       );
       setReadingRevision((r) => r + 1);
     }
@@ -413,10 +485,8 @@ export function ParagraphEditor({
       mode,
       query: '',
       index: 0,
-      selection: selectionPoints(element.current!),
-      ...(mode === 'convert'
-        ? { scope: current.slice(index, listEnd(current, index)), hiddenIds }
-        : {}),
+      selection: element.current ? selectionPoints(element.current) : null,
+      ...(mode === 'convert' ? { scope, hiddenIds } : {}),
     });
   }
   function selectSection() {
@@ -432,29 +502,89 @@ export function ParagraphEditor({
     setReadingRevision((r) => r + 1);
     setMenu({ ...menu, scope, section: true });
   }
-  function organize(action: 'up' | 'down' | 'delete' | 'indent' | 'outdent') {
-    if (!menu?.scope || readOnly || composing.current) return;
+  function organize(
+    action: 'up' | 'down' | 'delete' | 'indent' | 'outdent' | 'duplicate',
+    scope = menu?.scope,
+  ) {
+    if (!scope || readOnly || composing.current) return;
     const current = read(),
-      first = current.findIndex((b) => b.id === menu.scope![0]!.id);
+      first = current.findIndex((b) => b.id === scope[0]!.id);
     if (
       first < 0 ||
-      !menu.scope.every((b, i) => current[first + i] && sameBlock(b, current[first + i]!))
+      !scope.every((b, i) => current[first + i] && sameBlock(b, current[first + i]!))
     ) {
       setMenu(null);
       setNotice('原目标已失效，操作已取消');
       return;
     }
-    const ids = menu.scope.map((b) => b.id);
+    const ids = scope.map((b) => b.id);
     let next = current;
-    if (action === 'delete') next = current.filter((b) => !ids.includes(b.id));
+    if (action === 'duplicate') {
+      const roots = scope.filter((b) => !ids.includes(b.parentId as string));
+      const parent = roots.every((b) => b.parentId === roots[0]!.parentId)
+        ? roots[0]!.parentId
+        : undefined;
+      const copies = independentBlocks(scope, parent as string | undefined);
+      next = [...current];
+      next.splice(first + ids.length, 0, ...copies);
+    } else if (action === 'delete') next = current.filter((b) => !ids.includes(b.id));
     else if (action === 'indent' || action === 'outdent')
-      next = indentList(current, menu.id, action === 'outdent');
+      next = indentBlockRange(current, ids, action === 'outdent');
     else next = moveBlockRange(current, ids, action === 'up' ? -1 : 1);
     if (next === current) return;
     if (!next.length) next = [blank()];
-    const target = next.find((b) => b.id === menu.id) ?? next[Math.min(first, next.length - 1)]!;
+    const target =
+      next.find((b) => b.id === scope[0]!.id) ?? next[Math.min(first, next.length - 1)]!;
     setMenu(null);
     apply(next, { blockId: target.id, offset: 0 }, 'organizeBlocks');
+  }
+  async function copy(cut: boolean) {
+    if (!menu?.scope || readOnly || composing.current) return;
+    const source = read(),
+      first = source.findIndex((b) => b.id === menu.scope![0]!.id);
+    if (
+      first < 0 ||
+      !menu.scope.every((block, i) => source[first + i] && sameBlock(block, source[first + i]!))
+    ) {
+      setMenu(null);
+      setNotice('原目标已失效，操作已取消');
+      return;
+    }
+    const frozen = structuredClone(menu.scope);
+    try {
+      await writeBlocks(frozen);
+      if (!mounted.current) return;
+      if (cut) {
+        if (
+          latestReadOnly.current ||
+          composing.current ||
+          JSON.stringify(read()) !== JSON.stringify(source)
+        ) {
+          setNotice('原目标已变化，已复制但未剪切');
+          return;
+        }
+        organize('delete');
+      } else setMenu(null);
+      setNotice(cut ? '已剪切所选块' : '已复制所选块');
+    } catch {
+      if (mounted.current) setNotice('剪贴板写入失败，原文已保留');
+    }
+  }
+  function pasteBlocks(source: Block[]) {
+    if (readOnly || composing.current) return;
+    const current = read(),
+      selected = selectionPoints(element.current!);
+    const index = current.findIndex((b) => b.id === (selected?.end.blockId ?? activeId));
+    if (index < 0) {
+      setNotice('请选择正文中的粘贴位置');
+      return;
+    }
+    const copies = independentBlocks(source, current[index]!.parentId as string | undefined);
+    const next = [...current];
+    next.splice(listEnd(current, index), 0, ...copies);
+    setMenu(null);
+    setFormatTarget(null);
+    apply(next, { blockId: copies[0]!.id, offset: 0 }, 'insertFromPaste');
   }
   const options = BLOCK_OPTIONS.filter(
     (o) =>
@@ -462,7 +592,12 @@ export function ParagraphEditor({
       o.name.includes(menu?.query ?? ''),
   ).map((option) => ({
     ...option,
-    disabled: !!menu?.signature.parentId && option.shape.type !== 'listItem',
+    disabled:
+      !!menu &&
+      (!editableTextBlock(menu.signature) ||
+        (menu.scope?.filter((b) => !menu.scope!.some((parent) => parent.id === b.parentId))
+          .length ?? 0) > 1 ||
+        (!!menu.signature.parentId && option.shape.type !== 'listItem')),
   }));
   function choose(index: number) {
     if (!menu || composing.current || readOnly) return;
@@ -507,7 +642,9 @@ export function ParagraphEditor({
     let point = {
       blockId: target.id,
       offset:
-        menu.mode === 'convert' ? (menu.selection?.start.offset ?? target.text?.length ?? 0) : 0,
+        menu.mode === 'convert'
+          ? (menu.selection?.start.offset ?? target.text?.length ?? 0)
+          : 0,
     };
     if (target.type === 'divider') {
       const following = blank();
@@ -548,7 +685,11 @@ export function ParagraphEditor({
     let next = read();
     const i = next.findIndex((b) => b.id === selection.start.blockId),
       block = next[i];
-    if (!block || selection.start.blockId !== selection.end.blockId || !editableTextBlock(block))
+    if (
+      !block ||
+      selection.start.blockId !== selection.end.blockId ||
+      !editableTextBlock(block)
+    )
       return false;
     const before = sliceTextBlock(block, 0, selection.start.offset),
       after = sliceTextBlock(block, selection.end.offset, block.text.length);
@@ -653,6 +794,16 @@ export function ParagraphEditor({
             data-block-id={block.id}
             hidden={reading.current.hidden(blocks).has(block.id)}
           >
+            {!readOnly && (
+              <button
+                type="button"
+                data-block-selector
+                aria-label={`选择块：${block.text || block.type}`}
+                onClick={(event) => openMenu('convert', block.id, event.shiftKey)}
+              >
+                选择块
+              </button>
+            )}
             {foldEnd(blocks, index) > index + 1 && (
               <button
                 type="button"
@@ -674,6 +825,21 @@ export function ParagraphEditor({
             <pre>{plainParagraph(block) ? block.text : JSON.stringify(block, null, 2)}</pre>
           </section>
         ))}
+        {menu?.scope && !readOnly && (
+          <div role="menu" aria-label="块原件操作">
+            <p>已选择 {menu.scope.length} 个块</p>
+            <p>未知内容只读保留，副本保留原始格式与资源引用。</p>
+            <button role="menuitem" onClick={() => void copy(false)}>
+              复制所选块
+            </button>
+            <button role="menuitem" onClick={() => organize('duplicate')}>
+              创建副本
+            </button>
+            <button role="menuitem" onClick={() => setMenu(null)}>
+              取消
+            </button>
+          </div>
+        )}
         {notice && <p role="alert">{notice}</p>}
       </section>
     );
@@ -780,9 +946,11 @@ export function ParagraphEditor({
               }}
             >
               <p>已选择 {menu.scope.length} 个块</p>
-              {!!menu.hiddenIds?.filter((id) => menu.scope!.some((b) => b.id === id)).length && (
+              {!!menu.hiddenIds?.filter((id) => menu.scope!.some((b) => b.id === id))
+                .length && (
                 <p>
-                  包含 {menu.hiddenIds.filter((id) => menu.scope!.some((b) => b.id === id)).length}{' '}
+                  包含{' '}
+                  {menu.hiddenIds.filter((id) => menu.scope!.some((b) => b.id === id)).length}{' '}
                   个隐藏块，已临时展开
                 </p>
               )}
@@ -791,6 +959,15 @@ export function ParagraphEditor({
                   选择本节
                 </button>
               )}
+              <button role="menuitem" onClick={() => organize('duplicate')}>
+                创建副本
+              </button>
+              <button role="menuitem" onClick={() => void copy(false)}>
+                复制所选块
+              </button>
+              <button role="menuitem" onClick={() => void copy(true)}>
+                剪切所选块
+              </button>
               <button
                 role="menuitem"
                 onClick={() => organize('up')}
@@ -823,10 +1000,11 @@ export function ParagraphEditor({
                     role="menuitem"
                     onClick={() => organize('indent')}
                     disabled={
-                      previousListSibling(
+                      indentBlockRange(
                         blocks,
-                        blocks.findIndex((b) => b.id === menu.id),
-                      ) < 0
+                        menu.scope.map((b) => b.id),
+                        false,
+                      ) === blocks
                     }
                   >
                     增加缩进
@@ -834,7 +1012,13 @@ export function ParagraphEditor({
                   <button
                     role="menuitem"
                     onClick={() => organize('outdent')}
-                    disabled={!menu.signature.parentId}
+                    disabled={
+                      indentBlockRange(
+                        blocks,
+                        menu.scope.map((b) => b.id),
+                        true,
+                      ) === blocks
+                    }
                   >
                     减少缩进
                   </button>
@@ -854,6 +1038,71 @@ export function ParagraphEditor({
         </BlockMenu>
       )}
       {notice && <p role="alert">{notice}</p>}
+      {!readOnly && (
+        <div className="block-handles">
+          {blockControls.map((control) => (
+            <button
+              key={control.id}
+              type="button"
+              className="block-handle"
+              data-block-selector
+              style={{ top: control.top }}
+              aria-label={`选择块：${control.name}`}
+              title="选择内容块；Shift 连续选择；拖动调整顺序"
+              onMouseDown={(event) => event.preventDefault()}
+              onPointerDown={(event) => drag.begin(event, control.id)}
+              onKeyDown={(event) => {
+                if (event.nativeEvent.isComposing || event.keyCode === 229 || composing.current)
+                  return;
+                const action = event.altKey
+                  ? (
+                      {
+                        ArrowUp: 'up',
+                        ArrowDown: 'down',
+                        ArrowRight: 'indent',
+                        ArrowLeft: 'outdent',
+                      } as const
+                    )[event.key as 'ArrowUp']
+                  : event.key === 'Delete' || event.key === 'Backspace'
+                    ? 'delete'
+                    : undefined;
+                if (action) {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  const current = read(),
+                    index = current.findIndex((b) => b.id === control.id);
+                  organize(
+                    action,
+                    menu?.scope?.some((b) => b.id === control.id)
+                      ? menu.scope
+                      : current.slice(index, listEnd(current, index)),
+                  );
+                }
+              }}
+              aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown Alt+ArrowLeft Alt+ArrowRight Delete"
+              onClick={(event) => {
+                if (!drag.consumeClick()) openMenu('convert', control.id, event.shiftKey);
+              }}
+            >
+              <CardIcon name="更多" />
+            </button>
+          ))}
+        </div>
+      )}
+      {drag.preview?.drop && (
+        <div
+          className="block-drop-line"
+          aria-label="块落点"
+          role="status"
+          style={{
+            top: drag.preview.drop.top,
+            left: drag.preview.drop.left,
+            width: drag.preview.drop.width,
+          }}
+        >
+          <span>{drag.preview.drop.label}</span>
+        </div>
+      )}
       <div className="fold-controls">
         {foldControls.map((control) => (
           <button
@@ -940,7 +1189,21 @@ export function ParagraphEditor({
         onBlur={onFinish}
         onPaste={(event) => {
           event.preventDefault();
-          document.execCommand('insertText', false, event.clipboardData.getData('text/plain'));
+          if (readOnly || composing.current) return;
+          try {
+            const copied = clipboardBlocks(event.clipboardData.getData('text/html'));
+            if (copied) {
+              pasteBlocks(copied);
+              return;
+            }
+            document.execCommand(
+              'insertText',
+              false,
+              event.clipboardData.getData('text/plain'),
+            );
+          } catch {
+            setNotice('块剪贴板无法读取，原文已保留');
+          }
         }}
         onClick={(event) => {
           if ((event.target as Element).closest('a')) event.preventDefault();
@@ -948,7 +1211,8 @@ export function ParagraphEditor({
         onKeyDown={(event) => {
           const action = ++interaction.current;
           event.stopPropagation();
-          if (event.nativeEvent.isComposing || event.keyCode === 229 || composing.current) return;
+          if (event.nativeEvent.isComposing || event.keyCode === 229 || composing.current)
+            return;
           if (event.key === 'Tab') {
             const cursor = position(event.currentTarget),
               current = read();

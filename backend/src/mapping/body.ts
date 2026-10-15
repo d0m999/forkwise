@@ -7,12 +7,18 @@ import { editableBlock, unsupportedBlockIds } from './general-blocks.js';
 import { validListStructure } from './list-structure.js';
 import type Database from 'better-sqlite3';
 
-export function requireBlockOwnership(db: Database.Database, body: Card['body'], blocks: Block[]) {
+export function requireBlockOwnership(
+  db: Database.Database,
+  body: Card['body'],
+  blocks: Block[],
+) {
   const ids = new Set(blocks.map((b) => b.id));
   const inlineIds = new Map(blocks.filter((b) => b.inlineId).map((b) => [b.inlineId!, b.id]));
   // Immutable versions retain ownership even after deletion/merge and after a
   // block has left the 40-step history. This is a read, not a data migration.
-  const rows = db.prepare("SELECT id,value FROM mapping_versions WHERE domain='body'").all() as {
+  const rows = db
+    .prepare("SELECT id,value FROM mapping_versions WHERE domain='body'")
+    .all() as {
     id: string;
     value: string;
   }[];
@@ -49,6 +55,7 @@ export function requireBlockOwnership(db: Database.Database, body: Card['body'],
 export function editedBlocks(
   body: Card['body'],
   payload: { text?: string | undefined; blocks?: Block[] | undefined },
+  copySources: Block[] = [],
 ): Block[] {
   if (payload.blocks === undefined) {
     requireThat(
@@ -62,10 +69,20 @@ export function editedBlocks(
   const blocks = structuredClone(payload.blocks);
   const originalIds = unsupportedBlockIds(body.blocks);
   const nextUnsupported = unsupportedBlockIds(blocks);
+  const copiedOriginals = new Set(
+    blocks
+      .filter(
+        (block) =>
+          !body.blocks.some((old) => old.id === block.id) &&
+          nextUnsupported.has(block.id) &&
+          copySources.some((source) => sameOriginalContent(source, block)),
+      )
+      .map((block) => block.id),
+  );
   requireThat(
     validListStructure(
       blocks.map((block) =>
-        editableBlock(block) && !originalIds.has(block.id)
+        editableBlock(block) && !originalIds.has(block.id) && !copiedOriginals.has(block.id)
           ? block
           : { id: block.id, type: 'opaque' },
       ),
@@ -85,10 +102,15 @@ export function editedBlocks(
     }
     const previous = body.blocks.find((b) => b.id === block.id);
     if (previous?.type === 'divider')
-      requireThat(block.type === 'divider', 'BODY_FORMAT_UNSUPPORTED', '分隔线不支持文字转换', 409);
-    if (!editableBlock(block) || originalIds.has(block.id))
       requireThat(
-        previous && canonical(previous) === canonical(block),
+        block.type === 'divider',
+        'BODY_FORMAT_UNSUPPORTED',
+        '分隔线不支持文字转换',
+        409,
+      );
+    if (!editableBlock(block) || originalIds.has(block.id) || copiedOriginals.has(block.id))
+      requireThat(
+        (previous && canonical(previous) === canonical(block)) || copiedOriginals.has(block.id),
         'BODY_FORMAT_UNSUPPORTED',
         '尚不支持的内容须保留原件',
         409,
@@ -114,6 +136,29 @@ export function editedBlocks(
     409,
   );
   return blocks;
+}
+
+function sameOriginalContent(a: Block, b: Block): boolean {
+  const content = ({ id, inlineId, ...rest }: Block) => rest;
+  return canonical(content(a)) === canonical(content(b));
+}
+
+// New opaque identities may only reproduce original JSON already held by this
+// project. Editing/deleting/reordering its existing originals remains forbidden.
+export function originalCopySources(
+  db: Database.Database,
+  projectId: string,
+  body: Card['body'],
+  blocks?: Block[],
+): Block[] {
+  if (!blocks) return [];
+  const unsupported = unsupportedBlockIds(blocks);
+  if (!blocks.some((b) => unsupported.has(b.id) && !body.blocks.some((old) => old.id === b.id)))
+    return [];
+  const rows = db
+    .prepare("SELECT value FROM mapping_versions WHERE project_id=? AND domain='body'")
+    .all(projectId) as { value: string }[];
+  return rows.flatMap((row) => (JSON.parse(row.value) as Card['body']).blocks);
 }
 
 export function bodyContentUnchanged(before: Block[], after: Block[]): boolean {

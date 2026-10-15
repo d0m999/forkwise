@@ -14,7 +14,7 @@ import { readHistory, recordAction, travelHistory, interruptGroup } from './hist
 import { retainCardVersions } from './versions.js';
 import { writeGeometry } from './geometry.js';
 import { canonical } from '../domain/canonical.js';
-import { editedBlocks, requireBlockOwnership, bodyContentUnchanged } from './body.js';
+import { editedBlocks, requireBlockOwnership, bodyContentUnchanged, originalCopySources } from './body.js';
 import { deleteCard } from './lifecycle.js';
 import { randomUUID } from 'node:crypto';
 import { AccessService, type Principal } from '../services/access.js';
@@ -398,7 +398,13 @@ export class Mapping {
                 );
               changedIds = [];
               if (command.type !== 'pose.move') {
-                const blocks = editedBlocks(card.body, command.payload);
+                const blocks = editedBlocks(
+                  card.body,
+                  command.payload,
+                  command.type === 'body.edit' && command.payload.copyOriginals
+                    ? originalCopySources(this.db, command.projectId, card.body, command.payload.blocks)
+                    : [],
+                );
                 requireBlockOwnership(this.db, card.body, blocks);
                 if (!bodyContentUnchanged(card.body.blocks, blocks)) {
                   card.body.blocks = blocks;

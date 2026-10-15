@@ -12,7 +12,7 @@ import { InMemoryTransport } from "../../backend/node_modules/@modelcontextproto
 import Database from "../../backend/node_modules/better-sqlite3/lib/index.js";
 import type { Block } from "../../backend/src/mapping/contracts";
 
-type Workspace = {
+export type Workspace = {
   origin: string;
   state: (page?: Page) => Promise<ProjectState>;
   open: (page: Page) => Promise<void>;

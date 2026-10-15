@@ -126,6 +126,7 @@ export const MappingCommand = z.discriminatedUnion('type', [
         .object({
           id: Id,
           ...BodyInput,
+          copyOriginals: z.literal(true).optional(),
           requiredAssetIds: z.array(Id).max(128).optional(),
         })
         .strict().refine((p) => (p.text === undefined) !== (p.blocks === undefined), '正文须提供text或blocks之一'),

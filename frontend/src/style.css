@@ -721,3 +721,11 @@ body:has(.workspace[data-board-full="true"]) .card-tooltip { display: none; }
 .fold-controls { position: absolute; inset: 0; pointer-events: none; }
 .fold-toggle { position: absolute; left: 42px; width: 20px; min-height: 24px; padding: 0; pointer-events: auto; border: 0; background: transparent; }
 .paragraph-editor [hidden] { display: none !important; }
+
+.block-handles { position: absolute; inset: 0; pointer-events: none; }
+.block-handle { position: absolute; left: 22px; width: 20px; height: 24px; padding: 2px; pointer-events: auto; touch-action: none; cursor: grab; }
+
+.block-tools { width: 22px; }
+.paragraph-editor [data-block-dragging="true"] { opacity: .35; outline: 1px dashed var(--editor-focus); }
+.block-drop-line { position: fixed; z-index: 100; border-top: 2px solid var(--editor-focus); pointer-events: none; }
+.block-drop-line span { position: absolute; bottom: 3px; right: 0; background: var(--card-color-ffffff); color: var(--editor-focus); font-size: 12px; }
