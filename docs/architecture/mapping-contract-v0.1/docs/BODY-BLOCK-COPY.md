@@ -21,4 +21,6 @@
 
 UI 核对复制前镜时使用规范正文输入；尚未保存的 DOM 行内身份不代表外部正文发生修改，空白正文同样可以接收原件副本。
 
+结构化剪贴板记录复制时的只读块集合，避免把未知列表的 `parentId` 按普通缩进规则改写。此分类仅用于客户端保真复制，不是授权；服务端仍校验同项目不可变版本中的完整 JSON。
+
 实现：`backend/src/mapping/contracts.ts`、`body.ts`、`mapping.ts`、`frontend/src/block-clipboard.ts`、`paragraph-editor.tsx`。公共行为回归：`backend/tests/mapping-block-transfer.test.ts`、`frontend/tests/block-transfer*.spec.ts`；所有查询和断言经正式 Mapping/HTTP/MCP 或真实浏览器入口。

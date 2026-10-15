@@ -527,7 +527,9 @@ export function ParagraphEditor({
       const parent = roots.every((b) => b.parentId === roots[0]!.parentId)
         ? roots[0]!.parentId
         : undefined;
-      const copies = independentBlocks(scope, parent as string | undefined);
+      const copies = independentBlocks(scope, parent as string | undefined, [
+        ...unsupportedBlockIds(current),
+      ]);
       next = [...current];
       next.splice(first + ids.length, 0, ...copies);
     } else if (action === 'delete') next = current.filter((b) => !ids.includes(b.id));
@@ -555,7 +557,7 @@ export function ParagraphEditor({
     }
     const frozen = structuredClone(menu.scope);
     try {
-      await writeBlocks(frozen);
+      await writeBlocks(frozen, [...unsupportedBlockIds(source)]);
       if (!mounted.current) return;
       if (cut) {
         if (
@@ -573,7 +575,7 @@ export function ParagraphEditor({
       if (mounted.current) setNotice('剪贴板写入失败，原文已保留');
     }
   }
-  function pasteBlocks(source: Block[]) {
+  function pasteBlocks(source: Block[], readonlyIds: string[]) {
     if (readOnly || composing.current) return;
     const current = read(),
       selected = selectionPoints(element.current!);
@@ -582,7 +584,11 @@ export function ParagraphEditor({
       setNotice('请选择正文中的粘贴位置');
       return;
     }
-    const copies = independentBlocks(source, current[index]!.parentId as string | undefined);
+    const copies = independentBlocks(
+      source,
+      current[index]!.parentId as string | undefined,
+      readonlyIds,
+    );
     const next = [...current];
     next.splice(listEnd(current, index), 0, ...copies);
     setMenu(null);
@@ -1196,7 +1202,7 @@ export function ParagraphEditor({
           try {
             const copied = clipboardBlocks(event.clipboardData.getData('text/html'));
             if (copied) {
-              pasteBlocks(copied);
+              pasteBlocks(copied.blocks, copied.readonlyIds);
               return;
             }
             document.execCommand(

@@ -2,10 +2,14 @@ import type { Block } from '../../backend/src/mapping/contracts';
 import { validListStructure, withListParent } from '../../backend/src/mapping/list-structure';
 import { editableBlock } from '../../backend/src/mapping/general-blocks';
 
-export function independentBlocks(blocks: Block[], parentId?: string): Block[] {
+export function independentBlocks(
+  blocks: Block[],
+  parentId?: string,
+  readonlyIds: string[] = [],
+): Block[] {
   const identities = new Map(blocks.map((block) => [block.id, crypto.randomUUID()]));
   return structuredClone(blocks).map((block) => ({
-    ...(editableBlock(block)
+    ...(editableBlock(block) && !readonlyIds.includes(block.id)
       ? withListParent(
           block,
           typeof block.parentId === 'string' && identities.has(block.parentId)
@@ -17,10 +21,14 @@ export function independentBlocks(blocks: Block[], parentId?: string): Block[] {
     ...(block.inlineId ? { inlineId: crypto.randomUUID() } : {}),
   }));
 }
-export async function writeBlocks(blocks: Block[]) {
+export async function writeBlocks(blocks: Block[], readonlyIds: string[] = []) {
   const text = blocks.map((block) => block.text ?? `[${block.type}]`).join('\n');
   const data = encodeURIComponent(
-    JSON.stringify({ format: 'forkwise-body-blocks-v1', blocks }),
+    JSON.stringify({
+      format: 'forkwise-body-blocks-v1',
+      blocks,
+      readonlyIds: readonlyIds.filter((id) => blocks.some((b) => b.id === id)),
+    }),
   );
   await navigator.clipboard.write([
     new ClipboardItem({
@@ -34,7 +42,9 @@ export async function writeBlocks(blocks: Block[]) {
     }),
   ]);
 }
-export function clipboardBlocks(html: string): Block[] | null {
+export function clipboardBlocks(
+  html: string,
+): { blocks: Block[]; readonlyIds: string[] } | null {
   const encoded = html.match(/data-forkwise-blocks="([^"]+)"/)?.[1];
   if (!encoded) return null;
   const value = JSON.parse(decodeURIComponent(encoded));
@@ -48,12 +58,24 @@ export function clipboardBlocks(html: string): Block[] | null {
     new Set(value.blocks.map((b: Block) => b.id)).size !== value.blocks.length
   )
     throw new Error('无效的块剪贴板');
-  const blocks = independentBlocks(value.blocks);
+  const readonlyIds: unknown = value.readonlyIds ?? [];
+  if (
+    !Array.isArray(readonlyIds) ||
+    !readonlyIds.every(
+      (id) => typeof id === 'string' && value.blocks.some((b: Block) => b.id === id),
+    )
+  )
+    throw new Error('无效的原件范围');
+  const blocks = independentBlocks(value.blocks, undefined, readonlyIds);
   if (
     !validListStructure(
-      blocks.map((b) => (editableBlock(b) ? b : { id: b.id, type: 'opaque' })),
+      blocks.map((b, i) =>
+        editableBlock(b) && !readonlyIds.includes(value.blocks[i].id)
+          ? b
+          : { id: b.id, type: 'opaque' },
+      ),
     )
   )
     throw new Error('无效的块层级');
-  return value.blocks;
+  return { blocks: value.blocks, readonlyIds };
 }

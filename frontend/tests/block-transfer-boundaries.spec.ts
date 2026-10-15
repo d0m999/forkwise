@@ -14,7 +14,13 @@ test('未输入的空正文也能粘贴同项目未知原件，不误判临时�
   const state = await workspace.state(),
     source = state.cards.find((c) => c.title === '原件卡')!,
     target = state.cards.find((c) => c.title === '空白目标')!;
-  const raw = { id: 'raw', type: 'vendor', original: { text: '不可丢失的原件' } };
+  const raw = {
+    id: 'raw',
+    type: 'listItem',
+    listType: 'bullet',
+    text: '旧列表原件',
+    parentId: 'vendor-owner',
+  };
   await workspace.installOriginalBody(source.id, [raw]);
   await workspace.open(page);
   const sourceNode = page
@@ -26,12 +32,12 @@ test('未输入的空正文也能粘贴同项目未知原件，不误判临时�
   await sourceNode.getByRole('button', { name: '编辑正文', exact: true }).click();
   const guard = await preserveClipboard(page, info);
   try {
-    await page.getByRole('button', { name: '选择块：vendor', exact: true }).click();
+    await page.getByRole('button', { name: '选择块：旧列表原件', exact: true }).click();
     await page.getByRole('menuitem', { name: '复制所选块', exact: true }).click();
     await expect
       .poll(() => page.evaluate(() => navigator.clipboard.readText()))
-      .toBe('[vendor]');
-    await guard.wrote('[vendor]');
+      .toBe('旧列表原件');
+    await guard.wrote('旧列表原件');
     await targetNode.getByRole('button', { name: '编辑正文', exact: true }).click();
     await page.getByRole('textbox', { name: '卡片正文', exact: true }).click();
     await page.keyboard.press('Meta+v');

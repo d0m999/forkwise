@@ -127,9 +127,10 @@ test('未知原件和已有媒体可明确复制副本，保原文资源引用�
     { id: 'p', type: 'text', text: '已知段落' },
     {
       id: 'raw',
-      type: 'vendor',
+      type: 'listItem',
+      listType: 'bullet',
+      text: '旧列表原件',
       parentId: 'vendor-parent',
-      original: { text: '未知原文🚀', nested: [null, { keep: true }] },
     },
     { id: 'image', type: 'image', assetId: 'saved-asset', caption: '保留图注' },
   ];
@@ -137,7 +138,7 @@ test('未知原件和已有媒体可明确复制副本，保原文资源引用�
   await workspace.open(page);
   await page.getByRole('button', { name: '未知块复制', exact: true }).click();
   await page.getByRole('button', { name: '编辑正文', exact: true }).click();
-  await page.getByRole('button', { name: '选择块：vendor', exact: true }).click();
+  await page.getByRole('button', { name: '选择块：旧列表原件', exact: true }).click();
   await page
     .getByRole('button', { name: '选择块：image', exact: true })
     .click({ modifiers: ['Shift'] });
