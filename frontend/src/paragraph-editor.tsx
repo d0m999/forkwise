@@ -772,7 +772,13 @@ export function ParagraphEditor({
           top={Math.max(8, Math.min(anchor?.bottom ?? 100, window.innerHeight - 360))}
         >
           {menu.scope && (
-            <div role="group" aria-label="整理块">
+            <div
+              role="group"
+              aria-label="整理块"
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') event.stopPropagation();
+              }}
+            >
               <p>已选择 {menu.scope.length} 个块</p>
               {!!menu.hiddenIds?.filter((id) => menu.scope!.some((b) => b.id === id)).length && (
                 <p>
