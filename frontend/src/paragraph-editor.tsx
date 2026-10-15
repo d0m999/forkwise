@@ -579,11 +579,15 @@ export function ParagraphEditor({
     if (readOnly || composing.current) return;
     const current = read(),
       selected = selectionPoints(element.current!);
-    const index = current.findIndex((b) => b.id === (selected?.end.blockId ?? activeId));
+    let index = current.findIndex((b) => b.id === (selected?.end.blockId ?? activeId));
     if (index < 0) {
       setNotice('请选择正文中的粘贴位置');
       return;
     }
+    // Non-list roots stay at the document level, after the enclosing list.
+    if (source.some((block) => block.type !== 'listItem' || readonlyIds.includes(block.id)))
+      while (current[index]!.parentId)
+        index = current.findIndex((block) => block.id === current[index]!.parentId);
     const copies = independentBlocks(
       source,
       current[index]!.parentId as string | undefined,

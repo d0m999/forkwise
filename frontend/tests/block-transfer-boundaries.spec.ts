@@ -306,3 +306,80 @@ test('真实剪贴板将未知JSON与资源引用粘到同项目另一正文，�
     await guard.restore();
   }
 });
+
+test('R1-S01 普通段落粘贴到嵌套列表后保持顶层与格式，一次撤销恢复原层级', async ({
+  page,
+  workspace,
+}, info) => {
+  const originals: Block[] = [
+    {
+      id: 'source',
+      inlineId: 'is',
+      type: 'text',
+      text: '带格式原段',
+      marks: [{ type: 'bold', start: 0, end: 3 }],
+    },
+    { id: 'a', inlineId: 'ia', type: 'listItem', listType: 'bullet', text: '外层列表' },
+    {
+      id: 'b',
+      inlineId: 'ib',
+      type: 'listItem',
+      listType: 'bullet',
+      text: '粘贴目标',
+      parentId: 'a',
+    },
+    {
+      id: 'c',
+      inlineId: 'ic',
+      type: 'listItem',
+      listType: 'todo',
+      checked: true,
+      text: '后续同级项',
+      parentId: 'a',
+    },
+    { id: 'tail', inlineId: 'it', type: 'text', text: '列表后原段' },
+  ];
+  const editor = await body(page, workspace, originals);
+  const before = await workspace.state();
+  const guard = await preserveClipboard(page, info);
+  try {
+    await page.getByRole('button', { name: '选择块：带格式原段', exact: true }).click();
+    await page.getByRole('menuitem', { name: '复制所选块', exact: true }).click();
+    await expect
+      .poll(() => page.evaluate(() => navigator.clipboard.readText()))
+      .toBe('带格式原段');
+    await guard.wrote('带格式原段');
+    expect(await workspace.state()).toEqual(before);
+    await editor.locator('[data-block-id="b"]').click();
+    await page.keyboard.press('Meta+v');
+    await expect
+      .poll(async () => (await workspace.state()).cards[0]!.body.blocks.length)
+      .toBe(6);
+    const pasted = (await workspace.state()).cards[0]!.body.blocks;
+    expect(
+      pasted.map((b) => [b.id === pasted[4]!.id ? 'copy' : b.id, b.parentId ?? null]),
+    ).toEqual([
+      ['source', null],
+      ['a', null],
+      ['b', 'a'],
+      ['c', 'a'],
+      ['copy', null],
+      ['tail', null],
+    ]);
+    expect(pasted[4]!.id).not.toBe('source');
+    expect(pasted[4]!.inlineId).not.toBe('is');
+    expect({ ...pasted[4], id: 'source', inlineId: 'is' }).toEqual(originals[0]);
+    await page.getByRole('button', { name: '撤销', exact: true }).click();
+    await expect
+      .poll(async () => (await workspace.state()).cards[0]!.body.blocks)
+      .toEqual(originals);
+    await page.getByRole('button', { name: '重做', exact: true }).click();
+    await expect
+      .poll(async () => (await workspace.state()).cards[0]!.body.blocks)
+      .toEqual(pasted);
+    await workspace.restart();
+    expect((await workspace.state()).cards[0]!.body.blocks).toEqual(pasted);
+  } finally {
+    await guard.restore();
+  }
+});

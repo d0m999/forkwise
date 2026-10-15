@@ -12,9 +12,11 @@ export function independentBlocks(
     ...(editableBlock(block) && !readonlyIds.includes(block.id)
       ? withListParent(
           block,
-          typeof block.parentId === 'string' && identities.has(block.parentId)
-            ? identities.get(block.parentId)
-            : parentId,
+          block.type === 'listItem'
+            ? typeof block.parentId === 'string' && identities.has(block.parentId)
+              ? identities.get(block.parentId)
+              : parentId
+            : undefined,
         )
       : block),
     id: identities.get(block.id)!,
