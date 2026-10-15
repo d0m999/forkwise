@@ -409,6 +409,23 @@ export function ParagraphEditor({
     );
     selected();
   }, [blocks, readOnly, supported, historySelectionRevision]);
+  useLayoutEffect(() => {
+    if (readOnly || composing.current || !supported) return;
+    const table = blocks.find((block) => block.id === activeId && block.type === 'table');
+    if (!table || cellBlock(table, activeCell)) return;
+    const editor = element.current!;
+    const node = Array.from(editor.children).find(
+      (child) => (child as HTMLElement).dataset.blockId === table.id,
+    );
+    const first = node?.querySelector<HTMLElement>('[data-cell]');
+    if (!first?.dataset.cell) return;
+    // A removed cell has no surviving identity. Rebind the actual selection
+    // to an existing cell before enabling operations; do not clamp labels.
+    restoreSelection(editor, { blockId: table.id, cell: first.dataset.cell, offset: 0 });
+    selected();
+    const [row, column] = first.dataset.cell.split(',').map(Number);
+    setNotice(`原单元格已不在表格中，已定位到第 ${row! + 1} 行第 ${column! + 1} 列`);
+  }, [blocks, readOnly, supported, activeId, activeCell]);
   useEffect(() => {
     if (!menu) return;
     const outside = (e: PointerEvent) => {

@@ -513,3 +513,74 @@ test('单元格行内格式和富文粘贴只保行内内容并经HTTP与MCP同s
   expect(agent.body.blocks).toEqual(state.cards[0]!.body.blocks);
   expect(await page.evaluate(() => (window as any).__executed15)).toBeUndefined();
 });
+
+for (const trigger of ['末格Tab', '增加末行', '增加末列']) {
+  test(`表格undo生命周期：${trigger}后缩回维度，操作范围与真实单元格一致`, async ({ page, workspace }) => {
+    await place(page, '撤销后的表格范围');
+    const initial = await workspace.state(), card = initial.cards[0]!;
+    const original = [
+      { id: 'small-history-table', inlineId: 'small-inline', type: 'table', header: false, columnWidths: [140, 150], rows: [[{ text: '甲' }, { text: '乙' }], [{ text: '丙' }, { text: '丁' }]] },
+      { id: 'neighbor-table', inlineId: 'neighbor-inline', type: 'table', header: true, columnWidths: [170], rows: [[{ text: '相邻表格原件' }]] },
+      { id: 'neighbor-code', inlineId: 'code-inline', type: 'code', language: 'vendor-original', wrap: false, text: '<b>原件</b>\n  **literal**' },
+    ];
+    await workspace.execute(page, {
+      commandId: crypto.randomUUID(), projectId: initial.project.id, type: 'body.edit', expected: card.body.versionId,
+      payload: { id: card.id, blocks: original },
+    });
+    await workspace.open(page);
+    await page.getByRole('button', { name: '撤销后的表格范围', exact: true }).click();
+    await page.getByRole('button', { name: '编辑正文', exact: true }).click();
+    const editor = page.getByRole('textbox', { name: '卡片正文', exact: true });
+    const table = editor.locator('[data-block-id="small-history-table"]');
+    await table.locator('[data-cell="1,1"]').click();
+    if (trigger === '末格Tab') await table.locator('[data-cell="1,1"]').press('Tab');
+    else await page.getByRole('button', { name: trigger === '增加末行' ? '在下方增加行' : '在右侧增加列', exact: true }).click();
+    await expect.poll(async () => {
+      const block = (await workspace.state()).cards[0]!.body.blocks[0]!;
+      return [(block.rows as any[]).length, (block.rows as any[][])[0]!.length];
+    }).toEqual(trigger === '增加末列' ? [2, 3] : [3, 2]);
+    await expect(editor).toHaveAttribute('aria-readonly', 'false');
+    if (trigger === '末格Tab') await table.locator('[data-cell="2,0"]').press('Meta+z');
+    else await page.getByRole('button', { name: '撤销', exact: true }).click();
+    const body = async () => (await workspace.state()).cards[0]!.body.blocks;
+    await expect.poll(body).toEqual(original);
+    await expect(editor).toHaveAttribute('aria-readonly', 'false');
+    await expect(page.getByRole('status')).toHaveText('已保存到本机');
+    const tools = page.getByRole('group', { name: '表格操作', exact: true });
+    const declaration = await tools.locator('span').first().innerText();
+    const selection = await editor.evaluate(() => {
+      const node = getSelection()?.anchorNode;
+      const el = node instanceof Element ? node : node?.parentElement;
+      const cell = el?.closest<HTMLElement>('[data-cell]');
+      return { blockId: cell?.closest<HTMLElement>('[data-block-id]')?.dataset.blockId ?? null, cell: cell?.dataset.cell ?? null };
+    });
+    await test.info().attach(`undo-${trigger}-actual`, { body: JSON.stringify({ trigger, declaration, selection, state: await workspace.state() }, null, 2), contentType: 'application/json' });
+    const match = declaration.match(/2 行 × 2 列 · 第 (\d+) 行第 (\d+) 列/);
+    expect(match).not.toBeNull();
+    const row = Number(match![1]) - 1, column = Number(match![2]) - 1;
+    expect(row >= 0 && row < 2 && column >= 0 && column < 2).toBe(true);
+    await expect(table.locator(`[data-cell="${row},${column}"]`)).toHaveCount(1);
+    expect(selection).toEqual({ blockId: 'small-history-table', cell: `${row},${column}` });
+    await tools.getByRole('button', { name: `删除第 ${row + 1} 行（2 个单元格）`, exact: true }).click();
+    await expect.poll(body).toEqual([{ ...original[0], rows: original[0]!.rows!.filter((_, i) => i !== row) }, ...original.slice(1)]);
+    await expect(editor).toHaveAttribute('aria-readonly', 'false');
+    await page.getByRole('button', { name: '撤销', exact: true }).click();
+    await expect.poll(body).toEqual(original);
+    await expect(editor).toHaveAttribute('aria-readonly', 'false');
+    // Select an existing cell explicitly before testing each independent action.
+    await table.locator('[data-cell="0,1"]').click();
+    await tools.getByRole('spinbutton', { name: '第 2 列宽度', exact: true }).fill('277');
+    await tools.getByRole('button', { name: '应用列宽', exact: true }).click();
+    await expect.poll(body).toEqual([{ ...original[0], columnWidths: [140, 277] }, ...original.slice(1)]);
+    await expect(editor).toHaveAttribute('aria-readonly', 'false');
+    await page.getByRole('button', { name: '撤销', exact: true }).click();
+    await expect.poll(body).toEqual(original);
+    await expect(editor).toHaveAttribute('aria-readonly', 'false');
+    await table.locator('[data-cell="1,1"]').click();
+    await tools.getByRole('button', { name: '删除第 2 列（2 个单元格）', exact: true }).click();
+    await expect.poll(body).toEqual([{ ...original[0], columnWidths: [140], rows: original[0]!.rows!.map(r => r.slice(0, 1)) }, ...original.slice(1)]);
+    await expect(editor).toHaveAttribute('aria-readonly', 'false');
+    await page.getByRole('button', { name: '撤销', exact: true }).click();
+    await expect.poll(body).toEqual(original);
+  });
+}
