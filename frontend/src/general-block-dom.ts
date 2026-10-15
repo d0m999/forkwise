@@ -1,5 +1,7 @@
 import type { Block } from '../../backend/src/mapping/contracts';
-import type { InlineMark } from '../../backend/src/mapping/general-blocks';
+import type { InlineMark, TableCell } from '../../backend/src/mapping/general-blocks';
+
+const retainedBlocks = new WeakMap<HTMLElement, Block>();
 
 export function nodeText(node: Node): string {
   if (node.nodeType === Node.TEXT_NODE) return node.textContent ?? '';
@@ -12,17 +14,55 @@ export function blockText(element: HTMLElement): string {
 }
 export function renderBlock(block: Block): HTMLElement {
   const tag =
-    block.type === 'heading'
-      ? `h${block.level}`
-      : block.type === 'quote'
-        ? 'blockquote'
-        : block.type === 'divider'
-          ? 'hr'
-          : 'p';
+    block.type === 'table'
+      ? 'div'
+      : block.type === 'heading'
+        ? `h${block.level}`
+        : block.type === 'quote'
+          ? 'blockquote'
+          : block.type === 'code'
+            ? 'pre'
+            : block.type === 'divider'
+              ? 'hr'
+              : 'p';
   const p = document.createElement(tag);
   p.dataset.blockId = block.id;
   p.dataset.inlineId = block.inlineId ?? crypto.randomUUID();
   p.dataset.kind = block.type;
+  if (block.type === 'pendingImage') {
+    p.contentEditable = 'false';
+    p.className = 'pending-image';
+    p.textContent = `${block.name} — 图片显示尚未支持，原始字节保留在正文中`;
+    retainedBlocks.set(p, structuredClone(block));
+    return p;
+  }
+  if (block.type === 'table') {
+    p.contentEditable = 'false';
+    p.className = 'imported-table';
+    p.setAttribute('aria-label', '表格（导入内容）');
+    const table = document.createElement('table'),
+      body = document.createElement('tbody');
+    (block.rows as TableCell[][]).forEach((row, index) => {
+      const tr = document.createElement('tr');
+      for (const cell of row) {
+        const td = document.createElement(block.header && index === 0 ? 'th' : 'td');
+        const content = renderBlock({ id: 'cell', type: 'text', ...cell });
+        td.append(...Array.from(content.childNodes));
+        tr.append(td);
+      }
+      body.append(tr);
+    });
+    table.append(body);
+    p.append(table);
+    retainedBlocks.set(p, structuredClone(block));
+    return p;
+  }
+  if (block.type === 'code') {
+    p.dataset.language = String(block.language);
+    p.dataset.wrap = String(block.wrap);
+    p.style.whiteSpace = block.wrap ? 'pre-wrap' : 'pre';
+    p.style.overflowX = 'auto';
+  }
   if (block.type === 'divider') {
     p.contentEditable = 'false';
     return p;
@@ -73,8 +113,19 @@ export function renderBlock(block: Block): HTMLElement {
   return p;
 }
 export function readBlock(element: HTMLElement, id: string, inlineId: string): Block {
+  const retained = retainedBlocks.get(element);
+  if (retained) return structuredClone(retained);
   if (element.tagName === 'HR') return { id, type: 'divider', inlineId };
   const text = blockText(element);
+  if (element.dataset.kind === 'code')
+    return {
+      id,
+      inlineId,
+      type: 'code',
+      text,
+      language: element.dataset.language ?? '',
+      wrap: element.dataset.wrap === 'true',
+    };
   let offset = 0;
   const marks: InlineMark[] = [];
   const visit = (node: Node) => {
@@ -135,7 +186,9 @@ export function sameBlock(a: Block, b: Block): boolean {
       ? a.inlineId === undefined || a.inlineId === b.inlineId
       : key === 'marks'
         ? marks(a) === marks(b)
-        : a[key] === b[key],
+        : typeof a[key] === 'object'
+          ? JSON.stringify(a[key]) === JSON.stringify(b[key])
+          : a[key] === b[key],
   );
 }
 export type BlockPoint = { blockId: string; offset: number };

@@ -12,12 +12,14 @@ export function InlineToolbar({
   left,
   top,
   linkInitially = false,
+  onLink,
 }: {
   onFormat: (type: InlineMark['type'], value?: string) => void;
   onCancel: () => void;
   left: number;
   top: number;
   linkInitially?: boolean;
+  onLink?: () => void;
 }) {
   const [panel, setPanel] = useState<'more' | 'color' | 'link' | null>(
     linkInitially ? 'link' : null,
@@ -67,7 +69,7 @@ export function InlineToolbar({
       <button type="button" onClick={() => apply('italic')}>
         斜体
       </button>
-      <button type="button" onClick={() => setPanel('link')}>
+      <button type="button" onClick={() => (onLink ? onLink() : setPanel('link'))}>
         链接
       </button>
       <button

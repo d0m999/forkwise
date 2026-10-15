@@ -1,6 +1,7 @@
 import type { Block } from '../../backend/src/mapping/contracts';
 import { validListStructure, withListParent } from '../../backend/src/mapping/list-structure';
 import { editableBlock } from '../../backend/src/mapping/general-blocks';
+import { blockPlainText } from '../../backend/src/mapping/body-text';
 
 export function independentBlocks(
   blocks: Block[],
@@ -24,7 +25,15 @@ export function independentBlocks(
   }));
 }
 export async function writeBlocks(blocks: Block[], readonlyIds: string[] = []) {
-  const text = blocks.map((block) => block.text ?? `[${block.type}]`).join('\n');
+  const text = blocks
+    .map(
+      (block) =>
+        block.text ??
+        (editableBlock(block) && ['table', 'pendingImage'].includes(block.type)
+          ? blockPlainText(block)
+          : `[${block.type}]`),
+    )
+    .join('\n');
   const data = encodeURIComponent(
     JSON.stringify({
       format: 'forkwise-body-blocks-v1',
@@ -44,9 +53,7 @@ export async function writeBlocks(blocks: Block[], readonlyIds: string[] = []) {
     }),
   ]);
 }
-export function clipboardBlocks(
-  html: string,
-): { blocks: Block[]; readonlyIds: string[] } | null {
+export function clipboardBlocks(html: string): { blocks: Block[]; readonlyIds: string[] } | null {
   const encoded = html.match(/data-forkwise-blocks="([^"]+)"/)?.[1];
   if (!encoded) return null;
   const value = JSON.parse(decodeURIComponent(encoded));

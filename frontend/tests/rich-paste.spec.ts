@@ -1,0 +1,343 @@
+import { test, expect, place } from './writing-board-fixture';
+import type { Page } from '@playwright/test';
+test.use({ actionTimeout: 6000 });
+
+async function select(page: Page, start: number, end: number) {
+  const editor = page.getByRole('textbox', { name: '卡片正文', exact: true });
+  await editor.evaluate(
+    (el, offsets) => {
+      el.focus();
+      const node = el.firstElementChild!.firstChild!;
+      const r = document.createRange();
+      r.setStart(node, offsets[0]!);
+      r.setEnd(node, offsets[1]!);
+      const s = getSelection()!;
+      s.removeAllRanges();
+      s.addRange(r);
+    },
+    [start, end],
+  );
+}
+async function paste(page: Page, text: string, html = '') {
+  await page.getByRole('textbox', { name: '卡片正文', exact: true }).evaluate(
+    (el, data) => {
+      const clipboardData = new DataTransfer();
+      clipboardData.setData('text/plain', data.text);
+      if (data.html) clipboardData.setData('text/html', data.html);
+      el.dispatchEvent(
+        new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData }),
+      );
+    },
+    { text, html },
+  );
+}
+
+test('导入表格保留后方正文输入位置，复制同时保留可读纯文本和完整结构', async ({
+  page,
+  workspace,
+}) => {
+  await place(page, '表格互通');
+  await page.getByRole('button', { name: '编辑正文', exact: true }).click();
+  const editor = page.getByRole('textbox', { name: '卡片正文', exact: true });
+  await editor.click();
+  await paste(page, '甲\t乙', '<table><tr><td>甲</td><td>乙</td></tr></table>');
+  await expect
+    .poll(async () => (await workspace.state()).cards[0]!.body.blocks.map((b) => b.type))
+    .toEqual(['table', 'text']);
+  await page.keyboard.type('表后文字');
+  await expect
+    .poll(async () => (await workspace.state()).cards[0]!.body.blocks.at(-1)!.text)
+    .toBe('表后文字');
+  await page.evaluate(() =>
+    Object.defineProperty(navigator.clipboard, 'write', {
+      configurable: true,
+      value: async (items: ClipboardItem[]) => {
+        (window as any).copiedBody = {
+          plain: await (await items[0]!.getType('text/plain')).text(),
+          html: await (await items[0]!.getType('text/html')).text(),
+        };
+      },
+    }),
+  );
+  await page.getByRole('button', { name: '选择块：table', exact: true }).click();
+  await page.getByRole('menuitem', { name: '复制所选块', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).copiedBody?.plain)).toBe('甲\t乙');
+  const copied = await page.evaluate(() => (window as any).copiedBody);
+  const data = JSON.parse(
+    decodeURIComponent(copied.html.match(/data-forkwise-blocks="([^"]+)"/)[1]),
+  );
+  expect(data.blocks).toEqual([(await workspace.state()).cards[0]!.body.blocks[0]]);
+});
+
+test('HTML内嵌图片字节保留在原文字之间且不挂载资源节点', async ({ page, workspace }) => {
+  await place(page, '内嵌图片');
+  await page.getByRole('button', { name: '编辑正文', exact: true }).click();
+  const editor = page.getByRole('textbox', { name: '卡片正文', exact: true });
+  await editor.click();
+  const bytes =
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aS1sAAAAASUVORK5CYII=';
+  await paste(
+    page,
+    '前内嵌后',
+    `<p><strong>前<img src="data:image/png;base64,${bytes}" alt="内嵌">后</strong></p>`,
+  );
+  await expect
+    .poll(async () =>
+      (await workspace.state()).cards[0]!.body.blocks.map((b) =>
+        b.type === 'pendingImage' ? b.base64 : b.text,
+      ),
+    )
+    .toEqual(['前', bytes, '后']);
+  await expect(editor.locator('img')).toHaveCount(0);
+  await expect(editor).toContainText('尚未支持');
+  await expect(editor.locator('strong')).toHaveText(['前', '后']);
+});
+
+test('HTML结构无法可靠保留且没有text/plain时保留列表与表格原文字并提示', async ({
+  page,
+  workspace,
+}) => {
+  await place(page, '降级');
+  await page.getByRole('button', { name: '编辑正文', exact: true }).click();
+  const editor = page.getByRole('textbox', { name: '卡片正文', exact: true });
+  await editor.click();
+  await paste(
+    page,
+    '',
+    '<ul><li>原列表甲</li><li>原列表乙</li></ul><table><tr><td colspan="2">合并内容</td></tr></table>',
+  );
+  await expect(editor).toContainText('原列表甲');
+  await expect(editor).toContainText('原列表乙');
+  await expect(editor).toContainText('合并内容');
+  await expect(page.getByRole('alert')).toContainText('无法可靠');
+  await expect
+    .poll(async () => (await workspace.state()).cards[0]!.body.blocks.map((b) => b.text))
+    .toEqual(['原列表甲', '原列表乙', '合并内容']);
+});
+
+test('图片文件字节保留为尚未支持状态，不上传或解码，撤销重做与SQLite重开保真', async ({
+  page,
+  workspace,
+}) => {
+  await place(page, '图片暂存');
+  await page.getByRole('button', { name: '编辑正文', exact: true }).click();
+  const editor = page.getByRole('textbox', { name: '卡片正文', exact: true });
+  await editor.click();
+  const bytes =
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aS1sAAAAASUVORK5CYII=';
+  await editor.evaluate((el, bytes) => {
+    const clipboardData = new DataTransfer();
+    clipboardData.setData('text/plain', '一起保留');
+    clipboardData.setData('text/html', '<p><strong>一起保留</strong></p>');
+    clipboardData.items.add(
+      new File([Uint8Array.from(atob(bytes), (c) => c.charCodeAt(0))], '像素.png', {
+        type: 'image/png',
+      }),
+    );
+    el.dispatchEvent(
+      new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData }),
+    );
+  }, bytes);
+  await expect(editor).toContainText('像素.png');
+  await expect(editor.locator('strong')).toHaveText('一起保留');
+  await expect(editor).toContainText('尚未支持');
+  await expect(editor.locator('img')).toHaveCount(0);
+  await expect
+    .poll(
+      async () =>
+        (await workspace.state()).cards[0]!.body.blocks.find((b) => b.type === 'pendingImage')
+          ?.base64,
+    )
+    .toBe(bytes);
+  const saved = await workspace.state(),
+    blocks = saved.cards[0]!.body.blocks;
+  expect(blocks.find((b) => b.type === 'pendingImage')).toMatchObject({
+    name: '像素.png',
+    mime: 'image/png',
+    byteLength: Buffer.from(bytes, 'base64').length,
+    status: 'unsupported',
+  });
+  await editor.press('Meta+z');
+  await expect
+    .poll(async () => (await workspace.state()).cards[0]!.body.blocks.map((b) => b.text))
+    .toEqual(['']);
+  await expect(editor).toHaveAttribute('aria-readonly', 'false');
+  await editor.press('Meta+Shift+z');
+  await expect.poll(async () => (await workspace.state()).cards[0]!.body.blocks).toEqual(blocks);
+  await workspace.restart();
+  await workspace.open(page);
+  await page.getByRole('button', { name: '图片暂存', exact: true }).click();
+  await page.getByRole('button', { name: '编辑正文', exact: true }).click();
+  await expect(editor).toContainText('尚未支持');
+  const snapshot = await page.locator('.workspace').getAttribute('data-snapshot');
+  expect(
+    (await workspace.agentBody(saved.project.id, saved.cards[0]!.id, snapshot!)).body.blocks,
+  ).toEqual(blocks);
+});
+
+test('HTML仅保允许结构和格式，表格可读并完整重开，脚本事件远程图片与CSS零请求', async ({
+  page,
+  workspace,
+}) => {
+  await place(page, '富文');
+  await page.getByRole('button', { name: '编辑正文', exact: true }).click();
+  const editor = page.getByRole('textbox', { name: '卡片正文', exact: true });
+  const requests: string[] = [];
+  await page.route('https://paste.invalid/**', async (route) => {
+    requests.push(route.request().url());
+    await route.abort();
+  });
+  await editor.click();
+  await paste(
+    page,
+    'fallback',
+    '<h2 onclick="window.__pasteExecuted=1">中文 <strong>加粗</strong></h2><ul><li>父<ul><li><em>子</em></li></ul></li></ul><table><tr><th>名称</th><th>链接</th></tr><tr><td><u>甲</u></td><td><a href="https://example.com/">地址</a></td></tr></table><p style="background-image:url(https://paste.invalid/css)"><img src="https://paste.invalid/image.png" onerror="window.__pasteExecuted=2" alt="远图"></p><script>window.__pasteExecuted=3;fetch("https://paste.invalid/script")</script>',
+  );
+  await expect(editor.locator('h2')).toHaveText('中文 加粗');
+  await expect(editor.locator('table')).toBeVisible();
+  await expect(editor.locator('th')).toHaveText(['名称', '链接']);
+  await expect(editor.locator('td')).toHaveText(['甲', '地址']);
+  await expect(editor.locator('img,script,style')).toHaveCount(0);
+  await expect(editor).toContainText('https://paste.invalid/image.png');
+  await expect
+    .poll(async () =>
+      (await workspace.state()).cards[0]!.body.blocks.some((b) => b.type === 'table'),
+    )
+    .toBe(true);
+  const saved = await workspace.state(),
+    blocks = saved.cards[0]!.body.blocks;
+  expect(blocks.find((b) => b.type === 'table')).toMatchObject({
+    header: true,
+    rows: [
+      [{ text: '名称' }, { text: '链接' }],
+      [
+        { text: '甲', marks: [{ type: 'underline', start: 0, end: 1 }] },
+        {
+          text: '地址',
+          marks: [{ type: 'link', start: 0, end: 2, value: 'https://example.com/' }],
+        },
+      ],
+    ],
+  });
+  expect(blocks.filter((b) => b.type === 'listItem').map((b) => b.parentId ?? null)).toEqual([
+    null,
+    blocks.find((b) => b.type === 'listItem')!.id,
+  ]);
+  expect(await page.evaluate(() => (window as any).__pasteExecuted)).toBeUndefined();
+  expect(requests).toEqual([]);
+  await editor.press('Meta+z');
+  await expect
+    .poll(async () => (await workspace.state()).cards[0]!.body.blocks.map((b) => b.text))
+    .toEqual(['']);
+  await expect(editor).toHaveAttribute('aria-readonly', 'false');
+  await editor.press('Meta+Shift+z');
+  await expect.poll(async () => (await workspace.state()).cards[0]!.body.blocks).toEqual(blocks);
+  await workspace.restart();
+  await workspace.open(page);
+  await page.getByRole('button', { name: '富文', exact: true }).click();
+  await page.getByRole('button', { name: '编辑正文', exact: true }).click();
+  await expect(editor.locator('table')).toBeVisible();
+  const snapshot = await page.locator('.workspace').getAttribute('data-snapshot');
+  expect(
+    (await workspace.agentBody(saved.project.id, saved.cards[0]!.id, snapshot!)).body.blocks,
+  ).toEqual(blocks);
+  expect(requests).toEqual([]);
+});
+
+test('明确粘贴为Markdown冻结原文字选区，异步读取后光标移动仍落原位，目标改动则拒绝', async ({
+  page,
+  workspace,
+}) => {
+  await place(page, '显式粘贴');
+  await page.getByRole('button', { name: '编辑正文', exact: true }).click();
+  const editor = page.getByRole('textbox', { name: '卡片正文', exact: true });
+  await editor.fill('ABCD');
+  await select(page, 1, 3);
+  await page.evaluate(() =>
+    Object.defineProperty(navigator.clipboard, 'readText', {
+      configurable: true,
+      value: () =>
+        new Promise((resolve) => {
+          (window as any).finishPaste = resolve;
+        }),
+    }),
+  );
+  await page.getByRole('button', { name: '块菜单', exact: true }).click();
+  await page.getByRole('menuitem', { name: '粘贴为 Markdown', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => typeof (window as any).finishPaste)).toBe('function');
+  await select(page, 4, 4);
+  await page.evaluate(() =>
+    (window as any).finishPaste('# 标题\n\n```js\nconst x = "**raw**";\n```'),
+  );
+  await expect
+    .poll(async () => (await workspace.state()).cards[0]!.body.blocks.map((b) => [b.type, b.text]))
+    .toEqual([
+      ['text', 'A'],
+      ['heading', '标题'],
+      ['text', ''],
+      ['code', 'const x = "**raw**";'],
+      ['text', 'D'],
+    ]);
+  await editor.press('Meta+z');
+  await expect
+    .poll(async () => (await workspace.state()).cards[0]!.body.blocks.map((b) => b.text))
+    .toEqual(['ABCD']);
+  await expect(editor).toHaveAttribute('aria-readonly', 'false');
+  await select(page, 1, 3);
+  await page.getByRole('button', { name: '块菜单', exact: true }).click();
+  await page.getByRole('menuitem', { name: '粘贴为纯文本', exact: true }).click();
+  await editor.fill('changed');
+  await page.evaluate(() => (window as any).finishPaste('late result'));
+  await expect(page.getByRole('alert')).toContainText('原目标已失效');
+  await expect
+    .poll(async () => (await workspace.state()).cards[0]!.body.blocks.map((b) => b.text))
+    .toEqual(['changed']);
+});
+
+test('粘贴结构化内容替换普通文字选区，纯文本换行与空行逐段保留且不猜Markdown', async ({
+  page,
+  workspace,
+}) => {
+  await place(page, '粘贴');
+  await page.getByRole('button', { name: '编辑正文', exact: true }).click();
+  const editor = page.getByRole('textbox', { name: '卡片正文', exact: true });
+  await editor.fill('ABCD');
+  await select(page, 1, 3);
+  const encoded = encodeURIComponent(
+    JSON.stringify({
+      format: 'forkwise-body-blocks-v1',
+      blocks: [
+        { id: 'copied', type: 'text', text: 'X', marks: [{ type: 'bold', start: 0, end: 1 }] },
+      ],
+      readonlyIds: [],
+    }),
+  );
+  await paste(
+    page,
+    'wrong fallback',
+    `<div data-forkwise-blocks="${encoded}">wrong fallback</div>`,
+  );
+  await expect
+    .poll(async () => (await workspace.state()).cards[0]!.body.blocks.map((b) => b.text))
+    .toEqual(['AXD']);
+  await expect(editor.locator('strong')).toHaveText('X');
+  await editor.press('Meta+z');
+  await expect
+    .poll(async () => (await workspace.state()).cards[0]!.body.blocks.map((b) => b.text))
+    .toEqual(['ABCD']);
+  await expect(editor).toHaveAttribute('aria-readonly', 'false');
+  await select(page, 1, 3);
+  await paste(page, '# literal\n\n**raw**');
+  await expect
+    .poll(async () => (await workspace.state()).cards[0]!.body.blocks.map((b) => [b.type, b.text]))
+    .toEqual([
+      ['text', 'A# literal'],
+      ['text', ''],
+      ['text', '**raw**D'],
+    ]);
+  await expect(editor.locator('strong,h1')).toHaveCount(0);
+  await editor.press('Meta+z');
+  await expect
+    .poll(async () => (await workspace.state()).cards[0]!.body.blocks.map((b) => b.text))
+    .toEqual(['ABCD']);
+});

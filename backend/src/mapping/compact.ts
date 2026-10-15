@@ -11,6 +11,7 @@ import {
   type DetailChunk,
 } from './compact-contracts.js';
 import { CompactPages } from './compact-pages.js';
+import { blockPlainText } from './body-text.js';
 
 // Read-only copies of one SQLite read transaction. No projection accepts writes.
 export interface CompactOptions {
@@ -155,7 +156,7 @@ export class CompactMaps {
         if (query.view === 'body') {
           fidelity = 'partial_body';
           items = body.blocks.map((block): BodySlice => {
-            const points = Array.from(typeof block.text === 'string' ? block.text : '');
+            const points = Array.from(blockPlainText(block));
             return {
               id: block.id,
               type: block.type,

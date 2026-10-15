@@ -21,8 +21,15 @@ import { BodyReadingState, foldEnd } from './body-reading-state';
 import { CardIcon } from './card-icons';
 import { useBlockDrag } from './block-drag';
 import { clipboardBlocks, independentBlocks, writeBlocks } from './block-clipboard';
+import { markdownShortcut, type TypedRun } from './markdown-input';
+import { plainTextBlocks, replaceTextSelection } from './paste-selection';
+import { markdownBlocks } from './markdown-paste';
+import { htmlBlocks } from './html-paste';
+import { LinkPopover } from './link-popover';
+import { clipboardImages } from './clipboard-images';
 import {
   blockText,
+  nodeText,
   readBlock,
   renderBlock,
   restoreSelection,
@@ -116,6 +123,9 @@ export function ParagraphEditor({
   const nativeIds = useRef(new WeakMap<Node, { id: string; inlineId: string }>());
   const selectFrame = useRef<number | undefined>(undefined);
   const interaction = useRef(0);
+  const typed = useRef<TypedRun | null>(null);
+  const pointerStart = useRef({ x: 0, y: 0 });
+  const pasteEpoch = useRef(0);
   const selectionAnchor = useRef('');
   const pendingHistorySelection = useRef<{
     action: number;
@@ -142,10 +152,18 @@ export function ParagraphEditor({
   const [foldControls, setFoldControls] = useState<
     { id: string; name: string; top: number; collapsed: boolean }[]
   >([]);
-  const [blockControls, setBlockControls] = useState<
-    { id: string; name: string; top: number }[]
-  >([]);
+  const [blockControls, setBlockControls] = useState<{ id: string; name: string; top: number }[]>(
+    [],
+  );
   const [formatTarget, setFormatTarget] = useState<FormatTarget | null>(null);
+  const [linkTarget, setLinkTarget] = useState<{
+    key: string;
+    target: FormatTarget;
+    url: string;
+    text: string;
+    preview: boolean;
+    readOnly: boolean;
+  } | null>(null);
   const supported = unsupportedBlockIds(blocks).size === 0;
   const drag = useBlockDrag({
     editor: element,
@@ -351,6 +369,7 @@ export function ParagraphEditor({
       setMenu(null);
       setNotice('原目标已失效，操作已取消');
     }
+    if (readOnly) pasteEpoch.current++;
   }, [readOnly]);
   useLayoutEffect(() => {
     const pending = pendingHistorySelection.current;
@@ -418,7 +437,7 @@ export function ParagraphEditor({
     const p = position(element.current);
     if (p.blockId) setActiveId(p.blockId);
     onSelect(p);
-    if (document.activeElement?.closest('.inline-toolbar, .block-menu')) return;
+    if (document.activeElement?.closest('.inline-toolbar, .block-menu, .link-popover')) return;
     const selection = selectionPoints(element.current);
     if (
       selection &&
@@ -437,11 +456,16 @@ export function ParagraphEditor({
       });
     } else setFormatTarget(null);
   }
-  function format(type: InlineMark['type'], value?: string) {
-    if (!formatTarget || readOnly || composing.current) return;
+  function format(
+    type: InlineMark['type'],
+    value?: string,
+    target = formatTarget,
+    removeOnly = false,
+  ) {
+    if (!target || readOnly || composing.current) return;
     const next = read(),
-      { selection, originals } = formatTarget;
-    if (!matchesTarget(next, formatTarget)) {
+      { selection } = target;
+    if (!matchesTarget(next, target)) {
       setFormatTarget(null);
       setNotice('原文字选区已失效，操作已取消');
       return;
@@ -458,14 +482,17 @@ export function ParagraphEditor({
       start: i ? 0 : selection.start.offset,
       end: i === last - first ? selection.end.offset : b.text!.length,
     }));
-    const remove = ranges.every(({ block, start, end }) => {
-      let covered = start;
-      for (const m of ((block.marks ?? []) as InlineMark[])
-        .filter((m) => m.type === type && (value === undefined || m.value === value))
-        .sort((a, b) => a.start - b.start))
-        if (m.start <= covered) covered = Math.max(covered, m.end);
-      return covered >= end;
-    });
+    const remove =
+      removeOnly ||
+      (type !== 'link' &&
+        ranges.every(({ block, start, end }) => {
+          let covered = start;
+          for (const m of ((block.marks ?? []) as InlineMark[])
+            .filter((m) => m.type === type && (value === undefined || m.value === value))
+            .sort((a, b) => a.start - b.start))
+            if (m.start <= covered) covered = Math.max(covered, m.end);
+          return covered >= end;
+        }));
     for (const { block, start, end } of ranges) {
       const marks = ((block.marks ?? []) as InlineMark[]).flatMap((m) => {
         if (m.type !== type || m.end <= start || m.start >= end) return [m];
@@ -484,9 +511,107 @@ export function ParagraphEditor({
     apply(next, selection.start, 'formatInline', selection.end);
     const actual = read();
     setFormatTarget({
-      ...formatTarget,
+      ...target,
       originals: actual.slice(first, last + 1),
     });
+  }
+  function openLink(preview = false, anchor?: HTMLAnchorElement) {
+    if (readOnly || composing.current) return;
+    const current = read();
+    let selection = selectionPoints(element.current!);
+    let block = current.find((b) => b.id === selection?.start.blockId);
+    if (anchor) {
+      const parent = anchor.closest<HTMLElement>('[data-block-id]');
+      if (!parent) return;
+      block = current.find((b) => b.id === parent.dataset.blockId);
+      if (!block) return;
+      const prefix = document.createRange();
+      prefix.selectNodeContents(parent);
+      prefix.setEndBefore(anchor);
+      const offset = nodeText(prefix.cloneContents()).length;
+      selection = { start: { blockId: block.id, offset }, end: { blockId: block.id, offset } };
+    }
+    if (!selection || !block || block.type === 'code') return;
+    const collapsed =
+      selection.start.blockId === selection.end.blockId &&
+      selection.start.offset === selection.end.offset;
+    const mark = ((block.marks ?? []) as InlineMark[]).find(
+      (m) =>
+        m.type === 'link' && m.start <= selection!.start.offset && m.end > selection!.start.offset,
+    );
+    if (collapsed && mark)
+      selection = {
+        start: { blockId: block.id, offset: mark.start },
+        end: { blockId: block.id, offset: mark.end },
+      };
+    const first = current.findIndex((b) => b.id === selection!.start.blockId),
+      last = current.findIndex((b) => b.id === selection!.end.blockId);
+    if (first < 0 || last < first) return;
+    const originals = current.slice(first, last + 1);
+    const text = originals
+      .map((b, i) =>
+        (b.text ?? '').slice(
+          i === 0 ? selection!.start.offset : 0,
+          i === originals.length - 1 ? selection!.end.offset : undefined,
+        ),
+      )
+      .join('\n');
+    const rect =
+      anchor?.getBoundingClientRect() ??
+      window.getSelection()?.getRangeAt(0).getBoundingClientRect();
+    onFinish();
+    setMenu(null);
+    setLinkTarget({
+      key: crypto.randomUUID(),
+      target: {
+        selection,
+        originals: structuredClone(originals),
+        left: Math.max(8, Math.min(rect?.left ?? 8, innerWidth - 360)),
+        top: Math.max(8, Math.min(rect?.bottom ?? 100, innerHeight - 260)),
+      },
+      url: anchor?.getAttribute('href') ?? mark?.value ?? '',
+      text,
+      preview,
+      readOnly: !originals.every(editableTextBlock),
+    });
+  }
+  function closeLink() {
+    if (!linkTarget) return;
+    const target = linkTarget.target;
+    setLinkTarget(null);
+    setFormatTarget(null);
+    if (element.current && matchesTarget(read(), target)) {
+      element.current.focus();
+      restoreSelection(element.current, target.selection.start, target.selection.end);
+    }
+  }
+  function applyLink(url?: string, text?: string) {
+    if (!linkTarget || linkTarget.readOnly || readOnly || composing.current) return;
+    const { target } = linkTarget,
+      current = read();
+    if (!matchesTarget(current, target)) {
+      setLinkTarget(null);
+      setNotice('原文字选区已失效，操作已取消');
+      return;
+    }
+    if (url && text !== linkTarget.text) {
+      const inserted = [
+        {
+          ...blank(),
+          text: text!,
+          marks: [{ type: 'link', start: 0, end: text!.length, value: url }],
+        },
+      ];
+      const result = replaceTextSelection(current, target.selection, inserted);
+      if (!result) {
+        setNotice('原文字选区已失效，操作已取消');
+        setLinkTarget(null);
+        return;
+      }
+      apply(result.blocks, result.point, 'formatLink');
+    } else format('link', url, target, !url);
+    setLinkTarget(null);
+    setFormatTarget(null);
   }
   function openMenu(mode: Menu['mode'], id = activeId, extend = false) {
     if (readOnly || composing.current) return;
@@ -616,6 +741,26 @@ export function ParagraphEditor({
       setNotice('请选择正文中的粘贴位置');
       return;
     }
+    if (
+      selected &&
+      (selected.start.blockId !== selected.end.blockId ||
+        selected.start.offset !== selected.end.offset ||
+        selected.end.offset < (current[index]!.text?.length ?? 0))
+    ) {
+      const replacement = replaceTextSelection(
+        current,
+        selected,
+        independentBlocks(source, undefined, readonlyIds),
+      );
+      if (!replacement) {
+        setNotice('此选区不能可靠粘贴，原文已保留');
+        return;
+      }
+      setMenu(null);
+      setFormatTarget(null);
+      apply(replacement.blocks, replacement.point, 'insertFromPaste');
+      return;
+    }
     // Non-list roots stay at the document level, after the enclosing list.
     if (source.some((block) => block.type !== 'listItem' || readonlyIds.includes(block.id)))
       while (current[index]!.parentId)
@@ -630,6 +775,117 @@ export function ParagraphEditor({
     setMenu(null);
     setFormatTarget(null);
     apply(next, { blockId: copies[0]!.id, offset: 0 }, 'insertFromPaste');
+  }
+  function pasteText(text: string, selection = selectionPoints(element.current!)) {
+    if (!selection || !text) return;
+    const replacement = replaceTextSelection(read(), selection, plainTextBlocks(text));
+    if (!replacement) {
+      setNotice('此选区不能可靠粘贴，原文已保留');
+      return;
+    }
+    typed.current = null;
+    setMenu(null);
+    setFormatTarget(null);
+    apply(replacement.blocks, replacement.point, 'insertFromPaste');
+  }
+  async function pasteImages(files: File[], selection: Selection, html: string, text: string) {
+    const frozen = structuredClone(read()),
+      epoch = ++pasteEpoch.current;
+    onFinish();
+    try {
+      const content = html ? htmlBlocks(html, text) : { blocks: text ? plainTextBlocks(text) : [] };
+      const images = await clipboardImages(files);
+      if (!mounted.current) return;
+      const current = read();
+      if (
+        latestReadOnly.current ||
+        composing.current ||
+        pasteEpoch.current !== epoch ||
+        current.length !== frozen.length ||
+        !frozen.every((b, i) => sameBlock(b, current[i]!))
+      ) {
+        setNotice('原目标已失效，操作已取消');
+        return;
+      }
+      const unique = images.filter(
+        (image) =>
+          !content.blocks.some(
+            (block) =>
+              block.type === 'pendingImage' &&
+              block.base64 === image.base64 &&
+              block.mime === image.mime &&
+              block.name === image.name,
+          ),
+      );
+      const replacement = replaceTextSelection(current, selection, [
+        ...content.blocks,
+        ...unique,
+        blank(),
+      ]);
+      if (!replacement) {
+        setNotice('此选区不能可靠粘贴，原文已保留');
+        return;
+      }
+      if (new TextEncoder().encode(JSON.stringify(replacement.blocks)).length > 850000) {
+        setNotice('图片与正文超过本次暂存上限，原剪贴板与正文均保留');
+        return;
+      }
+      setMenu(null);
+      setFormatTarget(null);
+      apply(replacement.blocks, replacement.point, 'insertFromPaste');
+      if ('notice' in content && content.notice) setNotice(content.notice);
+    } catch (error) {
+      if (mounted.current)
+        setNotice(error instanceof Error ? error.message : '图片读取失败，原剪贴板与正文均保留');
+    }
+  }
+  async function explicitPaste(markdown: boolean) {
+    if (!menu || readOnly || composing.current) return;
+    const current = read(),
+      block = current.find((b) => b.id === menu.id);
+    if (!block || !sameBlock(menu.signature, block)) {
+      setMenu(null);
+      setNotice('原目标已失效，操作已取消');
+      return;
+    }
+    const selection = menu.selection ?? {
+      start: { blockId: block.id, offset: block.text?.length ?? 0 },
+      end: { blockId: block.id, offset: block.text?.length ?? 0 },
+    };
+    const frozen = structuredClone(current),
+      epoch = ++pasteEpoch.current;
+    setMenu(null);
+    setFormatTarget(null);
+    typed.current = null;
+    try {
+      const text = await navigator.clipboard.readText();
+      if (!mounted.current) return;
+      const latest = read();
+      if (
+        latestReadOnly.current ||
+        composing.current ||
+        pasteEpoch.current !== epoch ||
+        latest.length !== frozen.length ||
+        !frozen.every((b, i) => sameBlock(b, latest[i]!))
+      ) {
+        setNotice('原目标已失效，操作已取消');
+        return;
+      }
+      if (!text) return;
+      const inCode = latest.find((b) => b.id === selection.start.blockId)?.type === 'code';
+      const replacement = replaceTextSelection(
+        latest,
+        selection,
+        markdown && !inCode ? markdownBlocks(text) : plainTextBlocks(text),
+      );
+      if (!replacement) {
+        setNotice('此选区不能可靠粘贴，原文已保留');
+        return;
+      }
+      apply(replacement.blocks, replacement.point, 'insertFromPaste');
+    } catch {
+      if (mounted.current) setNotice('剪贴板读取失败，原文已保留');
+    }
   }
   const options = BLOCK_OPTIONS.filter(
     (o) =>
@@ -687,9 +943,7 @@ export function ParagraphEditor({
     let point = {
       blockId: target.id,
       offset:
-        menu.mode === 'convert'
-          ? (menu.selection?.start.offset ?? target.text?.length ?? 0)
-          : 0,
+        menu.mode === 'convert' ? (menu.selection?.start.offset ?? target.text?.length ?? 0) : 0,
     };
     if (target.type === 'divider') {
       const following = blank();
@@ -730,11 +984,16 @@ export function ParagraphEditor({
     let next = read();
     const i = next.findIndex((b) => b.id === selection.start.blockId),
       block = next[i];
-    if (
-      !block ||
-      selection.start.blockId !== selection.end.blockId ||
-      !editableTextBlock(block)
-    )
+    if (block?.type === 'code' && selection.start.blockId === selection.end.blockId) {
+      const text = block.text!;
+      next[i] = {
+        ...block,
+        text: text.slice(0, selection.start.offset) + '\n' + text.slice(selection.end.offset),
+      };
+      apply(next, { blockId: block.id, offset: selection.start.offset + 1 }, 'insertLineBreak');
+      return true;
+    }
+    if (!block || selection.start.blockId !== selection.end.blockId || !editableTextBlock(block))
       return false;
     const before = sliceTextBlock(block, 0, selection.start.offset),
       after = sliceTextBlock(block, selection.end.offset, block.text.length);
@@ -908,9 +1167,24 @@ export function ParagraphEditor({
           输入文字，或用 / 插入
         </span>
       )}
-      {formatTarget && !readOnly && !menu && (
+      {linkTarget && !readOnly && (
+        <LinkPopover
+          key={linkTarget.key}
+          url={linkTarget.url}
+          text={linkTarget.text}
+          preview={linkTarget.preview}
+          readOnly={linkTarget.readOnly}
+          left={linkTarget.target.left}
+          top={linkTarget.target.top}
+          onApply={applyLink}
+          onRemove={() => applyLink()}
+          onCancel={closeLink}
+        />
+      )}
+      {formatTarget && !readOnly && !menu && !linkTarget && (
         <InlineToolbar
           onFormat={format}
+          onLink={() => openLink()}
           left={formatTarget.left}
           top={formatTarget.top}
           linkInitially={formatTarget.link ?? false}
@@ -994,6 +1268,12 @@ export function ParagraphEditor({
               }}
             >
               <p>已选择 {menu.scope.length} 个块</p>
+              <button role="menuitem" onClick={() => void explicitPaste(true)}>
+                粘贴为 Markdown
+              </button>
+              <button role="menuitem" onClick={() => void explicitPaste(false)}>
+                粘贴为纯文本
+              </button>
               {!!selectedHiddenCount && <p>包含 {selectedHiddenCount} 个隐藏块，已临时展开</p>}
               {menu.signature.type === 'heading' && (
                 <button role="menuitem" onClick={selectSection}>
@@ -1192,6 +1472,38 @@ export function ParagraphEditor({
             ...p,
             blockId: id,
           });
+          const input = event.nativeEvent as InputEvent;
+          if (
+            !composing.current &&
+            !input.isComposing &&
+            input.inputType === 'insertText' &&
+            input.data &&
+            p.start === p.end
+          ) {
+            const start = p.start - input.data.length;
+            const prior = typed.current;
+            typed.current =
+              prior?.blockId === id && prior.end === start
+                ? { ...prior, end: p.start, text: prior.text + input.data }
+                : { blockId: id, start, end: p.start, text: input.data };
+            const run = typed.current;
+            const replacement = markdownShortcut(block, run);
+            if (replacement) {
+              typed.current = null;
+              const converted = next.map((b) => (b.id === id ? replacement : b));
+              let point = {
+                blockId: id,
+                offset: p.start - (block.text!.length - (replacement.text?.length ?? 0)),
+              };
+              if (replacement.type === 'divider') {
+                const following = blank();
+                converted.splice(converted.findIndex((b) => b.id === id) + 1, 0, following);
+                point = { blockId: following.id, offset: 0 };
+              }
+              apply(converted, point, 'formatMarkdown');
+              return;
+            }
+          } else typed.current = null;
           if (
             block.type === 'text' &&
             block.text?.startsWith('/') &&
@@ -1215,11 +1527,16 @@ export function ParagraphEditor({
         onKeyUp={(event) => {
           if (!event.metaKey && !event.ctrlKey) selected();
         }}
-        onPointerDown={() => {
+        onPointerDown={(event) => {
+          pointerStart.current = { x: event.clientX, y: event.clientY };
           interaction.current++;
+          typed.current = null;
+          setLinkTarget(null);
         }}
         onPointerUp={selected}
         onCompositionStart={() => {
+          typed.current = null;
+          pasteEpoch.current++;
           composing.current = true;
           onComposition(true);
         }}
@@ -1232,28 +1549,108 @@ export function ParagraphEditor({
           event.preventDefault();
           if (readOnly || composing.current) return;
           try {
+            typed.current = null;
+            const cursor = selectionPoints(event.currentTarget);
+            if (read().find((b) => b.id === cursor?.start.blockId)?.type === 'code') {
+              pasteText(event.clipboardData.getData('text/plain'), cursor);
+              return;
+            }
             const copied = clipboardBlocks(event.clipboardData.getData('text/html'));
             if (copied) {
               pasteBlocks(copied.blocks, copied.readonlyIds);
               return;
             }
-            document.execCommand(
-              'insertText',
-              false,
-              event.clipboardData.getData('text/plain'),
+            const files = Array.from(event.clipboardData.files).filter((file) =>
+              file.type.startsWith('image/'),
             );
+            if (files.length && cursor) {
+              void pasteImages(
+                files,
+                cursor,
+                event.clipboardData.getData('text/html'),
+                event.clipboardData.getData('text/plain'),
+              );
+              return;
+            }
+            const html = event.clipboardData.getData('text/html');
+            if (html && cursor) {
+              const imported = htmlBlocks(html, event.clipboardData.getData('text/plain'));
+              const replacement = replaceTextSelection(read(), cursor, imported.blocks);
+              if (!replacement) {
+                setNotice('此选区不能可靠粘贴，原文已保留');
+                return;
+              }
+              setMenu(null);
+              setFormatTarget(null);
+              apply(replacement.blocks, replacement.point, 'insertFromPaste');
+              if (imported.notice) setNotice(imported.notice);
+              return;
+            }
+            pasteText(event.clipboardData.getData('text/plain'), cursor);
           } catch {
             setNotice('块剪贴板无法读取，原文已保留');
           }
         }}
         onClick={(event) => {
-          if ((event.target as Element).closest('a')) event.preventDefault();
+          const anchor = (event.target as Element).closest<HTMLAnchorElement>('a');
+          if (anchor) {
+            event.preventDefault();
+            if (
+              event.detail <= 1 &&
+              Math.hypot(
+                event.clientX - pointerStart.current.x,
+                event.clientY - pointerStart.current.y,
+              ) < 4
+            )
+              openLink(true, anchor);
+          }
         }}
         onKeyDown={(event) => {
           const action = ++interaction.current;
           event.stopPropagation();
-          if (event.nativeEvent.isComposing || event.keyCode === 229 || composing.current)
-            return;
+          if (event.nativeEvent.isComposing || event.keyCode === 229 || composing.current) return;
+          const run = typed.current;
+          if (event.key.length > 1 || event.metaKey || event.ctrlKey || event.altKey)
+            typed.current = null;
+          if (
+            event.key === 'Enter' &&
+            !event.shiftKey &&
+            !event.metaKey &&
+            !event.ctrlKey &&
+            run?.start === 0 &&
+            /^(```|~~~)[\w+-]*$/.test(run.text)
+          ) {
+            const current = read(),
+              block = current.find((b) => b.id === run.blockId);
+            const cursor = selectionPoints(event.currentTarget);
+            if (
+              block?.type === 'text' &&
+              block.text === run.text &&
+              cursor?.start.blockId === block.id &&
+              cursor.end.blockId === block.id &&
+              cursor.start.offset === run.end &&
+              cursor.end.offset === run.end
+            ) {
+              event.preventDefault();
+              apply(
+                current.map((b) =>
+                  b === block
+                    ? {
+                        id: b.id,
+                        inlineId: b.inlineId,
+                        type: 'code',
+                        text: '',
+                        language: run.text.slice(3),
+                        wrap: false,
+                      }
+                    : b,
+                ),
+                { blockId: block.id, offset: 0 },
+                'formatMarkdown',
+              );
+              return;
+            }
+          }
           if (event.key === 'Tab') {
             const cursor = position(event.currentTarget),
               current = read();
@@ -1278,7 +1675,7 @@ export function ParagraphEditor({
               event.key.toLowerCase() as 'b' | 'i' | 'u'
             ];
             if (event.key.toLowerCase() === 'k') {
-              if (formatTarget) setFormatTarget({ ...formatTarget, link: true });
+              openLink();
             } else format(type);
             return;
           }

@@ -1,6 +1,7 @@
 import type { Block } from './contracts.js';
 import { plainParagraph } from './body-text.js';
 import { invalidListStructureIds } from './list-structure.js';
+import { validPendingImage } from './pending-image.js';
 
 export const INLINE_TYPES = [
   'bold',
@@ -21,6 +22,7 @@ export type InlineMark = {
   value?: string;
 };
 export type TextBlock = Block & { text: string; marks?: InlineMark[] };
+export type TableCell = { text: string; marks?: InlineMark[] };
 
 export function safeLink(value: string): boolean {
   try {
@@ -51,6 +53,42 @@ function validMark(value: unknown, length: number): value is InlineMark {
 // Recognition is deliberately exact: extension JSON stays a read-only original.
 export function editableBlock(block: Block): boolean {
   if (plainParagraph(block)) return true;
+  if (block.type === 'pendingImage') return validPendingImage(block);
+  if (block.type === 'code')
+    return (
+      typeof block.text === 'string' &&
+      typeof block.language === 'string' &&
+      typeof block.wrap === 'boolean' &&
+      Object.keys(block).every((k) =>
+        ['id', 'type', 'inlineId', 'text', 'language', 'wrap'].includes(k),
+      )
+    );
+  if (block.type === 'table') {
+    const rows = block.rows;
+    return (
+      typeof block.header === 'boolean' &&
+      Object.keys(block).every((k) => ['id', 'type', 'inlineId', 'rows', 'header'].includes(k)) &&
+      Array.isArray(rows) &&
+      rows.length > 0 &&
+      Array.isArray(rows[0]) &&
+      rows[0].length > 0 &&
+      rows.every(
+        (row) =>
+          Array.isArray(row) &&
+          row.length === rows[0].length &&
+          row.every(
+            (cell) =>
+              cell &&
+              typeof cell === 'object' &&
+              typeof cell.text === 'string' &&
+              Object.keys(cell).every((k) => ['text', 'marks'].includes(k)) &&
+              (cell.marks === undefined ||
+                (Array.isArray(cell.marks) &&
+                  cell.marks.every((m: unknown) => validMark(m, cell.text.length)))),
+          ),
+      )
+    );
+  }
   if (block.type === 'divider')
     return Object.keys(block).every((k) => ['id', 'type', 'inlineId'].includes(k));
   const keys = ['id', 'type', 'text', 'inlineId', 'marks'];
@@ -79,7 +117,7 @@ export function editableBlock(block: Block): boolean {
 }
 
 export function editableTextBlock(block: Block): block is TextBlock {
-  return editableBlock(block) && typeof block.text === 'string';
+  return block.type !== 'code' && editableBlock(block) && typeof block.text === 'string';
 }
 
 // A recognized list shape may still be an unsupported legacy original when its

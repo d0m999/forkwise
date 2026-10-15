@@ -729,3 +729,60 @@ body:has(.workspace[data-board-full="true"]) .card-tooltip { display: none; }
 .paragraph-editor [data-block-dragging="true"] { opacity: .35; outline: 1px dashed var(--editor-focus); }
 .block-drop-line { position: fixed; z-index: 100; border-top: 2px solid var(--editor-focus); pointer-events: none; }
 .block-drop-line span { position: absolute; bottom: 3px; right: 0; background: var(--card-color-ffffff); color: var(--editor-focus); font-size: 12px; }
+.imported-table {
+  overflow-x: auto;
+  max-width: 100%;
+}
+.imported-table table {
+  border-collapse: collapse;
+  width: max-content;
+  min-width: 100%;
+  font-size: 14px;
+}
+.imported-table th,
+.imported-table td {
+  border: 1px solid var(--card-color-edf1fa);
+  padding: 6px 10px;
+  min-width: 80px;
+  white-space: pre-wrap;
+}
+.imported-table th {
+  background: var(--card-color-edf1fa);
+  text-align: left;
+}
+.link-popover {
+  position: fixed;
+  z-index: 100;
+  background: var(--card-color-ffffff);
+  border: 1px solid var(--card-color-edf1fa);
+  border-radius: 8px;
+  padding: 12px;
+  width: 340px;
+  max-width: calc(100vw - 16px);
+  max-height: calc(100vh - 16px);
+  overflow: auto;
+  box-shadow: 0 8px 28px var(--card-menu-shadow);
+  font-size: 14px;
+}
+.link-popover p {
+  overflow-wrap: anywhere;
+  margin: 0 0 8px;
+}
+.link-popover label {
+  display: grid;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+.link-popover input {
+  width: 100%;
+}
+.link-popover button,
+.link-popover a {
+  margin: 4px;
+}
+.pending-image {
+  padding: 12px;
+  border: 1px dashed var(--card-color-edf1fa);
+  border-radius: 6px;
+  color: var(--inline-gray);
+}
