@@ -187,10 +187,39 @@ export function htmlBlocks(html: string, plain: string): { blocks: Block[]; noti
     images.reduce((size, block) => size + (block.byteLength as number), 0) > PENDING_IMAGE_MAX_BYTES
   )
     throw new Error('内嵌图片超过本次暂存上限，原剪贴板与正文均保留');
-  const fallback = () => ({
-    blocks: [...plainTextBlocks(plain || htmlPlain(root)), ...images],
-    notice: '无法可靠保留此内容的结构，已保留纯文本原文与已有图片字节',
-  });
+  const fallback = () => {
+    const text = plainTextBlocks(plain || htmlPlain(root));
+    const links: Block[] = [];
+    const urls = new Set(
+      Array.from(root.querySelectorAll('img'))
+        .map((img) => img.getAttribute('src') ?? '')
+        .filter((src) => /^https?:/i.test(src) && safeLink(src)),
+    );
+    for (const url of urls) {
+      let found = false;
+      for (const block of text) {
+        for (
+          let start = block.text!.indexOf(url);
+          start >= 0;
+          start = block.text!.indexOf(url, start + url.length)
+        ) {
+          const mark: InlineMark = { type: 'link', start, end: start + url.length, value: url };
+          block.marks = [...((block.marks ?? []) as InlineMark[]), mark];
+          found = true;
+        }
+      }
+      if (!found)
+        links.push({
+          ...plainTextBlocks('')[0]!,
+          text: url,
+          marks: [{ type: 'link', start: 0, end: url.length, value: url }],
+        });
+    }
+    return {
+      blocks: [...text, ...links, ...images],
+      notice: '无法可靠保留此内容的结构，已保留纯文本原文与已有图片字节',
+    };
+  };
   if (root.querySelector('iframe,object,embed,form,svg,math,canvas,video,audio,template'))
     return fallback();
   const blocks: Block[] = [];

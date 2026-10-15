@@ -37,6 +37,101 @@ async function paste(page: Page, text: string, html = '') {
 }
 
 for (const sample of [
+  { name: '纯文缺少地址且伴PNG', plain: 'before\nnested\nimage\nafter', embedded: true },
+  {
+    name: '纯文已有地址且重复img不补重',
+    plain: 'before\nnested\nimage https://fallback14.invalid/remote.png\nafter',
+    embedded: false,
+    duplicate: true,
+  },
+  { name: '没有纯文仍保alt与地址', plain: '', embedded: false },
+  {
+    name: '仅补安全HTTP地址',
+    plain: 'before\nnested\nimage\nafter',
+    embedded: false,
+    url: 'http://fallback14.invalid/remote.png',
+    unsafe: true,
+  },
+])
+  test(`C14-AC5 HTML降级${sample.name}仍保完整远程地址和原文，单次历史及SQLite重开保真`, async ({
+    page,
+    workspace,
+  }) => {
+    const url = sample.url ?? 'https://fallback14.invalid/remote.png';
+    const png =
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aS1sAAAAASUVORK5CYII=';
+    await place(page, '远程图降级');
+    await page.getByRole('button', { name: '编辑正文', exact: true }).click();
+    const editor = page.getByRole('textbox', { name: '卡片正文', exact: true });
+    await editor.fill('original');
+    await expect
+      .poll(async () => (await workspace.state()).cards[0]!.body.blocks[0]!.text)
+      .toBe('original');
+    await expect(editor).toHaveAttribute('aria-readonly', 'false');
+    const original = (await workspace.state()).cards[0]!.body.blocks;
+    const requests: string[] = [];
+    await page.route(/^https?:\/\/fallback14\.invalid\//, async (route) => {
+      requests.push(route.request().url());
+      await route.abort();
+    });
+    await select(page, 0, 'original'.length);
+    await paste(
+      page,
+      sample.plain,
+      '<blockquote><p>before</p><ul><li>nested</li></ul><p><img src="' +
+        url +
+        '" alt="image"></p>' +
+        (sample.duplicate ? '<img src="' + url + '" alt="image">' : '') +
+        (sample.unsafe
+          ? '<img src="javascript:window.__ac5Executed=1" onerror="window.__ac5Executed=1"><img src="mailto:drop@example.invalid"><script>window.__ac5Executed=1</script>'
+          : '') +
+        (sample.embedded ? '<img src="data:image/png;base64,' + png + '" alt="PNG">' : '') +
+        '<p>after</p></blockquote>',
+    );
+    await expect(page.getByRole('alert')).toContainText('无法可靠保留');
+    await expect(page.getByRole('status')).toHaveText('已保存到本机');
+    const saved = await workspace.state(),
+      blocks = saved.cards[0]!.body.blocks;
+    const text = blocks
+      .filter((b) => b.type === 'text')
+      .map((b) => b.text)
+      .join('\n');
+    // Full original phrases stay in their original order; the extra link's
+    // placement is intentionally not prescribed by the contract.
+    let offset = 0;
+    for (const phrase of ['before', 'nested', 'image', 'after']) {
+      const found = text.indexOf(phrase, offset);
+      expect(found).toBeGreaterThanOrEqual(offset);
+      offset = found + phrase.length;
+    }
+    expect(text.split(url)).toHaveLength(2);
+    await expect(editor).toContainText(url);
+    await expect(editor.locator('a').filter({ hasText: url })).toHaveAttribute('href', url);
+    await expect(editor.locator('img')).toHaveCount(0);
+    expect(requests).toEqual([]);
+    await expect(editor.locator('a[href^="javascript:"], a[href^="mailto:"]')).toHaveCount(0);
+    expect(await page.evaluate(() => (window as any).__ac5Executed)).toBeUndefined();
+    if (sample.embedded) expect(blocks.find((b) => b.type === 'pendingImage')?.base64).toBe(png);
+    await expect(editor).toHaveAttribute('aria-readonly', 'false');
+    await editor.press('Meta+z');
+    await expect
+      .poll(async () => (await workspace.state()).cards[0]!.body.blocks)
+      .toEqual(original);
+    await expect(editor).toHaveAttribute('aria-readonly', 'false');
+    await editor.press('Meta+Shift+z');
+    await expect.poll(async () => (await workspace.state()).cards[0]!.body.blocks).toEqual(blocks);
+    const oldSnapshot = await page.locator('.workspace').getAttribute('data-snapshot');
+    await workspace.restart();
+    await workspace.open(page);
+    await expect(page.locator('.workspace')).not.toHaveAttribute('data-snapshot', oldSnapshot!);
+    await page.getByRole('button', { name: '远程图降级', exact: true }).click();
+    const snapshot = await page.locator('.workspace').getAttribute('data-snapshot');
+    const agent = await workspace.agentBody(saved.project.id, saved.cards[0]!.id, snapshot!);
+    expect(agent.body.blocks).toEqual(blocks);
+    expect(agent.revision).toBe((await workspace.state()).project.revision);
+  });
+
+for (const sample of [
   {
     name: '引用中的列表',
     plain: '引用前\n不可丢失\n引用后',
