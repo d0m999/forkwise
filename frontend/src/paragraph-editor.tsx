@@ -797,6 +797,8 @@ export function ParagraphEditor({
     apply(next, { blockId: previous.id, offset }, 'deleteContentBackward');
     return true;
   }
+  const selectedHiddenCount =
+    menu?.hiddenIds?.filter((id) => menu.scope?.some((block) => block.id === id)).length ?? 0;
   if (!supported)
     return (
       <section className="original-body" aria-label="只读正文原件">
@@ -841,6 +843,7 @@ export function ParagraphEditor({
         {menu?.scope && !readOnly && (
           <div role="menu" aria-label="块原件操作">
             <p>已选择 {menu.scope.length} 个块</p>
+            {!!selectedHiddenCount && <p>包含 {selectedHiddenCount} 个隐藏块，已临时展开</p>}
             <p>未知内容只读保留，副本保留原始格式与资源引用。</p>
             <button role="menuitem" onClick={() => void copy(false)}>
               复制所选块
@@ -959,14 +962,7 @@ export function ParagraphEditor({
               }}
             >
               <p>已选择 {menu.scope.length} 个块</p>
-              {!!menu.hiddenIds?.filter((id) => menu.scope!.some((b) => b.id === id))
-                .length && (
-                <p>
-                  包含{' '}
-                  {menu.hiddenIds.filter((id) => menu.scope!.some((b) => b.id === id)).length}{' '}
-                  个隐藏块，已临时展开
-                </p>
-              )}
+              {!!selectedHiddenCount && <p>包含 {selectedHiddenCount} 个隐藏块，已临时展开</p>}
               {menu.signature.type === 'heading' && (
                 <button role="menuitem" onClick={selectSection}>
                   选择本节

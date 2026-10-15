@@ -430,3 +430,66 @@ test('R1-S02 相邻列表同序位拖为子项显示目标层级，一次撤销�
   await page.mouse.up();
   expect(await workspace.state()).toEqual(restored);
 });
+
+test('R1-Spec 原件正文Shift选择含折叠后代时明示隐藏数量，副本保原文且单次撤销重开', async ({
+  page,
+  workspace,
+}) => {
+  await place(page, '原件隐藏范围');
+  const initial = await workspace.state();
+  const card = initial.cards[0]!;
+  const originals: Block[] = [
+    { id: 'p', inlineId: 'ip', type: 'listItem', listType: 'bullet', text: '原件列表父' },
+    {
+      id: 'c',
+      inlineId: 'ic',
+      type: 'listItem',
+      listType: 'todo',
+      checked: true,
+      text: '隐藏子项',
+      parentId: 'p',
+    },
+    {
+      id: 'raw',
+      type: 'vendor',
+      original: { text: '未知原文🧠', nested: [null, { keep: true }] },
+      assetId: 'saved-resource',
+    },
+    { id: 'z', inlineId: 'iz', type: 'text', text: '原件尾段' },
+  ];
+  await workspace.installOriginalBody(card.id, originals);
+  await workspace.open(page);
+  await page.getByRole('button', { name: '原件隐藏范围', exact: true }).click();
+  await page.getByRole('button', { name: '编辑正文', exact: true }).click();
+  const originalBody = page.getByLabel('只读正文原件', { exact: true });
+  await expect(originalBody).toBeVisible();
+  const before = await workspace.state();
+  await originalBody.getByRole('button', { name: '收起：原件列表父', exact: true }).click();
+  await expect(
+    originalBody.getByRole('button', { name: '选择块：隐藏子项', exact: true }),
+  ).toBeHidden();
+  await originalBody.getByRole('button', { name: '选择块：原件尾段', exact: true }).click();
+  await originalBody
+    .getByRole('button', { name: '选择块：原件列表父', exact: true })
+    .click({ modifiers: ['Shift'] });
+  const menu = page.getByRole('menu', { name: '块原件操作', exact: true });
+  await expect(menu).toContainText('已选择 4 个块');
+  await expect(menu).toContainText('包含 1 个隐藏块，已临时展开');
+  await expect(
+    originalBody.getByRole('button', { name: '选择块：隐藏子项', exact: true }),
+  ).toBeVisible();
+  expect(await workspace.state()).toEqual(before);
+  await menu.getByRole('menuitem', { name: '创建副本', exact: true }).click();
+  await expect.poll(async () => (await workspace.state()).cards[0]!.body.blocks.length).toBe(8);
+  const copied = (await workspace.state()).cards[0]!.body.blocks;
+  expect(copied.slice(0, 4)).toEqual(originals);
+  expect(new Set(copied.map((b) => b.id)).size).toBe(8);
+  expect(copied[5]!.parentId).toBe(copied[4]!.id);
+  expect({ ...copied[6], id: 'raw' }).toEqual(originals[2]);
+  await page.getByRole('button', { name: '撤销', exact: true }).click();
+  await expect
+    .poll(async () => (await workspace.state()).cards[0]!.body.blocks)
+    .toEqual(originals);
+  await workspace.restart();
+  expect((await workspace.state()).cards[0]!.body.blocks).toEqual(originals);
+});
