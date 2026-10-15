@@ -493,3 +493,53 @@ test('R1-Spec 原件正文Shift选择含折叠后代时明示隐藏数量，副�
   await workspace.restart();
   expect((await workspace.state()).cards[0]!.body.blocks).toEqual(originals);
 });
+
+test('R1-Gate 撤销后正文解锁即保留原光标，紧接输入不插到前一条', async ({
+  page,
+  workspace,
+}) => {
+  const editor = await body(page, workspace, [
+    { id: 'a', inlineId: 'ia', type: 'listItem', listType: 'ordered', text: '一' },
+    { id: 'b', inlineId: 'ib', type: 'listItem', listType: 'todo', checked: false, text: '二' },
+  ]);
+  await editor.locator('[data-block-id="b"]').click();
+  await page.getByRole('button', { name: '标为完成', exact: true }).click();
+  await expect
+    .poll(async () => (await workspace.state()).cards[0]!.body.blocks[1]!.checked)
+    .toBe(true);
+  await page.evaluate(() => {
+    const editor = document.querySelector('[aria-label="卡片正文"]')!;
+    let blocked = false;
+    (window as any).__undoUnlockCaret = undefined;
+    const observer = new MutationObserver(() => {
+      if (editor.getAttribute('aria-readonly') === 'true') blocked = true;
+      else if (blocked) {
+        const anchor = window.getSelection()?.anchorNode;
+        const element =
+          anchor?.nodeType === Node.ELEMENT_NODE ? (anchor as Element) : anchor?.parentElement;
+        (window as any).__undoUnlockCaret =
+          element?.closest<HTMLElement>('[data-block-id]')?.dataset.blockId ?? null;
+        observer.disconnect();
+      }
+    });
+    observer.observe(editor, { attributes: true, attributeFilter: ['aria-readonly'] });
+  });
+  await editor.press('Meta+z');
+  await expect.poll(() => page.evaluate(() => (window as any).__undoUnlockCaret)).toBe('b');
+  await expect
+    .poll(async () => (await workspace.state()).cards[0]!.body.blocks[1]!.checked)
+    .toBe(false);
+  await editor.press('End');
+  await editor.press('Enter');
+  await editor.press('Enter');
+  await page.keyboard.insertText('/分隔');
+  await page.keyboard.press('Enter');
+  await expect
+    .poll(async () => (await workspace.state()).cards[0]!.body.blocks.map((b) => b.type))
+    .toEqual(['listItem', 'listItem', 'divider', 'text']);
+  const saved = (await workspace.state()).cards[0]!.body.blocks;
+  expect(saved.slice(0, 2).map((b) => [b.id, b.text])).toEqual([
+    ['a', '一'],
+    ['b', '二'],
+  ]);
+});

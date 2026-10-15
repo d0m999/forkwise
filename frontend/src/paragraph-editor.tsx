@@ -117,6 +117,13 @@ export function ParagraphEditor({
   const selectFrame = useRef<number | undefined>(undefined);
   const interaction = useRef(0);
   const selectionAnchor = useRef('');
+  const pendingHistorySelection = useRef<{
+    action: number;
+    selection: Selection | null;
+    wasBlocked: boolean;
+    ready: boolean;
+  } | null>(null);
+  const [historySelectionRevision, setHistorySelectionRevision] = useState(0);
   const mounted = useRef(true),
     latestReadOnly = useRef(readOnly);
   latestReadOnly.current = readOnly;
@@ -345,6 +352,31 @@ export function ParagraphEditor({
       setNotice('原目标已失效，操作已取消');
     }
   }, [readOnly]);
+  useLayoutEffect(() => {
+    const pending = pendingHistorySelection.current;
+    if (!pending) return;
+    if (readOnly) {
+      pending.wasBlocked = true;
+      return;
+    }
+    if (!pending.wasBlocked && !pending.ready) return;
+    pendingHistorySelection.current = null;
+    const editor = element.current;
+    if (!editor?.isConnected || !supported || interaction.current !== pending.action) return;
+    editor.focus();
+    const current = read(),
+      saved = pending.selection,
+      point =
+        saved && current.some((block) => block.id === saved.start.blockId)
+          ? saved.start
+          : { blockId: current.at(-1)!.id, offset: current.at(-1)!.text?.length ?? 0 };
+    restoreSelection(
+      editor,
+      point,
+      saved && current.some((block) => block.id === saved.end.blockId) ? saved.end : point,
+    );
+    selected();
+  }, [blocks, readOnly, supported, historySelectionRevision]);
   useEffect(() => {
     if (!menu) return;
     const outside = (e: PointerEvent) => {
@@ -1257,29 +1289,21 @@ export function ParagraphEditor({
           ) {
             event.preventDefault();
             const saved = selectionPoints(event.currentTarget);
+            pendingHistorySelection.current = {
+              action,
+              selection: saved,
+              wasBlocked: false,
+              ready: false,
+            };
             void onHistory(
               event.shiftKey || event.key.toLowerCase() === 'y' ? 'redo' : 'undo',
-            ).then(() =>
-              requestAnimationFrame(() => {
-                const editor = element.current;
-                if (!editor?.isConnected || interaction.current !== action) return;
-                editor.focus();
-                const current = read(),
-                  point =
-                    saved && current.some((b) => b.id === saved.start.blockId)
-                      ? saved.start
-                      : {
-                          blockId: current.at(-1)!.id,
-                          offset: current.at(-1)!.text?.length ?? 0,
-                        };
-                restoreSelection(
-                  editor,
-                  point,
-                  saved && current.some((b) => b.id === saved.end.blockId) ? saved.end : point,
-                );
-                selected();
-              }),
-            );
+            ).then(() => {
+              const pending = pendingHistorySelection.current;
+              if (pending?.action === action) {
+                pending.ready = true;
+                setHistorySelectionRevision((revision) => revision + 1);
+              }
+            });
             return;
           }
           if (event.key === 'Enter' && enter(event.shiftKey)) event.preventDefault();
