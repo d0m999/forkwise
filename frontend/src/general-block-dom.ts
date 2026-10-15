@@ -39,22 +39,32 @@ export function renderBlock(block: Block): HTMLElement {
   if (block.type === 'table') {
     p.contentEditable = 'false';
     p.className = 'imported-table';
-    p.setAttribute('aria-label', '表格（导入内容）');
+    p.setAttribute('aria-label', '简单表格');
+    if (block.columnWidths) p.dataset.columnWidths = JSON.stringify(block.columnWidths);
     const table = document.createElement('table'),
       body = document.createElement('tbody');
     (block.rows as TableCell[][]).forEach((row, index) => {
       const tr = document.createElement('tr');
-      for (const cell of row) {
+      row.forEach((cell, column) => {
         const td = document.createElement(block.header && index === 0 ? 'th' : 'td');
         const content = renderBlock({ id: 'cell', type: 'text', ...cell });
-        td.append(...Array.from(content.childNodes));
+        delete content.dataset.blockId;
+        delete content.dataset.inlineId;
+        content.dataset.cell = `${index},${column}`;
+        content.contentEditable = 'true';
+        content.setAttribute('role', 'textbox');
+        content.setAttribute('aria-label', `第 ${index + 1} 行第 ${column + 1} 列`);
+        content.setAttribute('aria-multiline', 'true');
+        const width = (block.columnWidths as number[] | undefined)?.[column] ?? 160;
+        td.style.width = `${width}px`;
+        td.style.minWidth = `${width}px`;
+        td.append(content);
         tr.append(td);
-      }
+      });
       body.append(tr);
     });
     table.append(body);
     p.append(table);
-    retainedBlocks.set(p, structuredClone(block));
     return p;
   }
   if (block.type === 'code') {
@@ -116,6 +126,24 @@ export function readBlock(element: HTMLElement, id: string, inlineId: string): B
   const retained = retainedBlocks.get(element);
   if (retained) return structuredClone(retained);
   if (element.tagName === 'HR') return { id, type: 'divider', inlineId };
+  if (element.dataset.kind === 'table') {
+    const rows = Array.from(element.querySelectorAll('tr')).map((row) =>
+      Array.from(row.querySelectorAll<HTMLElement>('[data-cell]')).map((cell) => {
+        const { text, marks } = readBlock(cell, 'cell', 'cell');
+        return { text: text!, ...(marks ? { marks } : {}) };
+      }),
+    );
+    return {
+      id,
+      inlineId,
+      type: 'table',
+      header: !!element.querySelector('th'),
+      rows,
+      ...(element.dataset.columnWidths
+        ? { columnWidths: JSON.parse(element.dataset.columnWidths) }
+        : {}),
+    };
+  }
   const text = blockText(element);
   if (element.dataset.kind === 'code')
     return {
@@ -191,7 +219,7 @@ export function sameBlock(a: Block, b: Block): boolean {
           : a[key] === b[key],
   );
 }
-export type BlockPoint = { blockId: string; offset: number };
+export type BlockPoint = { blockId: string; offset: number; cell?: string };
 export function selectionPoints(
   editor: HTMLElement,
 ): { start: BlockPoint; end: BlockPoint } | null {
@@ -203,12 +231,16 @@ export function selectionPoints(
       '[data-block-id]',
     );
     if (!block || !editor.contains(block)) return null;
+    const cell = (node instanceof Element ? node : node.parentElement)?.closest<HTMLElement>(
+      '[data-cell]',
+    );
     const prefix = document.createRange();
-    prefix.selectNodeContents(block);
+    prefix.selectNodeContents(cell ?? block);
     prefix.setEnd(node, offset);
     return {
       blockId: block.dataset.blockId!,
       offset: nodeText(prefix.cloneContents()).length,
+      ...(cell ? { cell: cell.dataset.cell! } : {}),
     };
   };
   const start = point(range.startContainer, range.startOffset),
@@ -217,10 +249,15 @@ export function selectionPoints(
 }
 export function restoreSelection(editor: HTMLElement, start: BlockPoint, end = start) {
   const locate = (p: BlockPoint): [Node, number] | null => {
-    const block = Array.from(editor.children).find(
+    let block = Array.from(editor.children).find(
       (e) => (e as HTMLElement).dataset.blockId === p.blockId,
     );
+    if (p.cell)
+      block = Array.from(block?.querySelectorAll<HTMLElement>('[data-cell]') ?? []).find(
+        (cell) => cell.dataset.cell === p.cell,
+      );
     if (!block) return null;
+    if (p.cell) (block as HTMLElement).focus();
     const walk = document.createTreeWalker(block, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT);
     let node = walk.nextNode(),
       left = p.offset;

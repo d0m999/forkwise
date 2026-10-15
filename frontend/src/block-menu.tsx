@@ -28,6 +28,23 @@ export const BLOCK_OPTIONS: {
     shape: { type: 'listItem', listType: 'todo', checked: false },
   },
   { name: '分隔线', group: '其他', shape: { type: 'divider' } },
+  {
+    name: '简单表格',
+    group: '其他',
+    shape: {
+      type: 'table',
+      header: false,
+      rows: [
+        [{ text: '' }, { text: '' }],
+        [{ text: '' }, { text: '' }],
+      ],
+    },
+  },
+  {
+    name: '代码块',
+    group: '其他',
+    shape: { type: 'code', language: '', wrap: false },
+  },
 ];
 export function BlockMenu({
   options,

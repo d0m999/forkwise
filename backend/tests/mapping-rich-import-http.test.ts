@@ -46,6 +46,7 @@ it('富文导入经HTTP写权限、幂等和撤权校验，MCP同snapshot完整�
         id: 'table',
         type: 'table',
         header: true,
+        columnWidths: [384],
         rows: [
           [{ text: '链接' }],
           [

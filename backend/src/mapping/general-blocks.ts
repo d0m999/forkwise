@@ -67,11 +67,20 @@ export function editableBlock(block: Block): boolean {
     const rows = block.rows;
     return (
       typeof block.header === 'boolean' &&
-      Object.keys(block).every((k) => ['id', 'type', 'inlineId', 'rows', 'header'].includes(k)) &&
+      Object.keys(block).every((k) =>
+        ['id', 'type', 'inlineId', 'rows', 'header', 'columnWidths'].includes(k),
+      ) &&
       Array.isArray(rows) &&
       rows.length > 0 &&
       Array.isArray(rows[0]) &&
       rows[0].length > 0 &&
+      (block.columnWidths === undefined ||
+        (Array.isArray(block.columnWidths) &&
+          block.columnWidths.length === rows[0].length &&
+          block.columnWidths.every(
+            (width) =>
+              typeof width === 'number' && Number.isFinite(width) && width >= 48 && width <= 2000,
+          ))) &&
       rows.every(
         (row) =>
           Array.isArray(row) &&

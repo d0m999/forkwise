@@ -1,8 +1,13 @@
 import type { Block } from '../../backend/src/mapping/contracts';
 import { blockPlainText } from '../../backend/src/mapping/body-text';
-import { editableTextBlock, type InlineMark } from '../../backend/src/mapping/general-blocks';
+import {
+  editableBlock,
+  editableTextBlock,
+  type InlineMark,
+} from '../../backend/src/mapping/general-blocks';
 import { listEnd, validListStructure } from '../../backend/src/mapping/list-structure';
 import { sliceTextBlock, type BlockPoint } from './general-block-dom';
+import { cellBlock, withCell, sameCell } from './table-selection';
 
 export function plainTextBlocks(text: string): Block[] {
   return text
@@ -43,6 +48,34 @@ export function replaceTextSelection(
   const a = current[first],
     z = current[last];
   if (!a || !z || last < first || !inserted.length) return null;
+  if (a.type === 'table' && sameCell(selection.start, selection.end)) {
+    if (inserted.some((block) => block.type === 'pendingImage' || !editableBlock(block)))
+      return null;
+    const cell = cellBlock(a, selection.start.cell);
+    if (!cell) return null;
+    const inline = inserted.map((b) => ({
+      id: 'cell',
+      type: 'text',
+      text: blockPlainText(b),
+      ...(editableTextBlock(b) && b.marks ? { marks: b.marks } : {}),
+    }));
+    let content: Block = inline[0]!;
+    for (const next of inline.slice(1))
+      content = join(join(content, { id: 'cell', type: 'text', text: '\n' }), next);
+    const result = join(
+      join(sliceTextBlock(cell, 0, selection.start.offset), content),
+      sliceTextBlock(cell, selection.end.offset, cell.text!.length),
+    );
+    const blocks = [...current];
+    blocks[first] = withCell(a, selection.start.cell!, result);
+    return {
+      blocks,
+      point: {
+        ...selection.start,
+        offset: selection.start.offset + content.text!.length,
+      },
+    };
+  }
   if (a.type === 'code' && first === last) {
     const text = inserted.map(blockPlainText).join('\n');
     const blocks = [...current];

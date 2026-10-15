@@ -24,6 +24,7 @@ it('已有未知块、媒体及额外文字元数据在真实SQLite重开、完�
       { id: 'old-unknown', type: 'opaque', original: { vendor: 'legacy', bytes: '完整未知内容\u0000中文🚀', nested: [null, { keep: true }] } },
       { id: 'old-media', type: 'image', assetId: 'existing-media', originalWidth: 123, caption: '原图引用原文' },
       { id: 'old-marked', type: 'text', text: '带未知行内格式的完整文字', marks: [{ legacyStyle: 'keep' }] },
+      { id: 'old-table', type: 'table', header: false, columnWidths: [144], rows: [[{ text: '旧表格原件' }]], vendor: { formula: '=keep-original' } },
     ];
     legacy.body.blocks.push(...originals);
     legacy.body.versionId = randomUUID();
@@ -39,7 +40,7 @@ it('已有未知块、媒体及额外文字元数据在真实SQLite重开、完�
     const snapshot = host.read({ type: 'map', view: 'index', projectId: 'p' }, human);
     const detail = host.read({ type: 'map', view: 'detail', projectId: 'p', cardId: 'a', snapshot: snapshot.snapshot }, human);
     expect(JSON.parse(detail.items.map(c => c.jsonText).join(''))).toEqual(legacy.body);
-    expect(host.read({ type: 'map', view: 'body', projectId: 'p', cardId: 'a', snapshot: snapshot.snapshot }, human).items.map(b => b.type)).toEqual(['text', 'opaque', 'image', 'text']);
+    expect(host.read({ type: 'map', view: 'body', projectId: 'p', cardId: 'a', snapshot: snapshot.snapshot }, human).items.map(b => b.type)).toEqual(['text', 'opaque', 'image', 'text', 'table']);
     expect(() => run({ type: 'body.edit', expected: legacy.body.versionId, payload: { id: 'a', text: '只写首块会丢原件' } })).toThrow('完整块');
     expect(() => run({ type: 'body.edit', expected: legacy.body.versionId, payload: { id: 'a', blocks: [legacy.body.blocks[0]] } })).toThrow('原件');
     expect(read().cards[0]!.body).toEqual(legacy.body);

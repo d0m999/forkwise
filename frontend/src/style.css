@@ -745,12 +745,15 @@ body:has(.workspace[data-board-full="true"]) .card-tooltip { display: none; }
 .imported-table {
   overflow-x: auto;
   max-width: 100%;
+  width: 100%;
+  margin: 16px 0;
 }
 .imported-table table {
   border-collapse: collapse;
   width: max-content;
   min-width: 100%;
   font-size: var(--body-detail-font-size);
+  table-layout: fixed;
 }
 .imported-table th,
 .imported-table td {
@@ -758,7 +761,16 @@ body:has(.workspace[data-board-full="true"]) .card-tooltip { display: none; }
   padding: var(--body-table-cell-padding);
   min-width: var(--body-table-cell-min-width);
   white-space: pre-wrap;
+  vertical-align: top;
 }
+.imported-table [data-cell] { min-height: 24px; margin: 0; font-size: 14px; line-height: 24px; outline-offset: 2px; }
+.table-tools { position: sticky; top: 0; z-index: 3; display: flex; flex-wrap: wrap; gap: 6px; padding: 8px; background: var(--card-color-ffffff); border: 1px solid var(--card-color-edf1fa); font-size: 13px; white-space: normal; }
+.table-tools span { flex-basis: 100%; }
+.table-tools input { width: 80px; }
+.table-tools form { display: flex; gap: 6px; align-items: center; }
+.code-tools { display: flex; flex-wrap: wrap; gap: 8px; padding: 8px; border: 1px solid var(--card-color-edf1fa); font-size: 13px; white-space: normal; }
+.code-tools span { flex-basis: 100%; color: var(--inline-gray); }
+.paragraph-editor pre[data-kind=code] { margin: 16px 0; max-width: 100%; font: 14px/22px ui-monospace, SFMono-Regular, Menlo, monospace; tab-size: 2; }
 .imported-table th {
   background: var(--card-color-edf1fa);
   text-align: left;

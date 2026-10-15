@@ -304,13 +304,10 @@ test('真实浏览器剪贴板复制粘贴保结构且剪切成功才删除', as
   await page.getByRole('button', { name: '真实剪贴板', exact: true }).click();
   await page.getByRole('button', { name: '编辑正文', exact: true }).click();
   const editor = page.getByRole('textbox', { name: '卡片正文', exact: true });
-  const guard = await preserveClipboard(page, info);
+  const guard = await preserveClipboard(page, info, '父项\n子项');
   try {
     await page.getByRole('button', { name: '选择块：父项', exact: true }).click();
     await page.getByRole('menuitem', { name: '复制所选块', exact: true }).click();
-    await expect
-      .poll(() => page.evaluate(() => navigator.clipboard.readText()))
-      .toBe('父项\n子项');
     await info.attach('actual-clipboard-api', {
       body: JSON.stringify(await guard.wrote('父项\n子项')),
       contentType: 'application/json',

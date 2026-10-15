@@ -30,13 +30,10 @@ test('未输入的空正文也能粘贴同项目未知原件，不误判临时�
     .locator('.react-flow__node')
     .filter({ has: page.getByRole('button', { name: '空白目标', exact: true }) });
   await sourceNode.getByRole('button', { name: '编辑正文', exact: true }).click();
-  const guard = await preserveClipboard(page, info);
+  const guard = await preserveClipboard(page, info, '旧列表原件');
   try {
     await page.getByRole('button', { name: '选择块：旧列表原件', exact: true }).click();
     await page.getByRole('menuitem', { name: '复制所选块', exact: true }).click();
-    await expect
-      .poll(() => page.evaluate(() => navigator.clipboard.readText()))
-      .toBe('旧列表原件');
     await guard.wrote('旧列表原件');
     await targetNode.getByRole('button', { name: '编辑正文', exact: true }).click();
     await page.getByRole('textbox', { name: '卡片正文', exact: true }).click();
@@ -270,16 +267,13 @@ test('真实剪贴板将未知JSON与资源引用粘到同项目另一正文，�
     .toBe('目标文字');
   await sourceNode.getByRole('button', { name: '编辑正文', exact: true }).click();
   await expect(page.getByLabel('只读正文原件')).toBeVisible();
-  const guard = await preserveClipboard(page, info);
+  const guard = await preserveClipboard(page, info, '[vendor]\n[image]');
   try {
     await page.getByRole('button', { name: '选择块：vendor', exact: true }).click();
     await page
       .getByRole('button', { name: '选择块：image', exact: true })
       .click({ modifiers: ['Shift'] });
     await page.getByRole('menuitem', { name: '复制所选块', exact: true }).click();
-    await expect
-      .poll(() => page.evaluate(() => navigator.clipboard.readText()))
-      .toBe('[vendor]\n[image]');
     await guard.wrote('[vendor]\n[image]');
     await targetNode.getByRole('button', { name: '编辑正文', exact: true }).click();
     const editor = page.getByRole('textbox', { name: '卡片正文', exact: true });
@@ -297,6 +291,7 @@ test('真实剪贴板将未知JSON与资源引用粘到同项目另一正文，�
     expect({ ...copied[1], id: 'raw' }).toEqual(originals[0]);
     expect({ ...copied[2], id: 'asset' }).toEqual(originals[1]);
     expect(state.cards.find((c) => c.id === source.id)!.body.blocks).toEqual(originals);
+    await expect(page.locator('.workspace')).toHaveAttribute('data-revision', String(state.project.revision));
     const snapshot = await page.locator('.workspace').getAttribute('data-snapshot');
     // The browser view and Agent expansion read the same committed revision.
     const map = await workspace.agentBody(state.project.id, target.id, snapshot!);
@@ -341,13 +336,10 @@ test('R1-S01 普通段落粘贴到嵌套列表后保持顶层与格式，一次�
   ];
   const editor = await body(page, workspace, originals);
   const before = await workspace.state();
-  const guard = await preserveClipboard(page, info);
+  const guard = await preserveClipboard(page, info, '带格式原段');
   try {
     await page.getByRole('button', { name: '选择块：带格式原段', exact: true }).click();
     await page.getByRole('menuitem', { name: '复制所选块', exact: true }).click();
-    await expect
-      .poll(() => page.evaluate(() => navigator.clipboard.readText()))
-      .toBe('带格式原段');
     await guard.wrote('带格式原段');
     expect(await workspace.state()).toEqual(before);
     await editor.locator('[data-block-id="b"]').click();

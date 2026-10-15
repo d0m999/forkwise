@@ -27,6 +27,10 @@ import { markdownBlocks } from './markdown-paste';
 import { htmlBlocks } from './html-paste';
 import { LinkPopover } from './link-popover';
 import { clipboardImages } from './clipboard-images';
+import { TableTools } from './table-tools';
+import { CodeTools } from './code-tools';
+import { cellBlock, withCell, sameCell } from './table-selection';
+import type { TableCell } from '../../backend/src/mapping/general-blocks';
 import {
   blockText,
   nodeText,
@@ -146,6 +150,7 @@ export function ParagraphEditor({
   const [activeId, setActiveId] = useState(''),
     [menu, setMenu] = useState<Menu | null>(null);
   const [notice, setNotice] = useState('');
+  const [activeCell, setActiveCell] = useState('0,0');
   const [readingState] = useState(() => new BodyReadingState(readingIdentity));
   const reading = useRef(readingState);
   const [readingRevision, setReadingRevision] = useState(0);
@@ -361,7 +366,12 @@ export function ParagraphEditor({
     setReadingRevision((r) => r + 1);
   }
   useLayoutEffect(() => {
+    for (const cell of element.current?.querySelectorAll<HTMLElement>('[data-cell]') ?? []) {
+      cell.contentEditable = String(!readOnly);
+      cell.setAttribute('aria-readonly', String(readOnly));
+    }
     if (readOnly && element.current?.contains(document.activeElement)) {
+      (document.activeElement as HTMLElement | null)?.blur();
       element.current.blur();
       window.getSelection()?.removeAllRanges();
     }
@@ -370,7 +380,7 @@ export function ParagraphEditor({
       setNotice('原目标已失效，操作已取消');
     }
     if (readOnly) pasteEpoch.current++;
-  }, [readOnly]);
+  }, [readOnly, blocks]);
   useLayoutEffect(() => {
     const pending = pendingHistorySelection.current;
     if (!pending) return;
@@ -388,7 +398,10 @@ export function ParagraphEditor({
       point =
         saved && current.some((block) => block.id === saved.start.blockId)
           ? saved.start
-          : { blockId: current.at(-1)!.id, offset: current.at(-1)!.text?.length ?? 0 };
+          : {
+              blockId: current.at(-1)!.id,
+              offset: current.at(-1)!.text?.length ?? 0,
+            };
     restoreSelection(
       editor,
       point,
@@ -436,6 +449,8 @@ export function ParagraphEditor({
     if (!element.current || composing.current) return;
     const p = position(element.current);
     if (p.blockId) setActiveId(p.blockId);
+    const cell = selectionPoints(element.current)?.start.cell;
+    if (cell) setActiveCell(cell);
     onSelect(p);
     if (document.activeElement?.closest('.inline-toolbar, .block-menu, .link-popover')) return;
     const selection = selectionPoints(element.current);
@@ -456,6 +471,49 @@ export function ParagraphEditor({
       });
     } else setFormatTarget(null);
   }
+  function tableChange(table: Block, cell: string) {
+    const next = read(),
+      index = next.findIndex((b) => b.id === table.id);
+    if (index < 0 || !sameBlock(next[index]!, blocks.find((b) => b.id === table.id)!)) {
+      setNotice('原表格已变化，请重新选择单元格');
+      return;
+    }
+    if (sameBlock(next[index]!, table)) return;
+    next[index] = table;
+    setActiveCell(cell);
+    apply(next, { blockId: table.id, offset: 0, cell }, 'formatTable');
+  }
+  function paragraphAfter(id: string) {
+    const next = read(),
+      index = next.findIndex((b) => b.id === id);
+    if (index < 0) return;
+    const following = blank();
+    next.splice(index + 1, 0, following);
+    apply(next, { blockId: following.id, offset: 0 }, 'insertParagraph');
+  }
+  function codeChange(code: Block) {
+    const next = read(),
+      index = next.findIndex((b) => b.id === code.id);
+    if (index < 0 || !sameBlock(next[index]!, blocks.find((b) => b.id === code.id)!)) {
+      setNotice('原代码块已变化，请重新选择');
+      return;
+    }
+    if (sameBlock(next[index]!, code)) return;
+    next[index] = code;
+    apply(next, { blockId: code.id, offset: 0 }, 'formatCode');
+  }
+  async function copyCode(id: string) {
+    if (readOnly || composing.current) return;
+    const code = read().find((block) => block.id === id);
+    if (code?.type !== 'code') return;
+    onFinish();
+    try {
+      await navigator.clipboard.writeText(code.text!);
+      if (mounted.current) setNotice('已复制代码');
+    } catch {
+      if (mounted.current) setNotice('代码复制失败，原文已保留');
+    }
+  }
   function format(
     type: InlineMark['type'],
     value?: string,
@@ -472,12 +530,17 @@ export function ParagraphEditor({
     }
     const first = next.findIndex((b) => b.id === selection.start.blockId),
       last = next.findIndex((b) => b.id === selection.end.blockId);
-    if (first < 0 || last < first || !next.slice(first, last + 1).every(editableTextBlock)) {
+    const cell =
+      next[first] && sameCell(selection.start, selection.end)
+        ? cellBlock(next[first]!, selection.start.cell)
+        : null;
+    const textBlocks = cell ? [cell] : next.slice(first, last + 1);
+    if (first < 0 || last < first || !textBlocks.every(editableTextBlock)) {
       setFormatTarget(null);
       setNotice('原文字选区已失效，操作已取消');
       return;
     }
-    const ranges = next.slice(first, last + 1).map((b, i) => ({
+    const ranges = textBlocks.map((b, i) => ({
       block: b,
       start: i ? 0 : selection.start.offset,
       end: i === last - first ? selection.end.offset : b.text!.length,
@@ -503,10 +566,12 @@ export function ParagraphEditor({
       });
       if (!remove && end > start) marks.push({ type, start, end, ...(value ? { value } : {}) });
       const { marks: oldMarks, ...rest } = block;
-      next[next.findIndex((b) => b.id === block.id)] = {
+      const formatted = {
         ...rest,
         ...(marks.length ? { marks } : {}),
       };
+      const index = next.findIndex((b) => b.id === block.id);
+      next[index] = cell ? withCell(next[index]!, selection.start.cell!, formatted) : formatted;
     }
     apply(next, selection.start, 'formatInline', selection.end);
     const actual = read();
@@ -521,34 +586,44 @@ export function ParagraphEditor({
     let selection = selectionPoints(element.current!);
     let block = current.find((b) => b.id === selection?.start.blockId);
     if (anchor) {
-      const parent = anchor.closest<HTMLElement>('[data-block-id]');
+      const parent = anchor.closest<HTMLElement>('[data-cell], [data-block-id]');
       if (!parent) return;
-      block = current.find((b) => b.id === parent.dataset.blockId);
+      block = current.find(
+        (b) => b.id === parent.closest<HTMLElement>('[data-block-id]')?.dataset.blockId,
+      );
       if (!block) return;
       const prefix = document.createRange();
       prefix.selectNodeContents(parent);
       prefix.setEndBefore(anchor);
       const offset = nodeText(prefix.cloneContents()).length;
-      selection = { start: { blockId: block.id, offset }, end: { blockId: block.id, offset } };
+      const point = {
+        blockId: block.id,
+        offset,
+        ...(parent.dataset.cell ? { cell: parent.dataset.cell } : {}),
+      };
+      selection = { start: point, end: point };
     }
     if (!selection || !block || block.type === 'code') return;
+    if (selection.start.cell && !sameCell(selection.start, selection.end)) return;
+    const cell = cellBlock(block, selection.start.cell);
+    const textBlock = cell ?? block;
     const collapsed =
       selection.start.blockId === selection.end.blockId &&
       selection.start.offset === selection.end.offset;
-    const mark = ((block.marks ?? []) as InlineMark[]).find(
+    const mark = ((textBlock.marks ?? []) as InlineMark[]).find(
       (m) =>
         m.type === 'link' && m.start <= selection!.start.offset && m.end > selection!.start.offset,
     );
     if (collapsed && mark)
       selection = {
-        start: { blockId: block.id, offset: mark.start },
-        end: { blockId: block.id, offset: mark.end },
+        start: { ...selection.start, offset: mark.start },
+        end: { ...selection.end, offset: mark.end },
       };
     const first = current.findIndex((b) => b.id === selection!.start.blockId),
       last = current.findIndex((b) => b.id === selection!.end.blockId);
     if (first < 0 || last < first) return;
     const originals = current.slice(first, last + 1);
-    const text = originals
+    const text = (cell ? [cell] : originals)
       .map((b, i) =>
         (b.text ?? '').slice(
           i === 0 ? selection!.start.offset : 0,
@@ -572,7 +647,7 @@ export function ParagraphEditor({
       url: anchor?.getAttribute('href') ?? mark?.value ?? '',
       text,
       preview,
-      readOnly: !originals.every(editableTextBlock),
+      readOnly: !(cell ? [cell] : originals).every(editableTextBlock),
     });
   }
   function closeLink() {
@@ -743,7 +818,8 @@ export function ParagraphEditor({
     }
     if (
       selected &&
-      (selected.start.blockId !== selected.end.blockId ||
+      (selected.start.cell !== undefined ||
+        selected.start.blockId !== selected.end.blockId ||
         selected.start.offset !== selected.end.offset ||
         selected.end.offset < (current[index]!.text?.length ?? 0))
     ) {
@@ -884,13 +960,18 @@ export function ParagraphEditor({
   }
   const options = BLOCK_OPTIONS.filter(
     (o) =>
-      (menu?.mode !== 'convert' || o.shape.type !== 'divider') &&
+      (menu?.mode !== 'convert' || !['divider', 'table'].includes(o.shape.type!)) &&
       o.name.includes(menu?.query ?? ''),
   ).map((option) => ({
     ...option,
     disabled:
       !!menu &&
-      (!editableTextBlock(menu.signature) ||
+      ((menu.mode === 'convert' &&
+        !editableTextBlock(menu.signature) &&
+        menu.signature.type !== 'code') ||
+        (menu.mode === 'convert' &&
+          menu.signature.type === 'code' &&
+          option.shape.type !== 'text') ||
         (menu.scope?.filter((b) => !menu.scope!.some((parent) => parent.id === b.parentId))
           .length ?? 0) > 1 ||
         (!!menu.signature.parentId && option.shape.type !== 'listItem')),
@@ -925,6 +1006,23 @@ export function ParagraphEditor({
         type: 'divider',
         ...(target.inlineId ? { inlineId: target.inlineId } : {}),
       };
+    if (target.type === 'table')
+      target = {
+        id: target.id,
+        type: 'table',
+        inlineId: target.inlineId,
+        header: false,
+        rows: structuredClone(option.shape.rows),
+      };
+    if (target.type === 'code')
+      target = {
+        id: target.id,
+        type: 'code',
+        inlineId: target.inlineId,
+        text: target.text ?? '',
+        language: '',
+        wrap: false,
+      };
     if (menu.mode === 'convert' && sameBlock(block, target)) {
       element.current!.focus();
       if (menu.selection)
@@ -935,7 +1033,7 @@ export function ParagraphEditor({
       next = promoteListChildren(next, i);
     const targetIndex = reuse ? i : listEnd(next, i);
     next.splice(targetIndex, reuse ? 1 : 0, target);
-    let point = {
+    let point: BlockPoint = {
       blockId: target.id,
       offset:
         menu.mode === 'convert' ? (menu.selection?.start.offset ?? target.text?.length ?? 0) : 0,
@@ -945,6 +1043,7 @@ export function ParagraphEditor({
       next.splice(targetIndex + 1, 0, following);
       point = { blockId: following.id, offset: 0 };
     }
+    if (target.type === 'table') point = { ...point, cell: '0,0' };
     apply(
       next,
       point,
@@ -979,13 +1078,62 @@ export function ParagraphEditor({
     let next = read();
     const i = next.findIndex((b) => b.id === selection.start.blockId),
       block = next[i];
+    if (
+      block?.type === 'table' &&
+      selection.start.cell &&
+      selection.start.cell === selection.end.cell
+    ) {
+      const [r, c] = selection.start.cell.split(',').map(Number);
+      const rows = structuredClone(block.rows as TableCell[][]),
+        cell = rows[r!]![c!]!;
+      const before = sliceTextBlock(
+        { id: 'cell', type: 'text', ...cell },
+        0,
+        selection.start.offset,
+      );
+      const after = sliceTextBlock(
+        { id: 'cell', type: 'text', ...cell },
+        selection.end.offset,
+        cell.text.length,
+      );
+      const marks = [
+        ...((before.marks ?? []) as InlineMark[]),
+        ...((after.marks ?? []) as InlineMark[]).map((m) => ({
+          ...m,
+          start: m.start + selection.start.offset + 1,
+          end: m.end + selection.start.offset + 1,
+        })),
+      ];
+      rows[r!]![c!] = {
+        text: before.text! + '\n' + after.text!,
+        ...(marks.length ? { marks } : {}),
+      };
+      next[i] = { ...block, rows };
+      apply(next, { ...selection.start, offset: selection.start.offset + 1 }, 'insertLineBreak');
+      return true;
+    }
     if (block?.type === 'code' && selection.start.blockId === selection.end.blockId) {
       const text = block.text!;
+      const indentation =
+        text
+          .slice(text.lastIndexOf('\n', selection.start.offset - 1) + 1, selection.start.offset)
+          .match(/^[\t ]*/)?.[0] ?? '';
       next[i] = {
         ...block,
-        text: text.slice(0, selection.start.offset) + '\n' + text.slice(selection.end.offset),
+        text:
+          text.slice(0, selection.start.offset) +
+          '\n' +
+          indentation +
+          text.slice(selection.end.offset),
       };
-      apply(next, { blockId: block.id, offset: selection.start.offset + 1 }, 'insertLineBreak');
+      apply(
+        next,
+        {
+          blockId: block.id,
+          offset: selection.start.offset + 1 + indentation.length,
+        },
+        'insertLineBreak',
+      );
       return true;
     }
     if (!block || selection.start.blockId !== selection.end.blockId || !editableTextBlock(block))
@@ -1205,7 +1353,7 @@ export function ParagraphEditor({
           <button type="button" aria-label="插入块" onClick={() => openMenu('insert')}>
             ＋
           </button>
-          {active && editableTextBlock(active) && (
+          {active && (editableTextBlock(active) || active.type === 'code') && (
             <button type="button" aria-label="块菜单" onClick={() => openMenu('convert')}>
               <CardIcon name="更多" />
             </button>
@@ -1241,7 +1389,11 @@ export function ParagraphEditor({
                     blocks.findIndex((b) => b.id === menu.id) + 1
                   ? '子列表将保留在下方'
                   : undefined
-              : undefined
+              : menu.signature.type === 'code'
+                ? '转为段落保留全部字符与换行'
+                : menu.mode === 'convert' && editableTextBlock(menu.signature)
+                  ? '转为代码去除行内样式，保留文字与换行'
+                  : undefined
           }
           options={options}
           selected={menu.index}
@@ -1354,6 +1506,22 @@ export function ParagraphEditor({
         </BlockMenu>
       )}
       {notice && <p role="alert">{notice}</p>}
+      {!readOnly && active?.type === 'table' && (
+        <TableTools
+          table={active}
+          cell={activeCell}
+          onChange={tableChange}
+          onParagraph={() => paragraphAfter(active.id)}
+        />
+      )}
+      {!readOnly && active?.type === 'code' && (
+        <CodeTools
+          code={active}
+          onChange={codeChange}
+          onParagraph={() => paragraphAfter(active.id)}
+          onCopy={() => void copyCode(active.id)}
+        />
+      )}
       {!readOnly && (
         <div className="block-handles">
           {blockControls.map((control) => (
@@ -1446,15 +1614,21 @@ export function ParagraphEditor({
         aria-readonly={readOnly}
         contentEditable={!readOnly}
         suppressContentEditableWarning
-        onFocus={() => {
+        onFocus={(event) => {
           document.execCommand('defaultParagraphSeparator', false, 'p');
           setActiveId(position(element.current!).blockId || blocks[0]!.id);
+          const cell = (event.target as HTMLElement).dataset.cell;
+          if (cell) {
+            onFinish();
+            setActiveCell(cell);
+          }
         }}
         onPointerMove={(event) => {
           const block = (event.target as Element).closest<HTMLElement>('[data-block-id]');
           if (!menu && block) setActiveId(block.dataset.blockId!);
         }}
         onInput={(event) => {
+          if (readOnly) return;
           if (selectFrame.current !== undefined) cancelAnimationFrame(selectFrame.current);
           const next = read(),
             p = position(event.currentTarget),
@@ -1604,6 +1778,28 @@ export function ParagraphEditor({
           const action = ++interaction.current;
           event.stopPropagation();
           if (event.nativeEvent.isComposing || event.keyCode === 229 || composing.current) return;
+          const codeSelection = selectionPoints(event.currentTarget);
+          if (
+            codeSelection &&
+            read().find((b) => b.id === codeSelection.start.blockId)?.type === 'code' &&
+            codeSelection.start.blockId === codeSelection.end.blockId
+          ) {
+            if (event.key === 'Tab') {
+              event.preventDefault();
+              const replacement = replaceTextSelection(
+                read(),
+                codeSelection,
+                plainTextBlocks('  '),
+              );
+              if (replacement) apply(replacement.blocks, replacement.point, 'insertText');
+              return;
+            }
+            if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+              event.preventDefault();
+              paragraphAfter(codeSelection.start.blockId);
+              return;
+            }
+          }
           const run = typed.current;
           if (event.key.length > 1 || event.metaKey || event.ctrlKey || event.altKey)
             typed.current = null;
@@ -1649,6 +1845,36 @@ export function ParagraphEditor({
           if (event.key === 'Tab') {
             const cursor = position(event.currentTarget),
               current = read();
+            const selection = selectionPoints(event.currentTarget),
+              table = current.find((b) => b.id === cursor.blockId);
+            if (table?.type === 'table' && selection?.start.cell) {
+              event.preventDefault();
+              const rows = table.rows as TableCell[][],
+                columns = rows[0]!.length;
+              const [row, column] = selection.start.cell.split(',').map(Number);
+              const index = row! * columns + column! + (event.shiftKey ? -1 : 1);
+              if (index < 0) return;
+              const cell = `${Math.floor(index / columns)},${index % columns}`;
+              onFinish();
+              setActiveCell(cell);
+              if (index >= rows.length * columns)
+                tableChange(
+                  {
+                    ...table,
+                    rows: [...rows, rows[0]!.map(() => ({ text: '' }))],
+                  },
+                  cell,
+                );
+              else {
+                restoreSelection(event.currentTarget, {
+                  blockId: table.id,
+                  offset: 0,
+                  cell,
+                });
+                selected();
+              }
+              return;
+            }
             if (current.find((b) => b.id === cursor.blockId)?.type === 'listItem') {
               event.preventDefault();
               const next = indentList(current, cursor.blockId, event.shiftKey);
@@ -1710,6 +1936,7 @@ export function ParagraphEditor({
           if (event.key === 'Escape') {
             event.preventDefault();
             window.getSelection()?.removeAllRanges();
+            (document.activeElement as HTMLElement | null)?.blur();
             event.currentTarget.blur();
             setActiveId('');
           }
