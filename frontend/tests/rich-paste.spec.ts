@@ -98,10 +98,12 @@ test('C14-AC1 HTML预设文字色与高亮保留等价CSS和MARK语义，未知�
     'wrapper',
     'list',
   ]);
+  await expect(editor).toHaveAttribute('aria-readonly', 'false');
   await editor.press('Meta+z');
   await expect
     .poll(async () => (await workspace.state()).cards[0]!.body.blocks.map((b) => b.text))
     .toEqual(['']);
+  await expect(editor).toHaveAttribute('aria-readonly', 'false');
   await editor.press('Meta+Shift+z');
   await expect.poll(async () => (await workspace.state()).cards[0]!.body.blocks).toEqual(blocks);
   const beforeRestart = await page.locator('.workspace').getAttribute('data-snapshot');
@@ -141,10 +143,12 @@ test('C14-AC2 HTML列表和引用内段落保留段界及行内格式，历史�
   expect(blocks[1]!.marks).toEqual([{ type: 'italic', start: 6, end: 10 }]);
   await expect(editor.locator('strong')).toHaveText('first');
   await expect(editor.locator('em')).toHaveText('beta');
+  await expect(editor).toHaveAttribute('aria-readonly', 'false');
   await editor.press('Meta+z');
   await expect
     .poll(async () => (await workspace.state()).cards[0]!.body.blocks.map((b) => b.text))
     .toEqual(['']);
+  await expect(editor).toHaveAttribute('aria-readonly', 'false');
   await editor.press('Meta+Shift+z');
   await expect.poll(async () => (await workspace.state()).cards[0]!.body.blocks).toEqual(blocks);
   const beforeRestart = await page.locator('.workspace').getAttribute('data-snapshot');

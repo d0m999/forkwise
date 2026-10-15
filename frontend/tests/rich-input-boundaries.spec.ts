@@ -84,8 +84,10 @@ test('C14-AC3 列表文字选区粘贴结构化父子保留两端文字、独立
   });
   expect(new Set(blocks.map((b) => b.id)).size).toBe(3);
   expect(blocks.some((b) => ['incoming-parent', 'incoming-child'].includes(b.id))).toBe(false);
+  await expect(editor).toHaveAttribute('aria-readonly', 'false');
   await editor.press('Meta+z');
   await expect.poll(async () => (await workspace.state()).cards[0]!.body.blocks).toEqual(original);
+  await expect(editor).toHaveAttribute('aria-readonly', 'false');
   await editor.press('Meta+Shift+z');
   await expect.poll(async () => (await workspace.state()).cards[0]!.body.blocks).toEqual(blocks);
   const beforeRestart = await page.locator('.workspace').getAttribute('data-snapshot');
@@ -173,8 +175,10 @@ test('C14-AC4 跨列表文字替换保留未选子项的文字身份与有效所
   });
   expect(child).toEqual({ ...original[2], parentId: merged.id });
   expect(blocks.find((b) => b.id === 'cross-tail')).toEqual(original[3]);
+  await expect(editor).toHaveAttribute('aria-readonly', 'false');
   await editor.press('Meta+z');
   await expect.poll(async () => (await workspace.state()).cards[0]!.body.blocks).toEqual(original);
+  await expect(editor).toHaveAttribute('aria-readonly', 'false');
   await editor.press('Meta+Shift+z');
   await expect.poll(async () => (await workspace.state()).cards[0]!.body.blocks).toEqual(blocks);
   const beforeRestart = await page.locator('.workspace').getAttribute('data-snapshot');
@@ -300,8 +304,10 @@ test('C14-AC3 嵌套目标粘贴父子保持目的层级，原后代留原父项
   });
   for (const i of [0, 2, 3, 4])
     expect(blocks.find((b) => b.id === original[i]!.id)).toEqual(original[i]);
+  await expect(editor).toHaveAttribute('aria-readonly', 'false');
   await editor.press('Meta+z');
   await expect.poll(async () => (await workspace.state()).cards[0]!.body.blocks).toEqual(original);
+  await expect(editor).toHaveAttribute('aria-readonly', 'false');
   await editor.press('Meta+Shift+z');
   await expect.poll(async () => (await workspace.state()).cards[0]!.body.blocks).toEqual(blocks);
   const beforeRestart = await page.locator('.workspace').getAttribute('data-snapshot');
