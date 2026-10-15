@@ -19,4 +19,6 @@
 
 标记不注册资源，不改变 `requiredAssetIds` 的持久化前置条件，新媒体导入仍须走资源接口。可编辑块的剪切只在真实浏览器剪贴板写成功、原编辑器仍存续且原正文未变时删除；拒绝写入、正文变化或编辑器关闭时保留原文。真实浏览器 API 证据与注入拒绝、合成 composition、系统剪贴板及系统 IME 的证据分别记录。
 
+UI 核对复制前镜时使用规范正文输入；尚未保存的 DOM 行内身份不代表外部正文发生修改，空白正文同样可以接收原件副本。
+
 实现：`backend/src/mapping/contracts.ts`、`body.ts`、`mapping.ts`、`frontend/src/block-clipboard.ts`、`paragraph-editor.tsx`。公共行为回归：`backend/tests/mapping-block-transfer.test.ts`、`frontend/tests/block-transfer*.spec.ts`；所有查询和断言经正式 Mapping/HTTP/MCP 或真实浏览器入口。

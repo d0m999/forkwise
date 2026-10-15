@@ -363,7 +363,8 @@ export function ParagraphEditor({
   function apply(next: Block[], start: BlockPoint, inputType: string, end = start) {
     if (readOnly || composing.current) return;
     if (unsupportedBlockIds(next).size) {
-      onOriginalCopy(read(), next);
+      // DOM reading may assign unsaved inline identities; compare the canonical input.
+      onOriginalCopy(blocks, next);
       setMenu(null);
       return;
     }

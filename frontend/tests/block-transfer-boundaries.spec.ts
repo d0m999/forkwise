@@ -4,6 +4,49 @@ import type { Block } from '../../backend/src/mapping/contracts';
 import { preserveClipboard } from './clipboard-fixture';
 
 test.use({ actionTimeout: 6000 });
+
+test('未输入的空正文也能粘贴同项目未知原件，不误判临时行内身份为外部修改', async ({
+  page,
+  workspace,
+}, info) => {
+  await place(page, '原件卡', 80, 120);
+  await place(page, '空白目标', 420, 120);
+  const state = await workspace.state(),
+    source = state.cards.find((c) => c.title === '原件卡')!,
+    target = state.cards.find((c) => c.title === '空白目标')!;
+  const raw = { id: 'raw', type: 'vendor', original: { text: '不可丢失的原件' } };
+  await workspace.installOriginalBody(source.id, [raw]);
+  await workspace.open(page);
+  const sourceNode = page
+    .locator('.react-flow__node')
+    .filter({ has: page.getByRole('button', { name: '原件卡', exact: true }) });
+  const targetNode = page
+    .locator('.react-flow__node')
+    .filter({ has: page.getByRole('button', { name: '空白目标', exact: true }) });
+  await sourceNode.getByRole('button', { name: '编辑正文', exact: true }).click();
+  const guard = await preserveClipboard(page, info);
+  try {
+    await page.getByRole('button', { name: '选择块：vendor', exact: true }).click();
+    await page.getByRole('menuitem', { name: '复制所选块', exact: true }).click();
+    await expect
+      .poll(() => page.evaluate(() => navigator.clipboard.readText()))
+      .toBe('[vendor]');
+    await guard.wrote('[vendor]');
+    await targetNode.getByRole('button', { name: '编辑正文', exact: true }).click();
+    await page.getByRole('textbox', { name: '卡片正文', exact: true }).click();
+    await page.keyboard.press('Meta+v');
+    await expect
+      .poll(
+        async () =>
+          (await workspace.state()).cards.find((c) => c.id === target.id)!.body.blocks.length,
+      )
+      .toBe(2);
+    const saved = (await workspace.state()).cards.find((c) => c.id === target.id)!.body.blocks;
+    expect({ ...saved[1], id: 'raw' }).toEqual(raw);
+  } finally {
+    await guard.restore();
+  }
+});
 async function body(page: Page, workspace: Workspace, blocks: Block[]) {
   await place(page, '边界正文');
   const state = await workspace.state(),
