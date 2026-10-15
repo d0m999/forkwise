@@ -584,3 +584,81 @@ for (const trigger of ['末格Tab', '增加末行', '增加末列']) {
     await expect.poll(body).toEqual(original);
   });
 }
+
+test('marks-first合法表格只在明确结构动作时保存，格式和相邻完整JSON各一次undo恢复', async ({ page, workspace }) => {
+  await place(page, '合法单元格原件');
+  const initial = await workspace.state(), card = initial.cards[0]!;
+  const original = [
+    { id: 'ordered-cell-table', inlineId: 'ordered-table-inline', type: 'table', header: false, columnWidths: [140, 150], rows: [
+      [{ marks: [{ type: 'bold', start: 0, end: 1 }], text: 'x' },
+       { marks: [{ end: 1, start: 0, type: 'italic' }, { type: 'italic', start: 1, end: 2 }, { type: 'bold', start: 0, end: 2 }], text: 'yz' }],
+      [{ text: '第二行甲' }, { text: '第二行乙' }],
+    ] },
+    { id: 'ordered-neighbor-code', inlineId: 'ordered-code-inline', type: 'code', language: 'vendor-original', wrap: false, text: '<b>原件</b>\n  **literal**' },
+    { id: 'ordered-neighbor-table', inlineId: 'neighbor-inline', type: 'table', header: true, columnWidths: [170], rows: [[{ marks: [], text: '相邻表格原件' }]] },
+  ];
+  await workspace.execute(page, { commandId: crypto.randomUUID(), projectId: initial.project.id, type: 'body.edit', expected: card.body.versionId, payload: { id: card.id, blocks: original } });
+  const beforeOpen = await workspace.state();
+  await workspace.open(page);
+  await page.getByRole('button', { name: '合法单元格原件', exact: true }).click();
+  await page.getByRole('button', { name: '编辑正文', exact: true }).click();
+  const editor = page.getByRole('textbox', { name: '卡片正文', exact: true });
+  const cell = editor.locator('[data-block-id="ordered-cell-table"] [data-cell="0,0"]');
+  await cell.click();
+  expect(await workspace.state()).toEqual(beforeOpen);
+  await test.info().attach('canonical-cell-preimage', { body: JSON.stringify({ beforeOpen, uiRevision: await page.locator('.workspace').getAttribute('data-revision'), uiSnapshot: await page.locator('.workspace').getAttribute('data-snapshot') }), contentType: 'application/json' });
+  const body = async () => (await workspace.state()).cards[0]!.body.blocks;
+  const tools = page.getByRole('group', { name: '表格操作', exact: true });
+  await tools.getByRole('button', { name: '首行表头', exact: true }).click();
+  await expect.poll(body).toEqual([{ ...original[0], header: true }, ...original.slice(1)]);
+  await expect(editor).toHaveAttribute('aria-readonly', 'false');
+  await page.getByRole('button', { name: '撤销', exact: true }).click();
+  await expect.poll(body).toEqual(original);
+  await expect(editor).toHaveAttribute('aria-readonly', 'false');
+  await cell.click();
+  await tools.getByRole('spinbutton', { name: '第 1 列宽度', exact: true }).fill('340');
+  await tools.getByRole('button', { name: '应用列宽', exact: true }).click();
+  await expect.poll(body).toEqual([{ ...original[0], columnWidths: [340, 150] }, ...original.slice(1)]);
+  await expect(editor).toHaveAttribute('aria-readonly', 'false');
+  await page.getByRole('button', { name: '撤销', exact: true }).click();
+  await expect.poll(body).toEqual(original);
+  await expect(editor).toHaveAttribute('aria-readonly', 'false');
+  await cell.click();
+  await tools.getByRole('button', { name: '删除第 1 行（2 个单元格）', exact: true }).click();
+  await expect.poll(body).toEqual([{ ...original[0], rows: original[0]!.rows!.slice(1) }, ...original.slice(1)]);
+  await expect(editor).toHaveAttribute('aria-readonly', 'false');
+  await page.getByRole('button', { name: '撤销', exact: true }).click();
+  await expect.poll(body).toEqual(original);
+  await expect(editor).toHaveAttribute('aria-readonly', 'false');
+  const plainCell = editor.locator('[data-block-id="ordered-cell-table"] [data-cell="1,0"]');
+  const beforeTyping = await workspace.state();
+  await plainCell.fill('更新文字');
+  await expect.poll(async () => (await workspace.state()).cards[0]!.body.versionId).not.toBe(beforeTyping.cards[0]!.body.versionId);
+  await expect(page.getByRole('status')).toHaveText('已保存到本机');
+  const typed = await workspace.state();
+  await test.info().attach('canonical-cell-typing-postimage', { body: JSON.stringify(typed), contentType: 'application/json' });
+  expect(typed.cards[0]!.body.blocks).toEqual([{ ...original[0], rows: [original[0]!.rows![0], [{ text: '更新文字' }, original[0]!.rows![1]![1]]] }, ...original.slice(1)]);
+  await page.getByRole('button', { name: '撤销', exact: true }).click();
+  await expect.poll(body).toEqual(original);
+  await expect(editor).toHaveAttribute('aria-readonly', 'false');
+  const markedCell = editor.locator('[data-block-id="ordered-cell-table"] [data-cell="0,1"]');
+  await markedCell.evaluate((el) => {
+    el.focus();
+    const range = document.createRange(); range.selectNodeContents(el);
+    getSelection()!.removeAllRanges(); getSelection()!.addRange(range);
+  });
+  await page.keyboard.press('Shift');
+  await expect(page.getByRole('toolbar', { name: '文字格式', exact: true })).toBeVisible();
+  const beforeFormat = await workspace.state();
+  await page.keyboard.press('Control+i');
+  await expect.poll(async () => (await workspace.state()).cards[0]!.body.versionId).not.toBe(beforeFormat.cards[0]!.body.versionId);
+  await expect(page.getByRole('status')).toHaveText('已保存到本机');
+  const formatted = await workspace.state();
+  await test.info().attach('canonical-cell-format-postimage', { body: JSON.stringify(formatted), contentType: 'application/json' });
+  expect(formatted.cards[0]!.body.blocks).toEqual([{ ...original[0], rows: [[original[0]!.rows![0]![0], { text: 'yz', marks: [{ type: 'bold', start: 0, end: 2 }] }], original[0]!.rows![1]] }, ...original.slice(1)]);
+  await expect(markedCell.locator('em')).toHaveCount(0);
+  await expect(editor).toHaveAttribute('aria-readonly', 'false');
+  await page.getByRole('button', { name: '撤销', exact: true }).click();
+  await expect.poll(body).toEqual(original);
+  await test.info().attach('canonical-cell-edit-undo-original', { body: JSON.stringify(await workspace.state()), contentType: 'application/json' });
+});

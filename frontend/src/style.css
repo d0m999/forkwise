@@ -746,6 +746,7 @@ body:has(.workspace[data-board-full="true"]) .card-tooltip { display: none; }
   --body-tool-font-size: 13px;
   --body-cell-line-height: 24px;
   --body-code-line-height: 22px;
+  --body-focus-outline-offset: 2px;
 }
 .imported-table {
   overflow-x: auto;
@@ -768,7 +769,7 @@ body:has(.workspace[data-board-full="true"]) .card-tooltip { display: none; }
   white-space: pre-wrap;
   vertical-align: top;
 }
-.imported-table [data-cell] { min-height: var(--body-cell-line-height); margin: 0; font-size: var(--body-detail-font-size); line-height: var(--body-cell-line-height); outline-offset: 2px; }
+.imported-table [data-cell] { min-height: var(--body-cell-line-height); margin: 0; font-size: var(--body-detail-font-size); line-height: var(--body-cell-line-height); outline-offset: var(--body-focus-outline-offset); }
 .table-tools { position: sticky; top: 0; z-index: 3; display: flex; flex-wrap: wrap; gap: var(--body-tool-gap); padding: var(--body-section-gap); background: var(--card-color-ffffff); border: 1px solid var(--card-color-edf1fa); font-size: var(--body-tool-font-size); white-space: normal; }
 .table-tools span { flex-basis: 100%; }
 .table-tools input { width: var(--body-table-cell-min-width); }

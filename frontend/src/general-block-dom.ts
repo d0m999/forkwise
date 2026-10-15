@@ -2,6 +2,7 @@ import type { Block } from '../../backend/src/mapping/contracts';
 import type { InlineMark, TableCell } from '../../backend/src/mapping/general-blocks';
 
 const retainedBlocks = new WeakMap<HTMLElement, Block>();
+const tableCellOrigins = new WeakMap<HTMLElement, { value: TableCell; rendered: Block }>();
 
 export function nodeText(node: Node): string {
   if (node.nodeType === Node.TEXT_NODE) return node.textContent ?? '';
@@ -48,6 +49,10 @@ export function renderBlock(block: Block): HTMLElement {
       row.forEach((cell, column) => {
         const td = document.createElement(block.header && index === 0 ? 'th' : 'td');
         const content = renderBlock({ id: 'cell', type: 'text', ...cell });
+        tableCellOrigins.set(content, {
+          value: structuredClone(cell),
+          rendered: readBlock(content, 'cell', 'cell'),
+        });
         delete content.dataset.blockId;
         delete content.dataset.inlineId;
         content.dataset.cell = `${index},${column}`;
@@ -129,7 +134,12 @@ export function readBlock(element: HTMLElement, id: string, inlineId: string): B
   if (element.dataset.kind === 'table') {
     const rows = Array.from(element.querySelectorAll('tr')).map((row) =>
       Array.from(row.querySelectorAll<HTMLElement>('[data-cell]')).map((cell) => {
-        const { text, marks } = readBlock(cell, 'cell', 'cell');
+        const value = readBlock(cell, 'cell', 'cell');
+        const original = tableCellOrigins.get(cell);
+        // DOM reading normalizes key order and adjacent marks. An unchanged
+        // cell retains its full JSON; actual edits use the new inline value.
+        if (original && sameBlock(original.rendered, value)) return structuredClone(original.value);
+        const { text, marks } = value;
         return { text: text!, ...(marks ? { marks } : {}) };
       }),
     );
