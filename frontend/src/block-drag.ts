@@ -33,7 +33,7 @@ function moved(gesture: Gesture, drop: Drop): Block[] | null {
     first < 0 ||
     ids.includes(drop.parentId ?? '') ||
     !ids.every((id, i) => source[first + i]?.id === id) ||
-    (drop.index >= first && drop.index <= first + ids.length)
+    (drop.index > first && drop.index < first + ids.length)
   )
     return null;
   const roots = source

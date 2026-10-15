@@ -383,3 +383,50 @@ test('R1-S01 普通段落粘贴到嵌套列表后保持顶层与格式，一次�
     await guard.restore();
   }
 });
+
+test('R1-S02 相邻列表同序位拖为子项显示目标层级，一次撤销；原位与Esc不写历史', async ({
+  page,
+  workspace,
+}) => {
+  const originals: Block[] = [
+    { id: 'a', inlineId: 'ia', type: 'listItem', listType: 'bullet', text: '父项A' },
+    { id: 'b', inlineId: 'ib', type: 'listItem', listType: 'bullet', text: '待缩进B' },
+  ];
+  const editor = await body(page, workspace, originals);
+  async function start() {
+    const h = await page
+      .getByRole('button', { name: '选择块：待缩进B', exact: true })
+      .boundingBox();
+    await page.mouse.move(h!.x + 10, h!.y + 10);
+    await page.mouse.down();
+  }
+  const target = await editor.locator('[data-block-id="a"]').boundingBox();
+  const before = await workspace.state();
+  await start();
+  await page.mouse.move(target!.x + 30, target!.y + target!.height - 2);
+  await expect(page.getByLabel('块落点', { exact: true })).toContainText(
+    '第 2 层 · 父项：父项A',
+  );
+  await page.mouse.up();
+  await expect
+    .poll(async () => (await workspace.state()).cards[0]!.body.blocks)
+    .toEqual([originals[0], { ...originals[1], parentId: 'a' }]);
+  expect((await workspace.state()).project.revision).toBe(before.project.revision + 1);
+  await page.getByRole('button', { name: '撤销', exact: true }).click();
+  await expect
+    .poll(async () => (await workspace.state()).cards[0]!.body.blocks)
+    .toEqual(originals);
+  const restored = await workspace.state();
+  await start();
+  await page.mouse.move(target!.x + 30, target!.y + target!.height - 2);
+  await expect(page.getByLabel('块落点', { exact: true })).toBeVisible();
+  await page.keyboard.press('Escape');
+  await page.mouse.up();
+  expect(await workspace.state()).toEqual(restored);
+  const same = await editor.locator('[data-block-id="b"]').boundingBox();
+  await start();
+  await page.mouse.move(same!.x + 3, same!.y + 2);
+  await expect(page.getByLabel('块落点', { exact: true })).toHaveCount(0);
+  await page.mouse.up();
+  expect(await workspace.state()).toEqual(restored);
+});
