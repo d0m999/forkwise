@@ -271,29 +271,31 @@ export function ParagraphEditor({
     }
     const measure = () => {
       const top = wrap.getBoundingClientRect().top;
-      setBlockControls((current) => {
-        const next = blocks.flatMap((block) => {
-          const node = Array.from(editor.children).find(
-            (n) => (n as HTMLElement).dataset.blockId === block.id,
-          );
-          return !hidden.has(block.id) && node
-            ? [
-                {
-                  id: block.id,
-                  name: block.text || block.type,
-                  top: node.getBoundingClientRect().top - top,
-                },
-              ]
-            : [];
-        });
-        return JSON.stringify(current) === JSON.stringify(next) ? current : next;
+      const nodes = new Map(
+        Array.from(editor.children).map((node) => [
+          (node as HTMLElement).dataset.blockId,
+          node as HTMLElement,
+        ]),
+      );
+      const controls = blocks.flatMap((block) => {
+        const node = nodes.get(block.id);
+        return !hidden.has(block.id) && node
+          ? [
+              {
+                id: block.id,
+                name: block.text || block.type,
+                top: node.getBoundingClientRect().top - top,
+              },
+            ]
+          : [];
       });
+      setBlockControls((current) =>
+        JSON.stringify(current) === JSON.stringify(controls) ? current : controls,
+      );
       setFoldControls(
         blocks.flatMap((block, i) => {
           if (hidden.has(block.id) || foldEnd(blocks, i) <= i + 1) return [];
-          const node = Array.from(editor.children).find(
-            (n) => (n as HTMLElement).dataset.blockId === block.id,
-          );
+          const node = nodes.get(block.id);
           return node
             ? [
                 {
