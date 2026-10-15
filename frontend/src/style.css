@@ -729,6 +729,19 @@ body:has(.workspace[data-board-full="true"]) .card-tooltip { display: none; }
 .paragraph-editor [data-block-dragging="true"] { opacity: .35; outline: 1px dashed var(--editor-focus); }
 .block-drop-line { position: fixed; z-index: 100; border-top: 2px solid var(--editor-focus); pointer-events: none; }
 .block-drop-line span { position: absolute; bottom: 3px; right: 0; background: var(--card-color-ffffff); color: var(--editor-focus); font-size: 12px; }
+:root {
+  --body-detail-font-size: 1rem;
+  --body-content-padding: 12px;
+  --body-control-gap: 4px;
+  --body-section-gap: 8px;
+  --body-panel-radius: 8px;
+  --body-status-radius: 6px;
+  --body-table-cell-padding: 6px 10px;
+  --body-table-cell-min-width: 80px;
+  --body-link-panel-width: 340px;
+  --body-overlay-inset: 16px;
+  --body-overlay-shadow: 0 8px 28px var(--card-menu-shadow);
+}
 .imported-table {
   overflow-x: auto;
   max-width: 100%;
@@ -737,13 +750,13 @@ body:has(.workspace[data-board-full="true"]) .card-tooltip { display: none; }
   border-collapse: collapse;
   width: max-content;
   min-width: 100%;
-  font-size: 14px;
+  font-size: var(--body-detail-font-size);
 }
 .imported-table th,
 .imported-table td {
   border: 1px solid var(--card-color-edf1fa);
-  padding: 6px 10px;
-  min-width: 80px;
+  padding: var(--body-table-cell-padding);
+  min-width: var(--body-table-cell-min-width);
   white-space: pre-wrap;
 }
 .imported-table th {
@@ -755,34 +768,34 @@ body:has(.workspace[data-board-full="true"]) .card-tooltip { display: none; }
   z-index: 100;
   background: var(--card-color-ffffff);
   border: 1px solid var(--card-color-edf1fa);
-  border-radius: 8px;
-  padding: 12px;
-  width: 340px;
-  max-width: calc(100vw - 16px);
-  max-height: calc(100vh - 16px);
+  border-radius: var(--body-panel-radius);
+  padding: var(--body-content-padding);
+  width: var(--body-link-panel-width);
+  max-width: calc(100vw - var(--body-overlay-inset));
+  max-height: calc(100vh - var(--body-overlay-inset));
   overflow: auto;
-  box-shadow: 0 8px 28px var(--card-menu-shadow);
-  font-size: 14px;
+  box-shadow: var(--body-overlay-shadow);
+  font-size: var(--body-detail-font-size);
 }
 .link-popover p {
   overflow-wrap: anywhere;
-  margin: 0 0 8px;
+  margin: 0 0 var(--body-section-gap);
 }
 .link-popover label {
   display: grid;
-  gap: 4px;
-  margin-bottom: 8px;
+  gap: var(--body-control-gap);
+  margin-bottom: var(--body-section-gap);
 }
 .link-popover input {
   width: 100%;
 }
 .link-popover button,
 .link-popover a {
-  margin: 4px;
+  margin: var(--body-control-gap);
 }
 .pending-image {
-  padding: 12px;
+  padding: var(--body-content-padding);
   border: 1px dashed var(--card-color-edf1fa);
-  border-radius: 6px;
+  border-radius: var(--body-status-radius);
   color: var(--inline-gray);
 }

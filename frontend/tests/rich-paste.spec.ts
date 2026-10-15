@@ -36,6 +36,170 @@ async function paste(page: Page, text: string, html = '') {
   );
 }
 
+for (const sample of [
+  {
+    name: '引用中的列表',
+    plain: '引用前\n不可丢失\n引用后',
+    html: '<blockquote><p>引用前</p><ul><li>不可丢失</li></ul><p>引用后</p></blockquote>',
+  },
+  {
+    name: '单元格中的列表',
+    plain: '',
+    html: '<table><tr><td><p>表前</p><ol><li>单元格列表</li></ol><p>表后</p></td></tr></table>',
+    expected: ['表前', '单元格列表', '表后'],
+  },
+  {
+    name: '引用多层包装列表',
+    plain: '',
+    html: '<blockquote><div><p>层前</p><section><ol><li>深层列表</li></ol></section><p>层后</p></div></blockquote>',
+    expected: ['层前', '深层列表', '层后'],
+  },
+  {
+    name: '列表项包装中的子列表',
+    plain: '',
+    html: '<ul><li><p>父前</p><div><section><ul><li>包装子项</li></ul></section></div><p>父后</p></li></ul>',
+    expected: ['父前', '包装子项', '父后'],
+  },
+])
+  test(`SPEC-1 ${sample.name}完整降级提示，单次撤销及SQLite重开保留全部原文字`, async ({
+    page,
+    workspace,
+  }) => {
+    await place(page, '结构保全');
+    await page.getByRole('button', { name: '编辑正文', exact: true }).click();
+    const editor = page.getByRole('textbox', { name: '卡片正文', exact: true });
+    await editor.fill('原文完整保留');
+    await expect
+      .poll(async () => (await workspace.state()).cards[0]!.body.blocks[0]!.text)
+      .toBe('原文完整保留');
+    const before = (await workspace.state()).cards[0]!.body.blocks;
+    await expect(editor).toHaveAttribute('aria-readonly', 'false');
+    await select(page, 0, '原文完整保留'.length);
+    await paste(page, sample.plain, sample.html);
+    const expected = sample.expected ?? ['引用前', '不可丢失', '引用后'];
+    await expect
+      .poll(async () =>
+        (await workspace.state()).cards[0]!.body.blocks.map((b) => [b.type, b.text]),
+      )
+      .toEqual(expected.map((text) => ['text', text]));
+    await expect(page.getByRole('alert')).toContainText('无法可靠保留');
+    const saved = await workspace.state(),
+      blocks = saved.cards[0]!.body.blocks;
+    await expect(editor).toHaveAttribute('aria-readonly', 'false');
+    await editor.press('Meta+z');
+    await expect.poll(async () => (await workspace.state()).cards[0]!.body.blocks).toEqual(before);
+    await expect(editor).toHaveAttribute('aria-readonly', 'false');
+    await editor.press('Meta+Shift+z');
+    await expect.poll(async () => (await workspace.state()).cards[0]!.body.blocks).toEqual(blocks);
+    const oldSnapshot = await page.locator('.workspace').getAttribute('data-snapshot');
+    await workspace.restart();
+    await workspace.open(page);
+    await expect(page.locator('.workspace')).not.toHaveAttribute('data-snapshot', oldSnapshot!);
+    await page.getByRole('button', { name: '结构保全', exact: true }).click();
+    const snapshot = await page.locator('.workspace').getAttribute('data-snapshot');
+    const agent = await workspace.agentBody(saved.project.id, saved.cards[0]!.id, snapshot!);
+    expect(agent.body.blocks).toEqual(blocks);
+    expect(agent.revision).toBe((await workspace.state()).project.revision);
+  });
+
+for (const sample of [
+  {
+    name: 'DIV多段继承',
+    html: '<div style="color:#ad343e;font-weight:bold"><p>甲</p><p>乙</p></div>',
+    texts: ['甲', '乙'],
+    formats: [[['bold', 'textColor:red']], [['bold', 'textColor:red']]],
+  },
+  {
+    name: 'UL和OL父容器及子项继承',
+    html: '<div style="color:#ad343e;font-weight:bold"><ul style="font-style:italic"><li>甲<ol style="color:#2457ad"><li>乙</li></ol></li><li style="font-weight:normal">丙</li></ul><ol style="color:#6e409a"><li>丁</li></ol></div>',
+    texts: ['甲', '乙', '丙', '丁'],
+    formats: [
+      [['bold', 'italic', 'textColor:red']],
+      [['bold', 'italic', 'textColor:blue']],
+      [['italic', 'textColor:red']],
+      [['bold', 'textColor:purple']],
+    ],
+  },
+  {
+    name: '子节点预设覆盖与明确重置',
+    html: '<div style="color:#ad343e;font-weight:bold;font-style:italic;text-decoration:underline;background-color:#fff0b5"><p>甲<span style="color:#2457ad;font-weight:normal;text-decoration:none;background-color:transparent">乙</span><span style="color:initial;font-weight:normal;font-style:normal;text-decoration:none;background-color:transparent">丙</span><span style="color:#123456;background-color:#654321">丁</span>戊</p><p><mark style="background-color:#deebff">己</mark></p></div>',
+    texts: ['甲乙丙丁戊', '己'],
+    formats: [
+      [
+        ['bold', 'highlight:yellow', 'italic', 'textColor:red', 'underline'],
+        ['italic', 'textColor:blue'],
+        [],
+        ['bold', 'italic', 'underline'],
+        ['bold', 'highlight:yellow', 'italic', 'textColor:red', 'underline'],
+      ],
+      [['bold', 'highlight:blue', 'italic', 'textColor:red', 'underline']],
+    ],
+  },
+])
+  test(`SPEC-2 ${sample.name}保留有效格式和子节点优先级，历史与SQLite重开一致`, async ({
+    page,
+    workspace,
+  }) => {
+    await place(page, '样式继承');
+    await page.getByRole('button', { name: '编辑正文', exact: true }).click();
+    const editor = page.getByRole('textbox', { name: '卡片正文', exact: true });
+    await editor.fill('原文完整保留');
+    await expect
+      .poll(async () => (await workspace.state()).cards[0]!.body.blocks[0]!.text)
+      .toBe('原文完整保留');
+    const before = (await workspace.state()).cards[0]!.body.blocks;
+    await expect(editor).toHaveAttribute('aria-readonly', 'false');
+    await select(page, 0, '原文完整保留'.length);
+    await paste(page, '', sample.html);
+    await expect
+      .poll(async () => (await workspace.state()).cards[0]!.body.blocks.map((b) => b.text))
+      .toEqual(sample.texts);
+    const saved = await workspace.state(),
+      blocks = saved.cards[0]!.body.blocks;
+    // Compare effective formats for every character, including explicit empty
+    // reset ranges. Parent marks must not overlap and override child choices.
+    const formats = blocks.map((b) =>
+      Array.from(b.text!).map((_, i) =>
+        (
+          (b.marks ?? []) as {
+            type: string;
+            start: number;
+            end: number;
+            value?: string;
+          }[]
+        )
+          .filter((m) => m.start <= i && i < m.end)
+          .map((m) => m.type + (m.value ? ':' + m.value : ''))
+          .sort(),
+      ),
+    );
+    expect(formats).toEqual(sample.formats);
+    if (sample.name.startsWith('UL')) {
+      expect(blocks.map((b) => [b.type, b.listType, b.parentId ?? null])).toEqual([
+        ['listItem', 'bullet', null],
+        ['listItem', 'ordered', blocks[0]!.id],
+        ['listItem', 'bullet', null],
+        ['listItem', 'ordered', null],
+      ]);
+    }
+    await expect(page.getByRole('alert')).toHaveCount(0);
+    await expect(editor).toHaveAttribute('aria-readonly', 'false');
+    await editor.press('Meta+z');
+    await expect.poll(async () => (await workspace.state()).cards[0]!.body.blocks).toEqual(before);
+    await expect(editor).toHaveAttribute('aria-readonly', 'false');
+    await editor.press('Meta+Shift+z');
+    await expect.poll(async () => (await workspace.state()).cards[0]!.body.blocks).toEqual(blocks);
+    const oldSnapshot = await page.locator('.workspace').getAttribute('data-snapshot');
+    await workspace.restart();
+    await workspace.open(page);
+    await expect(page.locator('.workspace')).not.toHaveAttribute('data-snapshot', oldSnapshot!);
+    await page.getByRole('button', { name: '样式继承', exact: true }).click();
+    const snapshot = await page.locator('.workspace').getAttribute('data-snapshot');
+    const agent = await workspace.agentBody(saved.project.id, saved.cards[0]!.id, snapshot!);
+    expect(agent.body.blocks).toEqual(blocks);
+    expect(agent.revision).toBe((await workspace.state()).project.revision);
+  });
+
 test('C14-AC1 HTML预设文字色与高亮保留等价CSS和MARK语义，未知颜色降为文字', async ({
   page,
   workspace,

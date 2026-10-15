@@ -788,6 +788,21 @@ export function ParagraphEditor({
     setFormatTarget(null);
     apply(replacement.blocks, replacement.point, 'insertFromPaste');
   }
+  function pasteTarget(frozen: Block[], epoch: number): Block[] | null {
+    if (!mounted.current) return null;
+    const current = read();
+    if (
+      latestReadOnly.current ||
+      composing.current ||
+      pasteEpoch.current !== epoch ||
+      current.length !== frozen.length ||
+      !frozen.every((b, i) => sameBlock(b, current[i]!))
+    ) {
+      setNotice('原目标已失效，操作已取消');
+      return null;
+    }
+    return current;
+  }
   async function pasteImages(files: File[], selection: Selection, html: string, text: string) {
     const frozen = structuredClone(read()),
       epoch = ++pasteEpoch.current;
@@ -795,18 +810,8 @@ export function ParagraphEditor({
     try {
       const content = html ? htmlBlocks(html, text) : { blocks: text ? plainTextBlocks(text) : [] };
       const images = await clipboardImages(files);
-      if (!mounted.current) return;
-      const current = read();
-      if (
-        latestReadOnly.current ||
-        composing.current ||
-        pasteEpoch.current !== epoch ||
-        current.length !== frozen.length ||
-        !frozen.every((b, i) => sameBlock(b, current[i]!))
-      ) {
-        setNotice('原目标已失效，操作已取消');
-        return;
-      }
+      const current = pasteTarget(frozen, epoch);
+      if (!current) return;
       const unique = images.filter(
         (image) =>
           !content.blocks.some(
@@ -859,18 +864,8 @@ export function ParagraphEditor({
     typed.current = null;
     try {
       const text = await navigator.clipboard.readText();
-      if (!mounted.current) return;
-      const latest = read();
-      if (
-        latestReadOnly.current ||
-        composing.current ||
-        pasteEpoch.current !== epoch ||
-        latest.length !== frozen.length ||
-        !frozen.every((b, i) => sameBlock(b, latest[i]!))
-      ) {
-        setNotice('原目标已失效，操作已取消');
-        return;
-      }
+      const latest = pasteTarget(frozen, epoch);
+      if (!latest) return;
       if (!text) return;
       const inCode = latest.find((b) => b.id === selection.start.blockId)?.type === 'code';
       const replacement = replaceTextSelection(

@@ -63,82 +63,111 @@ function htmlPlain(root: ParentNode): string {
   };
   return Array.from(root.childNodes).map(visit).join('').replace(/\n$/, '');
 }
-function inline(nodes: Node[]): TableCell {
+type InlineStyle = Partial<Record<InlineMark['type'], true | string>>;
+function inlineStyle(el: Element, inherited: InlineStyle): InlineStyle {
+  const next = { ...inherited };
+  const semantic: Record<string, InlineMark['type']> = {
+    STRONG: 'bold',
+    B: 'bold',
+    EM: 'italic',
+    I: 'italic',
+    U: 'underline',
+    S: 'strikethrough',
+    STRIKE: 'strikethrough',
+    DEL: 'strikethrough',
+    CODE: 'code',
+  };
+  const type = semantic[el.tagName];
+  if (type) next[type] = true;
+  if (el.tagName === 'MARK') next.highlight = 'yellow';
+  if (el.tagName === 'A') {
+    const href = el.getAttribute('href') ?? '';
+    if (safeLink(href)) next.link = href;
+    else delete next.link;
+  }
+  const css = (el as HTMLElement).style;
+  // Resolve only supported inline formats. Explicit resets/unsupported colors
+  // clear the inherited mark instead of painting over the child's own choice.
+  const set = (type: InlineMark['type'], declaration: string, value?: true | string) => {
+    if (!declaration) return;
+    if (declaration === 'inherit' || declaration === 'unset') value = inherited[type];
+    if (value === undefined) delete next[type];
+    else next[type] = value;
+  };
+  set('bold', css.fontWeight, /^(bold|[6-9]00)$/.test(css.fontWeight) ? true : undefined);
+  set('italic', css.fontStyle, css.fontStyle === 'italic' ? true : undefined);
+  const decoration = css.textDecorationLine || css.textDecoration;
+  set('underline', decoration, decoration.includes('underline') ? true : undefined);
+  set('strikethrough', decoration, decoration.includes('line-through') ? true : undefined);
+  set('textColor', css.color, textPresets[css.color.replace(/\s/g, '')]);
+  set('highlight', css.backgroundColor, highlightPresets[css.backgroundColor.replace(/\s/g, '')]);
+  return next;
+}
+function inline(
+  nodes: Node[],
+  consumedLists: Element[] = [],
+  inherited: InlineStyle = {},
+): TableCell {
   let text = '';
   const marks: InlineMark[] = [];
-  const children = (nodes: Node[]) => {
+  const append = (value: string, style: InlineStyle) => {
+    if (!value) return;
+    const start = text.length;
+    text += value;
+    for (const [type, value] of Object.entries(style) as [InlineMark['type'], true | string][]) {
+      const previous = marks.findLast((m) => m.type === type);
+      const markValue = typeof value === 'string' ? value : undefined;
+      if (previous && previous.end === start && previous.value === markValue)
+        previous.end = text.length;
+      else
+        marks.push({
+          type,
+          start,
+          end: text.length,
+          ...(markValue ? { value: markValue } : {}),
+        });
+    }
+  };
+  const children = (nodes: Node[], style: InlineStyle) => {
     let previousBlock = false,
       seen = false;
     for (const node of nodes) {
       const tag = node instanceof Element ? node.tagName : '';
-      if (ignored.has(tag) || tag === 'UL' || tag === 'OL') continue;
+      if (ignored.has(tag)) continue;
+      if (tag === 'UL' || tag === 'OL') {
+        if (!consumedLists.includes(node as Element))
+          throw new Error('nested list requires complete plain-text fallback');
+        continue;
+      }
       const block = blockTags.has(tag);
-      // Lists/quotes/cells have a single text field: preserve their paragraph
-      // boundaries as literal line breaks, with marks measured after the break.
       if (seen && (block || previousBlock)) text += '\n';
-      visit(node);
+      visit(node, style);
       previousBlock = block;
       seen = true;
     }
   };
-  const visit = (node: Node) => {
+  const visit = (node: Node, inherited: InlineStyle) => {
     if (node.nodeType === Node.TEXT_NODE) {
-      text += node.textContent;
+      append(node.textContent ?? '', inherited);
       return;
     }
-    if (node.nodeType !== Node.ELEMENT_NODE) return;
-    const el = node as HTMLElement,
-      tag = el.tagName;
-    if (ignored.has(tag) || tag === 'UL' || tag === 'OL') return;
-    if (tag === 'BR') {
-      text += '\n';
+    if (!(node instanceof Element) || ignored.has(node.tagName)) return;
+    const style = inlineStyle(node, inherited);
+    if (node.tagName === 'BR') {
+      append('\n', style);
       return;
     }
-    const start = text.length;
-    if (tag === 'IMG') {
-      const src = el.getAttribute('src') ?? '',
-        alt = el.getAttribute('alt') ?? '';
-      if (/^https?:/i.test(src) && safeLink(src)) {
-        text += (alt ? `图片链接：${alt} ` : '') + src;
-        marks.push({ type: 'link', start, end: text.length, value: src });
-      } else text += alt || '[图片尚未支持]';
+    if (node.tagName === 'IMG') {
+      const src = node.getAttribute('src') ?? '',
+        alt = node.getAttribute('alt') ?? '';
+      if (/^https?:/i.test(src) && safeLink(src))
+        append((alt ? `图片链接：${alt} ` : '') + src, { ...style, link: src });
+      else append(alt || '[图片尚未支持]', style);
       return;
     }
-    children(Array.from(el.childNodes));
-    if (text.length === start) return;
-    const types: Record<string, InlineMark['type']> = {
-      STRONG: 'bold',
-      B: 'bold',
-      EM: 'italic',
-      I: 'italic',
-      U: 'underline',
-      S: 'strikethrough',
-      STRIKE: 'strikethrough',
-      DEL: 'strikethrough',
-      CODE: 'code',
-    };
-    const add = (type: InlineMark['type'], value?: string) =>
-      marks.push({
-        type,
-        start,
-        end: text.length,
-        ...(value ? { value } : {}),
-      });
-    if (types[tag]) add(types[tag]);
-    if (tag === 'A' && safeLink(el.getAttribute('href') ?? ''))
-      add('link', el.getAttribute('href')!);
-    const style = el.getAttribute('style') ?? '';
-    if (/(?:^|;)\s*font-weight\s*:\s*(?:bold|[6-9]00)\s*(?:;|$)/i.test(style)) add('bold');
-    if (/(?:^|;)\s*font-style\s*:\s*italic\s*(?:;|$)/i.test(style)) add('italic');
-    if (/(?:^|;)\s*text-decoration(?:-line)?\s*:[^;]*underline/i.test(style)) add('underline');
-    if (/(?:^|;)\s*text-decoration(?:-line)?\s*:[^;]*line-through/i.test(style))
-      add('strikethrough');
-    const color = textPresets[el.style.color.replace(/\s/g, '')];
-    const highlight = highlightPresets[el.style.backgroundColor.replace(/\s/g, '')];
-    if (color) add('textColor', color);
-    if (highlight || tag === 'MARK') add('highlight', highlight ?? 'yellow');
+    children(Array.from(node.childNodes), style);
   };
-  children(nodes);
+  children(nodes, inherited);
   return { text, ...(marks.length ? { marks } : {}) };
 }
 
@@ -169,7 +198,7 @@ export function htmlBlocks(html: string, plain: string): { blocks: Block[]; noti
     id: crypto.randomUUID(),
     inlineId: crypto.randomUUID(),
   });
-  const paragraph = (nodes: Node[], shape: Partial<Block> = {}) => {
+  const paragraph = (nodes: Node[], shape: Partial<Block> = {}, inherited: InlineStyle = {}) => {
     const fragment = inert.createDocumentFragment();
     nodes.forEach((n) => fragment.append(n.cloneNode(true)));
     let split = false;
@@ -179,40 +208,41 @@ export function htmlBlocks(html: string, plain: string): { blocks: Block[]; noti
       const range = inert.createRange();
       range.selectNodeContents(fragment);
       range.setEndBefore(img);
-      const before = inline(Array.from(range.cloneContents().childNodes));
+      const before = inline(Array.from(range.cloneContents().childNodes), [], inherited);
       if (before.text) blocks.push({ ...identity(), type: 'text', ...shape, ...before });
       blocks.push(image);
       split = true;
       range.deleteContents();
       img.remove();
     }
-    const after = inline(Array.from(fragment.childNodes));
+    const after = inline(Array.from(fragment.childNodes), [], inherited);
     if (!split || after.text) blocks.push({ ...identity(), type: 'text', ...shape, ...after });
   };
-  const list = (el: Element, parentId?: string) => {
+  const list = (el: Element, parentId?: string, inherited: InlineStyle = {}) => {
+    const style = inlineStyle(el, inherited);
     if (el.querySelector('img[src^="data:" i]'))
       throw new Error('image inside list requires fallback');
     for (const child of Array.from(el.children)) {
       if (child.tagName !== 'LI') throw new Error('unsupported list structure');
+      const nestedLists = Array.from(child.children).filter((c) =>
+        ['UL', 'OL'].includes(c.tagName),
+      );
       const block: Block = {
         ...identity(),
         type: 'listItem',
         listType: el.tagName === 'OL' ? 'ordered' : 'bullet',
         ...(parentId ? { parentId } : {}),
-        ...inline([child]),
+        ...inline([child], nestedLists, style),
       };
       blocks.push(block);
-      for (const nested of Array.from(child.children).filter((c) =>
-        ['UL', 'OL'].includes(c.tagName),
-      ))
-        list(nested, block.id);
+      for (const nested of nestedLists) list(nested, block.id, inlineStyle(child, style));
     }
   };
-  const visit = (parent: ParentNode) => {
+  const visit = (parent: ParentNode, inherited: InlineStyle = {}) => {
     let pending: Node[] = [];
     const flush = () => {
       if (pending.some((n) => n.textContent?.trim() || n.nodeName === 'BR' || n.nodeName === 'IMG'))
-        paragraph(pending);
+        paragraph(pending, {}, inherited);
       pending = [];
     };
     for (const node of Array.from(parent.childNodes)) {
@@ -222,7 +252,7 @@ export function htmlBlocks(html: string, plain: string): { blocks: Block[]; noti
       }
       flush();
       const tag = node.tagName;
-      if (tag === 'UL' || tag === 'OL') list(node);
+      if (tag === 'UL' || tag === 'OL') list(node, undefined, inherited);
       else if (tag === 'TABLE') {
         if (node.querySelector('img[src^="data:" i]'))
           throw new Error('image inside table requires fallback');
@@ -239,12 +269,27 @@ export function htmlBlocks(html: string, plain: string): { blocks: Block[]; noti
         )
           throw new Error('unsupported table shape');
         const caption = node.querySelector('caption');
-        if (caption) paragraph(Array.from(caption.childNodes));
+        if (caption) paragraph([caption], {}, inlineStyle(node, inherited));
         blocks.push({
           ...identity(),
           type: 'table',
           header: cells[0]!.every((c) => c.tagName === 'TH'),
-          rows: cells.map((row) => row.map((cell) => inline([cell]))),
+          rows: cells.map((row) =>
+            row.map((cell) => {
+              const ancestors: Element[] = [];
+              for (
+                let parent = cell.parentElement;
+                parent && parent !== node;
+                parent = parent.parentElement
+              )
+                ancestors.unshift(parent);
+              const style = ancestors.reduce(
+                (style, el) => inlineStyle(el, style),
+                inlineStyle(node, inherited),
+              );
+              return inline([cell], [], style);
+            }),
+          ),
         });
       } else if (tag === 'PRE')
         blocks.push({
@@ -259,7 +304,7 @@ export function htmlBlocks(html: string, plain: string): { blocks: Block[]; noti
         ['DIV', 'SECTION', 'ARTICLE'].includes(tag) &&
         Array.from(node.children).some((c) => blockTags.has(c.tagName))
       )
-        visit(node);
+        visit(node, inlineStyle(node, inherited));
       else
         paragraph(
           [node],
@@ -268,6 +313,7 @@ export function htmlBlocks(html: string, plain: string): { blocks: Block[]; noti
             : tag === 'BLOCKQUOTE'
               ? { type: 'quote' }
               : {},
+          inherited,
         );
     }
     flush();

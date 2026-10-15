@@ -462,3 +462,209 @@ test('明确粘贴等待期间关闭原卡后，晚到剪贴板内容不能落�
     [''],
   ]);
 });
+
+const editorOf = (page: any) => page.getByRole('textbox', { name: '卡片正文', exact: true });
+async function openEditor(page: any, workspace: any) {
+  await place(page, '原卡');
+  await page.getByRole('button', { name: '编辑正文', exact: true }).click();
+  const editor = editorOf(page);
+  await editor.fill('原文');
+  await expect
+    .poll(async () => (await workspace.state()).cards[0]!.body.blocks[0]!.text)
+    .toBe('原文');
+  await expect(page.getByRole('status')).toHaveText('已保存到本机');
+  return editor;
+}
+async function delayedImage(editor: any) {
+  await editor.evaluate((el: HTMLElement) => {
+    el.focus();
+    const node = el.firstElementChild!.firstChild!;
+    const range = document.createRange();
+    range.setStart(node, 1);
+    range.collapse(true);
+    getSelection()!.removeAllRanges();
+    getSelection()!.addRange(range);
+    const original = File.prototype.arrayBuffer;
+    File.prototype.arrayBuffer = function () {
+      if (this.name !== 'delayed.png') return original.call(this);
+      return new Promise((resolve) => {
+        (window as any).__releaseImage = () => {
+          File.prototype.arrayBuffer = original;
+          resolve(new Uint8Array([0, 1, 2, 255]).buffer);
+          (window as any).__releasedImage = true;
+        };
+      });
+    };
+    const data = new DataTransfer();
+    data.items.add(
+      new File([new Uint8Array([0, 1, 2, 255])], 'delayed.png', {
+        type: 'image/png',
+      }),
+    );
+    el.dispatchEvent(
+      new ClipboardEvent('paste', {
+        bubbles: true,
+        cancelable: true,
+        clipboardData: data,
+      }),
+    );
+  });
+}
+async function release(page: any) {
+  await expect
+    .poll(() => page.evaluate(() => typeof (window as any).__releaseImage))
+    .toBe('function');
+  await page.evaluate(() => (window as any).__releaseImage());
+  await expect.poll(() => page.evaluate(() => (window as any).__releasedImage)).toBe(true);
+}
+test('S14 lifecycle delayed image positive control retains bytes/history/MCP/SQLite', async ({
+  page,
+  workspace,
+}) => {
+  const editor = await openEditor(page, workspace),
+    before = (await workspace.state()).cards[0]!.body.blocks;
+  await delayedImage(editor);
+  await release(page);
+  await expect
+    .poll(
+      async () =>
+        (await workspace.state()).cards[0]!.body.blocks.find((b) => b.type === 'pendingImage')
+          ?.base64,
+    )
+    .toBe('AAEC/w==');
+  const saved = await workspace.state(),
+    blocks = saved.cards[0]!.body.blocks;
+  expect(blocks[0]!.text).toBe('原');
+  expect(blocks.at(-1)!.text).toBe('文');
+  await expect(editor.locator('img')).toHaveCount(0);
+  await expect(editor).toHaveAttribute('aria-readonly', 'false');
+  await editor.press('Meta+z');
+  await expect.poll(async () => (await workspace.state()).cards[0]!.body.blocks).toEqual(before);
+  await expect(editor).toHaveAttribute('aria-readonly', 'false');
+  await editor.press('Meta+Shift+z');
+  await expect.poll(async () => (await workspace.state()).cards[0]!.body.blocks).toEqual(blocks);
+  await expect(editor).toHaveAttribute('aria-readonly', 'false');
+  const oldSnapshot = await page.locator('.workspace').getAttribute('data-snapshot');
+  await workspace.restart();
+  await workspace.open(page);
+  await expect(page.locator('.workspace')).not.toHaveAttribute('data-snapshot', oldSnapshot!);
+  await page.getByRole('button', { name: '原卡', exact: true }).click();
+  const snapshot = await page.locator('.workspace').getAttribute('data-snapshot');
+  const agent = await workspace.agentBody(saved.project.id, saved.cards[0]!.id, snapshot!);
+  expect(agent.body.blocks).toEqual(blocks);
+  expect(agent.revision).toBe((await workspace.state()).project.revision);
+});
+test('S14 lifecycle delayed image rejects later body change', async ({ page, workspace }) => {
+  const editor = await openEditor(page, workspace);
+  await delayedImage(editor);
+  await editor.fill('后来修改');
+  await expect
+    .poll(async () => (await workspace.state()).cards[0]!.body.blocks[0]!.text)
+    .toBe('后来修改');
+  const before = await workspace.state();
+  await release(page);
+  await expect(page.getByRole('alert')).toContainText('原目标已失效');
+  expect((await workspace.state()).cards[0]!.body).toEqual(before.cards[0]!.body);
+  expect((await workspace.state()).project.revision).toBe(before.project.revision);
+});
+test('S14 lifecycle delayed image close and switch preserves both cards', async ({
+  page,
+  workspace,
+}) => {
+  const editor = await openEditor(page, workspace);
+  await delayedImage(editor);
+  await page.getByRole('button', { name: '关闭正文', exact: true }).click();
+  await place(page, '新卡', 400, 200);
+  await page.getByRole('button', { name: '编辑正文', exact: true }).last().click();
+  const before = await workspace.state();
+  await release(page);
+  await expect(editor).toBeEmpty();
+  await expect(page.getByRole('alert')).toHaveCount(0);
+  expect((await workspace.state()).cards.map((c) => c.body)).toEqual(
+    before.cards.map((c) => c.body),
+  );
+  expect((await workspace.state()).project.revision).toBe(before.project.revision);
+});
+test('S14 lifecycle delayed image active composition invalidates target', async ({
+  page,
+  workspace,
+}) => {
+  const editor = await openEditor(page, workspace);
+  await delayedImage(editor);
+  await editor.dispatchEvent('compositionstart', { data: '' });
+  const before = await workspace.state();
+  await release(page);
+  await expect(page.getByRole('alert')).toContainText('原目标已失效');
+  expect((await workspace.state()).cards[0]!.body).toEqual(before.cards[0]!.body);
+  expect((await workspace.state()).project.revision).toBe(before.project.revision);
+  await editor.dispatchEvent('compositionend', { data: '' });
+});
+test('S14 lifecycle delayed image actual history/readOnly round trip invalidates identical body', async ({
+  page,
+  workspace,
+}) => {
+  const editor = await openEditor(page, workspace);
+  await delayedImage(editor);
+  let resume: () => void = () => {};
+  const gate = new Promise<void>((resolve) => {
+    resume = resolve;
+  });
+  await page.route('**/api/mapping/execute', async (route) => {
+    if (route.request().postDataJSON()?.type === 'history.undo') await gate;
+    await route.continue();
+  });
+  await editor.press('Meta+z');
+  await expect(editor).toHaveAttribute('aria-readonly', 'true');
+  resume();
+  await expect.poll(async () => (await workspace.state()).cards[0]!.body.blocks[0]!.text).toBe('');
+  await expect(editor).toHaveAttribute('aria-readonly', 'false');
+  await editor.press('Meta+Shift+z');
+  await expect
+    .poll(async () => (await workspace.state()).cards[0]!.body.blocks[0]!.text)
+    .toBe('原文');
+  await expect(editor).toHaveAttribute('aria-readonly', 'false');
+  const before = await workspace.state();
+  await release(page);
+  await expect(page.getByRole('alert')).toContainText('原目标已失效');
+  expect((await workspace.state()).cards[0]!.body).toEqual(before.cards[0]!.body);
+  expect((await workspace.state()).project.revision).toBe(before.project.revision);
+});
+test('S14 lifecycle historical rich import color and nested paragraph boundaries share snapshot', async ({
+  page,
+  workspace,
+}) => {
+  await openEditor(page, workspace);
+  const editor = editorOf(page);
+  await editor.fill('');
+  await editor.evaluate((el: HTMLElement) => {
+    el.focus();
+    const data = new DataTransfer();
+    data.setData(
+      'text/html',
+      '<p><span style="color:#AD343E;background-color:#FFF0B5">色</span></p><ul><li><p>甲</p><p><strong>乙</strong></p></li></ul><blockquote><p>丙</p><p>丁</p></blockquote>',
+    );
+    el.dispatchEvent(
+      new ClipboardEvent('paste', {
+        bubbles: true,
+        cancelable: true,
+        clipboardData: data,
+      }),
+    );
+  });
+  await expect
+    .poll(async () => (await workspace.state()).cards[0]!.body.blocks.map((b) => b.text))
+    .toEqual(['色', '甲\n乙', '丙\n丁']);
+  const saved = await workspace.state(),
+    blocks = saved.cards[0]!.body.blocks;
+  expect(blocks[0]!.marks).toEqual(
+    expect.arrayContaining([
+      { type: 'textColor', start: 0, end: 1, value: 'red' },
+      { type: 'highlight', start: 0, end: 1, value: 'yellow' },
+    ]),
+  );
+  expect(blocks[1]!.marks).toEqual([{ type: 'bold', start: 2, end: 3 }]);
+  const snapshot = await page.locator('.workspace').getAttribute('data-snapshot');
+  const agent = await workspace.agentBody(saved.project.id, saved.cards[0]!.id, snapshot!);
+  expect(agent.body.blocks).toEqual(blocks);
+  expect(agent.revision).toBe(saved.project.revision);
+});
