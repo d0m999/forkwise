@@ -8,6 +8,7 @@ export function retainCardVersions(db: Database.Database, projectId: string, car
   );
   insert.run(projectId, 'body', card.body.id, card.body.versionId, JSON.stringify(card.body));
   insert.run(projectId, 'pose', card.item.id, card.item.versionId, JSON.stringify(card.item));
+  if (card.cardTags) insert.run(projectId, 'cardTags', card.cardTags.id, card.cardTags.versionId, JSON.stringify(card.cardTags));
   if (card.appearance)
     insert.run(
       projectId,

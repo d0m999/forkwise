@@ -18,7 +18,14 @@ const BodyInput = {
     .refine((blocks) => bodyText({ blocks }).length <= 200000, '正文文字不能超过200000')
     .optional(),
 };
+export const TagCommandSchema = z.discriminatedUnion('type', [
+  z.object({ ...Envelope, type: z.literal('tag.delete'), expected: z.object({ tag: Id, cardTags: z.record(Id, Id) }).strict(), payload: z.object({ id: Id }).strict() }).strict(),
+  z.object({ ...Envelope, type: z.literal('tag.update'), expected: Id, payload: z.object({ id: Id, name: z.string().min(1).max(240).optional(), color: z.enum(['#f1f0ec','#e3e2df','#eee0da','#f8dfc4','#f4e9b9','#dce8dd','#d9e7f1','#e8dff0','#f1dfe8','#f3dcd8']).optional() }).strict() }).strict(),
+  z.object({ ...Envelope, type: z.literal('card.tags'), expected: Id.nullable(), payload: z.object({ id: Id, tagIds: z.array(Id) }).strict() }).strict(),
+  z.object({ ...Envelope, type: z.literal('tag.create'), expected: z.union([z.null(), z.object({ cardTags: Id.nullable() }).strict()]), payload: z.object({ id: Id, name: z.string().min(1).max(240), cardId: Id.optional() }).strict() }).strict(),
+]);
 export const MappingCommand = z.discriminatedUnion('type', [
+  ...TagCommandSchema.options,
   z.object({...Envelope,type:z.literal('media.retry'),expected:Id,payload:z.object({id:Id,blockId:Id,ticket:Id}).strict()}).strict(),
   z.object({...Envelope,type:z.literal('media.finish'),expected:Id,payload:z.object({id:Id,blockId:Id,assetId:Id}).strict()}).strict(),
   z.object({...Envelope,type:z.literal('media.fail'),expected:Id,payload:z.object({id:Id,blockId:Id,reason:z.string().min(1).max(2000)}).strict()}).strict(),
@@ -27,7 +34,7 @@ export const MappingCommand = z.discriminatedUnion('type', [
     .object({
       ...Envelope,
       type: z.literal('thought.delete'),
-      expected: z.object({ thought: Id, body: Id, pose: Id, appearance: Id.nullable() }).strict(),
+      expected: z.object({ thought: Id, body: Id, pose: Id, appearance: Id.nullable(), cardTags: Id.nullable().optional() }).strict(),
       payload: z.object({ id: Id }).strict(),
     })
     .strict(),
@@ -35,7 +42,7 @@ export const MappingCommand = z.discriminatedUnion('type', [
     .object({
       ...Envelope,
       type: z.literal('card.layout'),
-      expected: z.object({ thought: Id, body: Id, pose: Id, appearance: Id.nullable() }).strict(),
+      expected: z.object({ thought: Id, body: Id, pose: Id, appearance: Id.nullable(), cardTags: Id.nullable().optional() }).strict(),
       payload: z.object({ id: Id, necessaryHeight: z.number().finite().positive() }).strict(),
     })
     .strict(),
@@ -187,6 +194,7 @@ export interface Project {
   revision: number;
 }
 export interface Card {
+  cardTags?: { id: string; versionId: string; tagIds: string[] };
   id: string;
   title: string;
   versionId: string;
@@ -204,9 +212,11 @@ export interface Card {
     heightPolicy?: { manualHeight: number | null; necessaryHeight: number; previewFloor?: number };
   };
 }
+export interface Tag { id: string; versionId: string; name: string; color: string; deleted: boolean }
 export interface ProjectState {
   project: Project;
   cards: Card[];
+  tags?: Tag[];
 }
 export interface Receipt {
   commandId: string;
@@ -220,7 +230,7 @@ export interface Receipt {
 export type VersionQuery = {
   type: 'version';
   projectId: string;
-  domain: 'body' | 'pose' | 'appearance';
+  domain: 'body' | 'pose' | 'appearance' | 'tag' | 'cardTags';
   id: string;
   versionId: string;
 };
@@ -239,6 +249,7 @@ export type ReadQuery =
   | VersionQuery;
 
 export interface Change extends Receipt {
+  tagChange?: { before: Tag | null; after: Tag };
   cardChanges?: { before: Card; after: Card }[];
   before: Project | Card | null;
   after: Project | Card | null;

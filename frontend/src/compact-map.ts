@@ -1,4 +1,4 @@
-import type { Card, ProjectState } from "../../backend/src/mapping/contracts";
+import type { Card, ProjectState, Tag } from "../../backend/src/mapping/contracts";
 import type {
   CardIndex,
   CompactPage,
@@ -95,13 +95,18 @@ export async function readCompactMap(
       title: item.title,
       versionId: item.versionId,
       item: item.item,
+      ...(item.cardTags ? { cardTags: item.cardTags } : {}),
       ...(item.appearance ? { appearance: item.appearance } : {}),
       body,
     });
   }
+  const tags = await collect<Tag>({ view: "tags", snapshot: index.first.snapshot });
+  if (tags.first.revision !== index.first.revision || tags.first.snapshot !== index.first.snapshot)
+    throw new Error("标签与卡片快照不一致，请重新读取");
   return {
     project: index.first.project,
     cards,
+    tags: tags.items,
     snapshot: index.first.snapshot,
   };
 }

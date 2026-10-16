@@ -23,6 +23,7 @@ export type Workspace = {
   execute: (page: Page, command: Record<string, unknown>) => Promise<any>;
   agentBody: (projectId: string, cardId: string, snapshot: string) => Promise<any>;
   installOriginalBody: (id: string, blocks: Block[]) => Promise<void>;
+  installOriginalTagColor: (id: string, color: string) => Promise<void>;
 };
 export const test = base.extend<{ workspace: Workspace }>({
   workspace: async ({ page }, use, testInfo) => {
@@ -127,6 +128,21 @@ export const test = base.extend<{ workspace: Workspace }>({
       await use({
         origin,
         directory,
+        installOriginalTagColor: async (id, color) => {
+          await stop();
+          try {
+            const db = new Database(join(directory, 'workspace.sqlite'));
+            try {
+              const row = db.prepare('SELECT project_id,value FROM mapping_tags WHERE id=?').get(id) as { project_id: string; value: string };
+              const tag = { ...JSON.parse(row.value), color, versionId: crypto.randomUUID() };
+              db.transaction(() => {
+                db.prepare('UPDATE mapping_tags SET value=? WHERE id=?').run(JSON.stringify(tag), id);
+                db.prepare('INSERT INTO mapping_versions VALUES(?,?,?,?,?)').run(row.project_id, 'tag', id, tag.versionId, JSON.stringify(tag));
+              })();
+              record({ event: 'legacy-tag-fixture-input', id, tagVersion: tag.versionId });
+            } finally { db.close(); }
+          } finally { await start(); }
+        },
         installOriginalBody: async (id, blocks) => {
           await stop();
           const host = openMapping(directory);

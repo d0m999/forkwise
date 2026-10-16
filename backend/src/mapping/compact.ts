@@ -1,7 +1,8 @@
 import type Database from 'better-sqlite3';
 import { randomUUID } from 'node:crypto';
 import { requireThat } from '../domain/errors.js';
-import type { Card, Project } from './contracts.js';
+import type { Card, Project, Tag } from './contracts.js';
+import { readTags } from './tags.js';
 import {
   CompactQuerySchema,
   type CompactQuery,
@@ -24,6 +25,7 @@ type PinnedCard = Omit<Card, 'body'> & {
   body: { id: string; versionId: string; blockCount: number };
 };
 type Snapshot = {
+  tags: Tag[];
   project: Project;
   cards: PinnedCard[];
   expiresAt: number;
@@ -81,6 +83,7 @@ export class CompactMaps {
             title: card.title,
             versionId: card.versionId,
             item: card.item,
+            ...(card.cardTags ? { cardTags: card.cardTags } : {}),
             ...(card.appearance ? { appearance: card.appearance } : {}),
             body: {
               id: card.body.id,
@@ -89,7 +92,8 @@ export class CompactMaps {
             },
           };
         });
-        const bytes = Buffer.byteLength(JSON.stringify({ project, cards, identities }), 'utf8');
+        const tags = readTags(this.db, query.projectId);
+        const bytes = Buffer.byteLength(JSON.stringify({ project, cards, identities, tags }), 'utf8');
         const retainedBytes = [...this.snapshots.values()].reduce(
           (sum, value) => sum + value.bytes,
           0,
@@ -101,6 +105,7 @@ export class CompactMaps {
           503,
         );
         state = {
+          tags,
           project,
           cards,
           bytes,
@@ -125,14 +130,16 @@ export class CompactMaps {
           availability: 'not_fetched' as const,
         },
         item: card.item,
+        ...(card.cardTags ? { cardTags: card.cardTags } : {}),
         ...(card.appearance ? { appearance: card.appearance } : {}),
       }))
       .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
     let fidelity: CompactPage['fidelity'] = 'index';
     let availability: CompactPage['availability'] = 'available';
     let target: CompactPage['target'];
-    const view = JSON.stringify([query.view, query.view === 'index' ? null : query.cardId]);
-    if (query.view !== 'index') {
+    const view = JSON.stringify([query.view, query.view === 'index' || query.view === 'tags' ? null : query.cardId]);
+    if (query.view === 'tags') { items = state.tags; fidelity = 'tags'; }
+    else if (query.view !== 'index') {
       const card = state.cards.find((c) => c.id === query.cardId);
       if (!card) {
         availability = state.knownIds.has(query.cardId) ? 'deleted' : 'not_found';

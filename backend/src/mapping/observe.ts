@@ -15,10 +15,14 @@ export interface ObserveOptions {
 
 function delta(change: Change): Delta {
   const domains: Delta['domains'] = [];
+  if (change.tagChange) domains.push({ domain: 'tag', id: change.tagChange.after.id });
   if (change.cardChanges) {
-    for (const c of change.cardChanges)
+    for (const c of change.cardChanges) {
       if (c.before.item.versionId !== c.after.item.versionId)
         domains.push({ domain: 'pose', id: c.after.item.id });
+      if (c.before.cardTags?.versionId !== c.after.cardTags?.versionId)
+        domains.push({ domain: 'cardTags', id: `cardTags:${c.after.id}` });
+    }
     return { ...change, domains, deletedIds: change.deletedIds ?? [] };
   }
   const card = [change.after, change.before].find(
@@ -34,7 +38,9 @@ function delta(change: Change): Delta {
       domains.push({ domain: 'pose', id: card.item.id });
     if (before?.appearance?.versionId !== after?.appearance?.versionId)
       domains.push({ domain: 'appearance', id: `appearance:${card.id}` });
-  } else domains.push({ domain: 'project', id: change.projectId });
+    if (before?.cardTags?.versionId !== after?.cardTags?.versionId)
+      domains.push({ domain: 'cardTags', id: `cardTags:${card.id}` });
+  } else if (!change.tagChange) domains.push({ domain: 'project', id: change.projectId });
   return { ...change, domains, deletedIds: change.deletedIds ?? [] };
 }
 

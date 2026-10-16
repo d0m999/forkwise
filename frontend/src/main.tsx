@@ -46,8 +46,11 @@ import { CardMenu } from "./card-menu";
 import { bodyPreviewText, useCardPresentation } from "./card-presentation";
 import { useCardLayoutSave } from "./card-layout-save";
 import { useAppearanceSave, type AppearanceInput } from "./appearance-save";
+import { ProjectTags, CardTagSummary } from "./project-tags";
+import type { Tag } from "../../backend/src/mapping/contracts";
 
 type CardData = {
+  tags: Tag[];
   card: Card;
   previewBody: Card["body"];
   editing: boolean;
@@ -140,6 +143,7 @@ function ThoughtCard({ data, selected }: NodeProps<Node<CardData>>) {
           {data.title || "未命名卡片"}
         </button>
       )}
+      <CardTagSummary card={data.card} tags={data.tags} onOpen={data.onBody} />
       {text && data.appearanceValue.showPreview && (
         <div
           className="preview-region"
@@ -1297,12 +1301,14 @@ function Workspace() {
       setError("");
       pendingAction.current = null;
       onDone?.();
+      return true;
     } catch (e) {
-      if (command.type === "thought.delete" && e instanceof MappingError && ["VERSION_CONFLICT", "NOT_FOUND", "UNAUTHORIZED", "PROJECT_FORBIDDEN", "UNTRUSTED_PRINCIPAL"].includes(e.code)) {
+      if ((command.type === "thought.delete" || command.type.startsWith("tag.") || command.type === "card.tags") && e instanceof MappingError && ["VERSION_CONFLICT", "TAG_NAME_CONFLICT", "NOT_FOUND", "UNAUTHORIZED", "PROJECT_FORBIDDEN", "UNTRUSTED_PRINCIPAL"].includes(e.code)) {
         pendingAction.current = null;
         try { await refresh(command.projectId); } catch { /* Keep the unconfirmed view; authorization polling owns retraction. */ }
       }
       fail(e);
+      return false;
     } finally {
       setBusy(false);
     }
@@ -1406,7 +1412,7 @@ function Workspace() {
     if (!(await appearance.flush()) || !(await cardLayout.flush()) || !(await pose.flush()) || !(await flush())) return;
     const card = authority.current?.project.id === projectId ? authority.current.cards.find(c => c.id === id) : undefined;
     if (!card) return;
-    await action({ commandId: crypto.randomUUID(), projectId, type: "thought.delete", expected: { thought: card.versionId, body: card.body.versionId, pose: card.item.versionId, appearance: card.appearance?.versionId ?? null }, payload: { id } });
+    await action({ commandId: crypto.randomUUID(), projectId, type: "thought.delete", expected: { thought: card.versionId, body: card.body.versionId, pose: card.item.versionId, appearance: card.appearance?.versionId ?? null, cardTags: card.cardTags?.versionId ?? null }, payload: { id } });
   }
   async function createCard(x: number, y: number) {
     if (!state) return;
@@ -1541,6 +1547,7 @@ function Workspace() {
         const draft = draftView[draftKey(state!.project.id, card.id, "body")];
         return draft ? { ...card.body, blocks: draft.blocks ?? [{ ...card.body.blocks[0]!, text: draft.value }] } : card.body;
       })(),
+      tags: state!.tags ?? [],
       editing: editing === card.id,
       title:
         draftView[draftKey(state!.project.id, card.id, "title")]?.value ??
@@ -1915,6 +1922,7 @@ function Workspace() {
             bodyBinding.current = null; setDeletedBody(null); setBodyCard(null);
           }}
         >
+          {currentBody && <ProjectTags key={state!.project.id + ':' + currentBody.id} state={state!} card={currentBody} blocked={busy || historyBlocked} execute={action} refresh={refresh} undo={id => void travel('undo', id)} />}
           {!currentBody ? (
             <section className="deleted-body" aria-label="已删除卡片">
               <p>这张卡片已删除</p>

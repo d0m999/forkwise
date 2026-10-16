@@ -19,6 +19,7 @@ import { writeGeometry } from './geometry.js';
 import { canonical } from '../domain/canonical.js';
 import { editedBlocks, requireBlockOwnership, bodyContentUnchanged, originalCopySources } from './body.js';
 import { deleteCard } from './lifecycle.js';
+import { createTagSelection, readTags, updateTag, writeCardTags, deleteTag } from './tags.js';
 import { randomUUID } from 'node:crypto';
 import { AccessService, type Principal } from '../services/access.js';
 import { requireThat } from '../domain/errors.js';
@@ -34,6 +35,7 @@ import {
   type ReadQuery,
   type VersionQuery,
   type Receipt,
+  type Tag,
 } from './contracts.js';
 
 export interface CommitOptions {
@@ -68,7 +70,9 @@ export class Mapping {
   read(query: VersionQuery & { domain: 'body' }, actor: Principal): Card['body'];
   read(query: VersionQuery & { domain: 'pose' }, actor: Principal): Card['item'];
   read(query: VersionQuery & { domain: 'appearance' }, actor: Principal): Card['appearance'];
-  read(query: VersionQuery, actor: Principal): Card['body'] | Card['item'] | Card['appearance'];
+  read(query: VersionQuery & { domain: 'tag' }, actor: Principal): Tag;
+  read(query: VersionQuery & { domain: 'cardTags' }, actor: Principal): NonNullable<Card['cardTags']>;
+  read(query: VersionQuery, actor: Principal): Card['body'] | Card['item'] | Card['appearance'] | Tag | NonNullable<Card['cardTags']>;
   read(
     query: ReadQuery,
     actor: Principal,
@@ -81,6 +85,8 @@ export class Mapping {
     | Card['appearance']
     | CardIdentity
     | CompactPage
+    | Tag
+    | NonNullable<Card['cardTags']>
     | MediaAsset {
     return this.db.transaction(() => {
       this.access.validate(actor);
@@ -132,7 +138,7 @@ export class Mapping {
           )
           .all(query.projectId) as { value: string }[]
       ).map((row) => JSON.parse(row.value) as Card);
-      return { project, cards };
+      return { project, cards, tags: readTags(this.db, project.id) };
     })();
   }
 
@@ -204,6 +210,7 @@ export class Mapping {
         let before: Card | Project | null = null;
         let after: Card | Project | null;
         let cardChanges: Change['cardChanges'];
+        let tagChange: Change['tagChange'];
         let travel: ReturnType<typeof travelHistory> | undefined;
         let revision: number;
         let changedIds: string[];
@@ -218,10 +225,48 @@ export class Mapping {
           travel = travelHistory(this.db, project, command.type, command.payload.actionId);
           ({ before, after, changedIds } = travel);
           cardChanges = travel.cardChanges;
+          tagChange = travel.tagChange;
           revision = project.revision + 1;
           this.db
             .prepare('UPDATE mapping_projects SET revision=? WHERE id=?')
             .run(revision, project.id);
+        } else if (command.type === 'tag.delete') {
+          const project = this.project(command.projectId);
+          ({ tagChange, cardChanges, changedIds } = deleteTag(this.db, command));
+          after = null;
+          revision = project.revision + 1;
+          this.db.prepare('UPDATE mapping_projects SET revision=? WHERE id=?').run(revision, project.id);
+        } else if (command.type === 'tag.create') {
+          const project = this.project(command.projectId);
+          const result = createTagSelection(this.db, command);
+          if (!result.changedIds.length) return unchanged(project.revision);
+          tagChange = result.tagChange ?? undefined;
+          if (tagChange) {
+            after = null;
+            if (result.cardChange) cardChanges = [{ before: result.cardChange.before, after: result.cardChange.after }];
+          } else {
+            before = result.cardChange!.before;
+            after = result.cardChange!.after;
+          }
+          changedIds = result.changedIds;
+          revision = project.revision + 1;
+          this.db.prepare('UPDATE mapping_projects SET revision=? WHERE id=?').run(revision, project.id);
+        } else if (command.type === 'tag.update') {
+          const project = this.project(command.projectId);
+          const created = updateTag(this.db, command);
+          if (!created) return unchanged(project.revision);
+          tagChange = created;
+          after = null;
+          changedIds = [created.after.id];
+          revision = project.revision + 1;
+          this.db.prepare('UPDATE mapping_projects SET revision=? WHERE id=?').run(revision, project.id);
+        } else if (command.type === 'card.tags') {
+          const project = this.project(command.projectId);
+          const result = writeCardTags(this.db, command);
+          if (!result) return unchanged(project.revision);
+          ({ before, after, changedIds } = result);
+          revision = project.revision + 1;
+          this.db.prepare('UPDATE mapping_projects SET revision=? WHERE id=?').run(revision, project.id);
         } else if (command.type === 'media.finish' || command.type === 'media.fail' || command.type === 'media.retry') {
           const project=this.project(command.projectId);
           const row=this.db.prepare('SELECT value FROM mapping_cards WHERE project_id=? AND id=?').get(command.projectId,command.payload.id) as {value:string}|undefined;
@@ -329,7 +374,8 @@ export class Mapping {
                 command.expected.thought === card.versionId &&
                   command.expected.body === card.body.versionId &&
                   command.expected.pose === card.item.versionId &&
-                  command.expected.appearance === (card.appearance?.versionId ?? null),
+                  command.expected.appearance === (card.appearance?.versionId ?? null) &&
+                  (command.expected.cardTags ?? null) === (card.cardTags?.versionId ?? null),
                 'VERSION_CONFLICT',
                 '卡面测量依据已更新，请重新读取',
                 409,
@@ -463,6 +509,7 @@ export class Mapping {
           projectId: command.projectId,
           revision,
           changedIds,
+          ...(tagChange?.after.deleted ? { deletedIds: [tagChange.after.id] } : {}),
           ...(command.type === 'thought.delete' ? { deletedIds: changedIds, historyTarget: { id: command.payload.id, title: before && 'body' in before ? before.title : '', label: command.type } } : {}),
           ...(travel ? { deletedIds: travel.deletedIds, historyTarget: travel.target } : {}),
           ...(after && 'body' in after
@@ -480,6 +527,7 @@ export class Mapping {
           ...receipt,
           before,
           after,
+          ...(tagChange ? { tagChange } : {}),
           ...(cardChanges ? { cardChanges } : {}),
           actor: actor.actor,
           writtenAt: new Date().toISOString(),

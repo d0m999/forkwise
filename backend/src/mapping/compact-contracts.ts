@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { Card, Project } from './contracts.js';
+import type { Card, Project, Tag } from './contracts.js';
 
 const common = {
   type: z.literal('map'),
@@ -9,6 +9,7 @@ const common = {
   budget: z.number().int().positive().max(1_048_576).default(131_072),
 };
 export const CompactQuerySchema = z.discriminatedUnion('view', [
+  z.object({ ...common, view: z.literal('tags') }).strict(),
   z.object({ ...common, view: z.literal('index') }).strict(),
   z
     .object({
@@ -29,6 +30,7 @@ export const CompactQuerySchema = z.discriminatedUnion('view', [
 ]);
 export type CompactQuery = z.input<typeof CompactQuerySchema>;
 export interface CardIndex {
+  cardTags?: Card['cardTags'];
   id: string;
   type: 'thought';
   title: string;
@@ -50,7 +52,7 @@ export interface DetailChunk {
   chunkCount: number;
   jsonText: string;
 }
-export type CompactItem = CardIndex | BodySlice | DetailChunk;
+export type CompactItem = CardIndex | BodySlice | DetailChunk | Tag;
 export interface CompactPage<T = CompactItem> {
   scope: { types: ['thought']; relations: 'not_implemented'; order: 'creation_ordinal' };
   project: Project;
@@ -61,7 +63,7 @@ export interface CompactPage<T = CompactItem> {
   bytes: number;
   totalItems: number;
   coverage: { start: number; end: number; complete: boolean };
-  fidelity: 'index' | 'partial_body' | 'lossless_json_chunks';
+  fidelity: 'index' | 'partial_body' | 'lossless_json_chunks' | 'tags';
   availability: 'available' | 'deleted' | 'not_found';
   target?: { cardId: string; bodyId?: string; versionId?: string };
   summary: null;

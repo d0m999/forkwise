@@ -2,9 +2,22 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { ApiTransport } from '../mcp-server.js';
 import { ObserveQuerySchema } from './observe-contracts.js';
+import { TagCommandSchema } from './contracts.js';
 
 // The tool is read-only. Authentication and snapshots live in Mapping, not MCP.
 export function registerCompactMapTool(server: McpServer, transport: ApiTransport) {
+  server.registerTool('forkwise_execute_tag_command', {
+    description: '在明确项目编辑委托内管理项目标签与单卡关联顺序。与本人界面共用Mapping事务、细域expected、持久commandId和统一历史；删除须先完整读取当前标签和全部受影响cardTags版本并确认。Agent不能撤销研究历史。',
+    inputSchema: z.object({ command: TagCommandSchema }).strict(),
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
+  }, async ({ command }) => {
+    try {
+      const response = await transport.call('/api/mapping/execute', 'POST', command);
+      return { content: [{ type: 'text' as const, text: JSON.stringify(response) }], structuredContent: { response } };
+    } catch (error) {
+      return { content: [{ type: 'text' as const, text: error instanceof Error ? error.message : '标签保存失败' }], isError: true };
+    }
+  });
   server.registerTool(
     'forkwise_read_asset',
     {
@@ -60,7 +73,7 @@ export function registerCompactMapTool(server: McpServer, transport: ApiTranspor
       inputSchema: z
         .object({
           projectId: z.string().min(1).max(160),
-          view: z.enum(['index', 'body', 'detail']),
+          view: z.enum(['index', 'body', 'detail', 'tags']),
           cardId: z.string().min(1).max(160).optional(),
           snapshot: z.string().uuid().optional(),
           cursor: z.string().min(1).max(2048).optional(),

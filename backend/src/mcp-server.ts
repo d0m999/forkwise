@@ -40,6 +40,7 @@ export function httpTransport(origin: string, token: string): ApiTransport {
         signal: AbortSignal.timeout(30_000),
         headers: {
           Authorization: `Bearer ${token}`,
+          ...(method !== 'GET' && method !== 'HEAD' ? { Origin: url.origin } : {}),
           ...(body ? { 'Content-Type': 'application/json' } : {}),
           ...(key ? { 'Idempotency-Key': key } : {}),
         },

@@ -74,7 +74,8 @@ export function useCardLayoutSave(
       latest.versionId !== card.versionId ||
       latest.body.versionId !== card.body.versionId ||
       latest.item.versionId !== card.item.versionId ||
-      latest.appearance?.versionId !== card.appearance?.versionId
+      latest.appearance?.versionId !== card.appearance?.versionId ||
+      latest.cardTags?.versionId !== card.cardTags?.versionId
     )
       return;
     const policy = card.item.heightPolicy;
@@ -101,6 +102,7 @@ export function useCardLayoutSave(
         body: card.body.versionId,
         pose: card.item.versionId,
         appearance: card.appearance?.versionId ?? null,
+        cardTags: card.cardTags?.versionId ?? null,
       },
       payload: { id: card.id, necessaryHeight },
     });

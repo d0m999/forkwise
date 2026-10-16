@@ -7,8 +7,10 @@ import type { Card, Change, Command, HistoryAction, Project, ProjectHistory } fr
 import { requireThat } from '../domain/errors.js';
 import { restoreGeometry } from './geometry.js';
 import { bodyContentUnchanged } from './body.js';
+import { restoreTag, restoreTagCards } from './tags.js';
 
 interface StoredAction extends HistoryAction {
+  tagChange?: Change['tagChange'];
   cardChanges?: Change['cardChanges'];
   before: Card | Project | null;
   after: Card | Project | null;
@@ -62,7 +64,7 @@ export function recordAction(
   if (command.type === 'project.create') return;
   const stack = load(db, command.projectId);
   const after = change.after;
-  const target = after ?? change.before;
+  const target = change.tagChange?.after ?? after ?? change.before;
   if (!target) return;
   const previous = stack.undo.at(-1);
   if (command.type === 'card.layout') {
@@ -122,6 +124,7 @@ export function recordAction(
       actor: change.actor,
       before: change.before,
       after,
+      ...(change.tagChange ? { tagChange: change.tagChange } : {}),
       ...(change.cardChanges ? { cardChanges: change.cardChanges } : {}),
       changedIds: change.changedIds,
     });
@@ -141,6 +144,13 @@ export function travelHistory(
   const action = from.pop();
   requireThat(action, 'HISTORY_EMPTY', '没有可撤销或重做的操作', 409);
   const desired = type === 'history.undo' ? action.before : action.after;
+  if (action.tagChange) {
+    const tagChange = restoreTag(db, project.id, action.tagChange, type);
+    const cardChanges = action.cardChanges ? restoreTagCards(db, project.id, action.cardChanges, type) : undefined;
+    (type === 'history.undo' ? stack.redo : stack.undo).push(action);
+    save(db, project.id, stack);
+    return { before: null, after: null, tagChange, cardChanges, changedIds: action.changedIds, deletedIds: tagChange.after.deleted ? [tagChange.after.id] : [], target: { ...action.target, label: action.label } };
+  }
   if (action.cardChanges) {
     const cardChanges = restoreGeometry(db, project.id, action.cardChanges, type);
     (type === 'history.undo' ? stack.redo : stack.undo).push(action);
@@ -168,6 +178,10 @@ export function travelHistory(
       }
       if (!action.changedIds.includes(after.body.id)) after.body = before.body;
       if (!action.changedIds.includes(after.item.id)) after.item = before.item;
+      if (!action.changedIds.includes(`cardTags:${after.id}`)) {
+        if (before.cardTags) after.cardTags = before.cardTags;
+        else delete after.cardTags;
+      }
       if (!action.changedIds.includes(`appearance:${after.id}`)) {
         if (before.appearance) after.appearance = before.appearance;
         else delete after.appearance;
@@ -176,8 +190,10 @@ export function travelHistory(
     if (action.changedIds.includes(after.id)) after.versionId = randomUUID();
     if (action.changedIds.includes(after.body.id)) after.body.versionId = randomUUID();
     if (action.changedIds.includes(after.item.id)) after.item.versionId = randomUUID();
-    const appearanceId = `appearance:${after.id}`;
     const restoringIdentity = !before && action.changedIds.includes(after.id);
+    if (action.changedIds.includes(`cardTags:${after.id}`) || (restoringIdentity && (after.cardTags || db.prepare("SELECT 1 FROM mapping_versions WHERE project_id=? AND domain='cardTags' AND id=? LIMIT 1").get(project.id, `cardTags:${after.id}`))))
+      after.cardTags = { id: `cardTags:${after.id}`, tagIds: after.cardTags?.tagIds ?? [], versionId: randomUUID() };
+    const appearanceId = `appearance:${after.id}`;
     if (
       action.changedIds.includes(appearanceId) ||
       (restoringIdentity &&
@@ -216,7 +232,7 @@ export function travelHistory(
         (after && 'body' in after ? after.appearance?.id : undefined))
       : undefined;
   const changedIds = [
-    ...new Set([...action.changedIds, ...(lifecycleAppearance ? [lifecycleAppearance] : [])]),
+    ...new Set([...action.changedIds, ...(lifecycleAppearance ? [lifecycleAppearance] : []), ...((!before || !after) && 'body' in identity ? [before && 'body' in before ? before.cardTags?.id : undefined, after && 'body' in after ? after.cardTags?.id : undefined].filter((id): id is string => !!id) : [])]),
   ];
   return {
     before,
