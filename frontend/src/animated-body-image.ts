@@ -39,7 +39,7 @@ export function animateBodyImage(
   let playing = false;
   canvas.style.visibility = "hidden";
   function update() {
-    if (failed) return;
+    if (failed || !ready) return;
     const requested = preferences.get(key) ?? !motion.matches;
     const nextPlaying =
       requested &&

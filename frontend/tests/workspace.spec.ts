@@ -15,6 +15,7 @@ import { join, resolve } from "node:path";
 import { createServer } from "node:net";
 
 let directory: string, server: ChildProcess, origin: string;
+let failedForEvidence = true;
 async function start() {
   server = spawn(process.execPath, ["dist/src/workspace-server.js"], {
     cwd: resolve("../backend"),
@@ -69,10 +70,16 @@ test.beforeAll(async () => {
   });
   origin = `http://127.0.0.1:${port}`;
   await start();
+  failedForEvidence = false;
+});
+test.afterEach(async ({}, info) => {
+  if (info.status !== info.expectedStatus) failedForEvidence = true;
 });
 test.afterAll(async () => {
   await stop();
-  if (directory) rmSync(directory, { recursive: true, force: true });
+  // Source verification retains failed synthetic SQLite inputs for diagnosis.
+  if (directory && !(process.env.FORKWISE_TEST_RETAIN_FAILURE && failedForEvidence))
+    rmSync(directory, { recursive: true, force: true });
 });
 test("真实 React Flow 卡片经服务重启和新浏览器上下文保持项目、身份及正文", async ({
   page,
