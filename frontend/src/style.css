@@ -853,6 +853,7 @@ body:has(.workspace[data-board-full="true"]) .card-tooltip { display: none; }
 .body-image-viewer { position: fixed; inset: 0; z-index: 1000; display: flex; flex-direction: column; background: var(--image-viewer-background); color: var(--image-viewer-ink); }
 .body-image-viewer-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: var(--body-control-gap); padding: var(--body-content-padding); }
 .body-image-viewer-toolbar button { color: inherit; }
+.body-image-viewer-toolbar button:hover { color: var(--image-viewer-ink); background: var(--editor-focus); }
 .body-image-stage { position: relative; flex: 1; min-height: 0; overflow: hidden; display: flex; align-items: center; justify-content: center; touch-action: none; cursor: grab; }
 .body-image-stage:active { cursor: grabbing; }
 .body-image-stage img, .body-image-stage canvas { max-width: none; max-height: none; flex: none; user-select: none; transform-origin: center; }

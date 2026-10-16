@@ -6,10 +6,12 @@ import { animateBodyImage } from "./animated-body-image";
 export function BodyImageViewer({
   block,
   projectId,
+  playbackPreferences,
   onClose,
 }: {
   block: Block;
   projectId: string;
+  playbackPreferences: Map<string, boolean>;
   onClose: () => void;
 }) {
   const dialog = useRef<HTMLDivElement>(null),
@@ -49,9 +51,9 @@ export function BodyImageViewer({
   useEffect(() => {
     const canvas = stage.current?.querySelector("canvas");
     if (!canvas) return;
-    const controller = animateBodyImage(canvas, new Map());
+    const controller = animateBodyImage(canvas, playbackPreferences, block.id);
     return controller.close;
-  }, []);
+  }, [playbackPreferences, block.id]);
   useEffect(() => {
     const observer = new ResizeObserver(() => {
       if (view.fit) fit();
