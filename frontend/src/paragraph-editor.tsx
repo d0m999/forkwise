@@ -1895,11 +1895,18 @@ export function ParagraphEditor({
           try {
             typed.current = null;
             const cursor = selectionPoints(event.currentTarget);
+            const copied = clipboardBlocks(event.clipboardData.getData('text/html'));
             if (read().find((b) => b.id === cursor?.start.blockId)?.type === 'code') {
+              if (
+                event.clipboardData.files.length ||
+                copied?.blocks.some((b) => ['pendingImage', 'imageTask', 'image'].includes(b.type))
+              ) {
+                setNotice('代码仅接受文字，图片字节仍保留在原剪贴板，原文已保留');
+                return;
+              }
               pasteText(event.clipboardData.getData('text/plain'), cursor);
               return;
             }
-            const copied = clipboardBlocks(event.clipboardData.getData('text/html'));
             if (copied) {
               pasteBlocks(copied.blocks, copied.readonlyIds);
               return;

@@ -484,6 +484,7 @@ for (const activation of ['Enter', 'Space']) {
       .poll(async () => (await workspace.state()).cards[0]!.body.blocks)
       .toEqual(blocks.slice(3));
     const redone = await workspace.state();
+    await expect(page.getByRole('status')).toHaveText('已保存到本机');
     await workspace.restart();
     await workspace.open(page);
     expect((await workspace.state()).cards[0]!.body).toEqual(redone.cards[0]!.body);

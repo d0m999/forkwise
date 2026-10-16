@@ -48,9 +48,13 @@ export function replaceTextSelection(
   const a = current[first],
     z = current[last];
   if (!a || !z || last < first || !inserted.length) return null;
+  if (
+    ['table', 'code'].includes(a.type) &&
+    inserted.some((block) => ['pendingImage', 'imageTask', 'image'].includes(block.type))
+  )
+    return null;
   if (a.type === 'table' && sameCell(selection.start, selection.end)) {
-    if (inserted.some((block) => block.type === 'pendingImage' || !editableBlock(block)))
-      return null;
+    if (inserted.some((block) => !editableBlock(block))) return null;
     const cell = cellBlock(a, selection.start.cell);
     if (!cell) return null;
     const inline = inserted.map((b) => ({

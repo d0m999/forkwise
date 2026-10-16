@@ -1,21 +1,149 @@
 import { test, expect, place } from './writing-board-fixture';
+import { replaceTextSelection } from '../src/paste-selection';
+import type { Block } from '../../backend/src/mapping/contracts';
+
+test('媒体块在表格和代码选区不能被纯文投影吞掉原字节或资源身份', async () => {
+  const media: Block[] = [
+    {
+      id: 'pending',
+      type: 'pendingImage',
+      name: '原字节.png',
+      mime: 'image/png',
+      base64: 'AAEC',
+      byteLength: 3,
+      status: 'unsupported',
+    },
+    {
+      id: 'task',
+      type: 'imageTask',
+      name: '原字节.png',
+      mime: 'image/png',
+      base64: 'AAEC',
+      byteLength: 3,
+      ticket: 'original-ticket',
+      width: 320,
+      height: 180,
+      status: 'queued',
+    },
+    {
+      id: 'image',
+      type: 'image',
+      assetId: 'original-asset',
+      name: '原字节.png',
+      mime: 'image/png',
+      naturalWidth: 1,
+      naturalHeight: 1,
+    },
+  ];
+  for (const target of [
+    { id: 'target', type: 'table', rows: [[{ text: '原单元格' }]] },
+    { id: 'target', type: 'code', text: '原代码', language: '', wrap: false },
+  ] as Block[]) {
+    const point = {
+      blockId: target.id,
+      offset: 1,
+      ...(target.type === 'table' ? { cell: '0,0' } : {}),
+    };
+    for (const block of media) {
+      const current = structuredClone([target]),
+        incoming = structuredClone([block]);
+      expect(replaceTextSelection(current, { start: point, end: point }, incoming)).toBeNull();
+      expect(current).toEqual([target]);
+      expect(incoming).toEqual([block]);
+    }
+  }
+});
+
+test('代码粘贴真实图片文件或结构化媒体时保完整原文和剪贴板字节', async ({ page, workspace }) => {
+  await place(page, '代码媒体边界');
+  await page.getByRole('button', { name: '编辑正文', exact: true }).click();
+  const editor = page.getByRole('textbox', { name: '卡片正文', exact: true });
+  await editor.click();
+  await page.getByRole('button', { name: '插入块', exact: true }).click();
+  await page.getByRole('menuitem', { name: '代码块', exact: true }).click();
+  await page.keyboard.insertText('原代码');
+  await expect(page.getByRole('status')).toHaveText('已保存到本机');
+  const before = await workspace.state();
+  const writes: string[] = [];
+  page.on('request', (r) => {
+    if (r.url().endsWith('/api/mapping/execute')) writes.push(r.postDataJSON().type);
+  });
+  for (const structured of [false, true]) {
+    const retained = await editor.locator('pre').evaluate(async (el, structured) => {
+      const clipboardData = new DataTransfer();
+      if (structured) {
+        const payload = {
+          format: 'forkwise-body-blocks-v1',
+          readonlyIds: [],
+          blocks: [
+            {
+              id: 'copied-task',
+              type: 'imageTask',
+              ticket: 'copied-ticket',
+              name: '原图.png',
+              mime: 'image/png',
+              base64: 'AAEC',
+              byteLength: 3,
+              width: 320,
+              height: 180,
+              status: 'queued',
+            },
+          ],
+        };
+        clipboardData.setData(
+          'text/html',
+          `<div data-forkwise-blocks="${encodeURIComponent(JSON.stringify(payload))}">原图.png</div>`,
+        );
+        clipboardData.setData('text/plain', '原图.png');
+      } else
+        clipboardData.items.add(
+          new File([new Uint8Array([0, 1, 2])], '原图.png', { type: 'image/png' }),
+        );
+      el.dispatchEvent(
+        new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData }),
+      );
+      return structured
+        ? clipboardData.getData('text/html').includes('copied-ticket')
+        : Array.from(new Uint8Array(await clipboardData.files[0]!.arrayBuffer()));
+    }, structured);
+    await expect(page.getByRole('alert')).toContainText('原文已保留');
+    expect(retained).toEqual(structured ? true : [0, 1, 2]);
+    expect(await workspace.state()).toEqual(before);
+  }
+  expect(writes).toEqual([]);
+});
 import { preserveClipboard } from './clipboard-fixture';
 test.use({ actionTimeout: 6000 });
 
 test('跨表指针切换后操作范围、列宽和一次undo始终属于当前表', async ({ page, workspace }) => {
   await place(page, '两表操作范围');
-  const initial = await workspace.state(), card = initial.cards[0]!;
+  const initial = await workspace.state(),
+    card = initial.cards[0]!;
   const rows = (height: number, width: number, name: string) =>
     Array.from({ length: height }, (_, r) =>
       Array.from({ length: width }, (_, c) => ({ text: `${name}${r + 1},${c + 1}` })),
     );
   const original = [
-    { id: 'large-table', type: 'table', header: false, rows: rows(5, 4, '大'), columnWidths: [100, 110, 120, 130] },
-    { id: 'small-table', type: 'table', header: false, rows: rows(2, 2, '小'), columnWidths: [140, 150] },
+    {
+      id: 'large-table',
+      type: 'table',
+      header: false,
+      rows: rows(5, 4, '大'),
+      columnWidths: [100, 110, 120, 130],
+    },
+    {
+      id: 'small-table',
+      type: 'table',
+      header: false,
+      rows: rows(2, 2, '小'),
+      columnWidths: [140, 150],
+    },
   ];
   await workspace.execute(page, {
-    commandId: crypto.randomUUID(), projectId: initial.project.id,
-    type: 'body.edit', expected: card.body.versionId,
+    commandId: crypto.randomUUID(),
+    projectId: initial.project.id,
+    type: 'body.edit',
+    expected: card.body.versionId,
     payload: { id: card.id, blocks: original },
   });
   await workspace.open(page);
@@ -27,12 +155,17 @@ test('跨表指针切换后操作范围、列宽和一次undo始终属于当前�
   await expect(tools).toContainText('5 行 × 4 列 · 第 5 行第 4 列');
   await editor.locator('[data-block-id="small-table"] [data-cell="0,0"]').hover();
   await expect(tools).toContainText('2 行 × 2 列 · 第 1 行第 1 列');
-  await expect(tools.getByRole('button', { name: '删除第 1 行（2 个单元格）', exact: true })).toBeVisible();
+  await expect(
+    tools.getByRole('button', { name: '删除第 1 行（2 个单元格）', exact: true }),
+  ).toBeVisible();
   await tools.getByRole('button', { name: '删除第 1 行（2 个单元格）', exact: true }).click();
   // Missing optional inline identities are assigned on the first DOM edit.
   // Compare every content field; undo must also restore the imported shape.
-  const body = async () => (await workspace.state()).cards[0]!.body.blocks.map(({ inlineId, ...block }) => block);
-  await expect.poll(body).toEqual([original[0], { ...original[1], rows: original[1]!.rows.slice(1) }]);
+  const body = async () =>
+    (await workspace.state()).cards[0]!.body.blocks.map(({ inlineId, ...block }) => block);
+  await expect
+    .poll(body)
+    .toEqual([original[0], { ...original[1], rows: original[1]!.rows.slice(1) }]);
   await expect(editor).toHaveAttribute('aria-readonly', 'false');
   await editor.press('Meta+z');
   await expect.poll(body).toEqual(original);
@@ -47,19 +180,36 @@ test('跨表指针切换后操作范围、列宽和一次undo始终属于当前�
   await expect(editor).toHaveAttribute('aria-readonly', 'false');
   await editor.locator('[data-block-id="small-table"] [data-cell="0,0"]').hover();
   await tools.getByRole('button', { name: '删除第 1 列（2 个单元格）', exact: true }).click();
-  await expect.poll(body).toEqual([original[0], { ...original[1], rows: original[1]!.rows.map(r => r.slice(1)), columnWidths: [150] }]);
+  await expect
+    .poll(body)
+    .toEqual([
+      original[0],
+      { ...original[1], rows: original[1]!.rows.map((r) => r.slice(1)), columnWidths: [150] },
+    ]);
   await expect(editor).toHaveAttribute('aria-readonly', 'false');
   await editor.press('Meta+z');
   await expect.poll(body).toEqual(original);
 });
 
-
-test('导入的代码未带可选行内身份仍能编辑语言和wrap且保留全部字面文字', async ({ page, workspace }) => {
+test('导入的代码未带可选行内身份仍能编辑语言和wrap且保留全部字面文字', async ({
+  page,
+  workspace,
+}) => {
   await place(page, '导入代码编辑');
-  const initial = await workspace.state(), card = initial.cards[0]!;
-  const original = { id: 'imported-code', type: 'code', text: '<b>literal</b>\n  **raw**', language: 'vendor-language', wrap: false };
+  const initial = await workspace.state(),
+    card = initial.cards[0]!;
+  const original = {
+    id: 'imported-code',
+    type: 'code',
+    text: '<b>literal</b>\n  **raw**',
+    language: 'vendor-language',
+    wrap: false,
+  };
   await workspace.execute(page, {
-    commandId: crypto.randomUUID(), projectId: initial.project.id, type: 'body.edit', expected: card.body.versionId,
+    commandId: crypto.randomUUID(),
+    projectId: initial.project.id,
+    type: 'body.edit',
+    expected: card.body.versionId,
     payload: { id: card.id, blocks: [original] },
   });
   await workspace.open(page);
@@ -69,14 +219,20 @@ test('导入的代码未带可选行内身份仍能编辑语言和wrap且保留�
   await editor.locator('pre').click();
   await expect(page.getByLabel('代码语言', { exact: true })).toHaveValue('vendor-language');
   await page.getByRole('button', { name: '自动换行', exact: true }).click();
-  await expect.poll(async () => (await workspace.state()).cards[0]!.body.blocks[0]).toEqual({ ...original, inlineId: expect.any(String), wrap: true });
+  await expect
+    .poll(async () => (await workspace.state()).cards[0]!.body.blocks[0])
+    .toEqual({ ...original, inlineId: expect.any(String), wrap: true });
   await expect(editor).toHaveAttribute('aria-readonly', 'false');
   await page.getByLabel('代码语言', { exact: true }).selectOption('html');
-  await expect.poll(async () => (await workspace.state()).cards[0]!.body.blocks[0]).toEqual({ ...original, inlineId: expect.any(String), wrap: true, language: 'html' });
+  await expect
+    .poll(async () => (await workspace.state()).cards[0]!.body.blocks[0])
+    .toEqual({ ...original, inlineId: expect.any(String), wrap: true, language: 'html' });
   await expect(editor.locator('b,strong,script')).toHaveCount(0);
   await expect(editor).toHaveAttribute('aria-readonly', 'false');
   await editor.press('Meta+z');
-  await expect.poll(async () => (await workspace.state()).cards[0]!.body.blocks[0]).toEqual({ ...original, inlineId: expect.any(String), wrap: true });
+  await expect
+    .poll(async () => (await workspace.state()).cards[0]!.body.blocks[0])
+    .toEqual({ ...original, inlineId: expect.any(String), wrap: true });
 });
 
 test('表格和代码组合输入优先于Enter、Tab、Esc和快捷键，代码转换保留字面文字', async ({
@@ -515,16 +671,47 @@ test('单元格行内格式和富文粘贴只保行内内容并经HTTP与MCP同s
 });
 
 for (const trigger of ['末格Tab', '增加末行', '增加末列']) {
-  test(`表格undo生命周期：${trigger}后缩回维度，操作范围与真实单元格一致`, async ({ page, workspace }) => {
+  test(`表格undo生命周期：${trigger}后缩回维度，操作范围与真实单元格一致`, async ({
+    page,
+    workspace,
+  }) => {
     await place(page, '撤销后的表格范围');
-    const initial = await workspace.state(), card = initial.cards[0]!;
+    const initial = await workspace.state(),
+      card = initial.cards[0]!;
     const original = [
-      { id: 'small-history-table', inlineId: 'small-inline', type: 'table', header: false, columnWidths: [140, 150], rows: [[{ text: '甲' }, { text: '乙' }], [{ text: '丙' }, { text: '丁' }]] },
-      { id: 'neighbor-table', inlineId: 'neighbor-inline', type: 'table', header: true, columnWidths: [170], rows: [[{ text: '相邻表格原件' }]] },
-      { id: 'neighbor-code', inlineId: 'code-inline', type: 'code', language: 'vendor-original', wrap: false, text: '<b>原件</b>\n  **literal**' },
+      {
+        id: 'small-history-table',
+        inlineId: 'small-inline',
+        type: 'table',
+        header: false,
+        columnWidths: [140, 150],
+        rows: [
+          [{ text: '甲' }, { text: '乙' }],
+          [{ text: '丙' }, { text: '丁' }],
+        ],
+      },
+      {
+        id: 'neighbor-table',
+        inlineId: 'neighbor-inline',
+        type: 'table',
+        header: true,
+        columnWidths: [170],
+        rows: [[{ text: '相邻表格原件' }]],
+      },
+      {
+        id: 'neighbor-code',
+        inlineId: 'code-inline',
+        type: 'code',
+        language: 'vendor-original',
+        wrap: false,
+        text: '<b>原件</b>\n  **literal**',
+      },
     ];
     await workspace.execute(page, {
-      commandId: crypto.randomUUID(), projectId: initial.project.id, type: 'body.edit', expected: card.body.versionId,
+      commandId: crypto.randomUUID(),
+      projectId: initial.project.id,
+      type: 'body.edit',
+      expected: card.body.versionId,
       payload: { id: card.id, blocks: original },
     });
     await workspace.open(page);
@@ -534,11 +721,19 @@ for (const trigger of ['末格Tab', '增加末行', '增加末列']) {
     const table = editor.locator('[data-block-id="small-history-table"]');
     await table.locator('[data-cell="1,1"]').click();
     if (trigger === '末格Tab') await table.locator('[data-cell="1,1"]').press('Tab');
-    else await page.getByRole('button', { name: trigger === '增加末行' ? '在下方增加行' : '在右侧增加列', exact: true }).click();
-    await expect.poll(async () => {
-      const block = (await workspace.state()).cards[0]!.body.blocks[0]!;
-      return [(block.rows as any[]).length, (block.rows as any[][])[0]!.length];
-    }).toEqual(trigger === '增加末列' ? [2, 3] : [3, 2]);
+    else
+      await page
+        .getByRole('button', {
+          name: trigger === '增加末行' ? '在下方增加行' : '在右侧增加列',
+          exact: true,
+        })
+        .click();
+    await expect
+      .poll(async () => {
+        const block = (await workspace.state()).cards[0]!.body.blocks[0]!;
+        return [(block.rows as any[]).length, (block.rows as any[][])[0]!.length];
+      })
+      .toEqual(trigger === '增加末列' ? [2, 3] : [3, 2]);
     await expect(editor).toHaveAttribute('aria-readonly', 'false');
     if (trigger === '末格Tab') await table.locator('[data-cell="2,0"]').press('Meta+z');
     else await page.getByRole('button', { name: '撤销', exact: true }).click();
@@ -552,17 +747,37 @@ for (const trigger of ['末格Tab', '增加末行', '增加末列']) {
       const node = getSelection()?.anchorNode;
       const el = node instanceof Element ? node : node?.parentElement;
       const cell = el?.closest<HTMLElement>('[data-cell]');
-      return { blockId: cell?.closest<HTMLElement>('[data-block-id]')?.dataset.blockId ?? null, cell: cell?.dataset.cell ?? null };
+      return {
+        blockId: cell?.closest<HTMLElement>('[data-block-id]')?.dataset.blockId ?? null,
+        cell: cell?.dataset.cell ?? null,
+      };
     });
-    await test.info().attach(`undo-${trigger}-actual`, { body: JSON.stringify({ trigger, declaration, selection, state: await workspace.state() }, null, 2), contentType: 'application/json' });
+    await test
+      .info()
+      .attach(`undo-${trigger}-actual`, {
+        body: JSON.stringify(
+          { trigger, declaration, selection, state: await workspace.state() },
+          null,
+          2,
+        ),
+        contentType: 'application/json',
+      });
     const match = declaration.match(/2 行 × 2 列 · 第 (\d+) 行第 (\d+) 列/);
     expect(match).not.toBeNull();
-    const row = Number(match![1]) - 1, column = Number(match![2]) - 1;
+    const row = Number(match![1]) - 1,
+      column = Number(match![2]) - 1;
     expect(row >= 0 && row < 2 && column >= 0 && column < 2).toBe(true);
     await expect(table.locator(`[data-cell="${row},${column}"]`)).toHaveCount(1);
     expect(selection).toEqual({ blockId: 'small-history-table', cell: `${row},${column}` });
-    await tools.getByRole('button', { name: `删除第 ${row + 1} 行（2 个单元格）`, exact: true }).click();
-    await expect.poll(body).toEqual([{ ...original[0], rows: original[0]!.rows!.filter((_, i) => i !== row) }, ...original.slice(1)]);
+    await tools
+      .getByRole('button', { name: `删除第 ${row + 1} 行（2 个单元格）`, exact: true })
+      .click();
+    await expect
+      .poll(body)
+      .toEqual([
+        { ...original[0], rows: original[0]!.rows!.filter((_, i) => i !== row) },
+        ...original.slice(1),
+      ]);
     await expect(editor).toHaveAttribute('aria-readonly', 'false');
     await page.getByRole('button', { name: '撤销', exact: true }).click();
     await expect.poll(body).toEqual(original);
@@ -571,33 +786,80 @@ for (const trigger of ['末格Tab', '增加末行', '增加末列']) {
     await table.locator('[data-cell="0,1"]').click();
     await tools.getByRole('spinbutton', { name: '第 2 列宽度', exact: true }).fill('277');
     await tools.getByRole('button', { name: '应用列宽', exact: true }).click();
-    await expect.poll(body).toEqual([{ ...original[0], columnWidths: [140, 277] }, ...original.slice(1)]);
+    await expect
+      .poll(body)
+      .toEqual([{ ...original[0], columnWidths: [140, 277] }, ...original.slice(1)]);
     await expect(editor).toHaveAttribute('aria-readonly', 'false');
     await page.getByRole('button', { name: '撤销', exact: true }).click();
     await expect.poll(body).toEqual(original);
     await expect(editor).toHaveAttribute('aria-readonly', 'false');
     await table.locator('[data-cell="1,1"]').click();
     await tools.getByRole('button', { name: '删除第 2 列（2 个单元格）', exact: true }).click();
-    await expect.poll(body).toEqual([{ ...original[0], columnWidths: [140], rows: original[0]!.rows!.map(r => r.slice(0, 1)) }, ...original.slice(1)]);
+    await expect
+      .poll(body)
+      .toEqual([
+        { ...original[0], columnWidths: [140], rows: original[0]!.rows!.map((r) => r.slice(0, 1)) },
+        ...original.slice(1),
+      ]);
     await expect(editor).toHaveAttribute('aria-readonly', 'false');
     await page.getByRole('button', { name: '撤销', exact: true }).click();
     await expect.poll(body).toEqual(original);
   });
 }
 
-test('marks-first合法表格只在明确结构动作时保存，格式和相邻完整JSON各一次undo恢复', async ({ page, workspace }) => {
+test('marks-first合法表格只在明确结构动作时保存，格式和相邻完整JSON各一次undo恢复', async ({
+  page,
+  workspace,
+}) => {
   await place(page, '合法单元格原件');
-  const initial = await workspace.state(), card = initial.cards[0]!;
+  const initial = await workspace.state(),
+    card = initial.cards[0]!;
   const original = [
-    { id: 'ordered-cell-table', inlineId: 'ordered-table-inline', type: 'table', header: false, columnWidths: [140, 150], rows: [
-      [{ marks: [{ type: 'bold', start: 0, end: 1 }], text: 'x' },
-       { marks: [{ end: 1, start: 0, type: 'italic' }, { type: 'italic', start: 1, end: 2 }, { type: 'bold', start: 0, end: 2 }], text: 'yz' }],
-      [{ text: '第二行甲' }, { text: '第二行乙' }],
-    ] },
-    { id: 'ordered-neighbor-code', inlineId: 'ordered-code-inline', type: 'code', language: 'vendor-original', wrap: false, text: '<b>原件</b>\n  **literal**' },
-    { id: 'ordered-neighbor-table', inlineId: 'neighbor-inline', type: 'table', header: true, columnWidths: [170], rows: [[{ marks: [], text: '相邻表格原件' }]] },
+    {
+      id: 'ordered-cell-table',
+      inlineId: 'ordered-table-inline',
+      type: 'table',
+      header: false,
+      columnWidths: [140, 150],
+      rows: [
+        [
+          { marks: [{ type: 'bold', start: 0, end: 1 }], text: 'x' },
+          {
+            marks: [
+              { end: 1, start: 0, type: 'italic' },
+              { type: 'italic', start: 1, end: 2 },
+              { type: 'bold', start: 0, end: 2 },
+            ],
+            text: 'yz',
+          },
+        ],
+        [{ text: '第二行甲' }, { text: '第二行乙' }],
+      ],
+    },
+    {
+      id: 'ordered-neighbor-code',
+      inlineId: 'ordered-code-inline',
+      type: 'code',
+      language: 'vendor-original',
+      wrap: false,
+      text: '<b>原件</b>\n  **literal**',
+    },
+    {
+      id: 'ordered-neighbor-table',
+      inlineId: 'neighbor-inline',
+      type: 'table',
+      header: true,
+      columnWidths: [170],
+      rows: [[{ marks: [], text: '相邻表格原件' }]],
+    },
   ];
-  await workspace.execute(page, { commandId: crypto.randomUUID(), projectId: initial.project.id, type: 'body.edit', expected: card.body.versionId, payload: { id: card.id, blocks: original } });
+  await workspace.execute(page, {
+    commandId: crypto.randomUUID(),
+    projectId: initial.project.id,
+    type: 'body.edit',
+    expected: card.body.versionId,
+    payload: { id: card.id, blocks: original },
+  });
   const beforeOpen = await workspace.state();
   await workspace.open(page);
   await page.getByRole('button', { name: '合法单元格原件', exact: true }).click();
@@ -606,7 +868,16 @@ test('marks-first合法表格只在明确结构动作时保存，格式和相邻
   const cell = editor.locator('[data-block-id="ordered-cell-table"] [data-cell="0,0"]');
   await cell.click();
   expect(await workspace.state()).toEqual(beforeOpen);
-  await test.info().attach('canonical-cell-preimage', { body: JSON.stringify({ beforeOpen, uiRevision: await page.locator('.workspace').getAttribute('data-revision'), uiSnapshot: await page.locator('.workspace').getAttribute('data-snapshot') }), contentType: 'application/json' });
+  await test
+    .info()
+    .attach('canonical-cell-preimage', {
+      body: JSON.stringify({
+        beforeOpen,
+        uiRevision: await page.locator('.workspace').getAttribute('data-revision'),
+        uiSnapshot: await page.locator('.workspace').getAttribute('data-snapshot'),
+      }),
+      contentType: 'application/json',
+    });
   const body = async () => (await workspace.state()).cards[0]!.body.blocks;
   const tools = page.getByRole('group', { name: '表格操作', exact: true });
   await tools.getByRole('button', { name: '首行表头', exact: true }).click();
@@ -618,14 +889,18 @@ test('marks-first合法表格只在明确结构动作时保存，格式和相邻
   await cell.click();
   await tools.getByRole('spinbutton', { name: '第 1 列宽度', exact: true }).fill('340');
   await tools.getByRole('button', { name: '应用列宽', exact: true }).click();
-  await expect.poll(body).toEqual([{ ...original[0], columnWidths: [340, 150] }, ...original.slice(1)]);
+  await expect
+    .poll(body)
+    .toEqual([{ ...original[0], columnWidths: [340, 150] }, ...original.slice(1)]);
   await expect(editor).toHaveAttribute('aria-readonly', 'false');
   await page.getByRole('button', { name: '撤销', exact: true }).click();
   await expect.poll(body).toEqual(original);
   await expect(editor).toHaveAttribute('aria-readonly', 'false');
   await cell.click();
   await tools.getByRole('button', { name: '删除第 1 行（2 个单元格）', exact: true }).click();
-  await expect.poll(body).toEqual([{ ...original[0], rows: original[0]!.rows!.slice(1) }, ...original.slice(1)]);
+  await expect
+    .poll(body)
+    .toEqual([{ ...original[0], rows: original[0]!.rows!.slice(1) }, ...original.slice(1)]);
   await expect(editor).toHaveAttribute('aria-readonly', 'false');
   await page.getByRole('button', { name: '撤销', exact: true }).click();
   await expect.poll(body).toEqual(original);
@@ -633,32 +908,68 @@ test('marks-first合法表格只在明确结构动作时保存，格式和相邻
   const plainCell = editor.locator('[data-block-id="ordered-cell-table"] [data-cell="1,0"]');
   const beforeTyping = await workspace.state();
   await plainCell.fill('更新文字');
-  await expect.poll(async () => (await workspace.state()).cards[0]!.body.versionId).not.toBe(beforeTyping.cards[0]!.body.versionId);
+  await expect
+    .poll(async () => (await workspace.state()).cards[0]!.body.versionId)
+    .not.toBe(beforeTyping.cards[0]!.body.versionId);
   await expect(page.getByRole('status')).toHaveText('已保存到本机');
   const typed = await workspace.state();
-  await test.info().attach('canonical-cell-typing-postimage', { body: JSON.stringify(typed), contentType: 'application/json' });
-  expect(typed.cards[0]!.body.blocks).toEqual([{ ...original[0], rows: [original[0]!.rows![0], [{ text: '更新文字' }, original[0]!.rows![1]![1]]] }, ...original.slice(1)]);
+  await test
+    .info()
+    .attach('canonical-cell-typing-postimage', {
+      body: JSON.stringify(typed),
+      contentType: 'application/json',
+    });
+  expect(typed.cards[0]!.body.blocks).toEqual([
+    {
+      ...original[0],
+      rows: [original[0]!.rows![0], [{ text: '更新文字' }, original[0]!.rows![1]![1]]],
+    },
+    ...original.slice(1),
+  ]);
   await page.getByRole('button', { name: '撤销', exact: true }).click();
   await expect.poll(body).toEqual(original);
   await expect(editor).toHaveAttribute('aria-readonly', 'false');
   const markedCell = editor.locator('[data-block-id="ordered-cell-table"] [data-cell="0,1"]');
   await markedCell.evaluate((el) => {
     el.focus();
-    const range = document.createRange(); range.selectNodeContents(el);
-    getSelection()!.removeAllRanges(); getSelection()!.addRange(range);
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    getSelection()!.removeAllRanges();
+    getSelection()!.addRange(range);
   });
   await page.keyboard.press('Shift');
   await expect(page.getByRole('toolbar', { name: '文字格式', exact: true })).toBeVisible();
   const beforeFormat = await workspace.state();
   await page.keyboard.press('Control+i');
-  await expect.poll(async () => (await workspace.state()).cards[0]!.body.versionId).not.toBe(beforeFormat.cards[0]!.body.versionId);
+  await expect
+    .poll(async () => (await workspace.state()).cards[0]!.body.versionId)
+    .not.toBe(beforeFormat.cards[0]!.body.versionId);
   await expect(page.getByRole('status')).toHaveText('已保存到本机');
   const formatted = await workspace.state();
-  await test.info().attach('canonical-cell-format-postimage', { body: JSON.stringify(formatted), contentType: 'application/json' });
-  expect(formatted.cards[0]!.body.blocks).toEqual([{ ...original[0], rows: [[original[0]!.rows![0]![0], { text: 'yz', marks: [{ type: 'bold', start: 0, end: 2 }] }], original[0]!.rows![1]] }, ...original.slice(1)]);
+  await test
+    .info()
+    .attach('canonical-cell-format-postimage', {
+      body: JSON.stringify(formatted),
+      contentType: 'application/json',
+    });
+  expect(formatted.cards[0]!.body.blocks).toEqual([
+    {
+      ...original[0],
+      rows: [
+        [original[0]!.rows![0]![0], { text: 'yz', marks: [{ type: 'bold', start: 0, end: 2 }] }],
+        original[0]!.rows![1],
+      ],
+    },
+    ...original.slice(1),
+  ]);
   await expect(markedCell.locator('em')).toHaveCount(0);
   await expect(editor).toHaveAttribute('aria-readonly', 'false');
   await page.getByRole('button', { name: '撤销', exact: true }).click();
   await expect.poll(body).toEqual(original);
-  await test.info().attach('canonical-cell-edit-undo-original', { body: JSON.stringify(await workspace.state()), contentType: 'application/json' });
+  await test
+    .info()
+    .attach('canonical-cell-edit-undo-original', {
+      body: JSON.stringify(await workspace.state()),
+      contentType: 'application/json',
+    });
 });
