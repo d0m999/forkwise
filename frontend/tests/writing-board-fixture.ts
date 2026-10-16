@@ -25,7 +25,7 @@ export type Workspace = {
   installOriginalBody: (id: string, blocks: Block[]) => Promise<void>;
 };
 export const test = base.extend<{ workspace: Workspace }>({
-  workspace: async ({ page }, use) => {
+  workspace: async ({ page }, use, testInfo) => {
     const directory = mkdtempSync(join(tmpdir(), "forkwise-issue10-"));
     const evidence = process.env.FORKWISE_ISSUE10_RESOURCE_LOG;
     const record = (event: Record<string, unknown>) => {
@@ -219,8 +219,12 @@ export const test = base.extend<{ workspace: Workspace }>({
         await stop();
         if (socket.listening)
           await new Promise<void>((resolve) => socket.close(() => resolve()));
-        rmSync(directory, { recursive: true, force: true });
-        record({ event: "directory-reclaimed", method: "own-direct-allocation-finally" });
+        if (process.env.FORKWISE_TEST_RETAIN_FAILURE && testInfo.status !== testInfo.expectedStatus) {
+          record({ event: "directory-retained", reason: "failed-test-evidence" });
+        } else {
+          rmSync(directory, { recursive: true, force: true });
+          record({ event: "directory-reclaimed", method: "own-direct-allocation-finally" });
+        }
       }
     }
   },

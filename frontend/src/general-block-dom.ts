@@ -33,9 +33,28 @@ export function renderBlock(block: Block, projectId?: string): HTMLElement {
   if (block.type==='image'||block.type==='imageTask') {
     p.contentEditable='false';p.className='body-image';p.tabIndex=0;
     if(block.type==='image') {
-      const image=document.createElement('img');image.src=`/api/mapping/projects/${encodeURIComponent(projectId??'')}/assets/${encodeURIComponent(String(block.assetId))}/content`;
+      const image=document.createElement('img');const url=`/api/mapping/projects/${encodeURIComponent(projectId??'')}/assets/${encodeURIComponent(String(block.assetId))}/content`;
+      if(block.mime!=='image/gif')image.src=url;
       image.alt=String(block.alt||block.name);image.width=Number(block.naturalWidth);image.height=Number(block.naturalHeight);
       image.style.width=`${Number(block.width??block.naturalWidth)}px`;image.style.maxWidth='100%';image.style.height='auto';image.style.objectFit='contain';
+      image.style.aspectRatio=`${block.naturalWidth} / ${block.naturalHeight}`;
+      if(block.mime!=='image/gif'){
+        let failure: HTMLSpanElement | undefined;
+        image.onerror=()=>{
+          if(failure)return;
+          failure=document.createElement('span');failure.className='image-load-error';failure.setAttribute('role','alert');
+          const message=document.createElement('span');message.textContent='图片加载失败，原文件仍保留';
+          const retry=document.createElement('button');retry.type='button';retry.textContent='重新加载图片';
+          retry.onclick=e=>{e.stopPropagation();image.removeAttribute('src');image.src=url;};
+          failure.append(message,retry);p.append(failure);
+        };
+        image.onload=()=>{failure?.remove();failure=undefined;};
+      }
+      if(block.mime==='image/gif'){
+        const canvas=document.createElement('canvas');canvas.width=Number(block.naturalWidth);canvas.height=Number(block.naturalHeight);canvas.style.cssText=image.style.cssText;canvas.dataset.gifUrl=url;canvas.setAttribute('role','img');canvas.setAttribute('aria-label',image.alt);
+        const button=document.createElement('button');button.type='button';button.dataset.gifToggle='';button.textContent='播放动图';button.setAttribute('aria-label','播放动图');
+        p.append(canvas,button);image.hidden=true;
+      }
       p.append(image);
       if(block.caption){const caption=document.createElement('span');caption.className='image-caption';caption.textContent=String(block.caption);p.append(caption);}
     }

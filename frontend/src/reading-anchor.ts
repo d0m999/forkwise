@@ -1,4 +1,4 @@
-export type ReadingAnchor = { blockId: string; offset: number; relativeY: number };
+export type ReadingAnchor = { blockId: string; offset: number; relativeY: number; mediaY?: number };
 function length(node: Node): number {
   if (node.nodeType === Node.TEXT_NODE) return node.textContent?.length ?? 0;
   if (node.nodeName === "BR") return 1;
@@ -33,6 +33,10 @@ export function captureReadingAnchor(scroller: HTMLElement): ReadingAnchor | nul
   const block = blocks.find(p => p.getBoundingClientRect().bottom > bounds.top + 1);
   if (!block) return null;
   const box = block.getBoundingClientRect();
+  const media = block.querySelector<HTMLElement>('canvas, img:not([hidden])')?.getBoundingClientRect();
+  if (media && media.height > 0 && media.top < bounds.top + 2 && media.bottom > bounds.top + 2) {
+    return { blockId: block.dataset.blockId!, offset: 0, relativeY: 2, mediaY: (bounds.top + 2 - media.top) / media.height };
+  }
   const range = document.caretRangeFromPoint(Math.min(box.right - 2, box.left + 8), Math.max(bounds.top + 2, box.top + 2));
   if (range && block.contains(range.startContainer)) {
     const prefix = document.createRange();
@@ -47,6 +51,13 @@ export function restoreReadingAnchor(scroller: HTMLElement, anchor: ReadingAncho
   if (!anchor) return;
   const block = Array.from(scroller.querySelectorAll<HTMLElement>("[data-block-id]")).find(p => p.dataset.blockId === anchor.blockId);
   if (!block) return;
+  if (anchor.mediaY !== undefined) {
+    const media = block.querySelector<HTMLElement>('canvas, img:not([hidden])')?.getBoundingClientRect();
+    if (media && media.height > 0) {
+      scroller.scrollTop += media.top + anchor.mediaY * media.height - scroller.getBoundingClientRect().top - anchor.relativeY;
+      return;
+    }
+  }
   const point = textPoint(block, anchor.offset);
   const rect = rectAt(point.node, point.offset);
   const top = rect.height ? rect.top : block.getBoundingClientRect().top;

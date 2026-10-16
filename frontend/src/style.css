@@ -832,15 +832,40 @@ body:has(.workspace[data-board-full="true"]) .card-tooltip { display: none; }
 .body-image:focus {
   outline: var(--body-focus-outline-width) solid var(--editor-focus);
 }
-.body-image img {
+.body-image img, .body-image canvas {
   display: block;
 }
+.body-image-grip {
+  position: absolute;
+  z-index: 8;
+  width: var(--body-image-grip-width);
+  height: var(--body-image-grip-height);
+  border: var(--body-focus-outline-width) solid var(--editor-focus);
+  border-radius: var(--body-status-radius);
+  background: var(--body-media-background);
+  cursor: ew-resize;
+  touch-action: none;
+  transform: translate(-50%, -50%);
+}
+:root { --body-image-grip-width: 16px; --body-image-grip-height: 32px; --image-viewer-background: #202421f5; --image-viewer-ink: #fff; }
+.body-image-actions { position: absolute; bottom: var(--body-control-gap); left: var(--body-content-padding); right: var(--body-content-padding); z-index: 9; max-height: 40%; overflow: auto; background: var(--body-media-background); }
+.body-image-actions > button, .body-image-actions > .body-image-details { background: var(--body-media-background); }
+.body-image-viewer { position: fixed; inset: 0; z-index: 1000; display: flex; flex-direction: column; background: var(--image-viewer-background); color: var(--image-viewer-ink); }
+.body-image-viewer-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: var(--body-control-gap); padding: var(--body-content-padding); }
+.body-image-viewer-toolbar button { color: inherit; }
+.body-image-stage { position: relative; flex: 1; min-height: 0; overflow: hidden; display: flex; align-items: center; justify-content: center; touch-action: none; cursor: grab; }
+.body-image-stage:active { cursor: grabbing; }
+.body-image-stage img, .body-image-stage canvas { max-width: none; max-height: none; flex: none; user-select: none; transform-origin: center; }
+.body-image-details { display: grid; gap: var(--body-control-gap); }
+.body-image-details label { display: grid; }
+.body-image-details textarea { max-width: 100%; font: inherit; }
 .image-caption {
   display: block;
   font-size: var(--body-tool-font-size);
   line-height: var(--body-caption-line-height);
   color: var(--inline-gray);
 }
+.image-load-error { position: absolute; top: 0; left: 0; max-width: 100%; padding: var(--body-control-gap); background: var(--body-media-background); font-size: var(--body-tool-font-size); }
 .image-progress {
   display: flex;
   flex-direction: column;

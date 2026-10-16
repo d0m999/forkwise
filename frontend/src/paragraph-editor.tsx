@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import type { Block } from '../../backend/src/mapping/contracts';
 import { plainParagraph } from '../../backend/src/mapping/body-text';
 import {
@@ -30,6 +31,10 @@ import { mediaFiles, mediaTask } from './media-input';
 import { imageTask } from '../../backend/src/mapping/media-blocks';
 import { clipboardImages } from './clipboard-images';
 import { TableTools } from './table-tools';
+import { BodyImageTools } from './body-image-tools';
+import { BodyImageViewer } from './body-image-viewer';
+import { captureReadingAnchor, restoreReadingAnchor, type ReadingAnchor } from './reading-anchor';
+import { animateBodyImage } from './animated-body-image';
 import { CodeTools } from './code-tools';
 import { cellBlock, withCell, sameCell } from './table-selection';
 import type { TableCell } from '../../backend/src/mapping/general-blocks';
@@ -156,6 +161,29 @@ export function ParagraphEditor({
   const [activeId, setActiveId] = useState(''),
     [menu, setMenu] = useState<Menu | null>(null);
   const [notice, setNotice] = useState('');
+  const gifs = useRef(new Map<HTMLCanvasElement, ReturnType<typeof animateBodyImage>>());
+  const gifPreferences = useRef(new Map<string, boolean>());
+  const [viewer, setViewer] = useState<{ block: Block; anchor: ReadingAnchor | null } | null>(null);
+  const returningFromImage = useRef<typeof viewer>(null);
+  function openImage(block: Block) {
+    const scroller = element.current!.closest<HTMLElement>('.board-scroll')!;
+    onFinish();
+    setViewer({ block: structuredClone(block), anchor: captureReadingAnchor(scroller) });
+  }
+  function closeImage() {
+    if (!viewer) return;
+    returningFromImage.current = viewer;
+    setViewer(null);
+  }
+  useLayoutEffect(() => {
+    const returning = returningFromImage.current;
+    if (viewer || !returning || !element.current) return;
+    returningFromImage.current = null;
+    const scroller = element.current!.closest<HTMLElement>('.board-scroll')!;
+    restoreReadingAnchor(scroller, returning.anchor);
+    const original = Array.from(element.current!.children).find(n => (n as HTMLElement).dataset.blockId === returning.block.id) as HTMLElement | undefined;
+    original?.focus({ preventScroll: true });
+  }, [viewer]);
   const [activeCell, setActiveCell] = useState('0,0');
   const [readingState] = useState(() => new BodyReadingState(readingIdentity));
   const reading = useRef(readingState);
@@ -296,6 +324,14 @@ export function ParagraphEditor({
     render(blocks);
     emitted.current = JSON.stringify(blocks);
   }, [blocks, supported]);
+  useLayoutEffect(() => {
+    for (const [canvas, controller] of gifs.current) if (!element.current?.contains(canvas)) { controller.close(); gifs.current.delete(canvas); }
+    for (const canvas of element.current?.querySelectorAll<HTMLCanvasElement>('canvas[data-gif-url]') ?? []) {
+      if (!gifs.current.has(canvas)) gifs.current.set(canvas, animateBodyImage(canvas, gifPreferences.current));
+    }
+    for (const controller of gifs.current.values()) controller.refresh();
+  });
+  useEffect(() => () => { for (const controller of gifs.current.values()) controller.close(); gifs.current.clear(); }, []);
   useLayoutEffect(() => {
     const editor = element.current,
       wrap = wrapper.current;
@@ -1384,12 +1420,14 @@ export function ParagraphEditor({
       </section>
     );
   const active = blocks.find((b) => b.id === activeId);
+  const imageNode = Array.from(element.current?.children ?? []).find(p => (p as HTMLElement).dataset.blockId === activeId) as HTMLElement | undefined;
   const anchor = Array.from(element.current?.children ?? [])
     .find((p) => (p as HTMLElement).dataset.blockId === activeId)
     ?.getBoundingClientRect();
   return (
     <div
       className="general-editor"
+      inert={viewer ? true : undefined}
       ref={wrapper}
       onPointerLeave={() => {
         if (!menu && !wrapper.current?.contains(document.activeElement)) setActiveId('');
@@ -1414,8 +1452,16 @@ export function ParagraphEditor({
         图片：JPEG / PNG / WebP / GIF / 静态 SVG；每次合计最多 512 KiB、4000 万像素。SVG
         仅支持安全静态子集，拒绝脚本、外联和动效。
       </p>
-      {active && ['image', 'imageTask', 'pendingImage'].includes(active.type) && !readOnly && (
-        <div role="group" aria-label="正文图片操作">
+      {active && imageNode && ['image', 'imageTask', 'pendingImage'].includes(active.type) && !readOnly && createPortal(
+        <div className="body-image-actions" role="group" aria-label="正文图片操作">
+          {active.type === 'image' && <button onClick={() => openImage(active)}>查看大图</button>}
+          {active.type === 'image' && imageNode && <BodyImageTools key={active.id} block={active} node={imageNode} onComposition={value => { composing.current = value; onComposition(value); }} onChange={next => {
+            const current = read(), index = current.findIndex(b => b.id === active.id);
+            if (index < 0 || !sameBlock(current[index]!, active)) { setNotice('原图片已变化，请重新选择'); return; }
+            if (sameBlock(active, next)) return;
+            current[index] = next;
+            apply(current, { blockId: active.id, offset: 0 }, 'formatImage');
+          }} />}
           {active.type === 'image' && (
             <button
               onClick={() =>
@@ -1466,8 +1512,9 @@ export function ParagraphEditor({
           >
             {imageTask(active) ? '取消图片任务' : '删除正文图片'}
           </button>
-        </div>
+        </div>, element.current!.closest('.body-editor')!,
       )}
+      {viewer && <BodyImageViewer block={viewer.block} projectId={projectId} onClose={closeImage} />}
       {blocks.length === 1 && blocks[0]!.type === 'text' && !blocks[0]!.text && (
         <span className="body-placeholder" aria-hidden="true">
           输入文字，或用 / 插入
@@ -1941,6 +1988,11 @@ export function ParagraphEditor({
           } catch {
             setNotice('块剪贴板无法读取，原文已保留');
           }
+        }}
+        onDoubleClick={event => {
+          const target = (event.target as Element).closest<HTMLElement>('[data-kind=image]');
+          const block = target && read().find(b => b.id === target.dataset.blockId);
+          if (block && block.type === 'image') { event.preventDefault(); openImage(block); }
         }}
         onClick={(event) => {
           const media=(event.target as Element).closest<HTMLElement>('[data-kind=image], [data-kind=imageTask], [data-kind=pendingImage]');if(media)setActiveId(media.dataset.blockId!);
