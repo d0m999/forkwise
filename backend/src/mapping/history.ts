@@ -264,7 +264,7 @@ export function completeMediaHistory(
     card.body.blocks = card.body.blocks.map((block) => {
       if (imageTask(block)?.ticket !== ticket) return block;
       changed = true;
-      if (replacement.type === 'image') {
+      if (replacement.type === 'image' && !imageTask(replacement)) {
         const { request, ...prior } = block;
         const identity =
           block.type === 'image'
