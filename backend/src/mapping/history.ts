@@ -1,3 +1,5 @@
+import { imageTask } from './media-blocks.js';
+import { retainCardVersions } from './versions.js';
 import { DEFAULT_APPEARANCE } from './presentation-values.js';
 import type Database from 'better-sqlite3';
 import { randomUUID } from 'node:crypto';
@@ -242,4 +244,64 @@ export function interruptGroup(db: Database.Database, command: Command, session:
     return;
   delete previous.editGroup;
   save(db, command.projectId, stack);
+}
+
+// Async completion belongs to the original insertion/replacement action, even
+// when another card has since been edited. Preserve the chronological stack;
+// replace only snapshots that still carry that exact request ticket.
+export function completeMediaHistory(
+  db: Database.Database,
+  projectId: string,
+  cardId: string,
+  ticket: string,
+  replacement: import('./contracts.js').Block,
+  revision: number,
+) {
+  const stack = load(db, projectId);
+  const update = (card: Card | Project | null) => {
+    if (!card || !('body' in card) || card.id !== cardId) return;
+    let changed = false;
+    card.body.blocks = card.body.blocks.map((block) => {
+      if (imageTask(block)?.ticket !== ticket) return block;
+      changed = true;
+      if (replacement.type === 'image') {
+        const { request, ...prior } = block;
+        const identity =
+          block.type === 'image'
+            ? prior
+            : {
+                id: block.id,
+                type: 'image',
+                ...(block.inlineId ? { inlineId: block.inlineId } : {}),
+              };
+        return {
+          ...identity,
+          assetId: replacement.assetId,
+          name: replacement.name,
+          mime: replacement.mime,
+          naturalWidth: replacement.naturalWidth,
+          naturalHeight: replacement.naturalHeight,
+        };
+      }
+      const task = structuredClone(imageTask(replacement)!);
+      if (block.type === 'image') return { ...block, request: task };
+      const { inlineId, ...content } = task;
+      return { ...content, id: block.id, ...(block.inlineId ? { inlineId: block.inlineId } : {}) };
+    });
+    if (changed) {
+      card.body.versionId = randomUUID();
+      retainCardVersions(db, projectId, card);
+    }
+  };
+  for (const action of [...stack.undo, ...stack.redo]) {
+    update(action.before);
+    update(action.after);
+    for (const change of action.cardChanges ?? []) {
+      update(change.before);
+      update(change.after);
+    }
+  }
+  const latest=stack.undo.at(-1);
+  if(latest?.lastRevision===revision-1)latest.lastRevision=revision;
+  save(db, projectId, stack);
 }

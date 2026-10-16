@@ -103,6 +103,12 @@ export function createWorkspaceApp(
       ),
     ),
   );
+  app.get('/api/mapping/projects/:id/assets/:assetId', (c) =>
+    c.json(mapping.read({type:'asset',projectId:c.req.param('id'),id:c.req.param('assetId')},c.get('principal'))));
+  app.get('/api/mapping/projects/:id/assets/:assetId/content', (c) => {
+    const asset=mapping.read({type:'asset',projectId:c.req.param('id'),id:c.req.param('assetId')},c.get('principal'));
+    return new Response(new Uint8Array(Buffer.from(asset.base64,'base64')),{headers:{'Content-Type':asset.mime,'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Content-Security-Policy':"default-src 'none'; sandbox; style-src 'none'; img-src 'none'"}});
+  });
   app.get('/api/mapping/projects/:id/history', (c) =>
     c.json(mapping.read({ type: 'history', projectId: c.req.param('id') }, c.get('principal'))),
   );

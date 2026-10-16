@@ -59,7 +59,7 @@ for (const sample of [
   }) => {
     const url = sample.url ?? 'https://fallback14.invalid/remote.png';
     const png =
-      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aS1sAAAAASUVORK5CYII=';
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==';
     await place(page, '远程图降级');
     await page.getByRole('button', { name: '编辑正文', exact: true }).click();
     const editor = page.getByRole('textbox', { name: '卡片正文', exact: true });
@@ -107,11 +107,14 @@ for (const sample of [
     expect(text.split(url)).toHaveLength(2);
     await expect(editor).toContainText(url);
     await expect(editor.locator('a').filter({ hasText: url })).toHaveAttribute('href', url);
-    await expect(editor.locator('img')).toHaveCount(0);
+    await expect(editor.locator('img')).toHaveCount(sample.embedded ? 1 : 0);
     expect(requests).toEqual([]);
     await expect(editor.locator('a[href^="javascript:"], a[href^="mailto:"]')).toHaveCount(0);
     expect(await page.evaluate(() => (window as any).__ac5Executed)).toBeUndefined();
-    if (sample.embedded) expect(blocks.find((b) => b.type === 'pendingImage')?.base64).toBe(png);
+    if (sample.embedded) {
+      const image=blocks.find(b=>b.type==='image')!;
+      const asset=await(await page.request.get(`${workspace.origin}/api/mapping/projects/${saved.project.id}/assets/${image.assetId}`)).json();expect(asset.base64).toBe(png);
+    }
     await expect(editor).toHaveAttribute('aria-readonly', 'false');
     await editor.press('Meta+z');
     await expect
@@ -521,13 +524,13 @@ test('导入表格保留后方正文输入位置，复制同时保留可读纯�
   expect(data.blocks).toEqual([(await workspace.state()).cards[0]!.body.blocks[0]]);
 });
 
-test('HTML内嵌图片字节保留在原文字之间且不挂载资源节点', async ({ page, workspace }) => {
+test('HTML内嵌图片字节转真实资产且保留原文字顺序', async ({ page, workspace }) => {
   await place(page, '内嵌图片');
   await page.getByRole('button', { name: '编辑正文', exact: true }).click();
   const editor = page.getByRole('textbox', { name: '卡片正文', exact: true });
   await editor.click();
   const bytes =
-    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aS1sAAAAASUVORK5CYII=';
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==';
   await paste(
     page,
     '前内嵌后',
@@ -535,13 +538,12 @@ test('HTML内嵌图片字节保留在原文字之间且不挂载资源节点', a
   );
   await expect
     .poll(async () =>
-      (await workspace.state()).cards[0]!.body.blocks.map((b) =>
-        b.type === 'pendingImage' ? b.base64 : b.text,
-      ),
+      (await workspace.state()).cards[0]!.body.blocks.map((b) =>b.type==='image'?'已保存图片':b.text),
     )
-    .toEqual(['前', bytes, '后']);
-  await expect(editor.locator('img')).toHaveCount(0);
-  await expect(editor).toContainText('尚未支持');
+    .toEqual(['前', '已保存图片', '后']);
+  const saved=await workspace.state(),image=saved.cards[0]!.body.blocks[1]!;
+  const asset=await(await page.request.get(`${workspace.origin}/api/mapping/projects/${saved.project.id}/assets/${image.assetId}`)).json();expect(asset.base64).toBe(bytes);
+  await expect(editor.locator('img')).toHaveCount(1);
   await expect(editor.locator('strong')).toHaveText(['前', '后']);
 });
 
@@ -567,7 +569,7 @@ test('HTML结构无法可靠保留且没有text/plain时保留列表与表格原
     .toEqual(['原列表甲', '原列表乙', '合并内容']);
 });
 
-test('图片文件字节保留为尚未支持状态，不上传或解码，撤销重做与SQLite重开保真', async ({
+test('图片文件字节转持久资产，撤销重做与SQLite重开保真', async ({
   page,
   workspace,
 }) => {
@@ -576,7 +578,7 @@ test('图片文件字节保留为尚未支持状态，不上传或解码，撤�
   const editor = page.getByRole('textbox', { name: '卡片正文', exact: true });
   await editor.click();
   const bytes =
-    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aS1sAAAAASUVORK5CYII=';
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==';
   await editor.evaluate((el, bytes) => {
     const clipboardData = new DataTransfer();
     clipboardData.setData('text/plain', '一起保留');
@@ -594,25 +596,13 @@ test('图片文件字节保留为尚未支持状态，不上传或解码，撤�
       }),
     );
   }, bytes);
-  await expect(editor).toContainText('像素.png');
+  await expect(editor.locator('img')).toHaveAttribute('alt','像素.png');
   await expect(editor.locator('strong')).toHaveText('一起保留');
-  await expect(editor).toContainText('尚未支持');
-  await expect(editor.locator('img')).toHaveCount(0);
-  await expect
-    .poll(
-      async () =>
-        (await workspace.state()).cards[0]!.body.blocks.find((b) => b.type === 'pendingImage')
-          ?.base64,
-    )
-    .toBe(bytes);
-  const saved = await workspace.state(),
-    blocks = saved.cards[0]!.body.blocks;
-  expect(blocks.find((b) => b.type === 'pendingImage')).toMatchObject({
-    name: '像素.png',
-    mime: 'image/png',
-    byteLength: Buffer.from(bytes, 'base64').length,
-    status: 'unsupported',
-  });
+  await expect(page.getByRole('status')).toHaveText('已保存到本机');
+  const saved = await workspace.state(), blocks = saved.cards[0]!.body.blocks;
+  const image=blocks.find(b=>b.type==='image')!;expect(image).toMatchObject({name:'像素.png',mime:'image/png',naturalWidth:1,naturalHeight:1});
+  const asset=await(await page.request.get(`${workspace.origin}/api/mapping/projects/${saved.project.id}/assets/${image.assetId}`)).json();expect(asset.base64).toBe(bytes);
+  await expect(editor).toHaveAttribute('aria-readonly','false');
   await editor.press('Meta+z');
   await expect
     .poll(async () => (await workspace.state()).cards[0]!.body.blocks.map((b) => b.text))
@@ -624,7 +614,7 @@ test('图片文件字节保留为尚未支持状态，不上传或解码，撤�
   await workspace.open(page);
   await page.getByRole('button', { name: '图片暂存', exact: true }).click();
   await page.getByRole('button', { name: '编辑正文', exact: true }).click();
-  await expect(editor).toContainText('尚未支持');
+  await expect(editor.locator('img')).toBeVisible();
   const snapshot = await page.locator('.workspace').getAttribute('data-snapshot');
   expect(
     (await workspace.agentBody(saved.project.id, saved.cards[0]!.id, snapshot!)).body.blocks,

@@ -26,6 +26,8 @@ import { plainTextBlocks, replaceTextSelection } from './paste-selection';
 import { markdownBlocks } from './markdown-paste';
 import { htmlBlocks } from './html-paste';
 import { LinkPopover } from './link-popover';
+import { mediaFiles, mediaTask } from './media-input';
+import { imageTask } from '../../backend/src/mapping/media-blocks';
 import { clipboardImages } from './clipboard-images';
 import { TableTools } from './table-tools';
 import { CodeTools } from './code-tools';
@@ -101,6 +103,8 @@ function matchesTarget(blocks: Block[], target: FormatTarget): boolean {
 }
 export function ParagraphEditor({
   readingIdentity,
+  projectId,
+  onMediaRetry,
   blocks,
   readOnly,
   onChange,
@@ -111,6 +115,8 @@ export function ParagraphEditor({
   onOriginalCopy,
 }: {
   readingIdentity: string;
+  projectId: string;
+  onMediaRetry: (block:Block)=>void;
   blocks: Block[];
   readOnly: boolean;
   onChange: (blocks: Block[], inputType: string, cursor: TextCursor) => void;
@@ -243,7 +249,7 @@ export function ParagraphEditor({
     const ordinals = new Map<string, number>();
     editor.replaceChildren(
       ...next.map((block) => {
-        const p = renderBlock(block);
+        const p = renderBlock(block, projectId);
         if (block.type === 'listItem') p.style.marginLeft = `${listDepth(next, block) * 24}px`;
         if (block.listType === 'ordered') {
           const previous = previousListSibling(next, next.indexOf(block));
@@ -916,8 +922,8 @@ export function ParagraphEditor({
           ),
       );
       const replacement = replaceTextSelection(current, selection, [
-        ...content.blocks,
-        ...unique,
+        ...content.blocks.map(mediaTask),
+        ...unique.map(mediaTask),
         blank(),
       ]);
       if (!replacement) {
@@ -993,6 +999,72 @@ export function ParagraphEditor({
           .length ?? 0) > 1 ||
         (!!menu.signature.parentId && option.shape.type !== 'listItem')),
   }));
+  const fileInput = useRef<HTMLInputElement>(null);
+  const fileTarget = useRef<{ menu: Menu; replace?: boolean } | null>(null);
+  useEffect(() => {
+    const input = fileInput.current;
+    const cancel = () => {
+      const target = fileTarget.current;
+      fileTarget.current = null;
+      if (target) restoreFileFocus(target.menu);
+    };
+    input?.addEventListener('cancel', cancel);
+    return () => input?.removeEventListener('cancel', cancel);
+  }, [supported]);
+  function pickImage(target: Menu, replace = false) {
+    fileTarget.current = { menu: structuredClone(target), replace };
+    fileInput.current!.value = '';
+    fileInput.current!.click();
+  }
+  function restoreFileFocus(target: Menu) {
+    element.current?.focus();
+    if (target.selection && element.current)
+      restoreSelection(element.current, target.selection.start, target.selection.end);
+  }
+  async function insertFiles(files: File[], target: Menu, replace = false) {
+    try {
+      const tasks = await mediaFiles(replace ? files.slice(0, 1) : files);
+      if (!mounted.current || latestReadOnly.current || composing.current) return;
+      const next = read(),
+        i = next.findIndex((b) => b.id === target.id),
+        original = next[i];
+      if (!original || !sameBlock(original, target.signature)) {
+        setNotice('原目标已失效，图片操作已取消');
+        return;
+      }
+      if (replace) {
+        if (original.type !== 'image') {
+          setNotice('只有正文图片可以替换');
+          return;
+        }
+        next[i] = { ...original, request: tasks[0] };
+      } else {
+        const reuse = target.mode === 'slash' || (original.type === 'text' && !original.text);
+        const first = {
+          ...tasks[0]!,
+          ...(reuse
+            ? { id: original.id, ...(original.inlineId ? { inlineId: original.inlineId } : {}) }
+            : {}),
+        };
+        next.splice(i + (reuse ? 0 : 1), reuse ? 1 : 0, first, ...tasks.slice(1), blank());
+      }
+      if (new TextEncoder().encode(JSON.stringify(next)).length > 850000)
+        throw new Error('图片与正文超过本次850000字节暂存上限，原内容保留');
+      apply(
+        next,
+        {
+          blockId: replace
+            ? original.id
+            : next.find((b) => b.type === 'imageTask' && b.ticket === tasks[0]!.ticket)!.id,
+          offset: 0,
+        },
+        replace ? 'replaceImage' : 'insertImage',
+      );
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : '图片读取失败，原文保留');
+      restoreFileFocus(target);
+    }
+  }
   function choose(index: number) {
     if (!menu || composing.current || readOnly) return;
     const option = options[index];
@@ -1005,6 +1077,7 @@ export function ParagraphEditor({
       setNotice('原目标已失效，操作已取消');
       return;
     }
+    if(option.shape.type==='imageTask'){pickImage(menu);return;}
     const reuse = menu.mode !== 'insert' || (block.type === 'text' && !block.text);
     let target = convert(
       reuse
@@ -1322,6 +1395,79 @@ export function ParagraphEditor({
         if (!menu && !wrapper.current?.contains(document.activeElement)) setActiveId('');
       }}
     >
+      <input
+        ref={fileInput}
+        type="file"
+        hidden
+        aria-label="选择正文图片文件"
+        accept="image/jpeg,image/png,image/webp,image/gif,image/svg+xml"
+        multiple
+        onChange={(event) => {
+          const target = fileTarget.current;
+          fileTarget.current = null;
+          const files = Array.from(event.currentTarget.files ?? []);
+          if (target && files.length) void insertFiles(files, target.menu, target.replace);
+          else if (target) restoreFileFocus(target.menu);
+        }}
+      />
+      <p className="media-limits">
+        图片：JPEG / PNG / WebP / GIF / 静态 SVG；每次合计最多 512 KiB、4000 万像素。SVG
+        仅支持安全静态子集，拒绝脚本、外联和动效。
+      </p>
+      {active && ['image', 'imageTask', 'pendingImage'].includes(active.type) && !readOnly && (
+        <div role="group" aria-label="正文图片操作">
+          {active.type === 'image' && (
+            <button
+              onClick={() =>
+                pickImage(
+                  {
+                    id: active.id,
+                    signature: structuredClone(active),
+                    mode: 'insert',
+                    query: '',
+                    index: 0,
+                    selection: selectionPoints(element.current!),
+                  },
+                  true,
+                )
+              }
+            >
+              替换正文图片
+            </button>
+          )}
+          {imageTask(active)?.status === 'failed' && (
+            <button onClick={() => onMediaRetry(active)}>重试图片</button>
+          )}
+          {active.type === 'pendingImage' && (
+            <button
+              onClick={() => {
+                const next = read().map((b) => (b.id === active.id ? mediaTask(b) : b));
+                apply(next, { blockId: active.id, offset: 0 }, 'insertImage');
+              }}
+            >
+              处理保留的图片字节
+            </button>
+          )}
+          <button
+            onClick={() => {
+              let next = read()
+                .map((b) => {
+                  if (b.id !== active.id) return b;
+                  if (b.type === 'image' && b.request) {
+                    const { request, ...original } = b;
+                    return original;
+                  }
+                  return null;
+                })
+                .filter((b): b is Block => !!b);
+              if (!next.length) next = [blank()];
+              apply(next, { blockId: next[0]!.id, offset: 0 }, 'deleteImage');
+            }}
+          >
+            {imageTask(active) ? '取消图片任务' : '删除正文图片'}
+          </button>
+        </div>
+      )}
       {blocks.length === 1 && blocks[0]!.type === 'text' && !blocks[0]!.text && (
         <span className="body-placeholder" aria-hidden="true">
           输入文字，或用 / 插入
@@ -1740,6 +1886,9 @@ export function ParagraphEditor({
           onComposition(false);
         }}
         onBlur={onFinish}
+        onDragOver={event=>{if(event.dataTransfer.types.includes('Files')){event.preventDefault();event.currentTarget.dataset.fileDrop='true';}}}
+        onDragLeave={event=>{delete event.currentTarget.dataset.fileDrop;}}
+        onDrop={event=>{if(!event.dataTransfer.files.length)return;event.preventDefault();delete event.currentTarget.dataset.fileDrop;if(readOnly||composing.current)return;const target=(event.target as Element).closest<HTMLElement>('[data-block-id]');const current=read(),block=current.find(b=>b.id===(target?.dataset.blockId??activeId))??current.at(-1)!;void insertFiles(Array.from(event.dataTransfer.files),{id:block.id,signature:structuredClone(block),mode:'insert',query:'',index:0,selection:selectionPoints(element.current!)});}}
         onPaste={(event) => {
           event.preventDefault();
           if (readOnly || composing.current) return;
@@ -1770,7 +1919,7 @@ export function ParagraphEditor({
             const html = event.clipboardData.getData('text/html');
             if (html && cursor) {
               const imported = htmlBlocks(html, event.clipboardData.getData('text/plain'));
-              const replacement = replaceTextSelection(read(), cursor, imported.blocks);
+              const replacement = replaceTextSelection(read(), cursor, imported.blocks.map(mediaTask));
               if (!replacement) {
                 setNotice('此选区不能可靠粘贴，原文已保留');
                 return;
@@ -1787,6 +1936,7 @@ export function ParagraphEditor({
           }
         }}
         onClick={(event) => {
+          const media=(event.target as Element).closest<HTMLElement>('[data-kind=image], [data-kind=imageTask], [data-kind=pendingImage]');if(media)setActiveId(media.dataset.blockId!);
           const anchor = (event.target as Element).closest<HTMLAnchorElement>('a');
           if (anchor) {
             event.preventDefault();

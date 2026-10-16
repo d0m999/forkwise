@@ -6,6 +6,20 @@ import { ObserveQuerySchema } from './observe-contracts.js';
 // The tool is read-only. Authentication and snapshots live in Mapping, not MCP.
 export function registerCompactMapTool(server: McpServer, transport: ApiTransport) {
   server.registerTool(
+    'forkwise_read_asset',
+    {
+      description:'明确读取当前授权项目内不可变媒体原件的完整JSON（含base64与摘要）；普通地图读取不会自动展开媒体字节。资源身份不可改写，仍需每次验证项目权限。',
+      inputSchema:z.object({projectId:z.string().min(1).max(160),id:z.string().min(1).max(160)}).strict(),
+      annotations:{readOnlyHint:true,openWorldHint:false},
+    },
+    async({projectId,id})=>{
+      try {
+        const response=await transport.call(`/api/mapping/projects/${encodeURIComponent(projectId)}/assets/${encodeURIComponent(id)}`);
+        return {content:[{type:'text' as const,text:JSON.stringify(response)}],structuredContent:{response}};
+      }catch(error){return {content:[{type:'text' as const,text:error instanceof Error?error.message:'媒体读取失败'}],isError:true};}
+    },
+  );
+  server.registerTool(
     'forkwise_observe_map',
     {
       description:

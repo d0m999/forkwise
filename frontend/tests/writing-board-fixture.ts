@@ -15,7 +15,7 @@ import type { Block } from "../../backend/src/mapping/contracts";
 export type Workspace = {
   origin: string;
   state: (page?: Page) => Promise<ProjectState>;
-  open: (page: Page) => Promise<void>;
+  open: (page: Page, expectedStatus?: string) => Promise<void>;
   restart: () => Promise<void>;
   revoke: () => void;
   removeCard: (id: string) => void;
@@ -72,12 +72,12 @@ export const test = base.extend<{ workspace: Workspace }>({
         server!.stderr!.on("data", (chunk) => process.stderr.write(chunk));
       });
     }
-    async function open(target: Page) {
+    async function open(target: Page, expectedStatus = "已保存到本机") {
       await target.goto(
         JSON.parse(readFileSync(join(directory, "local-access.json"), "utf8"))
           .url,
       );
-      await expect(target.getByRole("status")).toHaveText("已保存到本机");
+      await expect(target.getByRole("status")).toHaveText(expectedStatus);
     }
     function removeCard(id: string) {
       const host = openMapping(directory);

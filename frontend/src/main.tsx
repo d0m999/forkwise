@@ -1,3 +1,5 @@
+import { useMediaQueue } from './media-queue';
+import { imageTask } from '../../backend/src/mapping/media-blocks';
 import { DEFAULT_APPEARANCE } from "../../backend/src/mapping/presentation-values";
 import { bodyText } from "../../backend/src/mapping/body-text";
 import { WritingBoard } from "./writing-board";
@@ -1325,6 +1327,67 @@ function Workspace() {
       },
     );
   }
+  const mediaQueue = useMediaQueue(state?.project.id, state?.cards ?? [], async (command) => {
+    if (
+      composition.current ||
+      historyLock.current ||
+      historyCommand.current ||
+      busy ||
+      pendingAction.current ||
+      conflictRef.current
+    )
+      return "wait";
+    if (!(await flush())) return "wait";
+    if (
+      composition.current ||
+      historyLock.current ||
+      historyCommand.current ||
+      pendingAction.current ||
+      Object.keys(drafts.current).length
+    )
+      return "wait";
+    historyLock.current = true;
+    setHistoryBusy(true);
+    try {
+      await api.execute(command);
+      await refresh(command.projectId);
+      const retained =
+        !!unconfirmed.current ||
+        closedDrafts.current.length > 0 ||
+        Object.keys(drafts.current).length > 0;
+      setStatus(retained ? "等待保存…" : "已保存到本机");
+      setError("");
+      return "done";
+    } catch (error) {
+      if (
+        error instanceof MappingError &&
+        ["MEDIA_TASK_STALE", "MEDIA_TICKET_CONFLICT", "NOT_FOUND"].includes(error.code)
+      ) {
+        try {
+          await refresh(command.projectId);
+        } catch {}
+        return "done";
+      }
+      fail(new Error("媒体结果尚未确认，请使用图片重试；原请求与原内容已保留"));
+      return "unknown";
+    } finally {
+      historyLock.current = false;
+      setHistoryBusy(false);
+    }
+  });
+  const mediaTasks = (state?.cards ?? []).flatMap((card) =>
+    card.body.blocks.flatMap((block) => {
+      const task = imageTask(block);
+      return task ? [task] : [];
+    }),
+  );
+  const saveStatus = mediaQueue.hasUnconfirmed
+    ? "媒体结果尚未确认 · 重试确认"
+    : status === "已保存到本机" && mediaTasks.length
+      ? mediaTasks.some((task) => task.status === "failed")
+        ? "媒体保存失败 · 重试或移除"
+        : "媒体处理中 · 尚未保存"
+      : status;
   async function copyOriginalBody(cardId: string, before: Block[], after: Block[]) {
     const projectId=authority.current?.project.id;
     if (!projectId || !(await flush())) return;
@@ -1844,7 +1907,7 @@ function Workspace() {
           key={state!.project.id}
           projectId={state!.project.id} cardId={panelCard.id} opened={bodyOpened}
           title={draftView[draftKey(state!.project.id, panelCard.id, "title")]?.value ?? panelCard.title}
-          status={!currentBody ? "已删除 · 内容保留" : status}
+          status={!currentBody ? "已删除 · 内容保留" : saveStatus}
           onClose={() => {
             if (composition.current) return;
             editorEpoch.current++;
@@ -1871,6 +1934,8 @@ function Workspace() {
               <label htmlFor="card-body">卡片正文</label>
               <ParagraphEditor
                 key={state!.project.id + ":" + panelCard.id}
+                projectId={state!.project.id}
+                onMediaRetry={block=>{void mediaQueue.retry(block);}}
                 readingIdentity={state!.project.id + ":" + panelCard.id}
                 blocks={(() => {
                   const draft = draftView[draftKey(state!.project.id, panelCard.id, "body")];
@@ -1989,6 +2054,7 @@ function Workspace() {
         </div>
       )}
       <div className="save-state">
+        {mediaQueue.hasUnconfirmed && <button onClick={mediaQueue.retryUnconfirmed} disabled={historyBlocked}>重试媒体保存确认</button>}
         <span role="status" aria-live="polite">
           {appearance.error
             ? "外观保存未完成"
@@ -2004,7 +2070,7 @@ function Workspace() {
                       ? "布局等待保存…"
                       : recovery.current?.damaged && status === "已保存到本机"
                         ? "部分恢复记录未确认"
-                        : status}
+                        : saveStatus}
         </span>
         {(appearance.error || appearance.pending || cardLayout.error) && (
           <>

@@ -26,6 +26,8 @@ export function bodyText(body: Pick<Card['body'], 'blocks'>): string {
 
 export function blockPlainText(block: Block): string {
   if (typeof block.text === 'string') return block.text;
+  if (block.type === 'image') return typeof block.caption==='string'?block.caption:'';
+  if (block.type === 'imageTask' && typeof block.name === 'string') return `${block.name}（${block.status==='failed'?'图片失败':'图片处理中'}）`;
   if (block.type === 'pendingImage' && typeof block.name === 'string')
     return `${block.name}（图片尚未支持）`;
   if (block.type === 'table' && Array.isArray(block.rows))

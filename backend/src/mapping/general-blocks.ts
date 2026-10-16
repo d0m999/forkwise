@@ -1,3 +1,4 @@
+import { validImage, validImageTask } from './media-blocks.js';
 import type { Block } from './contracts.js';
 import { plainParagraph } from './body-text.js';
 import { invalidListStructureIds } from './list-structure.js';
@@ -52,6 +53,8 @@ function validMark(value: unknown, length: number): value is InlineMark {
 
 // Recognition is deliberately exact: extension JSON stays a read-only original.
 export function editableBlock(block: Block): boolean {
+  if (block.type==='image') return validImage(block);
+  if (block.type==='imageTask') return validImageTask(block);
   if (plainParagraph(block)) return true;
   if (block.type === 'pendingImage') return validPendingImage(block);
   if (block.type === 'code')

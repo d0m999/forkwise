@@ -1,3 +1,5 @@
+import { initializeMediaTasks } from './media-tasks.js';
+import { initializeMedia } from './media.js';
 import Database from 'better-sqlite3';
 import {
   mkdirSync,
@@ -84,6 +86,8 @@ export function openMapping(directory: string, options: CommitOptions = {}): Map
       CREATE TABLE IF NOT EXISTS mapping_receipts(project_id TEXT NOT NULL REFERENCES mapping_projects(id), command_id TEXT NOT NULL, actor_id TEXT NOT NULL, request TEXT NOT NULL, receipt TEXT NOT NULL, PRIMARY KEY(project_id, command_id));
       CREATE TABLE IF NOT EXISTS mapping_changes(project_id TEXT NOT NULL REFERENCES mapping_projects(id), revision INTEGER NOT NULL, receipt TEXT NOT NULL, PRIMARY KEY(project_id, revision));
     `);
+    initializeMedia(db);
+    initializeMediaTasks(db);
     initializeVersions(db);
     initializeHistory(db);
     return new Mapping(db, options);

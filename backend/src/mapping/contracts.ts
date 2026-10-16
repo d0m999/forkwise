@@ -19,6 +19,10 @@ const BodyInput = {
     .optional(),
 };
 export const MappingCommand = z.discriminatedUnion('type', [
+  z.object({...Envelope,type:z.literal('media.retry'),expected:Id,payload:z.object({id:Id,blockId:Id,ticket:Id}).strict()}).strict(),
+  z.object({...Envelope,type:z.literal('media.finish'),expected:Id,payload:z.object({id:Id,blockId:Id,assetId:Id}).strict()}).strict(),
+  z.object({...Envelope,type:z.literal('media.fail'),expected:Id,payload:z.object({id:Id,blockId:Id,reason:z.string().min(1).max(2000)}).strict()}).strict(),
+  z.object({...Envelope,type:z.literal('asset.save'),expected:z.null(),payload:z.object({id:Id,name:z.string().min(1).max(4096),mime:z.string().max(100),base64:z.string().max(699052)}).strict()}).strict(),
   z
     .object({
       ...Envelope,
@@ -224,7 +228,9 @@ export type CardIdentity =
   | { availability: 'available'; card: Card }
   | { availability: 'deleted' | 'not_found' };
 export type IdentityQuery = { type: 'card.identity'; projectId: string; id: string };
+export type AssetQuery = { type:'asset'; projectId:string; id:string };
 export type ReadQuery =
+  | AssetQuery
   | CompactQuery
   | IdentityQuery
   | { type: 'history'; projectId: string }

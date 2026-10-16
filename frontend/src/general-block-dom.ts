@@ -13,7 +13,7 @@ export function blockText(element: HTMLElement): string {
   const value = nodeText(element);
   return element.lastChild?.nodeName === 'BR' ? value.slice(0, -1) : value;
 }
-export function renderBlock(block: Block): HTMLElement {
+export function renderBlock(block: Block, projectId?: string): HTMLElement {
   const tag =
     block.type === 'table'
       ? 'div'
@@ -30,6 +30,25 @@ export function renderBlock(block: Block): HTMLElement {
   p.dataset.blockId = block.id;
   p.dataset.inlineId = block.inlineId ?? crypto.randomUUID();
   p.dataset.kind = block.type;
+  if (block.type==='image'||block.type==='imageTask') {
+    p.contentEditable='false';p.className='body-image';p.tabIndex=0;
+    if(block.type==='image') {
+      const image=document.createElement('img');image.src=`/api/mapping/projects/${encodeURIComponent(projectId??'')}/assets/${encodeURIComponent(String(block.assetId))}/content`;
+      image.alt=String(block.alt||block.name);image.width=Number(block.naturalWidth);image.height=Number(block.naturalHeight);
+      image.style.width=`${Number(block.width??block.naturalWidth)}px`;image.style.maxWidth='100%';image.style.height='auto';image.style.objectFit='contain';
+      p.append(image);
+      if(block.caption){const caption=document.createElement('span');caption.className='image-caption';caption.textContent=String(block.caption);p.append(caption);}
+    }
+    const task=block.type==='imageTask'?block:block.request as Block|undefined;
+    if(task){
+      const placeholder=document.createElement('span');placeholder.className='image-progress';placeholder.style.width=`${Number(task.width)}px`;placeholder.style.maxWidth='100%';placeholder.style.minHeight='80px';placeholder.style.aspectRatio=`${Number(task.width)} / ${Number(task.height)}`;
+      placeholder.setAttribute('role','group');placeholder.setAttribute('aria-live','polite');placeholder.setAttribute('aria-label',`图片任务：${task.name}`);
+      const label=document.createElement('span');label.textContent=`${task.name} — ${task.status==='failed'?task.reason:'正在处理，尚未保存'}（预留 ${task.width} × ${task.height}）`;placeholder.append(label);
+      if(task.status==='queued'){const progress=document.createElement('progress');progress.setAttribute('aria-label','图片保存进度');placeholder.append(progress);}
+      p.append(placeholder);
+    }
+    retainedBlocks.set(p,structuredClone(block));return p;
+  }
   if (block.type === 'pendingImage') {
     p.contentEditable = 'false';
     p.className = 'pending-image';

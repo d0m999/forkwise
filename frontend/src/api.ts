@@ -1,3 +1,4 @@
+import type { MediaAsset } from '../../backend/src/mapping/media';
 import type {
   CardIdentity,
   Command,
@@ -46,6 +47,7 @@ async function request<T>(path: string, body?: unknown): Promise<T> {
   return result as T;
 }
 export const api = {
+  asset: (projectId:string,id:string)=>request<MediaAsset>(`/projects/${encodeURIComponent(projectId)}/assets/${encodeURIComponent(id)}`),
   cardIdentity: (projectId: string, cardId: string) =>
     request<CardIdentity>(
       `/projects/${encodeURIComponent(projectId)}/cards/${encodeURIComponent(cardId)}/identity`,

@@ -27,6 +27,7 @@ export const BLOCK_OPTIONS: {
     group: '列表',
     shape: { type: 'listItem', listType: 'todo', checked: false },
   },
+  { name: '图片', group: '媒体', shape: { type: 'imageTask' } },
   { name: '分隔线', group: '其他', shape: { type: 'divider' } },
   {
     name: '简单表格',

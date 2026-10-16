@@ -552,12 +552,14 @@ test('S14 lifecycle delayed image positive control retains bytes/history/MCP/SQL
   await expect
     .poll(
       async () =>
-        (await workspace.state()).cards[0]!.body.blocks.find((b) => b.type === 'pendingImage')
+        (await workspace.state()).cards[0]!.body.blocks.find((b) => b.type === 'imageTask')
           ?.base64,
     )
     .toBe('AAEC/w==');
+  await expect.poll(async()=> (await workspace.state()).cards[0]!.body.blocks.find(b=>b.type==='imageTask')?.status).toBe('failed');
   const saved = await workspace.state(),
     blocks = saved.cards[0]!.body.blocks;
+  expect(blocks.find(b=>b.type==='imageTask')).toMatchObject({name:'delayed.png',mime:'image/png',base64:'AAEC/w==',status:'failed',reason:'图片文件不完整，原内容已保留'});
   expect(blocks[0]!.text).toBe('原');
   expect(blocks.at(-1)!.text).toBe('文');
   await expect(editor.locator('img')).toHaveCount(0);
@@ -570,9 +572,12 @@ test('S14 lifecycle delayed image positive control retains bytes/history/MCP/SQL
   await expect(editor).toHaveAttribute('aria-readonly', 'false');
   const oldSnapshot = await page.locator('.workspace').getAttribute('data-snapshot');
   await workspace.restart();
-  await workspace.open(page);
+  await workspace.open(page,'媒体保存失败 · 重试或移除');
   await expect(page.locator('.workspace')).not.toHaveAttribute('data-snapshot', oldSnapshot!);
   await page.getByRole('button', { name: '原卡', exact: true }).click();
+  await page.getByRole('button',{name:'编辑正文',exact:true}).click();
+  await expect(editor).toContainText('delayed.png');await expect(editor).toContainText('图片文件不完整，原内容已保留');
+
   const snapshot = await page.locator('.workspace').getAttribute('data-snapshot');
   const agent = await workspace.agentBody(saved.project.id, saved.cards[0]!.id, snapshot!);
   expect(agent.body.blocks).toEqual(blocks);

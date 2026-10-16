@@ -817,3 +817,42 @@ body:has(.workspace[data-board-full="true"]) .card-tooltip { display: none; }
   border-radius: var(--body-status-radius);
   color: var(--inline-gray);
 }
+.body-image {
+  position: relative;
+  margin: 16px 0;
+  outline-offset: 3px;
+}
+.body-image:focus {
+  outline: 2px solid #537d91;
+}
+.body-image img {
+  display: block;
+}
+.image-caption {
+  display: block;
+  font-size: 13px;
+  line-height: 20px;
+  color: #64717c;
+}
+.image-progress {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 12px;
+  box-sizing: border-box;
+  background: #edf1f3;
+  border: 1px dashed #83919b;
+  font-size: 13px;
+}
+.image-progress progress {
+  max-width: 100%;
+}
+.media-limits {
+  font-size: 12px;
+  line-height: 18px;
+  color: #61717d;
+}
+.paragraph-editor[data-file-drop="true"] {
+  outline: 2px dashed #537d91;
+  background: #edf1f3;
+}

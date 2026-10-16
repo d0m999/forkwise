@@ -1,3 +1,6 @@
+import { reconcileMediaTasks, completeMediaTask } from './media-tasks.js';
+import { completeMediaHistory } from './history.js';
+import { readAsset, saveAsset, validateImageAssets, type MediaAsset } from './media.js';
 import { DEFAULT_APPEARANCE, DEFAULT_PREVIEW_HEIGHT } from './presentation-values.js';
 import type Database from 'better-sqlite3';
 import { CompactMaps, type CompactOptions } from './compact.js';
@@ -57,6 +60,7 @@ export class Mapping {
   read(query: CompactQuery & { view: 'body' }, actor: Principal): CompactPage<BodySlice>;
   read(query: CompactQuery & { view: 'detail' }, actor: Principal): CompactPage<DetailChunk>;
   read(query: CompactQuery, actor: Principal): CompactPage;
+  read(query: {type:'asset';projectId:string;id:string}, actor: Principal): MediaAsset;
   read(query: IdentityQuery, actor: Principal): CardIdentity;
   read(query: { type: 'projects' }, actor: Principal): Project[];
   read(query: { type: 'history'; projectId: string }, actor: Principal): ProjectHistory;
@@ -76,7 +80,8 @@ export class Mapping {
     | Card['item']
     | Card['appearance']
     | CardIdentity
-    | CompactPage {
+    | CompactPage
+    | MediaAsset {
     return this.db.transaction(() => {
       this.access.validate(actor);
       if (query.type === 'projects') {
@@ -92,6 +97,7 @@ export class Mapping {
         );
       }
       this.access.project(actor, query.projectId);
+      if (query.type === 'asset') return readAsset(this.db, query.projectId, query.id);
       if (query.type === 'map') return this.compact.read(query);
       if (query.type === 'card.identity') {
         this.project(query.projectId);
@@ -167,15 +173,15 @@ export class Mapping {
           );
           return JSON.parse(saved.receipt) as Receipt;
         }
-        // #16 will connect verified immutable assets to this gate. Until then,
-        // a reference is never mistaken for a persisted resource, even on no-op.
+        if (command.type === 'asset.save') {
+          const project=this.project(command.projectId);
+          saveAsset(this.db,command);
+          const receipt={commandId:command.commandId,projectId:command.projectId,revision:project.revision,changedIds:[]};
+          this.db.prepare('INSERT INTO mapping_receipts VALUES(?,?,?,?,?)').run(command.projectId,command.commandId,actor.actor.id,request,JSON.stringify(receipt));
+          return receipt;
+        }
         if (command.type === 'body.edit')
-          requireThat(
-            !command.payload.requiredAssetIds?.length,
-            'MEDIA_NOT_PERSISTED',
-            '所需媒体尚未持久保存，请完成或移除媒体后重试',
-            409,
-          );
+          for (const id of command.payload.requiredAssetIds ?? []) readAsset(this.db, command.projectId, id);
         const unchanged = (revision: number): Receipt => {
           if (command.type !== 'card.layout') interruptGroup(this.db, command, actor.tokenHash);
           const receipt = {
@@ -216,6 +222,18 @@ export class Mapping {
           this.db
             .prepare('UPDATE mapping_projects SET revision=? WHERE id=?')
             .run(revision, project.id);
+        } else if (command.type === 'media.finish' || command.type === 'media.fail' || command.type === 'media.retry') {
+          const project=this.project(command.projectId);
+          const row=this.db.prepare('SELECT value FROM mapping_cards WHERE project_id=? AND id=?').get(command.projectId,command.payload.id) as {value:string}|undefined;
+          requireThat(row,'MEDIA_TASK_STALE','原卡片已删除，晚到结果未写入',409);
+          before=JSON.parse(row.value) as Card;
+          const card=structuredClone(before);
+          const replacement=completeMediaTask(this.db,project.id,card,command);
+          card.body.blocks=card.body.blocks.map(b=>b.id===command.payload.blockId?replacement:b);
+          card.body.versionId=randomUUID();after=card;changedIds=[card.body.id];revision=project.revision+1;
+          this.db.prepare('UPDATE mapping_cards SET value=? WHERE id=? AND project_id=?').run(JSON.stringify(card),card.id,project.id);
+          this.db.prepare('UPDATE mapping_projects SET revision=? WHERE id=?').run(revision,project.id);
+          completeMediaHistory(this.db,project.id,card.id,command.expected,replacement,revision);
         } else if (command.type === 'thought.delete') {
           const project = this.project(command.projectId);
           ({ before, after, changedIds } = deleteCard(this.db, command));
@@ -406,6 +424,7 @@ export class Mapping {
                     : [],
                 );
                 requireBlockOwnership(this.db, card.body, blocks);
+                validateImageAssets(this.db, command.projectId, blocks);
                 if (!bodyContentUnchanged(card.body.blocks, blocks)) {
                   card.body.blocks = blocks;
                   card.body.versionId = randomUUID();
@@ -432,6 +451,10 @@ export class Mapping {
           this.db
             .prepare('UPDATE mapping_projects SET revision=? WHERE id=?')
             .run(revision, project.id);
+        }
+        if (before && 'body' in before || after && 'body' in after) {
+          reconcileMediaTasks(this.db,command.projectId,before&&'body' in before?before:null,after&&'body' in after?after:null);
+          if(after&&'body' in after)this.db.prepare('UPDATE mapping_cards SET value=? WHERE id=? AND project_id=?').run(JSON.stringify(after),after.id,command.projectId);
         }
         if (after && 'body' in after) retainCardVersions(this.db, command.projectId, after);
         for (const c of cardChanges ?? []) retainCardVersions(this.db, command.projectId, c.after);
@@ -462,7 +485,7 @@ export class Mapping {
           writtenAt: new Date().toISOString(),
         };
         this.options.checkpoint?.('versions', structuredClone(change));
-        if (!travel) recordAction(this.db, command, change, actor.tokenHash);
+        if (!travel && command.type!=='media.finish' && command.type!=='media.fail' && command.type!=='media.retry') recordAction(this.db, command, change, actor.tokenHash);
         this.db
           .prepare('INSERT INTO mapping_changes VALUES(?,?,?)')
           .run(command.projectId, revision, JSON.stringify(change));
