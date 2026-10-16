@@ -486,16 +486,57 @@ for (const activation of ['Enter', 'Space']) {
       undoPersisted = resolve;
     });
     const historyRequests: { type: string; commandId: string }[] = [];
+    const network = (event: string, details: object = {}) => {
+      if (process.env.FORKWISE_ISSUE16_RESOURCE_LOG)
+        appendFileSync(
+          process.env.FORKWISE_ISSUE16_RESOURCE_LOG,
+          JSON.stringify({
+            event: 'history-network-diagnostic',
+            stage: event,
+            phase: process.env.FORKWISE_ISSUE16_PHASE,
+            activation,
+            at: Date.now(),
+            ...details,
+          }) + '\n',
+        );
+    };
+    for (const event of ['request', 'requestfinished', 'requestfailed'] as const)
+      page.on(event, (request) => {
+        if (!request.url().includes('/api/mapping/')) return;
+        network(event, {
+          url: new URL(request.url()).pathname,
+          method: request.method(),
+          command: request.postData()?.startsWith('{') ? request.postDataJSON().type : undefined,
+          failure: request.failure()?.errorText,
+        });
+      });
+    page.on('response', (response) => {
+      if (response.url().includes('/api/mapping/'))
+        network('response-headers', {
+          url: new URL(response.url()).pathname,
+          status: response.status(),
+          contentLength: response.headers()['content-length'],
+          connection: response.headers()['connection'],
+        });
+    });
     await page.route('**/api/mapping/execute', async (route) => {
       const command = route.request().postDataJSON();
       if (command.type.startsWith('history.'))
         historyRequests.push({ type: command.type, commandId: command.commandId });
       if (command.type === 'history.undo') {
+        network('route-fetch-start', { command: command.type });
         const response = await route.fetch();
+        network('route-fetch-return', { command: command.type, status: response.status() });
         undoPersisted();
         await undoGate;
+        network('route-fulfill-start', { command: command.type });
         await route.fulfill({ response });
-      } else await route.continue();
+        network('route-fulfill-return', { command: command.type });
+      } else {
+        network('route-continue-start', { command: command.type });
+        await route.continue();
+        network('route-continue-return', { command: command.type });
+      }
     });
     await page.evaluate(() => {
       Reflect.set(window, '__historyBusyKeys', []);
@@ -588,7 +629,6 @@ for (const activation of ['Enter', 'Space']) {
           state: await workspace.state(),
         }) + '\n',
       );
-    await page.unroute('**/api/mapping/execute');
     const redone = await workspace.state();
     await expect(editor).toHaveAttribute('aria-readonly', 'false');
     await expect(page.getByRole('button', { name: '重做', exact: true })).toBeEnabled();
@@ -597,6 +637,9 @@ for (const activation of ['Enter', 'Space']) {
       String(redone.project.revision),
     );
     await expect(page.getByRole('status')).toHaveText('已保存到本机');
+    network('unroute-start');
+    await page.unroute('**/api/mapping/execute');
+    network('unroute-return');
     await workspace.restart();
     await workspace.open(page);
     expect((await workspace.state()).cards[0]!.body).toEqual(redone.cards[0]!.body);
