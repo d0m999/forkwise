@@ -8,7 +8,10 @@ export const TAG_PALETTE = [
   ['蓝色', '#d9e7f1'], ['紫色', '#e8dff0'], ['粉色', '#f1dfe8'], ['红色', '#f3dcd8'],
 ] as const;
 export const tagColorName = (color: string) => TAG_PALETTE.find(([, value]) => value === color.toLowerCase())?.[0] ?? '原有颜色';
-const tagStyle = (tag: Tag) => ({ '--tag-color': tag.color } as CSSProperties);
+const tagStyle = (tag: Tag) => ({
+  '--tag-color': tag.color,
+  '--tag-pigment': tagColorName(tag.color) === '原有颜色' ? '15%' : '55%',
+} as CSSProperties);
 const isCompositionKey = (event: { keyCode: number; nativeEvent: { isComposing: boolean } }) => event.nativeEvent.isComposing || event.keyCode === 229;
 export function cardTags(card: Card, tags: Tag[]) {
   return (card.cardTags?.tagIds ?? []).flatMap(id => {

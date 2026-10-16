@@ -21,7 +21,7 @@ test('旧自定义色诚实保留，删除先显示影响数、过期确认重�
   await info.attach('legacy-tag-light-surface', { body: png, contentType: 'image/png' });
   const image = await loadImage(png), canvas = createCanvas(image.width, image.height), context = canvas.getContext('2d');
   context.drawImage(image, 0, 0); const rgb = [...context.getImageData(8, 3, 1, 1).data].slice(0, 3);
-  for (const [i, expected] of [125, 143, 162].entries()) expect(Math.abs(rgb[i]! - expected)).toBeLessThanOrEqual(1);
+  for (const channel of rgb) expect(channel).toBeGreaterThanOrEqual(210);
   expect(await board.getByRole('button', { name: 'Legacy颜色：原有颜色', exact: true }).locator('span').evaluate(e => getComputedStyle(e).backgroundColor)).toBe('rgb(18, 52, 86)');
   await palette.getByRole('button', { name: '蓝色', exact: true }).click();
   await expect.poll(async () => (await workspace.state()).tags!.find(t => t.id === 'legacy')!.color).toBe('#d9e7f1');
@@ -49,4 +49,40 @@ test('旧自定义色诚实保留，删除先显示影响数、过期确认重�
   expect(state.cards[1]!.cardTags!.tagIds).toEqual(['other']);
   await workspace.restart(); await page.reload(); await expect(page.getByRole('status')).toHaveText('已保存到本机');
   expect((await workspace.state()).tags!.find(t => t.id === 'legacy')!.color).toBe('#123456');
+});
+
+test('旧黑色在卡面和写字板仍用浅底深字，持久原色与原有颜色点不改', async ({ page, workspace }, info) => {
+  await place(page, '旧黑色卡片', 90, 140);
+  const initial = await workspace.state(), projectId = initial.project.id;
+  await workspace.execute(page, { commandId: crypto.randomUUID(), projectId, type: 'tag.create', payload: { id: 'black', name: '旧黑色' }, expected: null });
+  await workspace.execute(page, { commandId: crypto.randomUUID(), projectId, type: 'card.tags', payload: { id: initial.cards[0]!.id, tagIds: ['black'] }, expected: null });
+  await workspace.installOriginalTagColor('black', '#000000');
+  await page.reload(); await expect(page.getByRole('status')).toHaveText('已保存到本机');
+  const node = page.locator('.react-flow__node').filter({ has: page.getByRole('button', { name: '旧黑色卡片', exact: true }) });
+  await node.getByRole('button', { name: '编辑正文' }).click();
+  const board = page.getByRole('complementary', { name: '写字板', exact: true });
+  for (const [area, chip] of [
+    ['card', node.locator('.card-visible-tags .project-tag')],
+    ['board', board.locator('.board-tags .project-tag')],
+  ] as const) {
+    const png = await chip.screenshot();
+    await info.attach(`legacy-black-${area}-surface`, { body: png, contentType: 'image/png' });
+    const image = await loadImage(png), canvas = createCanvas(image.width, image.height), context = canvas.getContext('2d');
+    context.drawImage(image, 0, 0);
+    const rgb = [...context.getImageData(8, 3, 1, 1).data].slice(0, 3);
+    for (const channel of rgb) expect(channel).toBeGreaterThanOrEqual(210);
+    const ink = await chip.evaluate(e => getComputedStyle(e).color.match(/\d+/g)!.slice(0, 3).map(Number));
+    for (const channel of ink) expect(channel).toBeLessThan(100);
+  }
+  await board.getByRole('button', { name: '管理标签', exact: true }).click();
+  const trigger = board.getByRole('button', { name: '旧黑色颜色：原有颜色', exact: true });
+  expect(await trigger.locator('span').evaluate(e => getComputedStyle(e).backgroundColor)).toBe('rgb(0, 0, 0)');
+  await trigger.click();
+  await expect(board.getByRole('group', { name: '旧黑色标签颜色', exact: true }).getByText('原有颜色已保留')).toBeVisible();
+  await expect(board.locator('[data-tag-swatch][aria-pressed=true]')).toHaveCount(0);
+  const beforeReopen = await workspace.state();
+  expect(beforeReopen.tags!.find(t => t.id === 'black')!.color).toBe('#000000');
+  expect(beforeReopen.cards[0]!.body).toEqual(initial.cards[0]!.body);
+  await workspace.restart(); await page.reload(); await expect(page.getByRole('status')).toHaveText('已保存到本机');
+  expect(await workspace.state()).toEqual(beforeReopen);
 });
