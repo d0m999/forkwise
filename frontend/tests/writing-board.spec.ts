@@ -68,6 +68,8 @@ test('真实段落输入在光标处分块，软换行仍同块，末尾空段�
   expect(new Set(saved.map(b => b.inlineId)).size).toBe(3);
   await editor.press('Meta+z');
   await expect.poll(async () => (await workspace.state()).cards[0]!.body.blocks).toEqual(saved.slice(0, 2));
+  // SQLite visibility precedes the history ACK and UI unlock.
+  await expect(editor).toHaveAttribute('aria-readonly', 'false');
   await editor.press('Meta+Shift+z');
   await expect.poll(async () => (await workspace.state()).cards[0]!.body.blocks).toEqual(saved);
   // SQLite commits before the history response restores the editable UI.
