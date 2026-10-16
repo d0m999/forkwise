@@ -146,3 +146,25 @@ for (const navigation of ['click', 'keyboard', 'empty', 'multi', 'marquee'] as c
     expect(actions).toHaveLength(historyBefore.length + 1);
   });
 }
+
+test('普通正文入口的同次鼠标或键盘选择不取消自身，正文始终绑定入口卡', async ({ page, workspace }) => {
+  await place(page, '正文入口甲', 70, 120); await place(page, '正文入口乙', 400, 180);
+  const initial = await workspace.state(), [cardA, cardB] = initial.cards;
+  const a = page.locator('.react-flow__node').filter({ has: page.getByRole('button', { name: '正文入口甲', exact: true }) });
+  const b = page.locator('.react-flow__node').filter({ has: page.getByRole('button', { name: '正文入口乙', exact: true }) });
+  const board = page.getByRole('complementary', { name: '写字板', exact: true });
+  for (const input of ['mouse', 'keyboard']) {
+    await a.locator('.title-button').click();
+    if (input === 'mouse') await b.locator('.body-button').click();
+    else await b.locator('.body-button').press('Enter');
+    await expect(board.getByRole('heading')).toHaveText('正在编辑：正文入口乙');
+    await expect(board.locator('.board-identity small')).toHaveText(`卡片 ${cardB!.id}`);
+    await expect(b).toHaveClass(/selected/);
+    await page.getByRole('textbox', { name: '卡片正文', exact: true }).fill(`${input}入口仅保存乙`);
+    await expect(page.getByRole('status')).toHaveText('已保存到本机');
+    const saved = await workspace.state();
+    expect(saved.cards.find(card => card.id === cardA!.id)!.body).toEqual(cardA!.body);
+    expect(saved.cards.find(card => card.id === cardB!.id)!.body.blocks.map(block => block.text)).toEqual([`${input}入口仅保存乙`]);
+    await board.getByRole('button', { name: '关闭正文', exact: true }).click();
+  }
+});

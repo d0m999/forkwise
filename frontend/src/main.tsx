@@ -59,6 +59,7 @@ type CardData = {
   onFinish: () => void;
   onEdit: () => void;
   onBody: () => void;
+  onCanvasChoice: () => void;
   onDelete: () => void;
   onAppearance: (value: AppearanceInput) => void;
   appearanceValue: AppearanceInput;
@@ -88,6 +89,7 @@ function ThoughtCard({ data, selected }: NodeProps<Node<CardData>>) {
     <article
       ref={anchor}
       className="thought-card"
+      onClickCapture={data.onCanvasChoice}
       style={
         {
           "--card-title-color": data.appearanceValue.titleColor,
@@ -1564,6 +1566,7 @@ function Workspace() {
       },
       onEdit: () => void editCard(card.id, "title"),
       onBody: () => void editCard(card.id, "body"),
+      onCanvasChoice: () => { editorEpoch.current++; },
       onDelete: () => void removeCard(card.id),
       onMeasure: cardLayout.measure,
       measurable: !busy && !historyBlocked && !pose.pending && !pose.dragging,
@@ -1755,7 +1758,6 @@ function Workspace() {
             }}
             nodes={nodes}
             onNodeClick={(event, node) => {
-              editorEpoch.current++;
               awaitBodySelection.current = false;
               if (event.shiftKey)
                 setSelection((previous) => [
