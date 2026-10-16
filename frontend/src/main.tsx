@@ -1736,6 +1736,7 @@ function Workspace() {
             !placing &&
             !panTool
           ) {
+            editorEpoch.current++;
             awaitBodySelection.current = false;
             marqueeSelection.current = {
               previous: selection,
@@ -1754,6 +1755,7 @@ function Workspace() {
             }}
             nodes={nodes}
             onNodeClick={(event, node) => {
+              editorEpoch.current++;
               awaitBodySelection.current = false;
               if (event.shiftKey)
                 setSelection((previous) => [
