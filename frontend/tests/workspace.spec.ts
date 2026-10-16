@@ -3363,6 +3363,10 @@ test("S5-R3 原请求缺省媒体要求的损坏恢复隔离原字节，合法�
       raw,
     );
     await page.reload();
+    await expect(page.getByRole("tab", { selected: true })).toHaveAttribute(
+      "title",
+      projectId,
+    );
     await expect(restore).toHaveCount(0);
     expect((await draftProject(page)).cards[0].body.blocks[0].text).toBe(
       "同库合法恢复正文",
