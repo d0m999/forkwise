@@ -81,6 +81,8 @@ test("正文图片期望宽保存、窄面板临时约束、一次手势一次�
         )!.width,
     )
     .toBeUndefined();
+  // A committed SQLite undo can precede its ACK and the UI history unlock.
+  await expect(editor).toHaveAttribute("aria-readonly", "false");
   await editor.press("Meta+Shift+z");
   await expect
     .poll(

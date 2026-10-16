@@ -848,7 +848,7 @@ body:has(.workspace[data-board-full="true"]) .card-tooltip { display: none; }
   transform: translate(-50%, -50%);
 }
 :root { --body-image-grip-width: 16px; --body-image-grip-height: 32px; --image-viewer-background: #202421f5; --image-viewer-ink: #fff; }
-.body-image-actions { position: absolute; bottom: var(--body-control-gap); left: var(--body-content-padding); right: var(--body-content-padding); z-index: 9; max-height: 40%; overflow: auto; background: var(--body-media-background); }
+.body-image-actions { position: absolute; bottom: calc(var(--body-control-gap) + var(--body-save-state-clearance, 0px)); left: var(--body-content-padding); right: var(--body-content-padding); z-index: 9; max-height: 40%; overflow: auto; background: var(--body-media-background); }
 .body-image-actions > button, .body-image-actions > .body-image-details { background: var(--body-media-background); }
 .body-image-viewer { position: fixed; inset: 0; z-index: 1000; display: flex; flex-direction: column; background: var(--image-viewer-background); color: var(--image-viewer-ink); }
 .body-image-viewer-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: var(--body-control-gap); padding: var(--body-content-padding); }

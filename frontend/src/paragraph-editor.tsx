@@ -184,6 +184,24 @@ export function ParagraphEditor({
     const original = Array.from(element.current!.children).find(n => (n as HTMLElement).dataset.blockId === returning.block.id) as HTMLElement | undefined;
     original?.focus({ preventScroll: true });
   }, [viewer]);
+  const [imageTarget, setImageTarget] = useState<{ id: string; node: HTMLElement } | null>(null);
+  const imageActions = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const actions = imageActions.current;
+    const panel = element.current?.closest<HTMLElement>('.body-editor');
+    const status = panel?.parentElement?.querySelector<HTMLElement>('.save-state');
+    if (!actions || !panel || !status) return;
+    const measure = () => {
+      const panelBox = panel.getBoundingClientRect(), statusBox = status.getBoundingClientRect();
+      const overlaps = statusBox.left < panelBox.right && statusBox.right > panelBox.left;
+      actions.style.setProperty('--body-save-state-clearance', `${overlaps ? Math.max(0, panelBox.bottom - statusBox.top) : 0}px`);
+    };
+    const observer = new ResizeObserver(measure);
+    observer.observe(status);
+    observer.observe(panel);
+    measure();
+    return () => observer.disconnect();
+  });
   const [activeCell, setActiveCell] = useState('0,0');
   const [readingState] = useState(() => new BodyReadingState(readingIdentity));
   const reading = useRef(readingState);
@@ -324,6 +342,14 @@ export function ParagraphEditor({
     render(blocks);
     emitted.current = JSON.stringify(blocks);
   }, [blocks, supported]);
+  // Bind tools after the imperative editor projection has committed. A task
+  // and its finished image share an ID, but do not share their DOM node.
+  useLayoutEffect(() => {
+    const block = blocks.find(b => b.id === activeId && b.type === 'image');
+    const node = Array.from(element.current?.children ?? []).find(p => (p as HTMLElement).dataset.blockId === block?.id) as HTMLElement | undefined;
+    const next = block && node?.dataset.kind === 'image' ? { id: block.id, node } : null;
+    setImageTarget(previous => previous?.id === next?.id && previous?.node === next?.node ? previous : next);
+  });
   useLayoutEffect(() => {
     for (const [canvas, controller] of gifs.current) if (!element.current?.contains(canvas)) { controller.close(); gifs.current.delete(canvas); }
     for (const canvas of element.current?.querySelectorAll<HTMLCanvasElement>('canvas[data-gif-url]') ?? []) {
@@ -1453,9 +1479,9 @@ export function ParagraphEditor({
         仅支持安全静态子集，拒绝脚本、外联和动效。
       </p>
       {active && imageNode && ['image', 'imageTask', 'pendingImage'].includes(active.type) && !readOnly && createPortal(
-        <div className="body-image-actions" role="group" aria-label="正文图片操作">
+        <div ref={imageActions} className="body-image-actions" role="group" aria-label="正文图片操作">
           {active.type === 'image' && <button onClick={() => openImage(active)}>查看大图</button>}
-          {active.type === 'image' && imageNode && <BodyImageTools key={active.id} block={active} node={imageNode} onComposition={value => { composing.current = value; onComposition(value); }} onChange={next => {
+          {active.type === 'image' && imageTarget?.id === active.id && imageTarget.node.isConnected && <BodyImageTools key={active.id} block={active} node={imageTarget.node} onComposition={value => { composing.current = value; onComposition(value); }} onChange={next => {
             const current = read(), index = current.findIndex(b => b.id === active.id);
             if (index < 0 || !sameBlock(current[index]!, active)) { setNotice('原图片已变化，请重新选择'); return; }
             if (sameBlock(active, next)) return;

@@ -4,6 +4,19 @@ const png = Buffer.from(
   'base64',
 );
 test.use({ actionTimeout: 6000 });
+// Capture real browser failures independently of protocol assertions.
+const browserErrors = new WeakMap<object, string[]>();
+test.beforeEach(async ({ page }) => {
+  const errors: string[] = [];
+  browserErrors.set(page, errors);
+  page.on('pageerror', error => errors.push(error.stack ?? error.message));
+});
+test.afterEach(async ({ page }, info) => {
+  const errors = browserErrors.get(page) ?? [];
+  if (errors.length) console.log(JSON.stringify({ title: info.title, pageErrors: errors }));
+  expect(errors, 'media transitions keep the editor mounted without browser errors').toEqual([]);
+});
+
 test('文件真实字节插图经原卡保存、完整HTTP-MCP同revision、重启与一次undo/redo', async ({
   page,
   workspace,
@@ -131,12 +144,27 @@ test('延迟真实上传后切卡完成原卡，取消替换后晚到保旧图',
     await route.continue();
   });
   await editor.locator('img').click();
+  const replacementChooser = page.waitForEvent('filechooser');
   await page.getByRole('button', { name: '替换正文图片', exact: true }).click();
-  await page
-    .getByLabel('选择正文图片文件')
-    .setInputFiles({ name: '取消.png', mimeType: 'image/png', buffer: png });
+  await (await replacementChooser).setFiles({ name: '取消.png', mimeType: 'image/png', buffer: png });
   await started2;
-  await page.getByRole('button', { name: '取消图片任务', exact: true }).click();
+  const cancel = page.getByRole('button', { name: '取消图片任务', exact: true });
+  const hit = await cancel.evaluate(button => {
+    const box = button.getBoundingClientRect();
+    const x = box.x + box.width / 2, y = box.y + box.height / 2;
+    const describe = (node: Element) => ({
+      tag: node.tagName, className: node.className,
+      zIndex: getComputedStyle(node).zIndex,
+      rect: node.getBoundingClientRect().toJSON(),
+    });
+    const parents = [];
+    for (let node: Element | null = button; node; node = node.parentElement) parents.push(describe(node));
+    return { reachable: document.elementFromPoint(x, y)?.closest('button') === button,
+      stack: document.elementsFromPoint(x, y).map(describe), parents };
+  });
+  console.log(JSON.stringify({ cancelHitTest: hit }));
+  expect(hit.reachable, 'cancel remains reachable while media save status is visible').toBe(true);
+  await cancel.click();
   await expect
     .poll(async () =>
       (await workspace.state()).cards
