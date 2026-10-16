@@ -1,5 +1,6 @@
 import type { Page, Locator } from '@playwright/test';
 import { test, expect, place } from './writing-board-fixture';
+import { appendFileSync } from 'node:fs';
 
 test('父列表后插入分隔线及后续段落不拆散子树', async ({ page, workspace }) => {
   await place(page, '分隔线边界', 80, 120);
@@ -477,12 +478,117 @@ for (const activation of ['Enter', 'Space']) {
     expect(delta.changes.at(-1).revision).toBe(saved.project.revision);
     expect(saved.project.revision).toBe(before.project.revision + 1);
     expect(historyAfter.undo.length).toBe(historyBefore.undo.length + 1);
-    await editor.press('Meta+z');
-    await expect.poll(async () => (await workspace.state()).cards[0]!.body.blocks).toEqual(blocks);
+    let releaseUndo!: () => void, undoPersisted!: () => void;
+    const undoGate = new Promise<void>((resolve) => {
+      releaseUndo = resolve;
+    });
+    const persisted = new Promise<void>((resolve) => {
+      undoPersisted = resolve;
+    });
+    const historyRequests: { type: string; commandId: string }[] = [];
+    await page.route('**/api/mapping/execute', async (route) => {
+      const command = route.request().postDataJSON();
+      if (command.type.startsWith('history.'))
+        historyRequests.push({ type: command.type, commandId: command.commandId });
+      if (command.type === 'history.undo') {
+        const response = await route.fetch();
+        undoPersisted();
+        await undoGate;
+        await route.fulfill({ response });
+      } else await route.continue();
+    });
+    await page.evaluate(() => {
+      Reflect.set(window, '__historyBusyKeys', []);
+      document.addEventListener(
+        'keydown',
+        (event) => {
+          if (!event.metaKey || event.key.toLowerCase() !== 'z') return;
+          Reflect.get(window, '__historyBusyKeys').push({
+            key: event.key,
+            shift: event.shiftKey,
+            trusted: event.isTrusted,
+            targetId: (event.target as HTMLElement).id,
+            activeId: (document.activeElement as HTMLElement)?.id,
+            readonly: document.querySelector('#card-body')?.getAttribute('aria-readonly'),
+          });
+        },
+        true,
+      );
+    });
+    await expect(editor).toHaveAttribute('aria-readonly', 'false');
+    try {
+      await editor.press('Meta+z');
+      await persisted;
+      await expect
+        .poll(async () => (await workspace.state()).cards[0]!.body.blocks)
+        .toEqual(blocks);
+      await expect(editor).toHaveAttribute('aria-readonly', 'true');
+      await expect(page.getByRole('button', { name: '重做', exact: true })).toBeDisabled();
+      const busyFocusBefore = await page.evaluate(() => ({
+        activeId: (document.activeElement as HTMLElement)?.id,
+        focused: document.hasFocus(),
+      }));
+      // A persisted read is not the UI's ACK. Busy shortcuts must not enqueue
+      // another history action; the next user action waits for edit readiness.
+      await editor.press('Meta+Shift+z');
+      expect(historyRequests.filter((r) => r.type === 'history.redo')).toEqual([]);
+      const witness = {
+        historyRequests,
+        busyFocusBefore,
+        busyFocusAfter: await page.evaluate(() => ({
+          activeId: (document.activeElement as HTMLElement)?.id,
+          focused: document.hasFocus(),
+        })),
+        keys: await page.evaluate(() => Reflect.get(window, '__historyBusyKeys')),
+        state: await workspace.state(),
+        history: await (
+          await page.request.get(
+            workspace.origin + '/api/mapping/projects/' + initial.project.id + '/history',
+          )
+        ).json(),
+      };
+      if (process.env.FORKWISE_ISSUE16_RESOURCE_LOG)
+        appendFileSync(
+          process.env.FORKWISE_ISSUE16_RESOURCE_LOG,
+          JSON.stringify({
+            event: 'undo-persisted-before-ack',
+            phase: process.env.FORKWISE_ISSUE16_PHASE,
+            activation,
+            ...witness,
+          }) + '\n',
+        );
+      await info.attach('undo-persisted-before-ack', {
+        body: JSON.stringify(witness),
+        contentType: 'application/json',
+      });
+    } finally {
+      releaseUndo();
+    }
+    await expect(editor).toHaveAttribute('aria-readonly', 'false');
+    await expect(page.getByRole('button', { name: '重做', exact: true })).toBeEnabled();
+    const undone = await workspace.state();
+    await expect(page.locator('.workspace')).toHaveAttribute(
+      'data-revision',
+      String(undone.project.revision),
+    );
     await editor.press('Meta+Shift+z');
     await expect
       .poll(async () => (await workspace.state()).cards[0]!.body.blocks)
       .toEqual(blocks.slice(3));
+    expect(historyRequests.filter((r) => r.type === 'history.redo')).toHaveLength(1);
+    if (process.env.FORKWISE_ISSUE16_RESOURCE_LOG)
+      appendFileSync(
+        process.env.FORKWISE_ISSUE16_RESOURCE_LOG,
+        JSON.stringify({
+          event: 'history-ready-redo',
+          phase: process.env.FORKWISE_ISSUE16_PHASE,
+          activation,
+          historyRequests,
+          keys: await page.evaluate(() => Reflect.get(window, '__historyBusyKeys')),
+          state: await workspace.state(),
+        }) + '\n',
+      );
+    await page.unroute('**/api/mapping/execute');
     const redone = await workspace.state();
     await expect(page.getByRole('status')).toHaveText('已保存到本机');
     await workspace.restart();
