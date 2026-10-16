@@ -1454,7 +1454,8 @@ function Workspace() {
       const card = authority.current?.cards.find((c) => c.id === id);
       if (!card || !authority.current) return;
       bodyBinding.current = { projectId: authority.current.project.id, card };
-      awaitBodySelection.current = false;
+      // Explicit navigation owns the panel until the next canvas selection.
+      awaitBodySelection.current = !followingSelection;
       setDeletedBody(null);
       setBodyCard(id);
       setBodyOpened(value => value + 1);
