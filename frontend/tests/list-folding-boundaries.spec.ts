@@ -590,6 +590,12 @@ for (const activation of ['Enter', 'Space']) {
       );
     await page.unroute('**/api/mapping/execute');
     const redone = await workspace.state();
+    await expect(editor).toHaveAttribute('aria-readonly', 'false');
+    await expect(page.getByRole('button', { name: '重做', exact: true })).toBeEnabled();
+    await expect(page.locator('.workspace')).toHaveAttribute(
+      'data-revision',
+      String(redone.project.revision),
+    );
     await expect(page.getByRole('status')).toHaveText('已保存到本机');
     await workspace.restart();
     await workspace.open(page);
