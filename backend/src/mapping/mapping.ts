@@ -21,6 +21,10 @@ import { editedBlocks, requireBlockOwnership, bodyContentUnchanged, originalCopy
 import { deleteCard } from './lifecycle.js';
 import { createTagSelection, readTags, updateTag, writeCardTags, deleteTag } from './tags.js';
 import { randomUUID } from 'node:crypto';
+import { searchProject } from './search.js';
+import { SearchLibraries, type SearchAssetReader } from './search-language.js';
+import { contentEditTimes } from './search-edits.js';
+import { SearchQuerySchema, type SearchQuery, type SearchResult } from './search-contracts.js';
 import { AccessService, type Principal } from '../services/access.js';
 import { requireThat } from '../domain/errors.js';
 import {
@@ -39,6 +43,8 @@ import {
 } from './contracts.js';
 
 export interface CommitOptions {
+  // Local asset I/O seam for hosts and fault tests; never accepted from HTTP.
+  searchAssetReader?: SearchAssetReader;
   compact?: CompactOptions;
   observe?: ObserveOptions;
   // Storage failure seam, injected only by an in-process host (never by HTTP).
@@ -47,17 +53,20 @@ export interface CommitOptions {
 export class Mapping {
   readonly access: AccessService;
   private readonly compact: CompactMaps;
+  private readonly searchLibraries: SearchLibraries;
   constructor(
     private readonly db: Database.Database,
     private readonly options: CommitOptions = {},
   ) {
     this.access = new AccessService(db);
     this.compact = new CompactMaps(db, options.compact);
+    this.searchLibraries = new SearchLibraries(options.searchAssetReader);
   }
   close() {
     this.db.close();
   }
 
+  read(query: SearchQuery, actor: Principal): Promise<SearchResult>;
   read(query: CompactQuery & { view: 'index' }, actor: Principal): CompactPage<CardIndex>;
   read(query: CompactQuery & { view: 'body' }, actor: Principal): CompactPage<BodySlice>;
   read(query: CompactQuery & { view: 'detail' }, actor: Principal): CompactPage<DetailChunk>;
@@ -87,7 +96,10 @@ export class Mapping {
     | CompactPage
     | Tag
     | NonNullable<Card['cardTags']>
-    | MediaAsset {
+    | MediaAsset
+    | Promise<SearchResult> {
+    if (query.type === 'search')
+      return this.readSearch(SearchQuerySchema.parse(query), actor);
     return this.db.transaction(() => {
       this.access.validate(actor);
       if (query.type === 'projects') {
@@ -139,6 +151,28 @@ export class Mapping {
           .all(query.projectId) as { value: string }[]
       ).map((row) => JSON.parse(row.value) as Card);
       return { project, cards, tags: readTags(this.db, project.id) };
+    })();
+  }
+
+  private async readSearch(query: SearchQuery, actor: Principal): Promise<SearchResult> {
+    this.access.validate(actor);
+    this.access.project(actor, query.projectId);
+    const loaded = await this.searchLibraries.load(query.retry);
+    return this.db.transaction(() => {
+      // Reauthorize after the asynchronous boundary, then read all current facts
+      // and edit times within this one SQLite snapshot.
+      const state = this.read({ type: 'project', projectId: query.projectId }, actor);
+      const capabilities: SearchResult['capabilities'] = {
+        normalization: loaded.normalization ? 'ready' : 'failed',
+        segmentation: loaded.segmentation ? 'ready' : 'failed',
+      };
+      if (!loaded.language || (!loaded.segmentation && !query.literal))
+        return { state: 'failed', projectId: query.projectId, revision: state.project.revision,
+          capabilities, query: { input: query.text, units: [], unclosedQuote: false }, invalidTagIds: [], results: [],
+          message: '搜索库加载失败 · 重试' } as SearchResult;
+      const result = searchProject(state, query, loaded.language, contentEditTimes(this.db, query.projectId));
+      return { ...result, capabilities,
+        ...(query.literal && result.state === 'ready' ? { state: 'degraded' as const, message: '当前按完整片段搜索，未自动识别中文词组' } : {}) };
     })();
   }
 

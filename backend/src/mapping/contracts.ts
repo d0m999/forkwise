@@ -2,6 +2,7 @@ import { z } from 'zod';
 import type { CompactQuery } from './compact-contracts.js';
 import { TITLE_COLORS } from './presentation-values.js';
 import { bodyText } from './body-text.js';
+import type { SearchQuery } from './search-contracts.js';
 
 const Id = z.string().min(1).max(160);
 const Name = z.string().trim().min(1).max(240);
@@ -240,6 +241,7 @@ export type CardIdentity =
 export type IdentityQuery = { type: 'card.identity'; projectId: string; id: string };
 export type AssetQuery = { type:'asset'; projectId:string; id:string };
 export type ReadQuery =
+  | SearchQuery
   | AssetQuery
   | CompactQuery
   | IdentityQuery

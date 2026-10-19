@@ -1,3 +1,4 @@
+import type { SearchQuery, SearchResult } from '../../backend/src/mapping/search-contracts';
 import type { MediaAsset } from '../../backend/src/mapping/media';
 import type {
   CardIdentity,
@@ -47,6 +48,8 @@ async function request<T>(path: string, body?: unknown): Promise<T> {
   return result as T;
 }
 export const api = {
+  search: (projectId: string, query: Omit<SearchQuery, "type" | "projectId">) =>
+    request<SearchResult>(`/projects/${encodeURIComponent(projectId)}/search`, query),
   asset: (projectId:string,id:string)=>request<MediaAsset>(`/projects/${encodeURIComponent(projectId)}/assets/${encodeURIComponent(id)}`),
   cardIdentity: (projectId: string, cardId: string) =>
     request<CardIdentity>(

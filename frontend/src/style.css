@@ -923,3 +923,25 @@ body:has(.workspace[data-board-full="true"]) .card-tooltip { display: none; }
   outline: var(--body-focus-outline-width) dashed var(--editor-focus);
   background: var(--body-media-background);
 }
+
+.project-search { box-sizing: border-box; width: min(1200px, calc(100vw - 64px)); height: min(800px, calc(100dvh - 64px)); max-width: none; max-height: none; padding: 24px; border: 1px solid #d9d8d4; border-radius: 12px; background: white; color: #252525; }
+.project-search[open] { display: flex; flex-direction: column; gap: 12px; }
+.project-search::backdrop { background: rgb(25 25 25 / 22%); }
+.project-search > header { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.project-search h2 { margin: 0; font-size: 18px; }
+.project-search p { margin: 0; }
+.project-search button:focus-visible, .project-search input:focus-visible { outline: 2px solid #356683; outline-offset: 2px; }
+.search-input { display: flex; flex-direction: column; gap: 6px; font-size: 12px; }
+.search-input input { box-sizing: border-box; width: 100%; font: inherit; font-size: 18px; line-height: 26px; padding: 10px 12px; border: 1px solid #bdbcb7; border-radius: 6px; }
+.search-summary { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; font-size: 12px; }
+.search-explanation { display: flex; flex-wrap: wrap; gap: 8px; font-size: 12px; }
+.search-explanation p { flex-basis: 100%; color: #65645f; }
+.search-results { min-height: 80px; overflow: auto; padding: 0; margin: 0; list-style: none; border-top: 1px solid #e4e3df; }
+.search-results li { padding: 12px 16px; border-bottom: 1px solid #e4e3df; }
+.search-results h3 { margin: 0 0 4px; font-size: 14px; line-height: 20px; font-weight: 600; }
+.search-results h3, .search-snippet { overflow: hidden; overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.search-snippet { white-space: pre-wrap; font-size: 13px; line-height: 20px; color: #55544f; }
+.search-results mark { background: #fff0b6; color: inherit; }
+.search-failure, .search-limited { padding: 12px; background: #fff8e7; font-size: 13px; }
+.search-empty { padding: 24px 0; color: #65645f; }
+@media (max-width: 719px), (max-height: 599px) { .project-search { width: calc(100vw - 32px); height: calc(100dvh - 32px); padding: 16px; overflow: auto; } }

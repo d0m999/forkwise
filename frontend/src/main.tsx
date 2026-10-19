@@ -1,3 +1,4 @@
+import { ProjectSearch } from './project-search';
 import { useMediaQueue } from './media-queue';
 import { imageTask } from '../../backend/src/mapping/media-blocks';
 import { DEFAULT_APPEARANCE } from "../../backend/src/mapping/presentation-values";
@@ -564,6 +565,7 @@ function Workspace() {
       if (event.isComposing || event.keyCode === 229 || composition.current)
         return;
       const target = event.target as HTMLElement;
+      if (target.closest("dialog.project-search")) return;
       // Text inputs and title rounds own native text undo; non-text controls
       // such as the appearance checkbox use the project's action history.
       const input = target.closest("input");
@@ -1630,6 +1632,7 @@ function Workspace() {
         </div>
       )}
       <header className="topbar">
+        {state && <ProjectSearch key={state.project.id} projectId={state.project.id} revision={state.project.revision} disabled={busy || historyBlocked} />}
         <button
           disabled={!state || busy || historyBlocked}
           onMouseDown={(e) => e.preventDefault()}
