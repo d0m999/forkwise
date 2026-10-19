@@ -1541,11 +1541,6 @@ export function ParagraphEditor({
         </div>, element.current!.closest('.body-editor')!,
       )}
       {viewer && <BodyImageViewer block={viewer.block} projectId={projectId} playbackPreferences={gifPreferences.current} onClose={closeImage} />}
-      {blocks.length === 1 && blocks[0]!.type === 'text' && !blocks[0]!.text && (
-        <span className="body-placeholder" aria-hidden="true">
-          输入文字，或用 / 插入
-        </span>
-      )}
       {linkTarget && !readOnly && (
         <LinkPopover
           key={linkTarget.key}
@@ -1839,6 +1834,12 @@ export function ParagraphEditor({
           </button>
         ))}
       </div>
+      <div className="body-input-surface">
+      {blocks.length === 1 && blocks[0]!.type === 'text' && !blocks[0]!.text && (
+        <span className="body-placeholder" aria-hidden="true">
+          输入文字，或用 / 插入
+        </span>
+      )}
       <div
         id="card-body"
         className="paragraph-editor"
@@ -2203,6 +2204,7 @@ export function ParagraphEditor({
           }
         }}
       />
+      </div>
     </div>
   );
 }

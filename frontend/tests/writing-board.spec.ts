@@ -1,5 +1,64 @@
 import { test, expect, place } from './writing-board-fixture';
 
+test('空正文占位避开图片说明，点击原空段可输入并在保存重开后保持正文身份', async ({ page, workspace }) => {
+  await place(page, '空正文占位', 80, 120);
+  const original = (await workspace.state()).cards[0]!;
+  await page.getByRole('button', { name: '编辑正文', exact: true }).click();
+  const editor = page.getByRole('textbox', { name: '卡片正文', exact: true });
+  const placeholder = page.getByText('输入文字，或用 / 插入', { exact: true });
+  const help = page.locator('.media-limits');
+  await expect(editor).not.toBeFocused();
+  const textRects = (locator: typeof placeholder) => locator.evaluate(element => {
+    const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+    const rects: { x: number; y: number; width: number; height: number }[] = [];
+    let node: Node | null;
+    while ((node = walker.nextNode())) {
+      if (!node.textContent?.trim()) continue;
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      for (const rect of range.getClientRects()) {
+        if (rect.width > 0 && rect.height > 0)
+          rects.push({ x: rect.x, y: rect.y, width: rect.width, height: rect.height });
+      }
+    }
+    return rects;
+  });
+  for (const viewport of [{ width: 1360, height: 900 }, { width: 390, height: 660 }]) {
+    await page.setViewportSize(viewport);
+    const hintRects = await textRects(placeholder), helpRects = await textRects(help);
+    expect(hintRects.length).toBeGreaterThan(0);
+    expect(helpRects.length).toBeGreaterThan(0);
+    const overlaps = hintRects.flatMap(hint => helpRects.filter(note =>
+      hint.x < note.x + note.width && hint.x + hint.width > note.x &&
+      hint.y < note.y + note.height && hint.y + hint.height > note.y,
+    ).map(note => ({ hint, note })));
+    expect(overlaps, `${viewport.width}px 窗口的占位与图片说明文字不得重叠`).toEqual([]);
+  }
+  const hint = (await textRects(placeholder))[0]!;
+  await page.mouse.click(hint.x + hint.width / 2, hint.y + hint.height / 2);
+  await expect(editor).toBeFocused();
+  await expect.poll(() => editor.evaluate(() => {
+    const node = getSelection()?.anchorNode;
+    return (node instanceof Element ? node : node?.parentElement)
+      ?.closest<HTMLElement>('[data-block-id]')?.dataset.blockId;
+  })).toBe(original.body.blocks[0]!.id);
+  await page.keyboard.insertText('空正文点击后输入');
+  await expect(placeholder).toHaveCount(0);
+  await expect(help).toBeVisible();
+  await expect.poll(async () => (await workspace.state()).cards[0]!.body.blocks
+    .map(({ id, type, text }) => ({ id, type, text })))
+    .toEqual([{ id: original.body.blocks[0]!.id, type: 'text', text: '空正文点击后输入' }]);
+  await expect(page.getByRole('status')).toHaveText('已保存到本机');
+  const saved = (await workspace.state()).cards[0]!.body;
+  await workspace.restart();
+  await workspace.open(page);
+  await page.getByRole('button', { name: '空正文占位', exact: true }).click();
+  await page.getByRole('button', { name: '编辑正文', exact: true }).click();
+  await expect(editor).toHaveText('空正文点击后输入');
+  await expect(placeholder).toHaveCount(0);
+  expect((await workspace.state()).cards[0]!.body).toEqual(saved);
+});
+
 test('正文双击普通打开不抢光标，单卡跟随从开头，空白和多选保当前卡', async ({ page, workspace }) => {
   const initial = await workspace.state();
   for (const [id, title, x] of [['a', '卡片甲', 60], ['b', '卡片乙', 380]] as const) {

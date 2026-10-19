@@ -303,7 +303,8 @@ body:has(.workspace[data-board-full="true"]) .card-tooltip { display: none; }
 }
 .paragraph-editor p { margin: 0 0 8px; min-height: 28px; }
 .general-editor { position: relative; padding-left: var(--editor-control-gutter); }
-.body-placeholder { position: absolute; left: var(--editor-control-gutter); top: 0; color: var(--inline-gray); line-height: 28px; pointer-events: none; }
+.body-input-surface { position: relative; }
+.body-placeholder { position: absolute; left: 0; top: 0; color: var(--inline-gray); line-height: 28px; pointer-events: none; }
 .inline-toolbar { position: fixed; z-index: 41; display: flex; flex-wrap: wrap; width: max-content; max-width: calc(100vw - 16px); padding: 4px; border: 1px solid var(--card-color-edf1fa); border-radius: 8px; background: var(--card-color-ffffff); }
 .inline-toolbar button { padding: 6px 8px; font-size: 13px; }
 .format-panel { flex-basis: 100%; display: flex; flex-wrap: wrap; max-width: 320px; padding: 8px; gap: 4px; }
