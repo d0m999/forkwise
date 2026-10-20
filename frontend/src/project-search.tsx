@@ -1,9 +1,11 @@
 import { Fragment, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { api, type Card } from "./api";
-import { searchHitIdentity, type SearchReading } from "./search-reading";
+import { retainSearchHit, type SearchReading } from "./search-reading";
 import { SearchDocument, HitNavigation } from "./search-preview";
 import type { Tag } from "../../backend/src/mapping/contracts";
 import { cardTags, compareTagNames, TagChip } from "./project-tags";
+import { useSearchRecords } from "./search-records";
+import { SearchHistory } from "./search-history";
 import type {
   SearchRange,
   SearchResult,
@@ -131,8 +133,25 @@ export function ProjectSearch({
   const [tagIds, setTagIds] = useState<string[]>([]),
     [tagQuery, setTagQuery] = useState(""),
     [picker, setPicker] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const records = useSearchRecords(projectId, (query) => {
+    setText(query.text);
+    setTagIds(query.tagIds);
+  });
+  const leaving = useRef({ open, text, tagIds, composing, records });
+  leaving.current = { open, text, tagIds, composing, records };
+  useEffect(() => {
+    const leave = () => {
+      const latest = leaving.current;
+      if (latest.open && !latest.composing)
+        latest.records.finish({ text: latest.text, tagIds: latest.tagIds });
+    };
+    window.addEventListener("pagehide", leave);
+    return () => window.removeEventListener("pagehide", leave);
+  }, [projectId]);
   const tagTrigger = useRef<HTMLButtonElement>(null),
-    explanationTrigger = useRef<HTMLButtonElement>(null);
+    explanationTrigger = useRef<HTMLButtonElement>(null),
+    historyTrigger = useRef<HTMLButtonElement>(null);
   const [selected, setSelected] = useState<string>(),
     [hit, setHit] = useState(0),
     [previewPage, setPreviewPage] = useState(false);
@@ -159,8 +178,14 @@ export function ProjectSearch({
     setError("");
     setExplain(false);
   };
-  const close = (returnFocus = true) => {
+  const close = (returnFocus = true, record = true) => {
     if (!composition.current) {
+      if (record && records.state)
+        records.write({
+          type: "search.record",
+          payload: { query: { text, tagIds }, intent: "exit" },
+        });
+      setHistoryOpen(false);
       setPicker(false);
       setExplain(false);
       generation.current++;
@@ -169,6 +194,29 @@ export function ProjectSearch({
       if (returnFocus) trigger.current?.focus();
     }
   };
+  const dismiss = () => {
+    if (composition.current) return;
+    if (historyOpen) {
+      setHistoryOpen(false);
+      historyTrigger.current?.focus();
+    } else if (picker) {
+      setPicker(false);
+      tagTrigger.current?.focus();
+    } else if (explain) {
+      setExplain(false);
+      explanationTrigger.current?.focus();
+    } else close();
+  };
+  useEffect(() => {
+    if (!records.state || composing || !open) return;
+    const query = { text, tagIds };
+    if (JSON.stringify(query) === JSON.stringify(records.state.current)) return;
+    const timer = window.setTimeout(
+      () => records.write({ type: "search.save", payload: { query } }),
+      200,
+    );
+    return () => clearTimeout(timer);
+  }, [open, text, tagIds, composing, !!records.state]);
   useLayoutEffect(() => {
     if (!open) return;
     dialog.current?.showModal();
@@ -202,21 +250,8 @@ export function ProjectSearch({
               (card) => card.cardId === next,
             );
             const updated = value.results.find((card) => card.cardId === next);
-            const identity = old && searchHitIdentity(old, previous.hit);
-            const same =
-              identity && updated
-                ? updated.bodyHits.findIndex(
-                    (_, index) =>
-                      searchHitIdentity(updated, index) === identity,
-                  )
-                : -1;
-            nextHit =
-              same >= 0
-                ? same
-                : Math.min(
-                    previous.hit,
-                    Math.max(0, (updated?.bodyHits.length ?? 0) - 1),
-                  );
+            if (updated)
+              nextHit = retainSearchHit(old, previous.hit, updated).hit;
           }
           setResult(value);
           setSelected(next);
@@ -243,7 +278,11 @@ export function ProjectSearch({
     const measure = () => {
       if (!dialog.current?.open || !content.current!.clientWidth) return;
       const nextNarrow = content.current!.clientWidth < 900;
-      if (previousNarrow.current === false && nextNarrow && currentSelection.current.selected)
+      if (
+        previousNarrow.current === false &&
+        nextNarrow &&
+        currentSelection.current.selected
+      )
         setPreviewPage(true);
       previousNarrow.current = nextNarrow;
       setNarrow(nextNarrow);
@@ -266,7 +305,13 @@ export function ProjectSearch({
   const previewKey = current ? current.cardId + ":" + result!.query.input : "";
   if (source && current)
     preview.current = { key: previewKey, card: source, result: current };
-  const document = preview.current?.key === previewKey ? preview.current : null;
+  const cached = preview.current?.key === previewKey ? preview.current : null;
+  const document =
+    cached &&
+    cached.result.bodyVersion === current?.bodyVersion &&
+    cached.result.thoughtVersion === current?.thoughtVersion
+      ? cached
+      : null;
   const select = (id: string) => {
     navigation.current++;
     if (id !== selected) setHit(0);
@@ -274,7 +319,13 @@ export function ProjectSearch({
     setPreviewPage(true);
   };
   const canOpen =
-    !!current && !pending && !composing && !opening && !error && !disabled;
+    !!current &&
+    !!records.state &&
+    !pending &&
+    !composing &&
+    !opening &&
+    !error &&
+    !disabled;
   const openCurrent = async () => {
     if (!canOpen || !current) return;
     setOpening(true);
@@ -285,8 +336,13 @@ export function ProjectSearch({
     try {
       const opened = await onOpen({ result: current, text, hit }, valid);
       if (!valid()) return;
-      if (opened) close(false);
-      else {
+      if (opened) {
+        records.write({
+          type: "search.record",
+          payload: { query: { text, tagIds }, intent: "open" },
+        });
+        close(false, false);
+      } else {
         setError("目标已更新或失效，请重新搜索");
         setAttempt((value) => value + 1);
       }
@@ -349,19 +405,19 @@ export function ProjectSearch({
       >
         搜索
       </button>
+      {!open && records.error && (
+        <span role="alert" className="search-record-error">
+          <span>{records.error}</span>
+          <button onClick={records.retry}>重试保存搜索记录</button>
+        </span>
+      )}
       <dialog
         ref={dialog}
         className="project-search"
         aria-label="搜索当前项目卡片"
         onCancel={(event) => {
           event.preventDefault();
-          if (picker) {
-            setPicker(false);
-            tagTrigger.current?.focus();
-          } else if (explain) {
-            setExplain(false);
-            explanationTrigger.current?.focus();
-          } else close();
+          dismiss();
         }}
         onClose={() => setOpen(false)}
         onPointerDown={(event) => {
@@ -376,6 +432,8 @@ export function ProjectSearch({
             event.preventDefault();
             event.stopPropagation();
           } else {
+            if (!(event.target as Element).closest(".search-history"))
+              setHistoryOpen(false);
             if (
               !(event.target as Element).closest(".search-tag-picker") &&
               !tagTrigger.current?.contains(event.target as Node)
@@ -398,13 +456,11 @@ export function ProjectSearch({
         }}
         onKeyDown={(event) => {
           event.stopPropagation();
-          if (
-            event.key === "Escape" &&
-            (composition.current ||
-              event.nativeEvent.isComposing ||
-              event.keyCode === 229)
-          )
+          if (event.key === "Escape") {
             event.preventDefault();
+            if (event.nativeEvent.isComposing || event.keyCode === 229) return;
+            dismiss();
+          }
         }}
       >
         <header>
@@ -413,12 +469,19 @@ export function ProjectSearch({
             关闭
           </button>
         </header>
+        {open && records.error && (
+          <div role="alert" className="search-record-error">
+            <span>{records.error}</span>
+            <button onClick={records.retry}>重试保存搜索记录</button>
+          </div>
+        )}
         <label className="search-input">
           关键词
           <input
             ref={input}
             type="search"
             value={text}
+            disabled={!records.state}
             maxLength={10000}
             placeholder="搜索标题和完整正文"
             onChange={(event) => {
@@ -476,6 +539,7 @@ export function ProjectSearch({
             aria-label="筛选标签"
             aria-expanded={picker}
             onClick={() => {
+              setHistoryOpen(false);
               setExplain(false);
               setPicker(!picker);
             }}
@@ -514,6 +578,27 @@ export function ProjectSearch({
               清除标签
             </button>
           )}
+          <SearchHistory
+            open={historyOpen}
+            visible={open}
+            trigger={historyTrigger}
+            records={records}
+            query={{ text, tagIds }}
+            tags={tags}
+            onToggle={() => {
+              setHistoryOpen(!historyOpen);
+              setPicker(false);
+              setExplain(false);
+              historyTrigger.current?.focus();
+            }}
+            onRestore={(query) => {
+              invalidate();
+              setText(query.text);
+              setTagIds(query.tagIds);
+              setHistoryOpen(false);
+              input.current?.focus();
+            }}
+          />
           {picker && (
             <section className="search-tag-picker" aria-label="标签筛选">
               <label>
@@ -591,6 +676,7 @@ export function ProjectSearch({
               aria-expanded={explain}
               onClick={() => {
                 setPicker(false);
+                setHistoryOpen(false);
                 setExplain(!explain);
               }}
             >
@@ -636,8 +722,21 @@ export function ProjectSearch({
             {result.message} <button onClick={repeat}>重试完整搜索</button>
           </p>
         )}
-        {result?.state === "invalid_tags" && (
-          <p role="alert">标签条件已失效，请移除或恢复对应标签后重试。</p>
+        {!pending && result?.state === "invalid_tags" && (
+          <div role="alert">
+            <p>标签条件已失效，请移除或恢复对应标签后重试。</p>
+            <button
+              onClick={() => {
+                invalidate();
+                delay.current = 0;
+                setTagIds((ids) =>
+                  ids.filter((id) => !result.invalidTagIds.includes(id)),
+                );
+              }}
+            >
+              移除失效标签
+            </button>
+          </div>
         )}
         {!pending &&
           result &&
@@ -766,16 +865,19 @@ export function ProjectSearch({
                   hit={hit}
                   onHit={setHit}
                 />
-                {document ? (
-                  <SearchDocument
-                    key={previewKey}
-                    projectId={projectId}
-                    visible={open && (!narrow || previewPage)}
-                    card={document.card}
-                    result={document.result}
-                    hit={hit}
-                  />
-                ) : (
+                {cached && (
+                  <div className="search-preview-document" hidden={!document}>
+                    <SearchDocument
+                      key={previewKey}
+                      projectId={projectId}
+                      visible={!!document && open && (!narrow || previewPage)}
+                      card={cached.card}
+                      result={cached.result}
+                      hit={hit}
+                    />
+                  </div>
+                )}
+                {!document && (
                   <p role="alert">
                     正文版本正在更新。<button onClick={repeat}>重试预览</button>
                   </p>

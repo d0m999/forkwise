@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { api, type Card } from "./api";
 import { HitNavigation } from "./search-preview";
-import { searchHitIdentity, type SearchReading } from "./search-reading";
+import { retainSearchHit, type SearchReading } from "./search-reading";
 
 export function BodyFind({
   projectId,
@@ -90,22 +90,15 @@ export function BodyFind({
             result.bodyVersion === card.body.versionId,
         );
         const sameQuery = lastQuery.current === text;
-        const identity = reading && searchHitIdentity(reading.result, reading.hit);
-        const retainedHit = sameQuery && identity && match
-          ? match.bodyHits.findIndex((_, index) => searchHitIdentity(match, index) === identity)
-          : -1;
+        const retained =
+          sameQuery && match
+            ? retainSearchHit(reading?.result, reading?.hit ?? 0, match)
+            : { hit: 0, preserveViewport: false };
         const next = match
           ? {
               result: match,
               text,
-              preserveViewport: retainedHit >= 0,
-              hit:
-                sameQuery
-                  ? retainedHit >= 0 ? retainedHit : Math.min(
-                      reading?.hit ?? 0,
-                      Math.max(0, match.bodyHits.length - 1),
-                    )
-                  : 0,
+              ...retained,
             }
           : null;
         show(next);

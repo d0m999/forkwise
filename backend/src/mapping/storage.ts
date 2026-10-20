@@ -15,6 +15,7 @@ import { Mapping, type CommitOptions } from './mapping.js';
 import { initializeHistory } from './history.js';
 import { initializeVersions } from './versions.js';
 import { initializeTags } from './tags.js';
+import { initializeSearchState } from './search-state.js';
 
 // Separate from research.sqlite: opening the workspace never runs legacy migrations,
 // activation recovery, background jobs, or retention cleanup.
@@ -92,6 +93,7 @@ export function openMapping(directory: string, options: CommitOptions = {}): Map
     initializeVersions(db);
     initializeHistory(db);
     initializeTags(db);
+    initializeSearchState(db);
     return new Mapping(db, options);
   } catch (error) {
     db.close();

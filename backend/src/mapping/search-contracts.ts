@@ -1,4 +1,24 @@
 import { z } from 'zod';
+import type { Tag } from './contracts.js';
+
+export const SearchConditionsSchema = z.object({
+  text: z.string().max(10000),
+  tagIds: z.array(z.string().min(1).max(160)).max(200),
+}).strict();
+export type SearchConditions = z.infer<typeof SearchConditionsSchema>;
+export interface SearchState {
+  projectId: string;
+  versionId: string | null;
+  current: SearchConditions;
+  history: { id: string; query: SearchConditions; usedAt: string }[];
+  blockedIdentity: string | null;
+  removed: { id: string; entries: SearchState['history'] } | null;
+}
+export type SearchStateQuery = { type: 'search.state'; projectId: string };
+export interface SearchStateView extends SearchState {
+  projectRevision: number;
+  tags: Tag[];
+}
 
 export const SearchQuerySchema = z
   .object({

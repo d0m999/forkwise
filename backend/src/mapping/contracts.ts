@@ -3,6 +3,7 @@ import type { CompactQuery } from './compact-contracts.js';
 import { TITLE_COLORS } from './presentation-values.js';
 import { bodyText } from './body-text.js';
 import type { SearchQuery } from './search-contracts.js';
+import { SearchConditionsSchema, type SearchStateView, type SearchStateQuery } from './search-contracts.js';
 
 const Id = z.string().min(1).max(160);
 const Name = z.string().trim().min(1).max(240);
@@ -26,6 +27,11 @@ export const TagCommandSchema = z.discriminatedUnion('type', [
   z.object({ ...Envelope, type: z.literal('tag.create'), expected: z.union([z.null(), z.object({ cardTags: Id.nullable() }).strict()]), payload: z.object({ id: Id, name: z.string().min(1).max(240), cardId: Id.optional() }).strict() }).strict(),
 ]);
 export const MappingCommand = z.discriminatedUnion('type', [
+  z.object({ ...Envelope, type: z.literal('search.delete'), expected: Id.nullable(), payload: z.object({ query: SearchConditionsSchema, id: Id }).strict() }).strict(),
+  z.object({ ...Envelope, type: z.literal('search.clear'), expected: Id.nullable(), payload: z.object({ query: SearchConditionsSchema }).strict() }).strict(),
+  z.object({ ...Envelope, type: z.literal('search.restore'), expected: Id.nullable(), payload: z.object({ undoId: Id }).strict() }).strict(),
+  z.object({ ...Envelope, type: z.literal('search.record'), expected: Id.nullable(), payload: z.object({ query: SearchConditionsSchema, intent: z.enum(['exit', 'open']), pending: z.array(z.record(z.string(), z.unknown())).max(200).optional() }).strict() }).strict(),
+  z.object({ ...Envelope, type: z.literal('search.save'), expected: Id.nullable(), payload: z.object({ query: SearchConditionsSchema }).strict() }).strict(),
   ...TagCommandSchema.options,
   z.object({...Envelope,type:z.literal('media.retry'),expected:Id,payload:z.object({id:Id,blockId:Id,ticket:Id}).strict()}).strict(),
   z.object({...Envelope,type:z.literal('media.finish'),expected:Id,payload:z.object({id:Id,blockId:Id,assetId:Id}).strict()}).strict(),
@@ -223,6 +229,7 @@ export interface Receipt {
   commandId: string;
   projectId: string;
   revision: number;
+  searchState?: SearchStateView;
   changedIds: string[];
   deletedIds?: string[];
   historyTarget?: { id: string; title: string; label: string };
@@ -241,6 +248,7 @@ export type CardIdentity =
 export type IdentityQuery = { type: 'card.identity'; projectId: string; id: string };
 export type AssetQuery = { type:'asset'; projectId:string; id:string };
 export type ReadQuery =
+  | SearchStateQuery
   | SearchQuery
   | AssetQuery
   | CompactQuery

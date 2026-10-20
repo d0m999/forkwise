@@ -100,6 +100,9 @@ export function createWorkspaceApp(
     const input = SearchQuerySchema.omit({ type: true, projectId: true }).parse(await c.req.json());
     return c.json(await mapping.read({ ...input, type: 'search', projectId: c.req.param('id') }, c.get('principal')));
   });
+  app.get('/api/mapping/projects/:id/search-state', (c) =>
+    c.json(mapping.read({ type: 'search.state', projectId: c.req.param('id') }, c.get('principal'))),
+  );
   app.get('/api/mapping/projects/:id/cards/:cardId/identity', (c) =>
     c.json(
       mapping.read(

@@ -23,6 +23,26 @@ export function searchHitIdentity(result: SearchCard, index: number) {
   ]);
 }
 
+export function retainSearchHit(
+  previous: SearchCard | undefined,
+  hit: number,
+  next: SearchCard,
+) {
+  const identity = previous && searchHitIdentity(previous, hit);
+  const retained = identity
+    ? next.bodyHits.findIndex(
+        (_, index) => searchHitIdentity(next, index) === identity,
+      )
+    : -1;
+  return {
+    hit:
+      retained >= 0
+        ? retained
+        : Math.min(hit, Math.max(0, next.bodyHits.length - 1)),
+    preserveViewport: retained >= 0,
+  };
+}
+
 // Resolve original matcher offsets against the same body version, preserving
 // table-cell and image-caption boundaries. Highlighting never edits the DOM.
 export function searchRanges(

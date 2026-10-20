@@ -1,4 +1,4 @@
-import type { SearchQuery, SearchResult } from '../../backend/src/mapping/search-contracts';
+import type { SearchQuery, SearchResult, SearchStateView } from '../../backend/src/mapping/search-contracts';
 import type { MediaAsset } from '../../backend/src/mapping/media';
 import type {
   CardIdentity,
@@ -27,9 +27,10 @@ export class MappingError extends Error {
     super(message);
   }
 }
-async function request<T>(path: string, body?: unknown): Promise<T> {
+async function request<T>(path: string, body?: unknown, keepalive = false): Promise<T> {
   const response = await fetch("/api/mapping" + path, {
     credentials: "same-origin",
+    keepalive,
     ...(body === undefined
       ? {}
       : {
@@ -48,6 +49,7 @@ async function request<T>(path: string, body?: unknown): Promise<T> {
   return result as T;
 }
 export const api = {
+  searchState: (projectId: string) => request<SearchStateView>(`/projects/${encodeURIComponent(projectId)}/search-state`),
   search: (projectId: string, query: Omit<SearchQuery, "type" | "projectId">) =>
     request<SearchResult>(`/projects/${encodeURIComponent(projectId)}/search`, query),
   asset: (projectId:string,id:string)=>request<MediaAsset>(`/projects/${encodeURIComponent(projectId)}/assets/${encodeURIComponent(id)}`),
@@ -60,7 +62,7 @@ export const api = {
   projects: () => request<Project[]>("/projects"),
   project: (id: string) => readCompactMap(id, request),
   synchronize: (value: WorkspaceProjection) => syncCompactMap(value, request),
-  execute: (command: Command) => request<Receipt>("/execute", command),
+  execute: (command: Command, options?: { keepalive?: boolean }) => request<Receipt>("/execute", command, options?.keepalive),
 };
 
 export async function authorizeLocalSession() {

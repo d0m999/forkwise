@@ -24,6 +24,8 @@ import { randomUUID } from 'node:crypto';
 import { searchProject } from './search.js';
 import { SearchLibraries, type SearchAssetReader } from './search-language.js';
 import { contentEditTimes } from './search-edits.js';
+import { readSearchState, saveSearchState, isSearchStateCommand } from './search-state.js';
+import type { SearchStateView, SearchStateQuery } from './search-contracts.js';
 import { SearchQuerySchema, type SearchQuery, type SearchResult } from './search-contracts.js';
 import { AccessService, type Principal } from '../services/access.js';
 import { requireThat } from '../domain/errors.js';
@@ -67,6 +69,7 @@ export class Mapping {
   }
 
   read(query: SearchQuery, actor: Principal): Promise<SearchResult>;
+  read(query: SearchStateQuery, actor: Principal): SearchStateView;
   read(query: CompactQuery & { view: 'index' }, actor: Principal): CompactPage<CardIndex>;
   read(query: CompactQuery & { view: 'body' }, actor: Principal): CompactPage<BodySlice>;
   read(query: CompactQuery & { view: 'detail' }, actor: Principal): CompactPage<DetailChunk>;
@@ -97,6 +100,7 @@ export class Mapping {
     | Tag
     | NonNullable<Card['cardTags']>
     | MediaAsset
+    | SearchStateView
     | Promise<SearchResult> {
     if (query.type === 'search')
       return this.readSearch(SearchQuerySchema.parse(query), actor);
@@ -115,6 +119,10 @@ export class Mapping {
         );
       }
       this.access.project(actor, query.projectId);
+      if (query.type === 'search.state') {
+        const project = this.project(query.projectId);
+        return { ...readSearchState(this.db, query.projectId), projectRevision: project.revision, tags: readTags(this.db, project.id) };
+      }
       if (query.type === 'asset') return readAsset(this.db, query.projectId, query.id);
       if (query.type === 'map') return this.compact.read(query);
       if (query.type === 'card.identity') {
@@ -192,6 +200,7 @@ export class Mapping {
         this.access.mappingWrite(actor, command.projectId);
         if (
           command.type === 'project.create' ||
+          isSearchStateCommand(command) ||
           command.type === 'history.undo' ||
           command.type === 'history.redo'
         )
@@ -212,6 +221,29 @@ export class Mapping {
             409,
           );
           return JSON.parse(saved.receipt) as Receipt;
+        }
+        if (isSearchStateCommand(command)) {
+          const project = this.project(command.projectId);
+          let expected = command.expected;
+          if (command.type === 'search.record' && command.payload.pending) {
+            requireThat(command.payload.intent === 'exit', 'INVALID_SEARCH_EXIT', '只有退出搜索可收拢在途请求', 400);
+            for (const pending of command.payload.pending) {
+              const preceding = MappingCommand.parse({ ...pending, expected: 'expected' in pending ? pending.expected : expected });
+              requireThat(isSearchStateCommand(preceding) && preceding.projectId === project.id && preceding.commandId !== command.commandId &&
+                !(preceding.type === 'search.record' && preceding.payload.pending),
+                'INVALID_SEARCH_EXIT', '退出搜索只能重放当前项目的搜索请求', 400);
+              requireThat(preceding.expected === expected, 'VERSION_CONFLICT', '在途搜索请求不属于当前版本链', 409);
+              // The outer expected is the start of this exact request chain.
+              // Replayed receipts advance it; the final CAS still rejects a peer
+              // write after that chain. This transaction rolls back every new
+              // child write if any request or the final CAS fails.
+              expected = this.execute(preceding, actor).searchState!.versionId;
+            }
+          }
+          const searchState = { ...saveSearchState(this.db, { ...command, expected }), projectRevision: project.revision, tags: readTags(this.db, project.id) };
+          const receipt: Receipt = { commandId: command.commandId, projectId: project.id, revision: project.revision, changedIds: [], searchState };
+          this.db.prepare('INSERT INTO mapping_receipts VALUES(?,?,?,?,?)').run(project.id, command.commandId, actor.actor.id, request, JSON.stringify(receipt));
+          return receipt;
         }
         if (command.type === 'asset.save') {
           const project=this.project(command.projectId);

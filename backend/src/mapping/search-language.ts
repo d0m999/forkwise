@@ -1,10 +1,32 @@
 import { readFile, access } from 'node:fs/promises';
 import { runInNewContext } from 'node:vm';
 import { randomUUID } from 'node:crypto';
+import { existsSync, readFileSync } from 'node:fs';
 
 export interface SearchLanguage {
   convert: (text: string) => string;
   cut: (text: string) => string[];
+}
+
+function converter(bytes: Uint8Array): SearchLanguage['convert'] {
+  const exports: { Converter?: (options: { from: string; to: string }) => SearchLanguage['convert'] } = {};
+  runInNewContext(new TextDecoder().decode(bytes), { exports, module: { exports } }, { timeout: 2000 });
+  const convert = exports.Converter?.({ from: 't', to: 'cn' });
+  if (!convert) throw new Error('文字规范化不可用');
+  return convert;
+}
+
+let historyConvert: SearchLanguage['convert'] | undefined;
+// Synchronous commands use the same trusted local normalization asset. History
+// identity preserves query syntax and never depends on segmentation results.
+export function normalizeHistoryText(text: string) {
+  if (!historyConvert) {
+    const built = new URL('../../search-vendor/', import.meta.url);
+    const directory = existsSync(new URL('NOTICE-search.txt', built)) ? built
+      : new URL('../../../prototype/open-canvas-r2-20261011/vendor/', import.meta.url);
+    historyConvert = converter(readFileSync(new URL('opencc-t2cn.js', directory)));
+  }
+  return foldText(text, { convert: historyConvert, cut: () => [] }).text;
 }
 
 // The only source assets remain the licensed R2 vendor files. A distribution
@@ -39,16 +61,8 @@ export class SearchLibraries {
   private async initialize() {
     const directory = await vendorDirectory();
     let convert: SearchLanguage['convert'] | undefined, cut: SearchLanguage['cut'] | undefined;
-    const exports: {
-      Converter?: (options: { from: string; to: string }) => (text: string) => string;
-    } = {};
     try {
-      runInNewContext(
-        new TextDecoder().decode(await this.read(new URL('opencc-t2cn.js', directory))),
-        { exports, module: { exports } },
-        { timeout: 2000 },
-      );
-      convert = exports.Converter?.({ from: 't', to: 'cn' });
+      convert = converter(await this.read(new URL('opencc-t2cn.js', directory)));
     } catch {
       /* A missing/corrupt local library is reported as a capability failure. */
     }
@@ -115,8 +129,10 @@ export function foldText(text: string, language: SearchLanguage): FoldedText {
   return result;
 }
 
-export function parseSearch(text: string, language: SearchLanguage, literal = false) {
-  const pieces: { text: string; phrase: boolean }[] = [];
+// Scan quote syntax before normalization or segmentation. History needs the
+// exact phrase structure/closure; matching separately decides whether to cut.
+export function lexSearch(text: string) {
+  const pieces: { text: string; phrase: boolean; closed: boolean }[] = [];
   const input = text.trimStart();
   let index = 0,
     separated = false,
@@ -133,16 +149,22 @@ export function parseSearch(text: string, language: SearchLanguage, literal = fa
       const start = ++index;
       while (index < input.length && input[index] !== closing) index++;
       const value = input.slice(start, index);
-      if (value.trim()) pieces.push({ text: value, phrase: true });
+      if (value.trim()) pieces.push({ text: value, phrase: true, closed: index < input.length });
       if (index === input.length) unclosedQuote = true;
       else index++;
     } else {
       const start = index++;
       while (index < input.length && !/[\s"“]/u.test(input[index]!)) index++;
-      pieces.push({ text: input.slice(start, index), phrase: false });
+      pieces.push({ text: input.slice(start, index), phrase: false, closed: true });
     }
   }
-  const units = pieces.flatMap((piece) => {
+  return { pieces, separated, unclosedQuote };
+}
+
+export function parseSearch(text: string, language: SearchLanguage, literal = false) {
+  const { pieces, separated, unclosedQuote } = lexSearch(text);
+  const units = pieces.flatMap(({ text, phrase }) => {
+    const piece = { text, phrase };
     if (literal || piece.phrase || separated || !/\p{Script=Han}/u.test(piece.text)) return [piece];
     const folded = foldText(piece.text, language);
     let offset = 0;
