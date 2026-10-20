@@ -1,8 +1,27 @@
 import type { Block } from '../../backend/src/mapping/contracts';
 import type { InlineMark, TableCell } from '../../backend/src/mapping/general-blocks';
+import { listDepth, previousListSibling } from '../../backend/src/mapping/list-structure';
 
 const retainedBlocks = new WeakMap<HTMLElement, Block>();
 const tableCellOrigins = new WeakMap<HTMLElement, { value: TableCell; rendered: Block }>();
+
+export function applyListLayout(root: HTMLElement, blocks: Block[]): void {
+  const nodes = new Map(Array.from(root.children, node => [
+    (node as HTMLElement).dataset.blockId, node as HTMLElement,
+  ]));
+  const ordinals = new Map<string, number>();
+  blocks.forEach((block, index) => {
+    const node = nodes.get(block.id);
+    if (!node) return;
+    if (block.type === 'listItem') node.style.marginLeft = `${listDepth(blocks, block) * 24}px`;
+    if (block.listType !== 'ordered') return;
+    const previous = previousListSibling(blocks, index);
+    const ordinal = previous >= 0 && blocks[previous]!.listType === 'ordered'
+      ? (ordinals.get(blocks[previous]!.id) ?? 0) + 1 : 1;
+    ordinals.set(block.id, ordinal);
+    node.dataset.ordinal = String(ordinal);
+  });
+}
 
 export function nodeText(node: Node): string {
   if (node.nodeType === Node.TEXT_NODE) return node.textContent ?? '';

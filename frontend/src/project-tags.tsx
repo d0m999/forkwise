@@ -13,6 +13,7 @@ const tagStyle = (tag: Tag) => ({
   '--tag-pigment': tagColorName(tag.color) === '原有颜色' ? '15%' : '55%',
 } as CSSProperties);
 const isCompositionKey = (event: { keyCode: number; nativeEvent: { isComposing: boolean } }) => event.nativeEvent.isComposing || event.keyCode === 229;
+export const compareTagNames = (a: Tag, b: Tag) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id);
 export function cardTags(card: Card, tags: Tag[]) {
   return (card.cardTags?.tagIds ?? []).flatMap(id => {
     const tag = tags.find(t => t.id === id && !t.deleted);
@@ -98,7 +99,7 @@ export function ProjectTags({ state, card, blocked, execute, refresh, undo }: Pr
   const manage = useRef<HTMLButtonElement>(null), triggers = useRef(new Map<string, HTMLButtonElement>());
   const tags = (state.tags ?? []).filter(t => !t.deleted);
   const selected = cardTags(card, tags);
-  const sorted = tags.filter(t => t.name.toLowerCase().includes(query.toLowerCase())).sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
+  const sorted = tags.filter(t => t.name.toLowerCase().includes(query.toLowerCase())).sort(compareTagNames);
   const run = (value: Omit<Command, 'projectId' | 'commandId'>, onDone?: () => void) => execute({ ...value, commandId: crypto.randomUUID(), projectId: state.project.id } as Command, onDone);
   function closePalette() { const id = colorId; setColorId(null); if (id) triggers.current.get(id)?.focus(); }
   function range(snapshot: ProjectState, id: string) {

@@ -1,4 +1,6 @@
 import { ProjectSearch } from './project-search';
+import type { SearchReading } from './search-reading';
+import { BodyFind } from './body-find';
 import { useMediaQueue } from './media-queue';
 import { imageTask } from '../../backend/src/mapping/media-blocks';
 import { DEFAULT_APPEARANCE } from "../../backend/src/mapping/presentation-values";
@@ -89,6 +91,7 @@ function ThoughtCard({ data, selected }: NodeProps<Node<CardData>>) {
   return (
     <article
       ref={anchor}
+      tabIndex={-1}
       className="thought-card"
       onClickCapture={data.onCanvasChoice}
       style={
@@ -227,6 +230,7 @@ function Workspace() {
     [editing, setEditing] = useState<string | null>(null),
     [bodyCard, setBodyCard] = useState<string | null>(null);
   const [bodyOpened, setBodyOpened] = useState(0);
+  const [searchSeed, setSearchSeed] = useState<SearchReading | null>(null), [bodySearchReading, setBodySearchReading] = useState<SearchReading | null>(null);
   const bodyBinding = useRef<{
     projectId: string;
     card: Card;
@@ -1461,9 +1465,32 @@ function Workspace() {
       // Explicit navigation owns the panel until the next canvas selection.
       awaitBodySelection.current = !followingSelection;
       setDeletedBody(null);
+      setSearchSeed(null); setBodySearchReading(null);
       setBodyCard(id);
       setBodyOpened(value => value + 1);
     }
+    return true;
+  }
+  async function openSearch(reading: SearchReading, valid: () => boolean) {
+    const projectId = authority.current?.project.id;
+    if (!valid() || !projectId || composition.current || historyLock.current) return false;
+    const identity = await api.cardIdentity(projectId, reading.result.cardId);
+    if (!valid() || authority.current?.project.id !== projectId || identity.availability !== 'available' || identity.card.body.versionId !== reading.result.bodyVersion || identity.card.versionId !== reading.result.thoughtVersion) return false;
+    const card = identity.card;
+    if (bodyCard) { if (!(await editCard(card.id, 'body', valid))) return false; setSearchSeed(reading); setBodySearchReading(reading); }
+    if (!valid() || authority.current?.project.id !== projectId) return false;
+    awaitBodySelection.current = true;
+    setSelection([card.item.id]);
+    setPlacing(false); setPanTool(false);
+    requestAnimationFrame(() => {
+      const pose = card.item.pose;
+      void flow.setCenter(pose.x + pose.width / 2, pose.y + pose.height / 2, { zoom: flow.getZoom(), duration: matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 180 });
+      requestAnimationFrame(() => {
+        const node = [...document.querySelectorAll<HTMLElement>('.react-flow__node')].find(node => node.dataset.id === card.item.id);
+        node?.querySelector<HTMLElement>('article')?.focus({ preventScroll: true });
+      });
+    });
+    return true;
   }
   const following = useRef<string | null>(null);
   const selectedCards = useRef(selection);
@@ -1632,7 +1659,7 @@ function Workspace() {
         </div>
       )}
       <header className="topbar">
-        {state && <ProjectSearch key={state.project.id} projectId={state.project.id} revision={state.project.revision} disabled={busy || historyBlocked} />}
+        {state && <ProjectSearch key={state.project.id} projectId={state.project.id} revision={state.project.revision} tags={state.tags ?? []} cards={state.cards} onOpen={openSearch} disabled={busy || historyBlocked} />}
         <button
           disabled={!state || busy || historyBlocked}
           onMouseDown={(e) => e.preventDefault()}
@@ -1927,10 +1954,11 @@ function Workspace() {
             if (composition.current) return;
             editorEpoch.current++;
             breakBodyGroup(); persistDrafts(); void flush();
-            bodyBinding.current = null; setDeletedBody(null); setBodyCard(null);
+            bodyBinding.current = null; setDeletedBody(null); setBodyCard(null); setSearchSeed(null); setBodySearchReading(null);
           }}
         >
           {currentBody && <ProjectTags key={state!.project.id + ':' + currentBody.id} state={state!} card={currentBody} blocked={busy || historyBlocked} execute={action} refresh={refresh} undo={id => void travel('undo', id)} />}
+          {currentBody && <BodyFind key={state!.project.id + ":" + currentBody.id + ":" + bodyOpened} projectId={state!.project.id} card={currentBody} updating={!!draftView[draftKey(state!.project.id, currentBody.id, "body")]} seed={searchSeed?.result.cardId === currentBody.id ? searchSeed : null} onReading={setBodySearchReading} />}
           {!currentBody ? (
             <section className="deleted-body" aria-label="已删除卡片">
               <p>这张卡片已删除</p>
@@ -1953,6 +1981,7 @@ function Workspace() {
                 projectId={state!.project.id}
                 onMediaRetry={block=>{void mediaQueue.retry(block);}}
                 readingIdentity={state!.project.id + ":" + panelCard.id}
+                searchReading={bodySearchReading?.result.cardId === panelCard.id ? bodySearchReading : null}
                 blocks={(() => {
                   const draft = draftView[draftKey(state!.project.id, panelCard.id, "body")];
                   return draft?.blocks ?? (draft ? [{ ...panelCard.body.blocks[0]!, text: draft.value }] : panelCard.body.blocks);

@@ -10,14 +10,13 @@ import {
 import { BlockMenu, BLOCK_OPTIONS } from './block-menu';
 import {
   indentList,
-  listDepth,
   listEnd,
-  previousListSibling,
   promoteListChildren,
   moveBlockRange,
   indentBlockRange,
 } from '../../backend/src/mapping/list-structure';
 import { InlineToolbar } from './inline-toolbar';
+import { highlightSearch, scrollToSearchHit, type SearchReading } from './search-reading';
 import { BodyReadingState, foldEnd } from './body-reading-state';
 import { CardIcon } from './card-icons';
 import { useBlockDrag } from './block-drag';
@@ -40,6 +39,7 @@ import { cellBlock, withCell, sameCell } from './table-selection';
 import type { TableCell } from '../../backend/src/mapping/general-blocks';
 import {
   blockText,
+  applyListLayout,
   nodeText,
   readBlock,
   renderBlock,
@@ -108,6 +108,7 @@ function matchesTarget(blocks: Block[], target: FormatTarget): boolean {
 }
 export function ParagraphEditor({
   readingIdentity,
+  searchReading,
   projectId,
   onMediaRetry,
   blocks,
@@ -120,6 +121,7 @@ export function ParagraphEditor({
   onOriginalCopy,
 }: {
   readingIdentity: string;
+  searchReading?: SearchReading | null;
   projectId: string;
   onMediaRetry: (block:Block)=>void;
   blocks: Block[];
@@ -206,6 +208,10 @@ export function ParagraphEditor({
   const [readingState] = useState(() => new BodyReadingState(readingIdentity));
   const reading = useRef(readingState);
   const [readingRevision, setReadingRevision] = useState(0);
+  useEffect(() => {
+    const sync = (event: Event) => { if ((event as CustomEvent).detail === reading.current.key) { reading.current.refreshPreferences(); setReadingRevision(value => value + 1); } };
+    window.addEventListener('forkwise-fold-preference', sync); return () => window.removeEventListener('forkwise-fold-preference', sync);
+  }, []);
   const [foldControls, setFoldControls] = useState<
     { id: string; name: string; top: number; collapsed: boolean }[]
   >([]);
@@ -292,20 +298,9 @@ export function ParagraphEditor({
   }
   function render(next: Block[]) {
     const editor = element.current!;
-    const ordinals = new Map<string, number>();
     editor.replaceChildren(
       ...next.map((block) => {
         const p = renderBlock(block, projectId);
-        if (block.type === 'listItem') p.style.marginLeft = `${listDepth(next, block) * 24}px`;
-        if (block.listType === 'ordered') {
-          const previous = previousListSibling(next, next.indexOf(block));
-          const ordinal =
-            previous >= 0 && next[previous]!.listType === 'ordered'
-              ? (ordinals.get(next[previous]!.id) ?? 0) + 1
-              : 1;
-          ordinals.set(block.id, ordinal);
-          p.dataset.ordinal = String(ordinal);
-        }
         nativeIds.current.set(p, {
           id: block.id,
           inlineId: p.dataset.inlineId!,
@@ -313,6 +308,7 @@ export function ParagraphEditor({
         return p;
       }),
     );
+    applyListLayout(editor, next);
     editor.dataset.inlineId = (editor.firstElementChild as HTMLElement)?.dataset.inlineId;
   }
   useLayoutEffect(() => {
@@ -412,6 +408,46 @@ export function ParagraphEditor({
     observer.observe(editor);
     return () => observer.disconnect();
   }, [blocks, supported, readingRevision]);
+  const wasSearching = useRef(false), deferredSearchCursor = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    const leave = (event: Event) => {
+      if (!deferredSearchCursor.current || wasSearching.current) return;
+      const target = event.target;
+      if (target instanceof Node && !element.current?.contains(target) && !(target instanceof Element && target.closest('.body-find'))) leaveSearchEditing();
+    };
+    const moved = () => {
+      if (!deferredSearchCursor.current || wasSearching.current || !element.current) return;
+      const cursor = selectionPoints(element.current);
+      if (cursor && cursor.start.blockId !== deferredSearchCursor.current) leaveSearchEditing();
+    };
+    document.addEventListener('pointerdown', leave, true); document.addEventListener('focusin', leave, true); document.addEventListener('selectionchange', moved);
+    return () => { document.removeEventListener('pointerdown', leave, true); document.removeEventListener('focusin', leave, true); document.removeEventListener('selectionchange', moved); };
+  }, []);
+  useLayoutEffect(() => {
+    const editor = element.current;
+    if (!editor) return;
+    if (searchReading) {
+      reading.current.beginSearch(blocks, searchReading.result.bodyHits[searchReading.hit] ? [searchReading.result.bodyHits[searchReading.hit]!.blockId] : []);
+      wasSearching.current = true;
+    } else if (wasSearching.current) {
+      const cursor = selectionPoints(editor);
+      deferredSearchCursor.current = cursor?.start.blockId;
+      reading.current.endSearch(blocks, cursor?.start.blockId);
+      wasSearching.current = false;
+    } else return;
+    setReadingRevision(value => value + 1);
+    const frame = requestAnimationFrame(() => {
+      if (searchReading && !searchReading.preserveViewport) scrollToSearchHit(editor, editor.closest<HTMLElement>('.board-scroll')!, searchReading.result, searchReading.hit);
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [searchReading]);
+  useLayoutEffect(() => {
+    if (element.current && searchReading) return highlightSearch(element.current, searchReading.result, searchReading.hit, 'board');
+  }, [searchReading, blocks, readingRevision]);
+  function leaveSearchEditing() {
+    deferredSearchCursor.current = undefined;
+    reading.current.leaveEditing(); setReadingRevision(value => value + 1);
+  }
   function toggleFold(id: string) {
     if (composing.current) return;
     const current = read(),
@@ -1959,7 +1995,10 @@ export function ParagraphEditor({
           composing.current = false;
           onComposition(false);
         }}
-        onBlur={onFinish}
+        onBlur={event => {
+          onFinish();
+          if (!wasSearching.current && !(event.relatedTarget as Element | null)?.closest('.body-find')) leaveSearchEditing();
+        }}
         onDragOver={event=>{if(event.dataTransfer.types.includes('Files')){event.preventDefault();event.currentTarget.dataset.fileDrop='true';}}}
         onDragLeave={event=>{delete event.currentTarget.dataset.fileDrop;}}
         onDrop={event=>{if(!event.dataTransfer.files.length)return;event.preventDefault();delete event.currentTarget.dataset.fileDrop;if(readOnly||composing.current)return;const target=(event.target as Element).closest<HTMLElement>('[data-block-id]');const current=read(),block=current.find(b=>b.id===(target?.dataset.blockId??activeId))??current.at(-1)!;void insertFiles(Array.from(event.dataTransfer.files),{id:block.id,signature:structuredClone(block),mode:'insert',query:'',index:0,selection:selectionPoints(element.current!)});}}

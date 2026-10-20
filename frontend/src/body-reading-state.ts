@@ -25,8 +25,11 @@ export class BodyReadingState {
     private storage: Pick<Storage, 'getItem' | 'setItem'> = localStorage,
   ) {
     this.key = `forkwise:body-folds:v1:${identity}`;
+    this.refreshPreferences();
+  }
+  refreshPreferences(): void {
     try {
-      const saved: unknown = JSON.parse(storage.getItem(this.key) ?? '[]');
+      const saved: unknown = JSON.parse(this.storage.getItem(this.key) ?? '[]');
       if (Array.isArray(saved))
         this.preferences = new Set(saved.filter((id): id is string => typeof id === 'string'));
     } catch {
@@ -49,6 +52,7 @@ export class BodyReadingState {
     if (collapse) this.preferences.add(id);
     else this.preferences.delete(id);
     this.storage.setItem(this.key, JSON.stringify([...this.preferences]));
+    window.dispatchEvent(new CustomEvent("forkwise-fold-preference", { detail: this.key }));
   }
   hidden(blocks: Block[]): Set<string> {
     const hidden = new Set<string>();
