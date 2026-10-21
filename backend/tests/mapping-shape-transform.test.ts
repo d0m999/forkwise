@@ -1,0 +1,65 @@
+import { afterEach, expect, it } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { randomUUID } from 'node:crypto';
+import { openMapping } from '../src/mapping/storage.js';
+
+const cleanups: (() => void)[] = [];
+afterEach(() => cleanups.splice(0).reverse().forEach(cleanup => cleanup()));
+
+it('形状整体变换只推进 Pose 版本，编辑内容保持且一次撤销重做恢复完整 bbox，旧布局拒绝不写', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'forkwise-issue23-transform-'));
+  const mapping = openMapping(directory);
+  cleanups.push(() => rmSync(directory, { recursive: true, force: true }));
+  cleanups.push(() => mapping.close());
+  const human = mapping.access.authenticate(mapping.access.issue('human', ['*']));
+  const run = (command: Record<string, unknown>) => mapping.execute({ commandId: randomUUID(), projectId: 'p', ...command }, human);
+  const state = () => mapping.read({ type: 'project', projectId: 'p' }, human);
+  const history = () => mapping.read({ type: 'history', projectId: 'p' }, human);
+  run({ type: 'project.create', expected: null, payload: { name: '形状整体变换' } });
+  const originalPose = { x: -120, y: 60, width: 160, height: 90 };
+  const content = { shapeType: 'roundedRectangle', shortText: '原短文字', fill: '#fef3c7', stroke: '#92400e', strokeWidth: 2 };
+  run({ type: 'shape.create', expected: null, payload: { id: 's', content, pose: originalPose } });
+  const original = state().shapes![0]!;
+  const editedContent = { ...content, shortText: '编辑后保留的内容🧠', fill: '#dbeafe', strokeWidth: 3 };
+  run({ type: 'shape.edit', expected: original.versionId, payload: { id: 's', content: editedContent } });
+  const edited = state().shapes![0]!;
+  expect(edited.versionId).not.toBe(original.versionId);
+  expect(edited.item).toEqual(original.item);
+  const beforeTransform = state();
+  const priorHistory = history();
+  const transformedPose = { x: 45, y: -80, width: 310, height: 140 };
+  const receipt = run({ type: 'shape.transform', expected: original.item.versionId, payload: { id: 's', pose: transformedPose } });
+  const transformed = state().shapes![0]!;
+  expect(transformed).toEqual({ ...edited, item: { ...edited.item, versionId: transformed.item.versionId, pose: transformedPose } });
+  expect(transformed.content).toEqual(editedContent);
+  expect(transformed.item.versionId).not.toBe(edited.item.versionId);
+  expect(receipt.changedIds).toEqual([original.item.id]);
+  expect(state().project.revision).toBe(beforeTransform.project.revision + 1);
+  expect(history().undo).toHaveLength(priorHistory.undo.length + 1);
+  expect(history().undo.at(-1)?.label).toBe('shape.transform');
+
+  const undo = run({ type: 'history.undo', expected: state().project.revision, payload: {} });
+  const undone = state().shapes![0]!;
+  expect(undone).toEqual({ ...edited, item: { ...edited.item, versionId: undone.item.versionId, pose: originalPose } });
+  expect([edited.item.versionId, transformed.item.versionId]).not.toContain(undone.item.versionId);
+  expect(undo.changedIds).toEqual([original.item.id]);
+  expect(undo.revision).toBe(receipt.revision + 1);
+  expect(history().undo).toHaveLength(priorHistory.undo.length);
+  expect(history().redo).toHaveLength(1);
+  const redo = run({ type: 'history.redo', expected: state().project.revision, payload: {} });
+  const redone = state().shapes![0]!;
+  expect(redone).toEqual({ ...edited, item: { ...edited.item, versionId: redone.item.versionId, pose: transformedPose } });
+  expect([edited.item.versionId, transformed.item.versionId, undone.item.versionId]).not.toContain(redone.item.versionId);
+  expect(redo.changedIds).toEqual([original.item.id]);
+  expect(redo.revision).toBe(undo.revision + 1);
+  expect(history().undo).toHaveLength(priorHistory.undo.length + 1);
+  expect(history().redo).toEqual([]);
+  const beforeFailure = state();
+  const historyBeforeFailure = history();
+  expect(() => run({ type: 'shape.transform', expected: transformed.item.versionId,
+    payload: { id: 's', pose: { x: 80, y: 90, width: 210, height: 260 } } })).toThrow(expect.objectContaining({ code: 'VERSION_CONFLICT' }));
+  expect(state()).toEqual(beforeFailure);
+  expect(history()).toEqual(historyBeforeFailure);
+});

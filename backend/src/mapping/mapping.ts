@@ -1,4 +1,8 @@
 import { moveCanvas } from './canvas-move.js';
+import { createStroke, deleteStroke, readStrokes } from './stroke.js';
+import { createShape, deleteShape, editShape, moveShape, readShapes, transformShape } from './shape.js';
+import type { ShapeVersion } from './shape-contracts.js';
+import type { StrokeVersion } from './stroke-contracts.js';
 import { readTexts, writeText } from './text.js';
 import { reconcileMediaTasks, completeMediaTask } from './media-tasks.js';
 import { completeMediaHistory } from './history.js';
@@ -86,7 +90,9 @@ export class Mapping {
   read(query: VersionQuery & { domain: 'appearance' }, actor: Principal): Card['appearance'];
   read(query: VersionQuery & { domain: 'tag' }, actor: Principal): Tag;
   read(query: VersionQuery & { domain: 'cardTags' }, actor: Principal): NonNullable<Card['cardTags']>;
-  read(query: VersionQuery, actor: Principal): Card['body'] | Card['item'] | Card['appearance'] | Tag | NonNullable<Card['cardTags']>;
+  read(query: VersionQuery & { domain: 'shape' }, actor: Principal): ShapeVersion;
+  read(query: VersionQuery & { domain: 'stroke' }, actor: Principal): StrokeVersion;
+  read(query: VersionQuery, actor: Principal): Card['body'] | Card['item'] | Card['appearance'] | Tag | NonNullable<Card['cardTags']> | ShapeVersion | StrokeVersion;
   read(
     query: ReadQuery,
     actor: Principal,
@@ -101,6 +107,8 @@ export class Mapping {
     | CompactPage
     | Tag
     | NonNullable<Card['cardTags']>
+    | ShapeVersion
+    | StrokeVersion
     | MediaAsset
     | SearchStateView
     | Promise<SearchResult> {
@@ -149,7 +157,7 @@ export class Mapping {
           | { value: string }
           | undefined;
         requireThat(row, 'NOT_FOUND', '版本不存在于当前项目', 404);
-        return JSON.parse(row.value) as Card['body'] | Card['item'];
+        return JSON.parse(row.value) as Card['body'] | Card['item'] | ShapeVersion | StrokeVersion;
       }
       const project = this.project(query.projectId);
       if (query.type === 'history') return readHistory(this.db, project);
@@ -160,7 +168,7 @@ export class Mapping {
           )
           .all(query.projectId) as { value: string }[]
       ).map((row) => JSON.parse(row.value) as Card);
-      return { project, cards, tags: readTags(this.db, project.id), texts: readTexts(this.db, project.id) };
+      return { project, cards, tags: readTags(this.db, project.id), texts: readTexts(this.db, project.id), shapes: readShapes(this.db, project.id), strokes: readStrokes(this.db, project.id) };
     })();
   }
 
@@ -280,15 +288,43 @@ export class Mapping {
         let cardChanges: Change['cardChanges'];
         let tagChange: Change['tagChange'];
         let textChange: Change['textChange'];
+        let shapeChange: Change['shapeChange'];
+        let strokeChange: Change['strokeChange'];
+        let shapeChanges: Change['shapeChanges'];
         let textChanges: Change['textChanges'];
         let travel: ReturnType<typeof travelHistory> | undefined;
         let revision: number;
         let changedIds: string[];
-        if (command.type === 'canvas.move') {
+        if (command.type === 'stroke.create' || command.type === 'stroke.delete') {
           const project = this.project(command.projectId);
-          ({ cardChanges, textChanges, changedIds } = moveCanvas(this.db, command));
+          strokeChange = command.type === 'stroke.create' ? { before: null, after: createStroke(this.db, command) } : deleteStroke(this.db, command);
+          const stroke = strokeChange.after ?? strokeChange.before!;
+          after = null;
+          changedIds = [stroke.id, stroke.item.id];
+          revision = project.revision + 1;
+          this.db.prepare('UPDATE mapping_projects SET revision=? WHERE id=?').run(revision, project.id);
+        } else if (command.type === 'canvas.move') {
+          const project = this.project(command.projectId);
+          ({ cardChanges, textChanges, shapeChanges, changedIds } = moveCanvas(this.db, command));
           if (!changedIds.length) return unchanged(project.revision);
           after = null; revision = project.revision + 1;
+          this.db.prepare('UPDATE mapping_projects SET revision=? WHERE id=?').run(revision, project.id);
+        } else if (command.type === 'shape.create' || command.type === 'shape.edit' || command.type === 'shape.move' || command.type === 'shape.delete' || command.type === 'shape.transform') {
+          const project = this.project(command.projectId);
+          const result = command.type === 'shape.create'
+            ? { before: null, after: createShape(this.db, command) }
+            : command.type === 'shape.edit' ? editShape(this.db, command)
+            : command.type === 'shape.move' ? moveShape(this.db, command)
+            : command.type === 'shape.transform' ? transformShape(this.db, command) : deleteShape(this.db, command);
+          if (!result) return unchanged(project.revision);
+          shapeChange = result;
+          const shape = result.after ?? result.before!;
+          after = null;
+          changedIds = [
+            ...(result.before?.versionId !== result.after?.versionId ? [shape.id] : []),
+            ...(result.before?.item.versionId !== result.after?.item.versionId ? [shape.item.id] : []),
+          ];
+          revision = project.revision + 1;
           this.db.prepare('UPDATE mapping_projects SET revision=? WHERE id=?').run(revision, project.id);
         } else if (command.type === 'text.create' || command.type === 'text.edit' || command.type === 'text.transform' || command.type === 'text.move' || command.type === 'text.delete' || command.type === 'text.copy' || command.type === 'text.layout') {
           const project = this.project(command.projectId);
@@ -313,6 +349,9 @@ export class Mapping {
           tagChange = travel.tagChange;
           textChange = travel.textChange;
           textChanges = travel.textChanges;
+          shapeChange = travel.shapeChange;
+          strokeChange = travel.strokeChange;
+          shapeChanges = travel.shapeChanges;
           revision = project.revision + 1;
           this.db
             .prepare('UPDATE mapping_projects SET revision=? WHERE id=?')
@@ -597,8 +636,12 @@ export class Mapping {
           projectId: command.projectId,
           revision,
           changedIds,
+          ...(strokeChange?.after ? { strokeVersions: { stroke: strokeChange.after.versionId, pose: strokeChange.after.item.versionId } } : {}),
+          ...(shapeChange?.after ? { shapeVersions: { shape: shapeChange.after.versionId, pose: shapeChange.after.item.versionId } } : {}),
           ...(textChange?.after ? { textVersions: { text: textChange.after.versionId, pose: textChange.after.item.versionId } } : {}),
           ...(textChange && !textChange.after ? { deletedIds: changedIds } : {}),
+          ...(shapeChange && !shapeChange.after ? { deletedIds: changedIds } : {}),
+          ...(strokeChange && !strokeChange.after ? { deletedIds: changedIds } : {}),
           ...(tagChange?.after.deleted ? { deletedIds: [tagChange.after.id] } : {}),
           ...(command.type === 'thought.delete' ? { deletedIds: changedIds, historyTarget: { id: command.payload.id, title: before && 'body' in before ? before.title : '', label: command.type } } : {}),
           ...(travel ? { deletedIds: travel.deletedIds, historyTarget: travel.target } : {}),
@@ -618,6 +661,9 @@ export class Mapping {
           before,
           after,
           ...(tagChange ? { tagChange } : {}),
+          ...(shapeChange ? { shapeChange } : {}),
+          ...(strokeChange ? { strokeChange } : {}),
+          ...(shapeChanges ? { shapeChanges } : {}),
           ...(textChange ? { textChange } : {}),
           ...(textChanges ? { textChanges } : {}),
           ...(cardChanges ? { cardChanges } : {}),

@@ -1,4 +1,6 @@
 import { initializeText } from './text.js';
+import { initializeShapes } from './shape.js';
+import { initializeStrokes } from './stroke.js';
 import { initializeMediaTasks } from './media-tasks.js';
 import { initializeMedia } from './media.js';
 import Database from 'better-sqlite3';
@@ -96,6 +98,8 @@ export function openMapping(directory: string, options: CommitOptions = {}): Map
     initializeTags(db);
     initializeSearchState(db);
     initializeText(db);
+    initializeShapes(db);
+    initializeStrokes(db);
     return new Mapping(db, options);
   } catch (error) {
     db.close();

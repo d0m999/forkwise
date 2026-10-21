@@ -15,12 +15,31 @@ export interface ObserveOptions {
 
 function delta(change: Change): Delta {
   const domains: Delta['domains'] = [];
+  if (change.strokeChange) {
+    const { before, after } = change.strokeChange;
+    const identity = after ?? before!;
+    if (before?.versionId !== after?.versionId) domains.push({ domain: 'stroke', id: identity.id });
+    if (before?.item.versionId !== after?.item.versionId) domains.push({ domain: 'pose', id: identity.item.id });
+    return { ...change, domains, deletedIds: change.deletedIds ?? [] };
+  }
+  if (change.shapeChange) {
+    const { before, after } = change.shapeChange;
+    const identity = after ?? before!;
+    if (before?.versionId !== after?.versionId) domains.push({ domain: 'shape', id: identity.id });
+    if (before?.item.versionId !== after?.item.versionId) domains.push({ domain: 'pose', id: identity.item.id });
+    return { ...change, domains, deletedIds: change.deletedIds ?? [] };
+  }
   if (change.textChange) {
     const { before, after } = change.textChange;
     const identity = after ?? before!;
     if (before?.versionId !== after?.versionId) domains.push({ domain: 'text', id: identity.id });
     if (before?.item.versionId !== after?.item.versionId) domains.push({ domain: 'pose', id: identity.item.id });
     return { ...change, domains, deletedIds: change.deletedIds ?? [] };
+  }
+  for (const shape of change.shapeChanges ?? []) {
+    const identity = shape.after ?? shape.before!;
+    if (shape.before?.versionId !== shape.after?.versionId) domains.push({ domain: 'shape', id: identity.id });
+    if (shape.before?.item.versionId !== shape.after?.item.versionId) domains.push({ domain: 'pose', id: identity.item.id });
   }
   for (const text of change.textChanges ?? []) {
     const identity = text.after ?? text.before!;

@@ -16,6 +16,7 @@ import { PathImportInput } from './services/local-import.js';
 import { ExternalTranscriptionInput } from './contracts/transcription.js';
 import { DrawingOperations } from './contracts/drawing.js';
 import { registerCompactMapTool } from './mapping/compact-mcp.js';
+import { ApiTransportError } from './api-transport-error.js';
 
 export interface ApiTransport {
   call(path: string, method?: string, body?: unknown, key?: string): Promise<unknown>;
@@ -46,8 +47,13 @@ export function httpTransport(origin: string, token: string): ApiTransport {
         },
         ...(body ? { body: JSON.stringify(body) } : {}),
       });
-      const response = (await result.json()) as { code: string; message: string; data: unknown };
-      if (!result.ok) throw new Error(`${response.code}: ${response.message}`);
+      const response = (await result.json()) as { code: string; message: string; data: unknown; details?: unknown };
+      if (!result.ok) {
+        if (typeof response.code === 'string' && typeof response.message === 'string')
+          throw new ApiTransportError({ status: result.status, code: response.code, message: response.message,
+            ...(response.details !== undefined ? { details: response.details } : {}) });
+        throw new Error(`${response.code}: ${response.message}`);
+      }
       return response;
     },
   };

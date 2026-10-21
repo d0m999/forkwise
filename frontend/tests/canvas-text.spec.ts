@@ -313,6 +313,14 @@ test("左右把手固定宽且不改字号，角点等比缩放并能拖动和�
   let scaled = ((await workspace.state()) as any).texts[0];
   expect(scaled.content.width).toBeCloseTo(750, 0);
   expect(scaled.item.pose.height).toBeCloseTo(40.5, 0);
+  await expect(page.locator(".canvas-text-content")).toHaveAttribute("aria-disabled", "false");
+  await expectTextFontSize(page.locator(".canvas-text-content"), 27);
+  await expect
+    .poll(async () => (await page.locator(".canvas-text-content").boundingBox())!.width)
+    .toBeCloseTo(750, 0);
+  await expect
+    .poll(async () => (await page.locator(".canvas-text-content").boundingBox())!.height)
+    .toBeCloseTo(40.5, 0);
   const text = (await page.locator(".canvas-text-content").boundingBox())!;
   await page.mouse.move(text.x + 10, text.y + 10);
   await page.mouse.down();

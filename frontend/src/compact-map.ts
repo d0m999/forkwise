@@ -1,4 +1,8 @@
 import type { CanvasText } from '../../backend/src/mapping/text-contracts';
+import type { CanvasShape, ShapeVersion } from '../../backend/src/mapping/shape-contracts';
+import type { CanvasStroke, StrokeVersion } from '../../backend/src/mapping/stroke-contracts';
+import type { StrokeIndex } from '../../backend/src/mapping/compact-contracts';
+import type { ShapeIndex } from '../../backend/src/mapping/compact-contracts';
 import type { TextIndex } from '../../backend/src/mapping/compact-contracts';
 import type { Card, ProjectState, Tag } from "../../backend/src/mapping/contracts";
 import type {
@@ -118,11 +122,48 @@ export async function readCompactMap(
     if (value.id !== item.id || value.versionId !== item.versionId || value.content.runs.length !== item.content.runCount) throw new Error('文字版本与快照不一致');
     texts.push({ ...value, kind: 'text', item: item.item });
   }
+  const shapePage = await collect<ShapeIndex>({ view: 'shape-index', snapshot: index.first.snapshot });
+  if (shapePage.first.revision !== index.first.revision || shapePage.first.snapshot !== index.first.snapshot)
+    throw new Error('形状索引与卡片快照不一致，请重新读取');
+  const shapes: CanvasShape[] = [];
+  for (const item of [...shapePage.items].sort((a, b) => a.order - b.order)) {
+    const detail = await collect<DetailChunk>({ view: 'shape-detail', shapeId: item.id, snapshot: index.first.snapshot });
+    if (detail.first.revision !== index.first.revision || detail.first.snapshot !== index.first.snapshot)
+      throw new Error('形状详情与卡片快照不一致，请重新读取');
+    if (detail.items.some((chunk, i) => chunk.id !== item.id || chunk.chunkIndex !== i || chunk.chunkCount !== detail.items.length))
+      throw new Error('形状分片与快照不一致，请重新读取');
+    const value = JSON.parse(detail.items.map(chunk => chunk.jsonText).join('')) as ShapeVersion;
+    if (value.id !== item.id || value.versionId !== item.versionId || value.content.shapeType !== item.content.shapeType)
+      throw new Error('形状版本与快照不一致，请重新读取');
+    shapes.push({ ...value, kind: 'shape', item: item.item });
+  }
+  const strokePage = await collect<StrokeIndex>({ view: 'stroke-index', snapshot: index.first.snapshot });
+  if (strokePage.first.revision !== index.first.revision || strokePage.first.snapshot !== index.first.snapshot)
+    throw new Error('笔迹索引与卡片快照不一致，请重新读取');
+  const strokes: CanvasStroke[] = [];
+  for (const item of [...strokePage.items].sort((a, b) => a.order - b.order)) {
+    const detail = await collect<DetailChunk>({ view: 'stroke-detail', strokeId: item.id, snapshot: index.first.snapshot });
+    const target = detail.first.target;
+    if (detail.first.revision !== index.first.revision || detail.first.snapshot !== index.first.snapshot ||
+      !target || !('strokeId' in target) || target.strokeId !== item.id || target.versionId !== item.versionId)
+      throw new Error('笔迹详情与卡片快照不一致，请重新读取');
+    if (detail.items.some((chunk, i) => chunk.id !== item.id || chunk.chunkIndex !== i || chunk.chunkCount !== detail.items.length))
+      throw new Error('笔迹分片与快照不一致，请重新读取');
+    const value = JSON.parse(detail.items.map(chunk => chunk.jsonText).join('')) as StrokeVersion;
+    if (value.id !== item.id || value.versionId !== item.versionId || value.content.path.length !== item.content.pointCount ||
+      value.content.penKind !== item.content.penKind || value.content.color !== item.content.color ||
+      value.content.width !== item.content.width || value.content.opacity !== item.content.opacity ||
+      value.content.path.some(point => !Number.isFinite(point.x) || !Number.isFinite(point.y)))
+      throw new Error('笔迹内容版本与索引不一致，请重新读取');
+    strokes.push({ ...value, kind: 'stroke', item: item.item });
+  }
   return {
     project: index.first.project,
     cards,
     tags: tags.items,
     texts,
+    shapes,
+    strokes,
     snapshot: index.first.snapshot,
   };
 }

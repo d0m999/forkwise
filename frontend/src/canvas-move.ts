@@ -2,7 +2,7 @@ import { useRef, useState } from "react";
 import type { Command, ProjectState } from "./api";
 type Point = { x: number; y: number };
 type Target = {
-  kind: "card" | "text";
+  kind: "card" | "text" | "shape";
   id: string;
   item: { id: string; versionId: string; pose: Point };
 };
@@ -19,7 +19,9 @@ export function useCanvasMove(
     anchor: Target;
   } | null>(null);
   const [dragging, setDragging] = useState(false);
+  const ended = useRef(new Set<string>());
   function start(id: string) {
+    ended.current.clear();
     if (!state || gesture.current || !selection.includes(id)) return false;
     const targets: Target[] = [
       ...state.cards.map((card) => ({
@@ -32,12 +34,18 @@ export function useCanvasMove(
         id: text.id,
         item: text.item,
       })),
-    ].filter((value) => selection.includes(value.item.id));
+      ...(state.shapes ?? []).map((shape) => ({
+        kind: "shape" as const,
+        id: shape.id,
+        item: shape.item,
+      })),
+    ].filter((value) => selection.includes(value.item.id)).map(value => ({ ...value, item: structuredClone(value.item) }));
     const anchor = targets.find((value) => value.item.id === id);
     if (
       !anchor ||
       targets.length < 2 ||
-      !targets.some((value) => value.kind === "text")
+      targets.length !== selection.length ||
+      !targets.some((value) => value.kind === "text" || value.kind === "shape")
     )
       return false;
     gesture.current = { projectId: state.project.id, targets, anchor };
@@ -45,6 +53,7 @@ export function useCanvasMove(
     return true;
   }
   function preview(id: string, point: Point) {
+    if (ended.current.has(id)) return true;
     if (!gesture.current?.targets.some((value) => value.item.id === id))
       return false;
     setPositions((previous) => ({ ...previous, [id]: point }));
@@ -52,7 +61,7 @@ export function useCanvasMove(
   }
   function drag(point: Point) {
     const current = gesture.current;
-    if (!current) return false;
+    if (!current) return ended.current.size > 0;
     const dx = point.x - current.anchor.item.pose.x,
       dy = point.y - current.anchor.item.pose.y;
     setPositions(
@@ -67,7 +76,8 @@ export function useCanvasMove(
   }
   function finish(point: Point) {
     const current = gesture.current;
-    if (!current) return false;
+    if (!current) return ended.current.size > 0;
+    ended.current = new Set(current.targets.map(value => value.item.id));
     gesture.current = null;
     setDragging(false);
     const dx = point.x - current.anchor.item.pose.x,
@@ -99,6 +109,7 @@ export function useCanvasMove(
     return true;
   }
   function cancel() {
+    if (gesture.current) ended.current = new Set(gesture.current.targets.map(value => value.item.id));
     gesture.current = null;
     setDragging(false);
     setPositions({});

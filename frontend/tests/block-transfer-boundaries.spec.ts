@@ -155,6 +155,8 @@ test('列表落点明示目标父项和层级；禁入自身后代，拖出正�
     ]);
   await page.getByRole('button', { name: '撤销', exact: true }).click();
   await expect.poll(async () => (await workspace.state()).cards[0]!.body.blocks).toEqual(list);
+  await expect(editor).toHaveAttribute('aria-readonly', 'false');
+  await expect(editor.locator('[data-block-id="c"]')).toBeVisible();
   const before = await workspace.state();
   const c = await editor.locator('[data-block-id="c"]').boundingBox();
   await start();

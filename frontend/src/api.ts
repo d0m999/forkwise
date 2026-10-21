@@ -1,5 +1,6 @@
 import type { SearchQuery, SearchResult, SearchStateView } from '../../backend/src/mapping/search-contracts';
 import type { MediaAsset } from '../../backend/src/mapping/media';
+import type { CanvasShape } from '../../backend/src/mapping/shape-contracts';
 import type {
   CardIdentity,
   Command,
@@ -61,6 +62,8 @@ export const api = {
     request<ProjectHistory>("/projects/" + encodeURIComponent(id) + "/history"),
   projects: () => request<Project[]>("/projects"),
   project: (id: string) => readCompactMap(id, request),
+  poseVersion: (projectId: string, itemId: string, versionId: string) =>
+    request<CanvasShape["item"]>(`/projects/${encodeURIComponent(projectId)}/versions/pose/${encodeURIComponent(itemId)}/${encodeURIComponent(versionId)}`),
   synchronize: (value: WorkspaceProjection) => syncCompactMap(value, request),
   execute: (command: Command, options?: { keepalive?: boolean }) => request<Receipt>("/execute", command, options?.keepalive),
 };

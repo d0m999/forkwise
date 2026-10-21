@@ -115,8 +115,10 @@ test('当前键入标题快捷转换，一次撤销恢复完整触发文字且�
   await expect
     .poll(async () => (await workspace.state()).cards[0]!.body.blocks[1]!.type)
     .toBe('heading');
+  await expect(editor).toHaveAttribute('aria-readonly', 'false');
   await expect(page.getByRole('status')).toHaveText('已保存到本机');
   const saved = await workspace.state();
+  await expect(page.locator('.workspace')).toHaveAttribute('data-revision', String(saved.project.revision));
   const snapshot = await page.locator('.workspace').getAttribute('data-snapshot');
   const agent = await workspace.agentBody(saved.project.id, saved.cards[0]!.id, snapshot!);
   expect(agent.revision).toBe(saved.project.revision);

@@ -1,8 +1,17 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { ApiTransport } from '../mcp-server.js';
+import { ApiTransportError } from '../api-transport-error.js';
 import { ObserveQuerySchema } from './observe-contracts.js';
 import { TagCommandSchema } from './contracts.js';
+
+function readError(error: unknown, fallback: string) {
+  return {
+    content: [{ type: 'text' as const, text: error instanceof Error ? error.message : fallback }],
+    ...(error instanceof ApiTransportError ? { structuredContent: { error: error.response } } : {}),
+    isError: true,
+  };
+}
 
 // The tool is read-only. Authentication and snapshots live in Mapping, not MCP.
 export function registerCompactMapTool(server: McpServer, transport: ApiTransport) {
@@ -36,7 +45,7 @@ export function registerCompactMapTool(server: McpServer, transport: ApiTranspor
     'forkwise_observe_map',
     {
       description:
-        '只读同步开放地图有序变化。afterRevision 是已完整读取的修订；首批 baseSnapshot 校验缓存，续页 snapshot 固定终点。整批连续后用返回 snapshot 重读 index/detail。RESET_REQUIRED 全量重读；过期重启重新开始；授权错误重新取得授权后完整读取。budget 为完整 Mapping JSON 的 UTF-8 字节，limit 至多100；协议外壳不计入。',
+        '只读同步开放地图有序变化。afterRevision 是已完整读取的修订；首批 baseSnapshot 校验缓存，续页 snapshot 固定终点。整批连续后或 RESET_REQUIRED 时，使用返回的 snapshot 读取五个视图 index、tags、text-index、shape-index、stroke-index，每个视图读至 complete，再按需读取各对象完整 detail。根 index 仅含 Card。预算错误保留 error.details.recovery，按其中 snapshot 完整重读；过期重启重新开始；授权错误重新取得授权。budget 为完整 Mapping JSON 的 UTF-8 字节，limit 至多100；协议外壳不计入。',
       inputSchema: ObserveQuerySchema,
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
@@ -53,15 +62,7 @@ export function registerCompactMapTool(server: McpServer, transport: ApiTranspor
           structuredContent: { response: page },
         };
       } catch (error) {
-        return {
-          content: [
-            {
-              type: 'text' as const,
-              text: error instanceof Error ? error.message : '地图同步失败',
-            },
-          ],
-          isError: true,
-        };
+        return readError(error, '地图同步失败');
       }
     },
   );
@@ -69,11 +70,13 @@ export function registerCompactMapTool(server: McpServer, transport: ApiTranspor
     'forkwise_read_map',
     {
       description:
-        '读取本机开放地图。先 index/tags 与 text-index，再以原 snapshot 选卡读 body/detail 或按textId读text-detail；budget 为完整 Mapping JSON 的 UTF-8 字节，summary 不推断未读正文。',
+        '读取本机开放地图。根 index 仅含 Card；完整读取须在同一 snapshot 分别读取 index、tags、text-index、shape-index、stroke-index 五个视图，每个视图分页至 complete。按需选卡读 body/detail，或按 textId、shapeId、strokeId 读取 text-detail、shape-detail、stroke-detail；完整详情与索引须同 snapshot。budget 为完整 Mapping JSON 的 UTF-8 字节，summary 不推断未读内容。',
       inputSchema: z
         .object({
           projectId: z.string().min(1).max(160),
-          view: z.enum(['index', 'body', 'detail', 'tags', 'text-index', 'text-detail']),
+          view: z.enum(['index', 'body', 'detail', 'tags', 'text-index', 'text-detail', 'shape-index', 'shape-detail', 'stroke-index', 'stroke-detail']),
+          strokeId: z.string().min(1).max(160).optional(),
+          shapeId: z.string().min(1).max(160).optional(),
           textId: z.string().min(1).max(160).optional(),
           cardId: z.string().min(1).max(160).optional(),
           snapshot: z.string().uuid().optional(),
@@ -96,15 +99,7 @@ export function registerCompactMapTool(server: McpServer, transport: ApiTranspor
           structuredContent: { response: page },
         };
       } catch (error) {
-        return {
-          content: [
-            {
-              type: 'text' as const,
-              text: error instanceof Error ? error.message : '地图读取失败',
-            },
-          ],
-          isError: true,
-        };
+        return readError(error, '地图读取失败');
       }
     },
   );

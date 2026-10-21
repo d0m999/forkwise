@@ -1,4 +1,6 @@
 import { TextCommands, type CanvasText, type TextChange } from './text-contracts.js';
+import { StrokeCreateCommand, StrokeDeleteCommand, type CanvasStroke, type StrokeChange } from './stroke-contracts.js';
+import { ShapeCreateCommand, ShapeEditCommand, ShapeMoveCommand, ShapeDeleteCommand, ShapeTransformCommand, type CanvasShape, type ShapeChange } from './shape-contracts.js';
 import { z } from 'zod';
 import type { CompactQuery } from './compact-contracts.js';
 import { TITLE_COLORS } from './presentation-values.js';
@@ -28,6 +30,13 @@ export const TagCommandSchema = z.discriminatedUnion('type', [
   z.object({ ...Envelope, type: z.literal('tag.create'), expected: z.union([z.null(), z.object({ cardTags: Id.nullable() }).strict()]), payload: z.object({ id: Id, name: z.string().min(1).max(240), cardId: Id.optional() }).strict() }).strict(),
 ]);
 export const MappingCommand = z.discriminatedUnion('type', [
+  StrokeCreateCommand,
+  StrokeDeleteCommand,
+  ShapeCreateCommand,
+  ShapeEditCommand,
+  ShapeMoveCommand,
+  ShapeDeleteCommand,
+  ShapeTransformCommand,
   ...TextCommands.options,
   z.object({ ...Envelope, type: z.literal('search.delete'), expected: Id.nullable(), payload: z.object({ query: SearchConditionsSchema, id: Id }).strict() }).strict(),
   z.object({ ...Envelope, type: z.literal('search.clear'), expected: Id.nullable(), payload: z.object({ query: SearchConditionsSchema }).strict() }).strict(),
@@ -65,7 +74,7 @@ export const MappingCommand = z.discriminatedUnion('type', [
         .strict(),
     })
     .strict(),
-  z.object({ ...Envelope, type: z.literal('canvas.move'), expected: z.record(Id, Id), payload: z.object({ targets: z.array(z.object({ kind: z.enum(['card', 'text']), id: Id, itemId: Id, x: z.number().finite(), y: z.number().finite() }).strict()).min(1) }).strict() }).strict(),
+  z.object({ ...Envelope, type: z.literal('canvas.move'), expected: z.record(Id, Id), payload: z.object({ targets: z.array(z.object({ kind: z.enum(['card', 'text', 'shape']), id: Id, itemId: Id, x: z.number().finite(), y: z.number().finite() }).strict()).min(1) }).strict() }).strict(),
   z
     .object({
       ...Envelope,
@@ -229,8 +238,12 @@ export interface ProjectState {
   cards: Card[];
   tags?: Tag[];
   texts?: CanvasText[];
+  shapes?: CanvasShape[];
+  strokes?: CanvasStroke[];
 }
 export interface Receipt {
+  strokeVersions?: { stroke: string; pose: string };
+  shapeVersions?: { shape: string; pose: string };
   textVersions?: { text: string; pose: string };
   commandId: string;
   projectId: string;
@@ -244,7 +257,7 @@ export interface Receipt {
 export type VersionQuery = {
   type: 'version';
   projectId: string;
-  domain: 'body' | 'pose' | 'appearance' | 'tag' | 'cardTags';
+  domain: 'body' | 'pose' | 'appearance' | 'tag' | 'cardTags' | 'shape' | 'stroke';
   id: string;
   versionId: string;
 };
@@ -265,6 +278,9 @@ export type ReadQuery =
   | VersionQuery;
 
 export interface Change extends Receipt {
+  strokeChange?: StrokeChange;
+  shapeChange?: ShapeChange;
+  shapeChanges?: ShapeChange[];
   textChanges?: TextChange[];
   textChange?: TextChange;
   tagChange?: { before: Tag | null; after: Tag };

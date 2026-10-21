@@ -2,8 +2,10 @@ import { randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
 import type { Card, Command } from './contracts.js';
 import type { CanvasText } from './text-contracts.js';
+import type { CanvasShape } from './shape-contracts.js';
 import { requireThat } from '../domain/errors.js';
 import { writeText } from './text.js';
+import { moveShape } from './shape.js';
 
 export function moveCanvas(
   db: Database.Database,
@@ -29,11 +31,13 @@ export function moveCanvas(
       .prepare(
         target.kind === 'card'
           ? 'SELECT value FROM mapping_cards WHERE id=? AND project_id=?'
-          : 'SELECT value FROM mapping_texts WHERE id=? AND project_id=?',
+          : target.kind === 'text'
+            ? 'SELECT value FROM mapping_texts WHERE id=? AND project_id=?'
+            : 'SELECT value FROM mapping_shapes WHERE id=? AND project_id=?',
       )
       .get(target.id, command.projectId) as { value: string } | undefined;
     requireThat(row, 'NOT_FOUND', '移动对象不存在于当前项目', 404);
-    const value = JSON.parse(row.value) as Card | CanvasText;
+    const value = JSON.parse(row.value) as Card | CanvasText | CanvasShape;
     requireThat(
       value.item.id === target.itemId && value.item.versionId === command.expected[target.itemId],
       'VERSION_CONFLICT',
@@ -44,6 +48,7 @@ export function moveCanvas(
   });
   const cardChanges: { before: Card; after: Card }[] = [];
   const textChanges: { before: CanvasText; after: CanvasText }[] = [];
+  const shapeChanges: { before: CanvasShape; after: CanvasShape }[] = [];
   for (const { target, value } of validated) {
     if (target.x === value.item.pose.x && target.y === value.item.pose.y) continue;
     if (target.kind === 'text') {
@@ -55,6 +60,15 @@ export function moveCanvas(
         payload: { id: target.id, x: target.x, y: target.y },
       })!;
       textChanges.push({ before: change.before!, after: change.after! });
+    } else if (target.kind === 'shape') {
+      const change = moveShape(db, {
+        commandId: command.commandId,
+        projectId: command.projectId,
+        type: 'shape.move',
+        expected: value.item.versionId,
+        payload: { id: target.id, x: target.x, y: target.y },
+      })!;
+      shapeChanges.push({ before: change.before!, after: change.after! });
     } else {
       const before = value as Card;
       const after = {
@@ -76,6 +90,7 @@ export function moveCanvas(
   return {
     cardChanges,
     textChanges,
-    changedIds: [...cardChanges, ...textChanges].map((change) => change.after.item.id),
+    shapeChanges,
+    changedIds: [...cardChanges, ...textChanges, ...shapeChanges].map((change) => change.after.item.id),
   };
 }
