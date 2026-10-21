@@ -215,6 +215,7 @@ test('有序条目连续编号，待办切换与分隔线插入各自保存并�
       .locator('[data-list-type=ordered]')
       .evaluateAll((items) => items.map((e) => getComputedStyle(e, '::before').content)),
   ).toEqual(['"1."', '"2."']);
+  const secondItemId = await editor.locator('[data-list-type=ordered]').nth(1).getAttribute('data-block-id');
   await page.getByRole('button', { name: '块菜单', exact: true }).click();
   await page.getByRole('menuitem', { name: '转为待办列表', exact: true }).click();
   await page.getByRole('button', { name: '标为完成', exact: true }).click();
@@ -225,6 +226,15 @@ test('有序条目连续编号，待办切换与分隔线插入各自保存并�
   await expect
     .poll(async () => (await workspace.state()).cards[0]!.body.blocks[1]!.checked)
     .toBe(false);
+  await expect(editor).toHaveAttribute('aria-readonly', 'false');
+  await expect(editor).toBeFocused();
+  await expect.poll(() => editor.evaluate((root, blockId) => {
+    const selection = window.getSelection();
+    const node = selection?.anchorNode;
+    const element = node instanceof Element ? node : node?.parentElement;
+    return !!blockId && !!selection?.rangeCount && selection.isCollapsed &&
+      !!node && root.contains(node) && element?.closest('[data-block-id]')?.getAttribute('data-block-id') === blockId;
+  }, secondItemId)).toBe(true);
   await editor.press('End');
   await editor.press('Enter');
   await editor.press('Enter');

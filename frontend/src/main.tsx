@@ -1,3 +1,9 @@
+import { TextConflictPanel } from "./text-conflict";
+import { CanvasMoveConflictPanel } from "./canvas-move-conflict";
+import { orderCanvas } from './canvas-order';
+import { useCanvasMove } from './canvas-move';
+import { CanvasTextNode } from './canvas-text';
+import { useCanvasTexts } from './text-session';
 import { ProjectSearch } from './project-search';
 import type { SearchReading } from './search-reading';
 import { BodyFind } from './body-find';
@@ -53,6 +59,7 @@ import { ProjectTags, CardTagSummary } from "./project-tags";
 import type { Tag } from "../../backend/src/mapping/contracts";
 
 type CardData = {
+  cardOnlySelection: boolean;
   tags: Tag[];
   card: Card;
   previewBody: Card["body"];
@@ -100,7 +107,7 @@ function ThoughtCard({ data, selected }: NodeProps<Node<CardData>>) {
         } as React.CSSProperties
       }
     >
-      {selected && (
+      {selected && data.cardOnlySelection && (
         <CardMenu
           anchor={anchor}
           card={data.card}
@@ -195,7 +202,7 @@ function ThoughtCard({ data, selected }: NodeProps<Node<CardData>>) {
     </article>
   );
 }
-const nodeTypes = { thought: ThoughtCard };
+const nodeTypes = { thought: ThoughtCard, canvasText: CanvasTextNode };
 function draftKey(projectId: string, cardId: string, field: Draft["field"]) {
   return JSON.stringify([projectId, cardId, field]);
 }
@@ -474,6 +481,7 @@ function Workspace() {
       (historyCommand.current ? direction !== "retry" : direction === "retry")
     )
       return;
+    if (!(await texts.finish())) return;
     editorEpoch.current++;
     historyLock.current = true;
     setHistoryBusy(true);
@@ -670,7 +678,7 @@ function Workspace() {
     setSelection((previous) =>
       current?.project.id !== value.project.id
         ? []
-        : previous.filter((id) => value.cards.some((c) => c.item.id === id)),
+        : previous.filter((id) => value.cards.some((c) => c.item.id === id) || value.texts?.some(text => text.item.id === id)),
     );
     setState(value);
   };
@@ -807,6 +815,7 @@ function Workspace() {
   });
   function cancelGesture() {
     pose.cancel();
+    canvasMove.cancel();
     resize.cancel();
     moving.current = null;
     bypass.current = false;
@@ -840,7 +849,7 @@ function Workspace() {
         )
       )
         return;
-      if (pose.dragging || marqueeSelection.current) {
+      if (pose.dragging || canvasMove.dragging || marqueeSelection.current) {
         event.preventDefault();
         cancel();
       }
@@ -899,7 +908,7 @@ function Workspace() {
     const all = await api.projects();
     // Keep the old project's authority while the destination is loading: the
     // visible editors may still accept input during those requests.
-    if (!(await pose.flush()) || !(await flush())) return false;
+    if (!(await texts.finish()) || !(await pose.flush()) || !(await flush())) return false;
     updateState(value);
     setProjects(all);
     return true;
@@ -913,6 +922,7 @@ function Workspace() {
     editorEpoch.current++;
     breakBodyGroup();
     if (
+      !(await texts.finish()) ||
       !(await appearance.flush()) ||
       !(await cardLayout.flush()) ||
       !(await pose.flush()) ||
@@ -1288,6 +1298,7 @@ function Workspace() {
     editorEpoch.current++;
     breakBodyGroup();
     if (
+      !(await texts.finish()) ||
       !(await appearance.flush()) ||
       !(await cardLayout.flush()) ||
       !(await pose.flush()) ||
@@ -1539,6 +1550,7 @@ function Workspace() {
         appearance.hasPending() ||
         cardLayout.hasPending() ||
         pose.hasPending()
+        || texts.hasPending()
       ) {
         event.preventDefault();
         event.returnValue = "";
@@ -1552,6 +1564,24 @@ function Workspace() {
       window.removeEventListener("beforeunload", beforeUnload);
     };
   }, []);
+  const texts = useCanvasTexts(state, selection, setSelection, updateState, () => flush());
+  const canvasMove = useCanvasMove(state, selection, texts.enqueueGeometry);
+  const textNodes = texts.nodes.map((node) => ({
+    ...node,
+    data: {
+      ...node.data,
+      moveDisabled: node.data.moveDisabled || busy || historyBlocked || pose.pending,
+      move: (dx: number, dy: number) => {
+        if (busy || historyBlocked || pose.pending || node.data.moveDisabled) return;
+        if (canvasMove.start(node.id)) {
+          canvasMove.finish({ x: node.data.value.item.pose.x + dx, y: node.data.value.item.pose.y + dy });
+        } else node.data.move(dx, dy);
+      },
+    },
+  }));
+  const cardOnlySelection = selection.every((id) =>
+    state?.cards.some((card) => card.item.id === id),
+  );
   const nodes: Node<CardData>[] = (state?.cards ?? []).map((card) => ({
     id: card.item.id,
     selected: selection.includes(card.item.id),
@@ -1574,6 +1604,7 @@ function Workspace() {
     draggable:
       !busy && !historyBlocked && !pose.pending && !placing && !panTool,
     data: {
+      cardOnlySelection,
       card,
       previewBody: (() => {
         const draft = draftView[draftKey(state!.project.id, card.id, "body")];
@@ -1613,12 +1644,13 @@ function Workspace() {
           card.appearance?.showPreview ?? DEFAULT_APPEARANCE.showPreview,
       },
       onComposition: compose,
-      movingDisabled: busy || historyBlocked || pose.pending,
+      movingDisabled: busy || historyBlocked || pose.pending || texts.geometryBlocked,
       historyBlocked,
       resizable: selection.length === 1 && selection.includes(card.item.id),
       onResize: (event, direction) => resize.start(event, card, direction),
       onResizeKey: (event, direction) => resize.key(event, card, direction),
       onMove: (dx, dy) => {
+        if (canvasMove.start(card.item.id)) { canvasMove.finish({ x: card.item.pose.x + dx, y: card.item.pose.y + dy }); return; }
         if (startMove(state!.project.id, card)) {
           pose.finish({ x: card.item.pose.x + dx, y: card.item.pose.y + dy });
           moving.current = null;
@@ -1739,6 +1771,9 @@ function Workspace() {
       <main
         className={panelCard ? "canvas with-editor" : "canvas"}
         onClickCapture={(event) => {
+          if (texts.placing && !busy && !historyBlocked && (event.target as Element).closest('.react-flow__node, .react-flow__pane') && !(event.target as Element).closest('.text-actions, .react-flow__controls')) {
+            event.preventDefault(); event.stopPropagation(); const point = flow.screenToFlowPosition({ x: event.clientX, y: event.clientY }); void texts.create(point.x, point.y); return;
+          }
           if (
             placing &&
             !busy &&
@@ -1767,6 +1802,7 @@ function Workspace() {
             ) &&
             !(event.target as HTMLElement).classList.contains("draggable") &&
             !placing &&
+            !texts.placing &&
             !panTool
           ) {
             editorEpoch.current++;
@@ -1786,7 +1822,7 @@ function Workspace() {
               "controls.zoomOut.ariaLabel": "缩小",
               "controls.fitView.ariaLabel": "适应画布",
             }}
-            nodes={nodes}
+            nodes={orderCanvas([...nodes, ...textNodes].map(node => ({ ...node, position: canvasMove.positions[node.id] ?? node.position, draggable: node.draggable !== false && !busy && !historyBlocked && !panTool && !placing && !texts.placing && !texts.geometryBlocked })), state, selection)}
             onNodeClick={(event, node) => {
               awaitBodySelection.current = false;
               if (event.shiftKey)
@@ -1796,7 +1832,7 @@ function Workspace() {
               else if (!selection.includes(node.id) || selection.length === 1) setSelection([node.id]);
             }}
             nodeDragThreshold={0}
-            selectionOnDrag={!placing && !panTool}
+            selectionOnDrag={!placing && !panTool && !texts.placing}
             selectionKeyCode={null}
             multiSelectionKeyCode="Shift"
             selectionMode={SelectionMode.Full}
@@ -1806,15 +1842,15 @@ function Workspace() {
               marqueeSelection.current = null;
             }}
             onNodeDragStart={(_, node) => {
+              if (canvasMove.start(node.id) || texts.startMove(node.id)) return;
               const card = authority.current?.cards.find(
                 (c) => c.item.id === node.id,
               );
               if (card) startMove(authority.current!.project.id, card);
             }}
-            onNodeDrag={(event, node) =>
-              previewMove(node.position, "altKey" in event && event.altKey)
-            }
+            onNodeDrag={(event, node) => { if (!canvasMove.drag(node.position) && !texts.previewMove(node.id, node.position)) previewMove(node.position, "altKey" in event && event.altKey); }}
             onNodeDragStop={(_, node) => {
+              if (canvasMove.finish(node.position) || texts.finishMove(node.position)) return;
               pose.finish(moving.current?.aligned ?? node.position);
               moving.current = null;
               setGuides([]);
@@ -1839,7 +1875,7 @@ function Workspace() {
                 });
               for (const change of changes)
                 if (change.type === "position" && change.position)
-                  pose.preview(change.id, change.position);
+                  if (!canvasMove.preview(change.id, change.position) && !texts.previewMove(change.id, change.position)) pose.preview(change.id, change.position);
               const measured = changes.filter(
                 (change) => change.type === "dimensions" && change.dimensions,
               );
@@ -1854,6 +1890,7 @@ function Workspace() {
             }}
             edges={[]}
             nodeTypes={nodeTypes}
+            elevateNodesOnSelect={false}
             nodesDraggable
             nodesFocusable={false}
             nodesConnectable={false}
@@ -1905,9 +1942,10 @@ function Workspace() {
         {state && (
           <div className="creation-tools" aria-label="创作工具">
             <button
-              aria-pressed={!placing && !panTool}
+              aria-pressed={!placing && !panTool && !texts.placing}
               onClick={() => {
                 setPlacing(false);
+                texts.setPlacing(false);
                 setPanTool(false);
               }}
             >
@@ -1917,6 +1955,7 @@ function Workspace() {
               aria-pressed={panTool}
               onClick={() => {
                 setPlacing(false);
+                texts.setPlacing(false);
                 setPanTool(true);
               }}
             >
@@ -1935,11 +1974,14 @@ function Workspace() {
               disabled={busy || historyBlocked}
               onClick={() => {
                 setPanTool(false);
+                texts.setPlacing(false);
                 setPlacing(true);
               }}
             >
               卡片
             </button>
+            <button aria-pressed={texts.placing} disabled={busy || historyBlocked} onClick={() => { setPlacing(false); setPanTool(false); texts.setPlacing(true); }}>文字</button>
+            {texts.error && <span role="alert">{texts.error}</span>}
             {placing && <span>点击画布放置卡片</span>}
           </div>
         )}
@@ -2010,6 +2052,8 @@ function Workspace() {
           <button onClick={pose.resolveConflict}>确认保留本次位置</button>
         </section>
       )}
+      {texts.conflict && <TextConflictPanel value={texts.conflict} resolve={texts.resolveConflict} />}
+      {texts.mixedConflict && <CanvasMoveConflictPanel value={texts.mixedConflict} abandon={texts.abandonMixedMove} />}
       {conflict && (
         <section className="conflict-panel" aria-label="保存冲突">
           <h2>
@@ -2099,9 +2143,15 @@ function Workspace() {
         </div>
       )}
       <div className="save-state">
+        {texts.mixedRecoveries.map(record => <button key={record.key} onClick={() => texts.recoverMixedMove(record.key)}>恢复混合移动草稿</button>)}
+        {texts.conflictRecoveries.map(record => <button key={record.key} onClick={() => texts.recoverConflict(record.key)}>恢复独立文字草稿</button>)}
+        {texts.createRecoveries.map(record => <button key={record.key} onClick={() => void texts.recoverCreate(record.key)}>恢复独立文字草稿</button>)}
+        {texts.formatRecoveries.map(record => <button key={record.key} onClick={() => texts.recoverFormat(record.key)}>恢复独立文字草稿</button>)}
+        {texts.recoveries.map(record => <button key={record.key} onClick={() => void texts.recover(record.key)}>恢复独立文字草稿</button>)}
+        {texts.error && <><span role="alert">{texts.error}</span><button onClick={() => void texts.retry()}>重试文字保存</button></>}
         {mediaQueue.hasUnconfirmed && <button onClick={mediaQueue.retryUnconfirmed} disabled={historyBlocked}>重试媒体保存确认</button>}
         <span role="status" aria-live="polite">
-          {appearance.error
+          {texts.status || (appearance.error
             ? "外观保存未完成"
             : appearance.pending
               ? "外观等待保存…"
@@ -2115,7 +2165,7 @@ function Workspace() {
                       ? "布局等待保存…"
                       : recovery.current?.damaged && status === "已保存到本机"
                         ? "部分恢复记录未确认"
-                        : saveStatus}
+                        : saveStatus)}
         </span>
         {(appearance.error || appearance.pending || cardLayout.error) && (
           <>

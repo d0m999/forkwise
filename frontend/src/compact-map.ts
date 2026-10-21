@@ -1,3 +1,5 @@
+import type { CanvasText } from '../../backend/src/mapping/text-contracts';
+import type { TextIndex } from '../../backend/src/mapping/compact-contracts';
 import type { Card, ProjectState, Tag } from "../../backend/src/mapping/contracts";
 import type {
   CardIndex,
@@ -103,10 +105,24 @@ export async function readCompactMap(
   const tags = await collect<Tag>({ view: "tags", snapshot: index.first.snapshot });
   if (tags.first.revision !== index.first.revision || tags.first.snapshot !== index.first.snapshot)
     throw new Error("标签与卡片快照不一致，请重新读取");
+  const textPage = await collect<TextIndex>({ view: 'text-index', snapshot: index.first.snapshot });
+  if (textPage.first.revision !== index.first.revision || textPage.first.snapshot !== index.first.snapshot)
+    throw new Error('文字索引与卡片快照不一致，请重新读取');
+  const texts: CanvasText[] = [];
+  for (const item of textPage.items) {
+    const detail = await collect<DetailChunk>({ view: 'text-detail', textId: item.id, snapshot: index.first.snapshot });
+    if (detail.first.revision !== index.first.revision || detail.first.snapshot !== index.first.snapshot)
+      throw new Error('文字详情与卡片快照不一致，请重新读取');
+    if (detail.items.some((chunk, i) => chunk.id !== item.id || chunk.chunkIndex !== i || chunk.chunkCount !== detail.items.length)) throw new Error('文字分片与快照不一致');
+    const value = JSON.parse(detail.items.map(chunk => chunk.jsonText).join(''));
+    if (value.id !== item.id || value.versionId !== item.versionId || value.content.runs.length !== item.content.runCount) throw new Error('文字版本与快照不一致');
+    texts.push({ ...value, kind: 'text', item: item.item });
+  }
   return {
     project: index.first.project,
     cards,
     tags: tags.items,
+    texts,
     snapshot: index.first.snapshot,
   };
 }

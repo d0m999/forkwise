@@ -69,11 +69,12 @@ export function registerCompactMapTool(server: McpServer, transport: ApiTranspor
     'forkwise_read_map',
     {
       description:
-        '读取本机开放地图。先 index，再以原 snapshot 选卡读 body/detail；budget 为完整 Mapping JSON 的 UTF-8 字节，summary 不推断未读正文。',
+        '读取本机开放地图。先 index/tags 与 text-index，再以原 snapshot 选卡读 body/detail 或按textId读text-detail；budget 为完整 Mapping JSON 的 UTF-8 字节，summary 不推断未读正文。',
       inputSchema: z
         .object({
           projectId: z.string().min(1).max(160),
-          view: z.enum(['index', 'body', 'detail', 'tags']),
+          view: z.enum(['index', 'body', 'detail', 'tags', 'text-index', 'text-detail']),
+          textId: z.string().min(1).max(160).optional(),
           cardId: z.string().min(1).max(160).optional(),
           snapshot: z.string().uuid().optional(),
           cursor: z.string().min(1).max(2048).optional(),

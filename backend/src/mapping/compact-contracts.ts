@@ -1,3 +1,4 @@
+import type { CanvasText } from './text-contracts.js';
 import { z } from 'zod';
 import type { Card, Project, Tag } from './contracts.js';
 
@@ -9,6 +10,8 @@ const common = {
   budget: z.number().int().positive().max(1_048_576).default(131_072),
 };
 export const CompactQuerySchema = z.discriminatedUnion('view', [
+  z.object({ ...common, view: z.literal('text-index') }).strict(),
+  z.object({ ...common, view: z.literal('text-detail'), textId: z.string().min(1).max(160), snapshot: z.string().uuid() }).strict(),
   z.object({ ...common, view: z.literal('tags') }).strict(),
   z.object({ ...common, view: z.literal('index') }).strict(),
   z
@@ -52,9 +55,10 @@ export interface DetailChunk {
   chunkCount: number;
   jsonText: string;
 }
-export type CompactItem = CardIndex | BodySlice | DetailChunk | Tag;
+export type TextIndex = Omit<CanvasText, 'kind' | 'content'> & { type: 'text'; order: number; content: Omit<CanvasText['content'], 'runs'> & { runCount: number; availability: 'not_fetched' } };
+export type CompactItem = TextIndex | CardIndex | BodySlice | DetailChunk | Tag;
 export interface CompactPage<T = CompactItem> {
-  scope: { types: ['thought']; relations: 'not_implemented'; order: 'creation_ordinal' };
+  scope: { types: ('thought' | 'text')[]; relations: 'not_implemented'; order: 'creation_ordinal' };
   project: Project;
   snapshot: string;
   revision: number;
@@ -63,7 +67,7 @@ export interface CompactPage<T = CompactItem> {
   bytes: number;
   totalItems: number;
   coverage: { start: number; end: number; complete: boolean };
-  fidelity: 'index' | 'partial_body' | 'lossless_json_chunks' | 'tags';
+  fidelity: 'index' | 'partial_body' | 'lossless_json_chunks' | 'tags' | 'text-index';
   availability: 'available' | 'deleted' | 'not_found';
   target?: { cardId: string; bodyId?: string; versionId?: string };
   summary: null;

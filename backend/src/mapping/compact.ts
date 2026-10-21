@@ -1,3 +1,5 @@
+import { textIndex, textDetail } from './text-projection.js';
+import type { TextIndex } from './compact-contracts.js';
 import type Database from 'better-sqlite3';
 import { randomUUID } from 'node:crypto';
 import { requireThat } from '../domain/errors.js';
@@ -25,6 +27,8 @@ type PinnedCard = Omit<Card, 'body'> & {
   body: { id: string; versionId: string; blockCount: number };
 };
 type Snapshot = {
+  texts: TextIndex[];
+  knownTextIds: Set<string>;
   tags: Tag[];
   project: Project;
   cards: PinnedCard[];
@@ -93,7 +97,9 @@ export class CompactMaps {
           };
         });
         const tags = readTags(this.db, query.projectId);
-        const bytes = Buffer.byteLength(JSON.stringify({ project, cards, identities, tags }), 'utf8');
+        const texts = textIndex(this.db, query.projectId);
+        const textIds = this.db.prepare('SELECT id FROM mapping_text_ids WHERE project_id=?').all(query.projectId) as { id: string }[];
+        const bytes = Buffer.byteLength(JSON.stringify({ project, cards, identities, tags, texts, textIds }), 'utf8');
         const retainedBytes = [...this.snapshots.values()].reduce(
           (sum, value) => sum + value.bytes,
           0,
@@ -105,6 +111,7 @@ export class CompactMaps {
           503,
         );
         state = {
+          texts, knownTextIds: new Set(textIds.map(value => value.id)),
           tags,
           project,
           cards,
@@ -137,8 +144,16 @@ export class CompactMaps {
     let fidelity: CompactPage['fidelity'] = 'index';
     let availability: CompactPage['availability'] = 'available';
     let target: CompactPage['target'];
-    const view = JSON.stringify([query.view, query.view === 'index' || query.view === 'tags' ? null : query.cardId]);
-    if (query.view === 'tags') { items = state.tags; fidelity = 'tags'; }
+    const view = JSON.stringify([query.view, query.view === 'text-detail' ? query.textId : query.view === 'body' || query.view === 'detail' ? query.cardId : null]);
+    if (query.view === 'text-index') { items = state.texts; fidelity = 'text-index'; }
+    else if (query.view === 'text-detail') {
+      const value = state.texts.find(item => item.id === query.textId);
+      fidelity = 'lossless_json_chunks';
+      target = { cardId: query.textId };
+      items = value ? textDetail(this.db, query.projectId, value) : [];
+      if (!value) availability = state.knownTextIds.has(query.textId) ? 'deleted' : 'not_found';
+    }
+    else if (query.view === 'tags') { items = state.tags; fidelity = 'tags'; }
     else if (query.view !== 'index') {
       const card = state.cards.find((c) => c.id === query.cardId);
       if (!card) {
@@ -194,7 +209,7 @@ export class CompactMaps {
     const start = this.pages.offset(query.cursor, token, view);
     return this.pages.page(
       {
-        scope: { types: ['thought'], relations: 'not_implemented', order: 'creation_ordinal' },
+        scope: { types: query.view === 'text-index' || query.view === 'text-detail' ? ['text'] : ['thought'], relations: 'not_implemented', order: 'creation_ordinal' },
         project: state.project,
         snapshot: token,
         revision: state.project.revision,

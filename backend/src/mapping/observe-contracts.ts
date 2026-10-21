@@ -13,7 +13,7 @@ export const ObserveQuerySchema = z
   .strict();
 export type ObserveQuery = z.input<typeof ObserveQuerySchema>;
 export interface Delta extends Change {
-  domains: { domain: 'project' | 'thought' | 'body' | 'pose' | 'appearance' | 'tag' | 'cardTags'; id: string }[];
+  domains: { domain: 'text' | 'project' | 'thought' | 'body' | 'pose' | 'appearance' | 'tag' | 'cardTags'; id: string }[];
   deletedIds: string[];
 }
 export interface ObservePage {

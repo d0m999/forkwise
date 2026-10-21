@@ -1,3 +1,5 @@
+import { moveCanvas } from './canvas-move.js';
+import { readTexts, writeText } from './text.js';
 import { reconcileMediaTasks, completeMediaTask } from './media-tasks.js';
 import { completeMediaHistory } from './history.js';
 import { readAsset, saveAsset, validateImageAssets, type MediaAsset } from './media.js';
@@ -158,7 +160,7 @@ export class Mapping {
           )
           .all(query.projectId) as { value: string }[]
       ).map((row) => JSON.parse(row.value) as Card);
-      return { project, cards, tags: readTags(this.db, project.id) };
+      return { project, cards, tags: readTags(this.db, project.id), texts: readTexts(this.db, project.id) };
     })();
   }
 
@@ -255,7 +257,7 @@ export class Mapping {
         if (command.type === 'body.edit')
           for (const id of command.payload.requiredAssetIds ?? []) readAsset(this.db, command.projectId, id);
         const unchanged = (revision: number): Receipt => {
-          if (command.type !== 'card.layout') interruptGroup(this.db, command, actor.tokenHash);
+          if (command.type !== 'card.layout' && command.type !== 'text.layout') interruptGroup(this.db, command, actor.tokenHash);
           const receipt = {
             commandId: command.commandId,
             projectId: command.projectId,
@@ -277,10 +279,27 @@ export class Mapping {
         let after: Card | Project | null;
         let cardChanges: Change['cardChanges'];
         let tagChange: Change['tagChange'];
+        let textChange: Change['textChange'];
+        let textChanges: Change['textChanges'];
         let travel: ReturnType<typeof travelHistory> | undefined;
         let revision: number;
         let changedIds: string[];
-        if (command.type === 'history.undo' || command.type === 'history.redo') {
+        if (command.type === 'canvas.move') {
+          const project = this.project(command.projectId);
+          ({ cardChanges, textChanges, changedIds } = moveCanvas(this.db, command));
+          if (!changedIds.length) return unchanged(project.revision);
+          after = null; revision = project.revision + 1;
+          this.db.prepare('UPDATE mapping_projects SET revision=? WHERE id=?').run(revision, project.id);
+        } else if (command.type === 'text.create' || command.type === 'text.edit' || command.type === 'text.transform' || command.type === 'text.move' || command.type === 'text.delete' || command.type === 'text.copy' || command.type === 'text.layout') {
+          const project = this.project(command.projectId);
+          const result = writeText(this.db, command);
+          if (!result) return unchanged(project.revision);
+          textChange = result;
+          after = null;
+          changedIds = [...(result.before?.versionId !== result.after?.versionId ? [(result.after ?? result.before)!.id] : []), ...(result.before?.item.versionId !== result.after?.item.versionId ? [(result.after ?? result.before)!.item.id] : [])];
+          revision = project.revision + 1;
+          this.db.prepare('UPDATE mapping_projects SET revision=? WHERE id=?').run(revision, project.id);
+        } else if (command.type === 'history.undo' || command.type === 'history.redo') {
           const project = this.project(command.projectId);
           requireThat(
             command.expected === project.revision,
@@ -292,6 +311,8 @@ export class Mapping {
           ({ before, after, changedIds } = travel);
           cardChanges = travel.cardChanges;
           tagChange = travel.tagChange;
+          textChange = travel.textChange;
+          textChanges = travel.textChanges;
           revision = project.revision + 1;
           this.db
             .prepare('UPDATE mapping_projects SET revision=? WHERE id=?')
@@ -392,6 +413,7 @@ export class Mapping {
               blocks: [{ id: randomUUID(), type: 'text', text: p.text }],
             },
             item: {
+              createdOrder: project.revision + 1,
               id: randomUUID(),
               versionId: randomUUID(),
               pose: { x: p.x, y: p.y, width: 280, height: 160 },
@@ -575,6 +597,8 @@ export class Mapping {
           projectId: command.projectId,
           revision,
           changedIds,
+          ...(textChange?.after ? { textVersions: { text: textChange.after.versionId, pose: textChange.after.item.versionId } } : {}),
+          ...(textChange && !textChange.after ? { deletedIds: changedIds } : {}),
           ...(tagChange?.after.deleted ? { deletedIds: [tagChange.after.id] } : {}),
           ...(command.type === 'thought.delete' ? { deletedIds: changedIds, historyTarget: { id: command.payload.id, title: before && 'body' in before ? before.title : '', label: command.type } } : {}),
           ...(travel ? { deletedIds: travel.deletedIds, historyTarget: travel.target } : {}),
@@ -594,6 +618,8 @@ export class Mapping {
           before,
           after,
           ...(tagChange ? { tagChange } : {}),
+          ...(textChange ? { textChange } : {}),
+          ...(textChanges ? { textChanges } : {}),
           ...(cardChanges ? { cardChanges } : {}),
           actor: actor.actor,
           writtenAt: new Date().toISOString(),

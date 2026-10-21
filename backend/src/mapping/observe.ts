@@ -15,6 +15,18 @@ export interface ObserveOptions {
 
 function delta(change: Change): Delta {
   const domains: Delta['domains'] = [];
+  if (change.textChange) {
+    const { before, after } = change.textChange;
+    const identity = after ?? before!;
+    if (before?.versionId !== after?.versionId) domains.push({ domain: 'text', id: identity.id });
+    if (before?.item.versionId !== after?.item.versionId) domains.push({ domain: 'pose', id: identity.item.id });
+    return { ...change, domains, deletedIds: change.deletedIds ?? [] };
+  }
+  for (const text of change.textChanges ?? []) {
+    const identity = text.after ?? text.before!;
+    if (text.before?.versionId !== text.after?.versionId) domains.push({ domain: 'text', id: identity.id });
+    if (text.before?.item.versionId !== text.after?.item.versionId) domains.push({ domain: 'pose', id: identity.item.id });
+  }
   if (change.tagChange) domains.push({ domain: 'tag', id: change.tagChange.after.id });
   if (change.cardChanges) {
     for (const c of change.cardChanges) {
@@ -23,6 +35,8 @@ function delta(change: Change): Delta {
       if (c.before.cardTags?.versionId !== c.after.cardTags?.versionId)
         domains.push({ domain: 'cardTags', id: `cardTags:${c.after.id}` });
     }
+    const order = new Map(change.changedIds.map((id, index) => [id, index]));
+    domains.sort((a, b) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0));
     return { ...change, domains, deletedIds: change.deletedIds ?? [] };
   }
   const card = [change.after, change.before].find(

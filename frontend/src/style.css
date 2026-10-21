@@ -1061,3 +1061,22 @@ body:has(.workspace[data-board-full="true"]) .card-tooltip { display: none; }
 .search-document [data-fold-for] { position: absolute; left: var(--search-fold-offset); top: 0; width: var(--search-space-xl); height: var(--search-space-xl); padding: var(--search-outline-width); border: 0; background: transparent; }
 .search-document [data-fold-for] svg { width: var(--search-preview-inset); height: var(--search-preview-inset); }
 .search-document [data-fold-for][aria-expanded=true] svg { transform: rotate(90deg); }
+:root { --text-tool-anchor-gap: 8px; --text-tool-stroke: 1px; --text-tool-radius: 6px; --text-tool-font-size: 14px; --text-tool-line-height: 20px; --text-tool-gap: 4px; --text-tool-inset: 3px; --text-tool-input-width: 56px; --text-tool-handle-size: 8px; --text-tool-handle-radius: 2px; --text-tool-palette-width: 320px; --text-tool-input-height: 108px; }
+.canvas-text { position: relative; color: var(--tag-ink); min-height: 1.5em; }
+.canvas-text-content, .canvas-text-input { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; line-height: inherit; text-align: inherit; min-height: 1.5em; width: 100%; margin: 0; padding: 0; border: 0; background: transparent; }
+.canvas-text-input { display: block; resize: none; outline: var(--text-tool-stroke) solid var(--tag-border); height: var(--text-tool-input-height); }
+.text-actions { position: fixed; z-index: 40; display: flex; flex-wrap: wrap; background: var(--tag-surface); border: var(--text-tool-stroke) solid var(--tag-border); border-radius: var(--text-tool-radius); white-space: nowrap; font-size: var(--text-tool-font-size); line-height: var(--text-tool-line-height); text-align: left; }
+.canvas-text-input[contenteditable] { height: auto; min-height: 1.5em; cursor: text; }
+.canvas-text-content:focus-visible { outline: var(--text-tool-stroke) solid var(--editor-focus); outline-offset: var(--text-tool-gap); }
+.text-actions label { display: flex; align-items: center; gap: var(--text-tool-gap); padding: var(--text-tool-inset); }
+.text-actions input { width: var(--text-tool-input-width); min-width: 0; }
+.text-resize { position: absolute; width: var(--text-tool-handle-size); height: var(--text-tool-handle-size); padding: 0; border: var(--text-tool-stroke) solid var(--tag-border); background: var(--tag-surface); border-radius: var(--text-tool-handle-radius); z-index: 1; }
+.text-resize-w, .text-resize-e { top: calc(50% - var(--text-tool-gap)); cursor: ew-resize; }
+.text-resize-w, .text-resize-nw, .text-resize-sw { left: calc(-1 * var(--text-tool-gap)); }
+.text-resize-e, .text-resize-ne, .text-resize-se { right: calc(-1 * var(--text-tool-gap)); }
+.text-resize-nw, .text-resize-ne { top: calc(-1 * var(--text-tool-gap)); }
+.text-resize-sw, .text-resize-se { bottom: calc(-1 * var(--text-tool-gap)); }
+.text-resize-nw, .text-resize-se { cursor: nwse-resize; }
+.text-resize-ne, .text-resize-sw { cursor: nesw-resize; }
+.text-actions[data-popup-side="top"] .text-color-panel { top: auto; bottom: 100%; }
+.text-color-panel { position: absolute; top: 100%; left: 0; max-width: var(--text-tool-palette-width); display: flex; flex-wrap: wrap; background: var(--tag-surface); border: var(--text-tool-stroke) solid var(--tag-border); border-radius: var(--text-tool-radius); padding: var(--text-tool-gap); }

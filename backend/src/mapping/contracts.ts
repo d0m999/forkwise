@@ -1,3 +1,4 @@
+import { TextCommands, type CanvasText, type TextChange } from './text-contracts.js';
 import { z } from 'zod';
 import type { CompactQuery } from './compact-contracts.js';
 import { TITLE_COLORS } from './presentation-values.js';
@@ -27,6 +28,7 @@ export const TagCommandSchema = z.discriminatedUnion('type', [
   z.object({ ...Envelope, type: z.literal('tag.create'), expected: z.union([z.null(), z.object({ cardTags: Id.nullable() }).strict()]), payload: z.object({ id: Id, name: z.string().min(1).max(240), cardId: Id.optional() }).strict() }).strict(),
 ]);
 export const MappingCommand = z.discriminatedUnion('type', [
+  ...TextCommands.options,
   z.object({ ...Envelope, type: z.literal('search.delete'), expected: Id.nullable(), payload: z.object({ query: SearchConditionsSchema, id: Id }).strict() }).strict(),
   z.object({ ...Envelope, type: z.literal('search.clear'), expected: Id.nullable(), payload: z.object({ query: SearchConditionsSchema }).strict() }).strict(),
   z.object({ ...Envelope, type: z.literal('search.restore'), expected: Id.nullable(), payload: z.object({ undoId: Id }).strict() }).strict(),
@@ -63,6 +65,7 @@ export const MappingCommand = z.discriminatedUnion('type', [
         .strict(),
     })
     .strict(),
+  z.object({ ...Envelope, type: z.literal('canvas.move'), expected: z.record(Id, Id), payload: z.object({ targets: z.array(z.object({ kind: z.enum(['card', 'text']), id: Id, itemId: Id, x: z.number().finite(), y: z.number().finite() }).strict()).min(1) }).strict() }).strict(),
   z
     .object({
       ...Envelope,
@@ -213,6 +216,7 @@ export interface Card {
   };
   body: { id: string; versionId: string; blocks: Block[] };
   item: {
+    createdOrder?: number;
     id: string;
     versionId: string;
     pose: { x: number; y: number; width: number; height: number };
@@ -224,8 +228,10 @@ export interface ProjectState {
   project: Project;
   cards: Card[];
   tags?: Tag[];
+  texts?: CanvasText[];
 }
 export interface Receipt {
+  textVersions?: { text: string; pose: string };
   commandId: string;
   projectId: string;
   revision: number;
@@ -259,6 +265,8 @@ export type ReadQuery =
   | VersionQuery;
 
 export interface Change extends Receipt {
+  textChanges?: TextChange[];
+  textChange?: TextChange;
   tagChange?: { before: Tag | null; after: Tag };
   cardChanges?: { before: Card; after: Card }[];
   before: Project | Card | null;

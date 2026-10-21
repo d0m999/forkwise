@@ -1,3 +1,4 @@
+import { restoreText } from './text.js';
 import { imageTask } from './media-blocks.js';
 import { retainCardVersions } from './versions.js';
 import { DEFAULT_APPEARANCE } from './presentation-values.js';
@@ -10,6 +11,8 @@ import { bodyContentUnchanged } from './body.js';
 import { restoreTag, restoreTagCards } from './tags.js';
 
 interface StoredAction extends HistoryAction {
+  textChange?: Change['textChange'];
+  textChanges?: Change['textChanges'];
   tagChange?: Change['tagChange'];
   cardChanges?: Change['cardChanges'];
   before: Card | Project | null;
@@ -63,6 +66,36 @@ export function recordAction(
 ) {
   if (command.type === 'project.create') return;
   const stack = load(db, command.projectId);
+  if (command.type === 'canvas.move') {
+    const target = change.cardChanges?.[0]?.after ?? change.textChanges?.[0]?.after;
+    if (!target) return;
+    stack.undo.push({ session, lastRevision: change.revision, id: command.commandId, label: command.type, target: { id: target.id, title: 'title' in target ? target.title : target.content.runs.map(run => run.text).join('') }, actor: change.actor, before: null, after: null, cardChanges: change.cardChanges ?? [], textChanges: change.textChanges ?? [], changedIds: change.changedIds });
+    stack.undo = stack.undo.slice(-40); stack.redo = []; save(db, command.projectId, stack); return;
+  }
+  if (change.textChange) {
+    const value = change.textChange.after ?? change.textChange.before!;
+    const previous = stack.undo.at(-1);
+    if (command.type === 'text.layout') {
+      if (previous?.lastRevision === change.revision - 1) {
+        previous.lastRevision = change.revision;
+        if (previous.textChange?.after?.id === value.id) {
+          previous.textChange.after.item = value.item;
+          previous.changedIds = [...new Set([...previous.changedIds, value.item.id])];
+        }
+      }
+      save(db, command.projectId, stack); return;
+    }
+    const editGroup = 'editGroup' in command ? command.editGroup : undefined;
+    if (editGroup && previous?.editGroup === editGroup && previous.session === session && previous.actor.id === change.actor.id && previous.target.id === value.id && previous.lastRevision === change.revision - 1 && !stack.redo.length && (previous.label === command.type || (previous.label === 'text.create' && command.type === 'text.edit') || (previous.label === 'text.edit' && command.type === 'text.delete'))) {
+      previous.textChange!.after = change.textChange.after;
+      previous.changedIds = [...new Set([...previous.changedIds, ...change.changedIds])];
+      previous.lastRevision = change.revision;
+      previous.target.title = value.content.runs.map(run => run.text).join('');
+    } else stack.undo.push({ session, lastRevision: change.revision, ...(editGroup ? { editGroup } : {}), id: command.commandId, label: command.type, target: { id: value.id, title: value.content.runs.map(run => run.text).join('') }, actor: change.actor, before: null, after: null, textChange: change.textChange, changedIds: change.changedIds });
+    stack.undo = stack.undo.slice(-40); stack.redo = [];
+    save(db, command.projectId, stack);
+    return;
+  }
   const after = change.after;
   const target = change.tagChange?.after ?? after ?? change.before;
   if (!target) return;
@@ -143,6 +176,24 @@ export function travelHistory(
   requireThat(!actionId || from.at(-1)?.id === actionId, 'HISTORY_TARGET_CHANGED', '历史目标已变化，不能撤销其他操作', 409);
   const action = from.pop();
   requireThat(action, 'HISTORY_EMPTY', '没有可撤销或重做的操作', 409);
+  if (action.textChanges) {
+    const textChanges = action.textChanges.map(change => restoreText(db, project.id, change, type));
+    const cardChanges = restoreGeometry(db, project.id, action.cardChanges ?? [], type);
+    (type === 'history.undo' ? stack.redo : stack.undo).push(action); save(db, project.id, stack);
+    return { before: null, after: null, cardChanges, textChanges, changedIds: action.changedIds, deletedIds: [], target: { ...action.target, label: action.label } };
+  }
+  if (action.textChange) {
+    const textChange = restoreText(db, project.id, action.textChange, type);
+    (type === 'history.undo' ? stack.redo : stack.undo).push(action);
+    save(db, project.id, stack);
+    const { before, after } = textChange;
+    const identity = after ?? before!;
+    const changedIds = [
+      ...(!before || !after || before.versionId !== after.versionId ? [identity.id] : []),
+      ...(!before || !after || before.item.versionId !== after.item.versionId ? [identity.item.id] : []),
+    ];
+    return { before: null, after: null, textChange, changedIds, deletedIds: after ? [] : changedIds, target: { ...action.target, label: action.label } };
+  }
   const desired = type === 'history.undo' ? action.before : action.after;
   if (action.tagChange) {
     const tagChange = restoreTag(db, project.id, action.tagChange, type);
@@ -255,7 +306,8 @@ export function interruptGroup(db: Database.Database, command: Command, session:
     'id' in command.payload &&
     command.payload.id === previous.target.id &&
     (command.type === previous.label ||
-      (command.type === 'thought.title' && previous.label === 'thought.create'))
+      (command.type === 'thought.title' && previous.label === 'thought.create') ||
+      (command.type === 'text.edit' && previous.label === 'text.create'))
   )
     return;
   delete previous.editGroup;
