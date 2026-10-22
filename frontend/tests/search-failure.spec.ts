@@ -27,9 +27,11 @@ test("真实库文件读取失败可见，保留当前输入，显式受限后�
     fetch: (request) => app.fetch(request),
   });
   try {
-    await new Promise<void>((resolve, reject) => {
-      server.once("listening", resolve);
-      server.once("error", reject);
+    await test.step("等待搜索测试服务启动", async () => {
+      await new Promise<void>((resolve, reject) => {
+        server.once("listening", resolve);
+        server.once("error", reject);
+      });
     });
     const origin = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
     const root = resolve("../backend/dist/workspace");
@@ -100,11 +102,13 @@ test("真实库文件读取失败可见，保留当前输入，显式受限后�
       release = resolve;
     });
     await page.route("**/search", async (route) => {
-      const response = await route.fetch();
+      const response = await test.step("读取搜索后端响应", () => route.fetch());
       if (route.request().postDataJSON().literal) {
         limitedRequests++;
         started();
-        await gate;
+        await test.step("等待放行受限搜索响应", async () => {
+          await gate;
+        });
       }
       await route.fulfill({ response });
     });
@@ -113,7 +117,9 @@ test("真实库文件读取失败可见，保留当前输入，显式受限后�
       exact: true,
     });
     await limited.click();
-    await waiting;
+    await test.step("等待受限搜索请求完成后端读取", async () => {
+      await waiting;
+    });
     try {
       await expect(limited).toBeDisabled();
       await limited.click({ force: true });
@@ -141,10 +147,12 @@ test("真实库文件读取失败可见，保留当前输入，显式受限后�
       "平仓",
     ]);
   } finally {
-    await page.close();
-    await new Promise<void>((resolve, reject) =>
-      server.close((error) => (error ? reject(error) : resolve())),
-    );
+    await test.step("关闭搜索测试页面", () => page.context().close());
+    await test.step("等待搜索测试HTTP服务关闭", async () => {
+      await new Promise<void>((resolve, reject) =>
+        server.close((error) => (error ? reject(error) : resolve())),
+      );
+    });
     mapping.close();
     rmSync(directory, { recursive: true, force: true });
   }

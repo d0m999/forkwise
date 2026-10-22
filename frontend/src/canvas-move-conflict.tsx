@@ -33,7 +33,7 @@ export function useCanvasMoveConflict(publish: (state: ProjectState) => void) {
   async function open(command: Move) {
     const latest = await api.project(command.projectId);
     store({ command, saved: command.payload.targets.map((target) => {
-      const object = (target.kind === "card" ? latest.cards : target.kind === "shape" ? latest.shapes : latest.texts)?.find((item) => item.id === target.id && item.item.id === target.itemId);
+      const object = (target.kind === "card" ? latest.cards : target.kind === "shape" ? latest.shapes : target.kind === 'image' ? latest.images : latest.texts)?.find((item) => item.id === target.id && item.item.id === target.itemId);
       return { itemId: target.itemId, position: object ? { x: object.item.pose.x, y: object.item.pose.y } : null };
     }) });
   }
@@ -63,7 +63,7 @@ export function CanvasMoveConflictPanel({ value, abandon }: { value: Conflict; a
     <p>全部成员均未按本次意图移动。对比整组位置后，可明确放弃本次移动，保留当前已保存位置。</p>
     <table><thead><tr><th>对象</th><th>本次移动位置</th><th>已保存位置</th></tr></thead>
       <tbody>{value.command.payload.targets.map((target, index) => <tr key={target.itemId}>
-        <td>{target.kind === "card" ? "卡片" : target.kind === "shape" ? "形状" : "文字"} {index + 1}</td>
+        <td>{target.kind === "card" ? "卡片" : target.kind === "shape" ? "形状" : target.kind === 'image' ? '图片' : "文字"} {index + 1}</td>
         <td>{target.x}, {target.y}</td>
         <td>{value.saved[index]?.position ? `${value.saved[index]!.position!.x}, ${value.saved[index]!.position!.y}` : "对象已删除"}</td>
       </tr>)}</tbody></table>

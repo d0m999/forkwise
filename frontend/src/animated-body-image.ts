@@ -37,6 +37,13 @@ export function animateBodyImage(
     index = 0,
     ready = false;
   let playing = false;
+  function label(state: 'play' | 'pause' | 'loading' | 'retry' | 'still', text: string) {
+    // Shared React controls keep their Lucide children; legacy body controls
+    // remain plain text. Both paths retain the same playback policy.
+    (button.querySelector('[data-gif-label]') ?? button).textContent = text;
+    button.dataset.gifState = state;
+    button.setAttribute('aria-label', text);
+  }
   canvas.style.visibility = "hidden";
   function update() {
     if (failed || !ready) return;
@@ -47,8 +54,7 @@ export function animateBodyImage(
       !document.hidden &&
       !canvas.closest("[inert]") &&
       ready;
-    button.textContent = requested ? "暂停动图" : "播放动图";
-    button.setAttribute("aria-label", requested ? "暂停动图" : "播放动图");
+    label(requested ? 'pause' : 'play', requested ? '暂停动图' : '播放动图');
     canvas.dataset.playing = String(nextPlaying);
     if (nextPlaying === playing) return;
     generation++;
@@ -96,8 +102,7 @@ export function animateBodyImage(
     canvas.dataset.playing = "false";
     canvas.style.visibility = "visible";
     button.disabled = false;
-    button.textContent = "重新加载动图";
-    button.setAttribute("aria-label", button.textContent);
+    label('retry', '重新加载动图');
     if (!failure) {
       failure = document.createElement("span");
       failure.className = "image-load-error";
@@ -144,8 +149,7 @@ export function animateBodyImage(
     failure?.remove();
     failure = undefined;
     button.disabled = true;
-    button.textContent = "正在加载动图";
-    button.setAttribute("aria-label", button.textContent);
+    label('loading', '正在加载动图');
     canvas.dataset.playing = "false";
     canvas.style.visibility = "hidden";
     try {
@@ -172,8 +176,7 @@ export function animateBodyImage(
         }
         if (disposed || version !== loadVersion) return;
         button.disabled = true;
-        button.textContent = "当前浏览器仅显示动图首帧";
-        button.setAttribute("aria-label", button.textContent);
+        label('still', '当前浏览器仅显示动图首帧');
         return;
       }
       decoder = new Constructor({ data, type: "image/gif" });

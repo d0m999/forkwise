@@ -58,6 +58,7 @@ export function useTextOperations(
   }
   const [pending, setPending] = useState(false),
     [error, setError] = useState("");
+  const [scope, setScope] = useState<'文字' | '画布'>('文字');
   async function flush(): Promise<boolean> {
     if (saving.current) return saving.current;
     saving.current = (async () => {
@@ -67,6 +68,7 @@ export function useTextOperations(
           const command = operation.command ?? (await operation.prepare());
           if (command) {
             operation.command = command;
+            setScope(command.type === 'canvas.move' ? '画布' : '文字');
             const receipt = await api.execute(command);
             const value = await api.project(command.projectId);
             if (command.type === "text.layout" && receipt.textVersions?.pose) {
@@ -154,6 +156,7 @@ export function useTextOperations(
     void flush();
   }
   return {
+    scope,
     enqueue,
     flush,
     pending,

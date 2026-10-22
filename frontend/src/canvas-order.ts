@@ -5,7 +5,7 @@ export function orderCanvas(
   state: ProjectState,
   selection: string[],
 ): Node[] {
-  const items = [...state.cards, ...(state.texts ?? [])].map(
+  const items = [...state.cards, ...(state.texts ?? []), ...(state.images ?? [])].map(
     (value) => value.item,
   );
   items.sort((a, b) => (a.createdOrder ?? 0) - (b.createdOrder ?? 0));

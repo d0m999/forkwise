@@ -15,6 +15,13 @@ export interface ObserveOptions {
 
 function delta(change: Change): Delta {
   const domains: Delta['domains'] = [];
+  if (change.imageChange) {
+    const { before, after } = change.imageChange;
+    const value = after ?? before!;
+    if (before?.versionId !== after?.versionId) domains.push({ domain: 'image', id: value.id });
+    if (before?.item.versionId !== after?.item.versionId) domains.push({ domain: 'pose', id: value.item.id });
+    return { ...change, domains, deletedIds: change.deletedIds ?? [] };
+  }
   if (change.strokeChange) {
     const { before, after } = change.strokeChange;
     const identity = after ?? before!;
@@ -35,6 +42,11 @@ function delta(change: Change): Delta {
     if (before?.versionId !== after?.versionId) domains.push({ domain: 'text', id: identity.id });
     if (before?.item.versionId !== after?.item.versionId) domains.push({ domain: 'pose', id: identity.item.id });
     return { ...change, domains, deletedIds: change.deletedIds ?? [] };
+  }
+  for (const image of change.imageChanges ?? []) {
+    const identity = image.after ?? image.before!;
+    if (image.before?.versionId !== image.after?.versionId) domains.push({ domain: 'image', id: identity.id });
+    if (image.before?.item.versionId !== image.after?.item.versionId) domains.push({ domain: 'pose', id: identity.item.id });
   }
   for (const shape of change.shapeChanges ?? []) {
     const identity = shape.after ?? shape.before!;

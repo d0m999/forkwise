@@ -1,3 +1,5 @@
+import { imageIndex, imageDetail } from './image-projection.js';
+import type { ImageIndex } from './compact-contracts.js';
 import { textIndex, textDetail } from './text-projection.js';
 import { shapeIndex, shapeDetail } from './shape-projection.js';
 import { strokeIndex, strokeDetail } from './stroke-projection.js';
@@ -29,6 +31,8 @@ type PinnedCard = Omit<Card, 'body'> & {
   body: { id: string; versionId: string; blockCount: number };
 };
 type Snapshot = {
+  images: ImageIndex[];
+  knownImageIds: Set<string>;
   strokes: StrokeIndex[];
   knownStrokeIds: Set<string>;
   shapes: ShapeIndex[];
@@ -107,7 +111,8 @@ export class CompactMaps {
         const textIds = this.db.prepare('SELECT id FROM mapping_text_ids WHERE project_id=?').all(query.projectId) as { id: string }[];
         const { items: shapes, knownIds: shapeIds } = shapeIndex(this.db, query.projectId);
         const { items: strokes, knownIds: strokeIds } = strokeIndex(this.db, query.projectId);
-        const bytes = Buffer.byteLength(JSON.stringify({ project, cards, identities, tags, texts, textIds, shapes, shapeIds, strokes, strokeIds }), 'utf8');
+        const { items: images, knownIds: imageIds } = imageIndex(this.db, query.projectId);
+        const bytes = Buffer.byteLength(JSON.stringify({ project, cards, identities, tags, texts, textIds, shapes, shapeIds, strokes, strokeIds, images, imageIds }), 'utf8');
         const retainedBytes = [...this.snapshots.values()].reduce(
           (sum, value) => sum + value.bytes,
           0,
@@ -119,6 +124,7 @@ export class CompactMaps {
           503,
         );
         state = {
+          images, knownImageIds: new Set(imageIds),
           strokes, knownStrokeIds: new Set(strokeIds),
           shapes, knownShapeIds: new Set(shapeIds),
           texts, knownTextIds: new Set(textIds.map(value => value.id)),
@@ -154,8 +160,16 @@ export class CompactMaps {
     let fidelity: CompactPage['fidelity'] = 'index';
     let availability: CompactPage['availability'] = 'available';
     let target: CompactPage['target'];
-    const view = JSON.stringify([query.view, query.view === 'stroke-detail' ? query.strokeId : query.view === 'shape-detail' ? query.shapeId : query.view === 'text-detail' ? query.textId : query.view === 'body' || query.view === 'detail' ? query.cardId : null]);
-    if (query.view === 'stroke-index') { items = state.strokes; fidelity = 'stroke-index'; }
+    const view = JSON.stringify([query.view, query.view === 'image-detail' ? query.imageId : query.view === 'stroke-detail' ? query.strokeId : query.view === 'shape-detail' ? query.shapeId : query.view === 'text-detail' ? query.textId : query.view === 'body' || query.view === 'detail' ? query.cardId : null]);
+    if (query.view === 'image-index') { items = state.images; fidelity = 'image-index'; }
+    else if (query.view === 'image-detail') {
+      const value = state.images.find(item => item.id === query.imageId);
+      fidelity = 'lossless_json_chunks';
+      target = { imageId: query.imageId, ...(value ? { versionId: value.versionId } : {}) };
+      items = value ? imageDetail(this.db, query.projectId, value) : [];
+      if (!value) availability = state.knownImageIds.has(query.imageId) ? 'deleted' : 'not_found';
+    }
+    else if (query.view === 'stroke-index') { items = state.strokes; fidelity = 'stroke-index'; }
     else if (query.view === 'stroke-detail') {
       const value = state.strokes.find(item => item.id === query.strokeId);
       fidelity = 'lossless_json_chunks';
@@ -235,7 +249,7 @@ export class CompactMaps {
     const start = this.pages.offset(query.cursor, token, view);
     return this.pages.page(
       {
-        scope: { types: query.view === 'stroke-index' || query.view === 'stroke-detail' ? ['stroke'] : query.view === 'shape-index' || query.view === 'shape-detail' ? ['shape'] : query.view === 'text-index' || query.view === 'text-detail' ? ['text'] : ['thought'], relations: 'not_implemented', order: 'creation_ordinal' },
+        scope: { types: query.view === 'image-index' || query.view === 'image-detail' ? ['image'] : query.view === 'stroke-index' || query.view === 'stroke-detail' ? ['stroke'] : query.view === 'shape-index' || query.view === 'shape-detail' ? ['shape'] : query.view === 'text-index' || query.view === 'text-detail' ? ['text'] : ['thought'], relations: 'not_implemented', order: 'creation_ordinal' },
         project: state.project,
         snapshot: token,
         revision: state.project.revision,

@@ -1,3 +1,5 @@
+import { ImageCommands, type CanvasImage, type ImageChange } from './image-contracts.js';
+import { TagCommandSchema } from './tag-contracts.js';
 import { TextCommands, type CanvasText, type TextChange } from './text-contracts.js';
 import { StrokeCreateCommand, StrokeDeleteCommand, type CanvasStroke, type StrokeChange } from './stroke-contracts.js';
 import { ShapeCreateCommand, ShapeEditCommand, ShapeMoveCommand, ShapeDeleteCommand, ShapeTransformCommand, type CanvasShape, type ShapeChange } from './shape-contracts.js';
@@ -7,7 +9,6 @@ import { TITLE_COLORS } from './presentation-values.js';
 import { bodyText } from './body-text.js';
 import type { SearchQuery } from './search-contracts.js';
 import { SearchConditionsSchema, type SearchStateView, type SearchStateQuery } from './search-contracts.js';
-
 const Id = z.string().min(1).max(160);
 const Name = z.string().trim().min(1).max(240);
 const Envelope = { commandId: Id, projectId: Id };
@@ -23,13 +24,9 @@ const BodyInput = {
     .refine((blocks) => bodyText({ blocks }).length <= 200000, '正文文字不能超过200000')
     .optional(),
 };
-export const TagCommandSchema = z.discriminatedUnion('type', [
-  z.object({ ...Envelope, type: z.literal('tag.delete'), expected: z.object({ tag: Id, cardTags: z.record(Id, Id) }).strict(), payload: z.object({ id: Id }).strict() }).strict(),
-  z.object({ ...Envelope, type: z.literal('tag.update'), expected: Id, payload: z.object({ id: Id, name: z.string().min(1).max(240).optional(), color: z.enum(['#f1f0ec','#e3e2df','#eee0da','#f8dfc4','#f4e9b9','#dce8dd','#d9e7f1','#e8dff0','#f1dfe8','#f3dcd8']).optional() }).strict() }).strict(),
-  z.object({ ...Envelope, type: z.literal('card.tags'), expected: Id.nullable(), payload: z.object({ id: Id, tagIds: z.array(Id) }).strict() }).strict(),
-  z.object({ ...Envelope, type: z.literal('tag.create'), expected: z.union([z.null(), z.object({ cardTags: Id.nullable() }).strict()]), payload: z.object({ id: Id, name: z.string().min(1).max(240), cardId: Id.optional() }).strict() }).strict(),
-]);
+export { TagCommandSchema } from './tag-contracts.js';
 export const MappingCommand = z.discriminatedUnion('type', [
+  ...ImageCommands.options,
   StrokeCreateCommand,
   StrokeDeleteCommand,
   ShapeCreateCommand,
@@ -74,7 +71,7 @@ export const MappingCommand = z.discriminatedUnion('type', [
         .strict(),
     })
     .strict(),
-  z.object({ ...Envelope, type: z.literal('canvas.move'), expected: z.record(Id, Id), payload: z.object({ targets: z.array(z.object({ kind: z.enum(['card', 'text', 'shape']), id: Id, itemId: Id, x: z.number().finite(), y: z.number().finite() }).strict()).min(1) }).strict() }).strict(),
+  z.object({ ...Envelope, type: z.literal('canvas.move'), expected: z.record(Id, Id), payload: z.object({ targets: z.array(z.object({ kind: z.enum(['card', 'text', 'shape', 'image']), id: Id, itemId: Id, x: z.number().finite(), y: z.number().finite() }).strict()).min(1) }).strict() }).strict(),
   z
     .object({
       ...Envelope,
@@ -234,6 +231,7 @@ export interface Card {
 }
 export interface Tag { id: string; versionId: string; name: string; color: string; deleted: boolean }
 export interface ProjectState {
+  images?: CanvasImage[];
   project: Project;
   cards: Card[];
   tags?: Tag[];
@@ -242,6 +240,7 @@ export interface ProjectState {
   strokes?: CanvasStroke[];
 }
 export interface Receipt {
+  imageVersions?: { image: string; pose: string };
   strokeVersions?: { stroke: string; pose: string };
   shapeVersions?: { shape: string; pose: string };
   textVersions?: { text: string; pose: string };
@@ -257,7 +256,7 @@ export interface Receipt {
 export type VersionQuery = {
   type: 'version';
   projectId: string;
-  domain: 'body' | 'pose' | 'appearance' | 'tag' | 'cardTags' | 'shape' | 'stroke';
+  domain: 'body' | 'pose' | 'appearance' | 'tag' | 'cardTags' | 'shape' | 'stroke' | 'image';
   id: string;
   versionId: string;
 };
@@ -276,8 +275,9 @@ export type ReadQuery =
   | { type: 'projects' }
   | { type: 'project'; projectId: string }
   | VersionQuery;
-
 export interface Change extends Receipt {
+  imageChanges?: ImageChange[];
+  imageChange?: ImageChange;
   strokeChange?: StrokeChange;
   shapeChange?: ShapeChange;
   shapeChanges?: ShapeChange[];
@@ -290,15 +290,4 @@ export interface Change extends Receipt {
   actor: { id: string; type: 'human' | 'agent' | 'system' };
   writtenAt: string;
 }
-
-export interface HistoryAction {
-  id: string;
-  label: string;
-  target: { id: string; title: string };
-  actor: Change['actor'];
-}
-export interface ProjectHistory {
-  revision: number;
-  undo: HistoryAction[];
-  redo: HistoryAction[];
-}
+export type { HistoryAction, ProjectHistory } from './history-contracts.js';

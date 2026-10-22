@@ -1,3 +1,5 @@
+import type { CanvasImage, ImageVersion } from '../../backend/src/mapping/image-contracts';
+import type { ImageIndex } from '../../backend/src/mapping/compact-contracts';
 import type { CanvasText } from '../../backend/src/mapping/text-contracts';
 import type { CanvasShape, ShapeVersion } from '../../backend/src/mapping/shape-contracts';
 import type { CanvasStroke, StrokeVersion } from '../../backend/src/mapping/stroke-contracts';
@@ -157,6 +159,22 @@ export async function readCompactMap(
       throw new Error('笔迹内容版本与索引不一致，请重新读取');
     strokes.push({ ...value, kind: 'stroke', item: item.item });
   }
+  const imagePage = await collect<ImageIndex>({ view: 'image-index', snapshot: index.first.snapshot });
+  if (imagePage.first.revision !== index.first.revision || imagePage.first.snapshot !== index.first.snapshot)
+    throw new Error('图片索引与地图快照不一致，请重新读取');
+  const images: CanvasImage[] = [];
+  for (const item of [...imagePage.items].sort((a, b) => a.order - b.order)) {
+    const detail = await collect<DetailChunk>({ view: 'image-detail', imageId: item.id, snapshot: index.first.snapshot });
+    const target = detail.first.target;
+    if (detail.first.revision !== index.first.revision || detail.first.snapshot !== index.first.snapshot ||
+      !target || !('imageId' in target) || target.imageId !== item.id || target.versionId !== item.versionId ||
+      detail.items.some((chunk, i) => chunk.id !== item.id || chunk.chunkIndex !== i || chunk.chunkCount !== detail.items.length))
+      throw new Error('图片详情与地图快照不一致，请重新读取');
+    const value = JSON.parse(detail.items.map(chunk => chunk.jsonText).join('')) as ImageVersion;
+    if (value.id !== item.id || value.versionId !== item.versionId || value.content.assetId !== item.content.assetId)
+      throw new Error('图片版本与地图快照不一致，请重新读取');
+    images.push({ ...value, kind: 'image', item: item.item });
+  }
   return {
     project: index.first.project,
     cards,
@@ -164,6 +182,7 @@ export async function readCompactMap(
     texts,
     shapes,
     strokes,
+    images,
     snapshot: index.first.snapshot,
   };
 }

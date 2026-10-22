@@ -45,7 +45,7 @@ export function registerCompactMapTool(server: McpServer, transport: ApiTranspor
     'forkwise_observe_map',
     {
       description:
-        '只读同步开放地图有序变化。afterRevision 是已完整读取的修订；首批 baseSnapshot 校验缓存，续页 snapshot 固定终点。整批连续后或 RESET_REQUIRED 时，使用返回的 snapshot 读取五个视图 index、tags、text-index、shape-index、stroke-index，每个视图读至 complete，再按需读取各对象完整 detail。根 index 仅含 Card。预算错误保留 error.details.recovery，按其中 snapshot 完整重读；过期重启重新开始；授权错误重新取得授权。budget 为完整 Mapping JSON 的 UTF-8 字节，limit 至多100；协议外壳不计入。',
+        '只读同步开放地图有序变化。afterRevision 是已完整读取的修订；首批 baseSnapshot 校验缓存，续页 snapshot 固定终点。整批连续后或 RESET_REQUIRED 时，使用返回的 snapshot 读取六个视图 index、tags、text-index、shape-index、stroke-index、image-index，每个视图读至 complete，再按需读取各对象完整 detail。根 index 仅含 Card。预算错误保留 error.details.recovery，按其中 snapshot 完整重读；过期重启重新开始；授权错误重新取得授权。budget 为完整 Mapping JSON 的 UTF-8 字节，limit 至多100；协议外壳不计入。',
       inputSchema: ObserveQuerySchema,
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
@@ -70,11 +70,12 @@ export function registerCompactMapTool(server: McpServer, transport: ApiTranspor
     'forkwise_read_map',
     {
       description:
-        '读取本机开放地图。根 index 仅含 Card；完整读取须在同一 snapshot 分别读取 index、tags、text-index、shape-index、stroke-index 五个视图，每个视图分页至 complete。按需选卡读 body/detail，或按 textId、shapeId、strokeId 读取 text-detail、shape-detail、stroke-detail；完整详情与索引须同 snapshot。budget 为完整 Mapping JSON 的 UTF-8 字节，summary 不推断未读内容。',
+        '读取本机开放地图。根 index 仅含 Card；完整读取须在同一 snapshot 分别读取 index、tags、text-index、shape-index、stroke-index、image-index 六个视图，每个视图分页至 complete。按需选卡读 body/detail，或按 textId、shapeId、strokeId、imageId 读取 text-detail、shape-detail、stroke-detail、image-detail；完整详情与索引须同 snapshot。图片详情包含固定assetId与裁剪，姿态在索引，原件另由read_asset明确读取；无OCR或远程抓取。budget 为完整 Mapping JSON 的 UTF-8 字节，summary 不推断未读内容。',
       inputSchema: z
         .object({
           projectId: z.string().min(1).max(160),
-          view: z.enum(['index', 'body', 'detail', 'tags', 'text-index', 'text-detail', 'shape-index', 'shape-detail', 'stroke-index', 'stroke-detail']),
+          view: z.enum(['index', 'body', 'detail', 'tags', 'text-index', 'text-detail', 'shape-index', 'shape-detail', 'stroke-index', 'stroke-detail', 'image-index', 'image-detail']),
+          imageId: z.string().min(1).max(160).optional(),
           strokeId: z.string().min(1).max(160).optional(),
           shapeId: z.string().min(1).max(160).optional(),
           textId: z.string().min(1).max(160).optional(),

@@ -1,3 +1,4 @@
+import { initializeImages } from './image.js';
 import { initializeText } from './text.js';
 import { initializeShapes } from './shape.js';
 import { initializeStrokes } from './stroke.js';
@@ -100,6 +101,7 @@ export function openMapping(directory: string, options: CommitOptions = {}): Map
     initializeText(db);
     initializeShapes(db);
     initializeStrokes(db);
+    initializeImages(db);
     return new Mapping(db, options);
   } catch (error) {
     db.close();

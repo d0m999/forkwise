@@ -957,9 +957,9 @@ test("混合移动未知ACK保持原键，确定409保整组意图重载显式�
     return route.continue();
   });
   await page.getByRole("button", { name: "移动卡片：方向键调整位置", exact: true }).press("ArrowRight");
-  await expect(page.getByRole("status")).toHaveText("文字保存未完成");
+  await expect(page.getByRole("status")).toHaveText("画布保存未完成");
   await expect(page.getByRole("region", { name: "混合移动保存冲突", exact: true })).toHaveCount(0);
-  await page.getByRole("button", { name: "重试文字保存", exact: true }).click();
+  await page.getByRole("button", { name: "重试画布保存", exact: true }).click();
   await expect(page.getByRole("status")).toHaveText("已保存到本机");
   expect(commands[1]).toEqual(commands[0]);
   const before = (await workspace.state()) as any;

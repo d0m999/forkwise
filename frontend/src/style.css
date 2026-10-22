@@ -890,6 +890,15 @@ body:has(.workspace[data-board-full="true"]) .card-tooltip { display: none; }
 .body-image-viewer-toolbar button:hover { color: var(--image-viewer-ink); background: var(--editor-focus); }
 .body-image-stage { position: relative; flex: 1; min-height: 0; overflow: hidden; display: flex; align-items: center; justify-content: center; touch-action: none; cursor: grab; }
 .body-image-stage:active { cursor: grabbing; }
+:root { --image-handle-size: 10px; --image-selection-offset: 3px; }
+.gif-toggle { display: inline-flex; align-items: center; gap: var(--body-control-gap); padding: var(--body-control-gap) var(--body-tool-gap); font-size: var(--body-tool-font-size); border-radius: var(--body-status-radius); white-space: nowrap; }
+.gif-toggle [data-gif-icon] { display: none; flex-shrink: 0; }
+.gif-toggle[data-gif-state="play"] [data-gif-icon="play"],
+.gif-toggle[data-gif-state="pause"] [data-gif-icon="pause"],
+.gif-toggle[data-gif-state="loading"] [data-gif-icon="loading"],
+.gif-toggle[data-gif-state="retry"] [data-gif-icon="retry"],
+.gif-toggle[data-gif-state="still"] [data-gif-icon="still"] { display: block; }
+.canvas-gif-control { position: absolute; right: 0; top: 100%; margin-top: var(--body-control-gap); z-index: 8; background: var(--card-color-ffffff); }
 .body-image-stage img, .body-image-stage canvas { max-width: none; max-height: none; flex: none; user-select: none; transform-origin: center; }
 .body-image-details { display: grid; gap: var(--body-control-gap); }
 .body-image-details label { display: grid; }

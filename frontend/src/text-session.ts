@@ -416,10 +416,11 @@ export function useCanvasTexts(
       conflicts.status ||
       creation.status ||
       (operations.error
-        ? "文字保存未完成"
+        ? `${operations.scope}保存未完成`
         : operations.pending
-          ? "文字操作等待保存…"
+          ? `${operations.scope}操作等待保存…`
           : save.status),
+    operationScope: operations.pending || operations.error ? operations.scope : mixedConflict.hasPending() || mixedConflict.error ? '画布' : '文字',
     hasPending: () =>
       mixedConflict.hasPending() ||
       conflicts.hasPending() ||

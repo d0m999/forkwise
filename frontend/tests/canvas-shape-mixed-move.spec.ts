@@ -93,7 +93,7 @@ test("Shape起拖混合多选整组预览取消与一次原子移动，未知ACK
     expect(moved.project.revision).toBe(original.project.revision + 1);
     const movedHistory = await history(); expect(movedHistory.undo).toHaveLength(originalHistory.undo.length + 1);
     expect(movedHistory.undo.at(-1).label).toBe("canvas.move");
-    await page.getByRole("button", { name: "重试文字保存", exact: true }).click();
+    await page.getByRole("button", { name: "重试画布保存", exact: true }).click();
     await expect.poll(() => attempts.length).toBe(2); expect(attempts[1]).toEqual(attempts[0]);
     await expect(page.getByRole("status")).toHaveText("已保存到本机");
     expect(await workspace.state()).toEqual(moved); expect(await history()).toEqual(movedHistory);

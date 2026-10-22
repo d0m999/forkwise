@@ -1,3 +1,7 @@
+import { canvasPlainText } from "./canvas-paste";
+import { useCanvasImageInput } from "./canvas-image-input";
+import { ImageWriteRejected, useImageGeometry } from "./image-geometry";
+import { CanvasImageNode, imageNodes } from "./canvas-image";
 import { ShapeAppearanceRecovery } from "./shape-appearance-recovery";
 import { ShapeAppearance, type ShapeAppearanceBinding } from "./shape-appearance";
 import { useShapeTextSave } from "./shape-text-save";
@@ -215,7 +219,7 @@ function ThoughtCard({ data, selected }: NodeProps<Node<CardData>>) {
     </article>
   );
 }
-const nodeTypes = { thought: ThoughtCard, canvasText: CanvasTextNode, canvasShape: CanvasShapeNode, canvasStroke: CanvasStrokeNode };
+const nodeTypes = { thought: ThoughtCard, canvasText: CanvasTextNode, canvasShape: CanvasShapeNode, canvasStroke: CanvasStrokeNode, canvasImage: CanvasImageNode };
 function draftKey(projectId: string, cardId: string, field: Draft["field"]) {
   return JSON.stringify([projectId, cardId, field]);
 }
@@ -488,7 +492,9 @@ function Workspace() {
     direction: "undo" | "redo" | "retry",
     restoreActionId?: string,
   ) {
+    const ownerProjectId = authority.current?.project.id;
     if (
+      !ownerProjectId || imageGeometry.hasPending(ownerProjectId) || imageInput.hasPending(ownerProjectId) ||
       historyLock.current ||
       composition.current ||
       busy ||
@@ -498,6 +504,9 @@ function Workspace() {
     )
       return;
     if (!(await shapeMove.flush()) || !(await shapeText.finish()) || !(await texts.finish())) return;
+    if (authority.current?.project.id !== ownerProjectId || imageGeometry.hasPending(ownerProjectId) || imageInput.hasPending(ownerProjectId) ||
+      historyLock.current || composition.current || pendingAction.current || strokeDraw.hasPending() ||
+      (historyCommand.current ? direction !== "retry" : direction === "retry")) return;
     editorEpoch.current++;
     historyLock.current = true;
     setHistoryBusy(true);
@@ -694,7 +703,7 @@ function Workspace() {
     setSelection((previous) =>
       current?.project.id !== value.project.id
         ? []
-        : previous.filter((id) => value.cards.some((c) => c.item.id === id) || value.texts?.some(text => text.item.id === id) || value.shapes?.some(shape => shape.item.id === id) || value.strokes?.some(stroke => stroke.item.id === id)),
+        : previous.filter((id) => value.cards.some((c) => c.item.id === id) || value.texts?.some(text => text.item.id === id) || value.shapes?.some(shape => shape.item.id === id) || value.strokes?.some(stroke => stroke.item.id === id) || value.images?.some(image => image.item.id === id)),
     );
     setState(value);
   };
@@ -816,6 +825,8 @@ function Workspace() {
       return await shapeText.finish() && await flush();
     },
   );
+  const imageGeometry = useImageGeometry(() => authority.current, action, refresh,
+    () => historyLock.current || !!historyCommand.current);
   const shapeMove = useShapeMove(() => authority.current, value => {
     if (authority.current?.project.id === value.project.id) updateState(value);
   }, async () => await shapeText.finish() && await texts.finish() && await appearance.flush() &&
@@ -891,6 +902,7 @@ function Workspace() {
     pose.cancel();
     canvasMove.cancel();
     shapeMove.cancel();
+    imageGeometry.cancel();
     resize.cancel();
     moving.current = null;
     bypass.current = false;
@@ -1364,6 +1376,21 @@ function Workspace() {
     }
   }
   async function action(command: Command, onDone?: () => void) {
+    const imageCommand = command.type.startsWith('image.');
+    const backgroundImage = () => imageCommand && command.projectId !== authority.current?.project.id;
+    const finishImage = async () => {
+      try { await api.execute(command); }
+      catch (failure) {
+        if (failure instanceof MappingError && ['image.transform', 'image.rotate', 'image.delete'].includes(command.type) &&
+          ['VERSION_CONFLICT', 'NOT_FOUND'].includes(failure.code)) throw new ImageWriteRejected(failure.message);
+        throw failure;
+      }
+      if (command.projectId === authority.current?.project.id) await refresh(command.projectId);
+      else await api.project(command.projectId);
+      onDone?.();
+      return true;
+    };
+    if (backgroundImage()) return finishImage();
     if (historyLock.current || historyCommand.current) return;
     if (
       pendingAction.current &&
@@ -1382,6 +1409,7 @@ function Workspace() {
       !(await flush())
     )
       return;
+    if (imageCommand) return finishImage();
     if (command.type === "stroke.create" && command.projectId !== authority.current?.project.id) {
       fail(new Error("笔迹所属项目已变化，请在原项目明确恢复")); return false;
     }
@@ -1488,7 +1516,15 @@ function Workspace() {
       return task ? [task] : [];
     }),
   );
-  const saveStatus = mediaQueue.hasUnconfirmed
+  const imageFile = useRef<HTMLInputElement>(null);
+  const imageInput = useCanvasImageInput(() => {
+    const current = authority.current, element = document.querySelector('.canvas .react-flow');
+    if (!current || !element) return null;
+    const rect = element.getBoundingClientRect(), zoom = flow.getZoom();
+    const point = flow.screenToFlowPosition({ x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 });
+    return { projectId: current.project.id, ...point, maxWidth: rect.width * 0.6 / zoom, maxHeight: rect.height * 0.6 / zoom };
+  }, action, () => historyLock.current || !!historyCommand.current);
+  const saveStatus = imageGeometry.rejected ? '图片调整未保存' : imageGeometry.pending ? '图片布局尚未确认' : imageInput.pending ? (imageInput.error ? '图片保存失败 · 原输入保留' : '图片处理中 · 尚未保存') : imageInput.recoveryError ? '部分图片恢复记录未确认' : mediaQueue.hasUnconfirmed
     ? "媒体结果尚未确认 · 重试确认"
     : status === "已保存到本机" && mediaTasks.length
       ? mediaTasks.some((task) => task.status === "failed")
@@ -1515,7 +1551,7 @@ function Workspace() {
     if (!card) return;
     await action({ commandId: crypto.randomUUID(), projectId, type: "thought.delete", expected: { thought: card.versionId, body: card.body.versionId, pose: card.item.versionId, appearance: card.appearance?.versionId ?? null, cardTags: card.cardTags?.versionId ?? null }, payload: { id } });
   }
-  async function chooseShape(itemId: string, extend: boolean) {
+  async function chooseCanvasItem(itemId: string, extend: boolean) {
     if (busy || historyLock.current || historyCommand.current || composition.current || pendingAction.current) return;
     const projectId = authority.current?.project.id;
     if (!projectId) return;
@@ -1523,7 +1559,7 @@ function Workspace() {
     breakBodyGroup();
     if (!(await shapeMove.flush()) || !(await shapeText.finish()) || !(await texts.finish()) || !(await appearance.flush()) || !(await cardLayout.flush()) || !(await pose.flush()) || !(await flush())) return;
     if (epoch !== editorEpoch.current || authority.current?.project.id !== projectId ||
-      !authority.current.shapes?.some(shape => shape.item.id === itemId)) return;
+      ![...(authority.current.shapes ?? []), ...(authority.current.images ?? [])].some(item => item.item.id === itemId)) return;
     setEditing(null); titleGroup.current = null; awaitBodySelection.current = false;
     setSelection(previous => extend ? [...new Set([...previous, itemId])]
       : previous.includes(itemId) && previous.length > 1 ? previous : [itemId]);
@@ -1803,7 +1839,7 @@ function Workspace() {
         appearance.hasPending() ||
         cardLayout.hasPending() ||
         pose.hasPending()
-        || texts.hasPending() || shapeText.hasPending() || shapeMove.hasPending() || strokeDraw.hasPending()
+        || texts.hasPending() || shapeText.hasPending() || shapeMove.hasPending() || strokeDraw.hasPending() || imageGeometry.hasPending() || imageInput.hasPending()
       ) {
         event.preventDefault();
         event.returnValue = "";
@@ -1950,14 +1986,14 @@ function Workspace() {
       <header className="topbar">
         {state && <ProjectSearch key={state.project.id} projectId={state.project.id} revision={state.project.revision} tags={state.tags ?? []} cards={state.cards} onOpen={openSearch} disabled={busy || historyBlocked} />}
         <button
-          disabled={!state || busy || historyBlocked}
+          disabled={!state || busy || historyBlocked || imageGeometry.hasPending(state.project.id) || imageInput.hasPending(state.project.id)}
           onMouseDown={(e) => e.preventDefault()}
           onClick={() => void travel("undo")}
         >
           撤销
         </button>
         <button
-          disabled={!state || busy || historyBlocked}
+          disabled={!state || busy || historyBlocked || imageGeometry.hasPending(state.project.id) || imageInput.hasPending(state.project.id)}
           onMouseDown={(e) => e.preventDefault()}
           onClick={() => void travel("redo")}
         >
@@ -2027,6 +2063,18 @@ function Workspace() {
       )}
       <main
         className={panelCard ? "canvas with-editor" : "canvas"}
+        tabIndex={0}
+        onPaste={event => {
+          if (busy || historyBlocked || composition.current || pendingAction.current || !state) return;
+          if (imageInput.paste(event)) return;
+          const text = canvasPlainText(event);
+          if (text === null) return;
+          event.preventDefault();
+          const rect = event.currentTarget.querySelector('.react-flow')!.getBoundingClientRect();
+          const point = flow.screenToFlowPosition({ x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 });
+          void action({ commandId: crypto.randomUUID(), projectId: state.project.id, type: 'thought.create', expected: null,
+            payload: { id: crypto.randomUUID(), title: '', text, x: point.x - 140, y: point.y - 80 } });
+        }}
         onClickCapture={(event) => {
           if (strokeDraw.mode && (event.target as Element).closest('.react-flow__node, .react-flow__pane')) {
             event.preventDefault(); event.stopPropagation(); return;
@@ -2100,7 +2148,7 @@ function Workspace() {
               "controls.zoomOut.ariaLabel": "缩小",
               "controls.fitView.ariaLabel": "适应画布",
             }}
-            nodes={orderCanvas([...nodes, ...textNodes, ...shapeNodes(state.shapes ?? [], selection, (id, extend) => void chooseShape(id, extend), busy || historyBlocked || placing || !!shapePreset || texts.placing || panTool, id => void beginShapeText(id), !!shapeText.session, (id, trigger) => void beginShapeAppearance(id, trigger), value => void removeShape(value), shapeMove.positions, shapeMove, composition.current || !!pendingAction.current || pose.pending || pose.dragging || canvasMove.dragging || texts.hasPending() || appearance.pending || cardLayout.pending), ...strokeNodes(state.strokes ?? [], selection, (id, extend) => void chooseStrokeItem(id, extend), value => void removeStroke(value), busy || historyBlocked || !!pendingAction.current || placing || !!shapePreset || texts.placing || panTool || !!strokeDraw.mode || !!shapeText.session)].map(node => ({ ...node, position: shapeMove.positions[node.id] ?? canvasMove.positions[node.id] ?? node.position, draggable: node.draggable !== false && !strokeSelected && !strokeDraw.mode && !busy && !historyBlocked && !panTool && !placing && !shapePreset && !texts.placing && !texts.geometryBlocked && !shapeText.session && !shapeMove.pending })), state, selection)}
+            nodes={orderCanvas([...nodes, ...textNodes, ...imageNodes(state.images ?? [], state.project.id, selection, (id, extend) => void chooseCanvasItem(id, extend), busy || historyBlocked || composition.current || !!pendingAction.current || placing || !!shapePreset || texts.placing || panTool || !!strokeDraw.mode || !!shapeText.session || texts.geometryBlocked, imageGeometry, (value, dx, dy) => { if (canvasMove.start(value.item.id)) canvasMove.finish({ x: value.item.pose.x + dx, y: value.item.pose.y + dy }); }), ...shapeNodes(state.shapes ?? [], selection, (id, extend) => void chooseCanvasItem(id, extend), busy || historyBlocked || placing || !!shapePreset || texts.placing || panTool, id => void beginShapeText(id), !!shapeText.session, (id, trigger) => void beginShapeAppearance(id, trigger), value => void removeShape(value), shapeMove.positions, shapeMove, composition.current || !!pendingAction.current || pose.pending || pose.dragging || canvasMove.dragging || texts.hasPending() || appearance.pending || cardLayout.pending), ...strokeNodes(state.strokes ?? [], selection, (id, extend) => void chooseStrokeItem(id, extend), value => void removeStroke(value), busy || historyBlocked || !!pendingAction.current || placing || !!shapePreset || texts.placing || panTool || !!strokeDraw.mode || !!shapeText.session)].map(node => ({ ...node, position: shapeMove.positions[node.id] ?? canvasMove.positions[node.id] ?? node.position, draggable: node.draggable !== false && !strokeSelected && !strokeDraw.mode && !busy && !historyBlocked && !panTool && !placing && !shapePreset && !texts.placing && !texts.geometryBlocked && !shapeText.session && !shapeMove.pending })), state, selection)}
             onNodeClick={(event, node) => {
               awaitBodySelection.current = false;
               if (event.shiftKey)
@@ -2292,6 +2340,17 @@ function Workspace() {
               strokeDraw.setMode(null); setPlacing(false); texts.setPlacing(false); setPanTool(false); setShapePreset(type);
             }} />
             <StrokeTools active={strokeDraw.mode} disabled={busy || historyBlocked || strokeDraw.drawing} choose={chooseStroke} />
+            <button disabled={busy || historyBlocked || imageInput.pending || strokeDraw.drawing} onClick={() => imageFile.current?.click()}>图片</button>
+            <input ref={imageFile} type="file" hidden accept="image/jpeg,image/png,image/webp,image/gif,image/svg+xml"
+              onChange={event => { const file = event.currentTarget.files?.[0]; event.currentTarget.value = ''; if (file) void imageInput.begin(file); }} />
+            {imageInput.error && <section aria-label="图片导入失败">
+              <p role="alert">{imageInput.error}</p>
+              <button onClick={() => void imageInput.retry()}>重试图片保存</button>
+            </section>}
+            {imageInput.active && <button disabled={!imageInput.cancellable} onClick={imageInput.cancel}>取消图片导入</button>}
+            {imageInput.recoveryError && <p role="alert">{imageInput.recoveryError}</p>}
+            {imageInput.recoveries.filter(record => record.input.placement.projectId === state.project.id).map(record =>
+              <button key={record.key} disabled={busy || historyBlocked} onClick={() => void imageInput.recover(record.key)}>恢复未确认图片</button>)}
             {shapePreset && <span>点击画布放置{shapePreset === "roundedRectangle" ? "圆角矩形" : shapePreset === "rectangle" ? "矩形" : shapePreset === "ellipse" ? "椭圆" : shapePreset === "diamond" ? "菱形" : "三角形"}</span>}
             {texts.error && <span role="alert">{texts.error}</span>}
             {placing && <span>点击画布放置卡片</span>}
@@ -2473,6 +2532,9 @@ function Workspace() {
         </div>
       )}
       <div className="save-state">
+        {imageGeometry.error && <><span role="alert">{imageGeometry.error}</span>{imageGeometry.rejected
+          ? <button onClick={() => void imageGeometry.abandon()}>放弃本次图片调整，保留已保存状态</button>
+          : <button onClick={() => void imageGeometry.retry()}>重试图片调整</button>}</>}
         {!pendingAction.current && strokeRecoveries.filter(record => record.command.projectId === state?.project.id).map(record =>
           <button key={record.key} disabled={busy || historyBlocked} onClick={() => void recoverStrokeCreate(record.key)}>恢复未确认笔迹</button>)}
         {state && strokeRecoveryError && <span role="alert">{strokeRecoveryError}</span>}
@@ -2488,7 +2550,7 @@ function Workspace() {
         {texts.createRecoveries.map(record => <button key={record.key} onClick={() => void texts.recoverCreate(record.key)}>恢复独立文字草稿</button>)}
         {texts.formatRecoveries.map(record => <button key={record.key} onClick={() => texts.recoverFormat(record.key)}>恢复独立文字草稿</button>)}
         {texts.recoveries.map(record => <button key={record.key} onClick={() => void texts.recover(record.key)}>恢复独立文字草稿</button>)}
-        {texts.error && <><span role="alert">{texts.error}</span><button onClick={() => void texts.retry()}>重试文字保存</button></>}
+        {texts.error && <><span role="alert">{texts.error}</span><button onClick={() => void texts.retry()}>重试{texts.operationScope}保存</button></>}
         {mediaQueue.hasUnconfirmed && <button onClick={mediaQueue.retryUnconfirmed} disabled={historyBlocked}>重试媒体保存确认</button>}
         <span role="status" aria-live="polite">
           {shapeMove.status || shapeText.status || texts.status || (appearance.error

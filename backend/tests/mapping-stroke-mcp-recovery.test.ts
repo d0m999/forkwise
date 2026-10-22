@@ -9,10 +9,10 @@ import { randomUUID } from 'node:crypto';
 import { createMcpServer, httpTransport } from '../src/mcp-server.js';
 import { openMapping } from '../src/mapping/storage.js';
 import { createWorkspaceApp } from '../src/mapping/http.js';
-import type { CompactPage, CompactItem, CardIndex, TextIndex, ShapeIndex, StrokeIndex, DetailChunk } from '../src/mapping/compact-contracts.js';
+import type { CompactPage, CompactItem, CardIndex, TextIndex, ShapeIndex, StrokeIndex, ImageIndex, DetailChunk } from '../src/mapping/compact-contracts.js';
 import type { ObservePage } from '../src/mapping/observe-contracts.js';
 
-it('真实 MCP 固定混合地图变化终点，预算错误与过旧游标仅凭协议恢复信息完整重建五种视图', async () => {
+it('真实 MCP 固定混合地图变化终点，预算错误与过旧游标仅凭协议恢复信息完整重建六种视图', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'forkwise-stroke-mcp-recovery-'));
   const mapping = openMapping(directory, { observe: { retentionRevisions: 2 } });
   let http: ReturnType<typeof serve> | undefined;
@@ -37,6 +37,10 @@ it('真实 MCP 固定混合地图变化终点，预算错误与过旧游标仅�
     run({ type: 'stroke.create', expected: null, payload: { id: 'short-highlighter',
       content: { penKind: 'highlighter', path: [{ x: 6, y: 6 }, { x: 40, y: 6 }, { x: 74, y: 16 }], color: '#ffe08a', width: 12, opacity: 0.4 },
       pose: { x: 80, y: -35, width: 80, height: 22 } } });
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="80" height="40"><rect width="80" height="40" fill="green"/></svg>';
+    run({ type: 'asset.save', expected: null, payload: { id: 'image-asset', name: '恢复图片.svg', mime: 'image/svg+xml', base64: Buffer.from(svg).toString('base64') } });
+    run({ type: 'image.create', expected: null, payload: { id: 'image', content: { assetId: 'image-asset', crop: { x: 0.25, y: 0.125, width: 0.5, height: 0.75 } },
+      pose: { x: -40, y: 60, width: 30, height: 40, rotation: 90 } } });
     const r0 = state();
     let app: ReturnType<typeof createWorkspaceApp>;
     http = serve({ hostname: '127.0.0.1', port: 0, fetch: request => app.fetch(request) });
@@ -100,8 +104,8 @@ it('真实 MCP 固定混合地图变化终点，预算错误与过旧游标仅�
     const readTool = tools.find(value => value.name === 'forkwise_read_map');
     expect(readTool?.annotations?.readOnlyHint).toBe(true);
     expect(readTool?.inputSchema).toMatchObject({ properties: {
-      view: { enum: expect.arrayContaining(['index', 'tags', 'text-index', 'shape-index', 'stroke-index', 'stroke-detail']) },
-      strokeId: { type: 'string' } } });
+      view: { enum: expect.arrayContaining(['index', 'tags', 'text-index', 'shape-index', 'stroke-index', 'stroke-detail', 'image-index', 'image-detail']) },
+      strokeId: { type: 'string' }, imageId: { type: 'string' } } });
     const pages = async (snapshot: string, revision: number, view: string, extra: Record<string, unknown> = {}) => {
       const items: CompactItem[] = [];
       let cursor: string | undefined;
@@ -139,20 +143,21 @@ it('真实 MCP 固定混合地图变化终点，预算错误与过旧游标仅�
       const texts = await pages(snapshot, revision, 'text-index') as TextIndex[];
       const shapes = await pages(snapshot, revision, 'shape-index') as ShapeIndex[];
       const strokes = await pages(snapshot, revision, 'stroke-index') as StrokeIndex[];
+      const images = await pages(snapshot, revision, 'image-index') as ImageIndex[];
       const cards = await Promise.all(cardIndex.map(async value => {
         const { type: _, order: __, body, ...metadata } = value;
         const full = await detail(snapshot, revision, 'detail', { cardId: value.id });
         expect(full).toMatchObject({ id: body.id, versionId: body.versionId });
         return { ...metadata, body: full };
       }));
-      const expand = async (values: (TextIndex | ShapeIndex | StrokeIndex)[], kind: 'text' | 'shape' | 'stroke') => Promise.all(values.map(async value => {
+      const expand = async (values: (TextIndex | ShapeIndex | StrokeIndex | ImageIndex)[], kind: 'text' | 'shape' | 'stroke' | 'image') => Promise.all(values.map(async value => {
         expect(value.content.availability).toBe('not_fetched');
         const full = await detail(snapshot, revision, kind + '-detail', { [kind + 'Id']: value.id });
         expect(full).toMatchObject({ id: value.id, versionId: value.versionId });
         if (kind === 'stroke') expect(full.content.path).toHaveLength((value as StrokeIndex).content.pointCount);
         return { kind, ...full, item: value.item };
       }));
-      return { project: base.project, cards, tags, texts: await expand(texts, 'text'), shapes: await expand(shapes, 'shape'), strokes: await expand(strokes, 'stroke') };
+      return { project: base.project, cards, tags, texts: await expand(texts, 'text'), shapes: await expand(shapes, 'shape'), strokes: await expand(strokes, 'stroke'), images: await expand(images, 'image') };
     };
     expect(await rebuild(first.snapshot, r2.project.revision)).toEqual(r2);
     expect(await rebuild(recoveryR3, r3.project.revision)).toEqual(r3);

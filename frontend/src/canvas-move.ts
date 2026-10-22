@@ -2,7 +2,7 @@ import { useRef, useState } from "react";
 import type { Command, ProjectState } from "./api";
 type Point = { x: number; y: number };
 type Target = {
-  kind: "card" | "text" | "shape";
+  kind: "card" | "text" | "shape" | "image";
   id: string;
   item: { id: string; versionId: string; pose: Point };
 };
@@ -39,13 +39,14 @@ export function useCanvasMove(
         id: shape.id,
         item: shape.item,
       })),
+      ...(state.images ?? []).map(image => ({ kind: 'image' as const, id: image.id, item: image.item })),
     ].filter((value) => selection.includes(value.item.id)).map(value => ({ ...value, item: structuredClone(value.item) }));
     const anchor = targets.find((value) => value.item.id === id);
     if (
       !anchor ||
-      targets.length < 2 ||
+      (targets.length < 2 && anchor.kind !== 'image') ||
       targets.length !== selection.length ||
-      !targets.some((value) => value.kind === "text" || value.kind === "shape")
+      !targets.some((value) => value.kind === "text" || value.kind === "shape" || value.kind === 'image')
     )
       return false;
     gesture.current = { projectId: state.project.id, targets, anchor };
