@@ -1105,3 +1105,10 @@ body:has(.workspace[data-board-full="true"]) .card-tooltip { display: none; }
 .shape-text-actions { padding: var(--body-control-gap); background: var(--card-color-ffffff); }
 .shape-text-actions--floating { position: fixed; z-index: 1000; border: var(--text-tool-stroke) solid var(--card-menu-border); border-radius: var(--body-panel-radius); }
 .shape-text-actions--editor { position: absolute; top: 100%; left: 0; min-width: 100%; }
+
+.image-crop { position: absolute; z-index: 20; outline: none; }
+.image-crop-source { position: absolute; inset: 0; overflow: hidden; }
+.image-crop-mask { position: absolute; pointer-events: none; box-shadow: 0 0 0 100vmax color-mix(in srgb, var(--image-viewer-background) 55%, transparent); }
+.image-crop-frame { position: absolute; border: var(--body-focus-outline-width) solid var(--canvas-selection-color); }
+.image-crop-handle { position: absolute; transform: translate(-50%, -50%); width: var(--image-handle-size); height: var(--image-handle-size); padding: 0; border: var(--text-tool-stroke) solid var(--canvas-selection-color); background: var(--card-color-ffffff); touch-action: none; }
+.image-crop-actions { position: absolute; display: flex; flex-wrap: wrap; width: max-content; white-space: nowrap; }

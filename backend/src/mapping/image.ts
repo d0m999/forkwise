@@ -60,6 +60,35 @@ export function transformImage(db: Database.Database, command: Extract<ImageComm
   return { before, after };
 }
 
+export function cropImage(db: Database.Database, command: Extract<ImageCommand, { type: 'image.crop' }>): ImageChange | null {
+  const before = readImages(db, command.projectId).find(value => value.id === command.payload.id);
+  requireThat(before, 'NOT_FOUND', '图片不存在于当前项目', 404);
+  requireThat(command.expected.image === before.versionId && command.expected.pose === before.item.versionId, 'VERSION_CONFLICT', '图片或布局已更新，请重新读取', 409);
+  const p = before.item.pose, previous = before.content.crop, crop = command.payload.crop;
+  if (crop.x === previous.x && crop.y === previous.y && crop.width === previous.width && crop.height === previous.height) return null;
+  const odd = p.rotation === 90 || p.rotation === 270;
+  const sourceWidth = (odd ? p.height : p.width) / previous.width;
+  const sourceHeight = (odd ? p.width : p.height) / previous.height;
+  const dx = (crop.x + crop.width / 2 - previous.x - previous.width / 2) * sourceWidth;
+  const dy = (crop.y + crop.height / 2 - previous.y - previous.height / 2) * sourceHeight;
+  const offset = p.rotation === 90 ? [-dy, dx] : p.rotation === 180 ? [-dx, -dy] : p.rotation === 270 ? [dy, -dx] : [dx, dy];
+  const width = odd ? sourceHeight * crop.height : sourceWidth * crop.width;
+  const height = odd ? sourceWidth * crop.width : sourceHeight * crop.height;
+  const after = structuredClone(before);
+  after.versionId = randomUUID();
+  after.content = { ...after.content, crop };
+  after.item = { ...after.item, versionId: randomUUID(), pose: {
+    x: p.x + p.width / 2 + offset[0]! - width / 2,
+    y: p.y + p.height / 2 + offset[1]! - height / 2,
+    width, height, rotation: p.rotation,
+  } };
+  requireThat(Object.values(after.item.pose).every(Number.isFinite) && after.item.pose.width > 0 && after.item.pose.height > 0,
+    'INVALID_COMMAND', '裁剪后的图片范围超出可表示尺寸', 400);
+  db.prepare('UPDATE mapping_images SET value=? WHERE id=? AND project_id=?').run(JSON.stringify(after), after.id, command.projectId);
+  retainImageVersions(db, command.projectId, after);
+  return { before, after };
+}
+
 export function rotateImage(db: Database.Database, command: Extract<ImageCommand, { type: 'image.rotate' }>): ImageChange {
   const before = readImages(db, command.projectId).find(value => value.id === command.payload.id);
   requireThat(before, 'NOT_FOUND', '图片不存在于当前项目', 404);

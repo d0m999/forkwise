@@ -922,6 +922,10 @@ function Workspace() {
   }
   useEffect(() => {
     const cancel = () => cancelGesture();
+    const lostCapture = (event: PointerEvent) => {
+      if (event.target instanceof Element && event.target.closest('.image-crop')) return;
+      cancel();
+    };
     const hidden = () => {
       if (document.visibilityState === "hidden") cancel();
     };
@@ -943,14 +947,14 @@ function Workspace() {
       }
     };
     window.addEventListener("pointercancel", cancel, true);
-    window.addEventListener("lostpointercapture", cancel, true);
+    window.addEventListener("lostpointercapture", lostCapture, true);
     window.addEventListener("blur", cancel);
     window.addEventListener("pagehide", cancel);
     window.addEventListener("keydown", escape);
     document.addEventListener("visibilitychange", hidden);
     return () => {
       window.removeEventListener("pointercancel", cancel, true);
-      window.removeEventListener("lostpointercapture", cancel, true);
+      window.removeEventListener("lostpointercapture", lostCapture, true);
       window.removeEventListener("blur", cancel);
       window.removeEventListener("pagehide", cancel);
       window.removeEventListener("keydown", escape);
@@ -1381,7 +1385,7 @@ function Workspace() {
     const finishImage = async () => {
       try { await api.execute(command); }
       catch (failure) {
-        if (failure instanceof MappingError && ['image.transform', 'image.rotate', 'image.delete'].includes(command.type) &&
+        if (failure instanceof MappingError && ['image.transform', 'image.rotate', 'image.delete', 'image.crop'].includes(command.type) &&
           ['VERSION_CONFLICT', 'NOT_FOUND'].includes(failure.code)) throw new ImageWriteRejected(failure.message);
         throw failure;
       }
@@ -2076,6 +2080,9 @@ function Workspace() {
             payload: { id: crypto.randomUUID(), title: '', text, x: point.x - 140, y: point.y - 80 } });
         }}
         onClickCapture={(event) => {
+          if (imageGeometry.cropping?.projectId === state?.project.id && state && !(event.target as Element).closest('.image-crop')) {
+            event.preventDefault(); event.stopPropagation(); return;
+          }
           if (strokeDraw.mode && (event.target as Element).closest('.react-flow__node, .react-flow__pane')) {
             event.preventDefault(); event.stopPropagation(); return;
           }
@@ -2115,6 +2122,9 @@ function Workspace() {
         onPointerMoveCapture={strokeDraw.move}
         onPointerUpCapture={strokeDraw.finish}
         onPointerDownCapture={(event) => {
+          if (imageGeometry.cropping?.projectId === state?.project.id && state && event.button === 0 && !(event.target as Element).closest('.image-crop')) {
+            event.preventDefault(); event.stopPropagation(); return;
+          }
           if (strokeDraw.start(event)) return;
           if (shapeText.session && (event.target as Element).closest('.react-flow__node, .react-flow__pane') && !(event.target as Element).closest('.shape-text-session, .shape-text-actions')) {
             event.preventDefault(); event.stopPropagation(); return;

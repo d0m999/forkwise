@@ -2,8 +2,8 @@ import { useLayoutEffect, useRef, useState, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
 import { useViewport } from '@xyflow/react';
 import type { ImagePose } from './image-geometry';
-export function ImageActions({ anchor, pose, blocked, rotate, remove, view }: {
-  anchor: RefObject<HTMLElement | null>; pose: ImagePose; blocked: boolean; rotate: (direction: 'left' | 'right') => void; remove: () => void; view: () => void;
+export function ImageActions({ anchor, pose, blocked, rotate, remove, view, crop, restore }: {
+  anchor: RefObject<HTMLElement | null>; pose: ImagePose; blocked: boolean; rotate: (direction: 'left' | 'right') => void; remove: () => void; view: () => void; crop: () => void; restore?: (() => void) | undefined;
 }) {
   const toolbar = useRef<HTMLDivElement>(null), viewport = useViewport();
   const [point, setPoint] = useState({ left: 0, top: 0 });
@@ -23,6 +23,8 @@ export function ImageActions({ anchor, pose, blocked, rotate, remove, view }: {
   }, [viewport.x, viewport.y, viewport.zoom, pose.x, pose.y, pose.width, pose.height]);
   return createPortal(<div ref={toolbar} className="shape-text-actions shape-text-actions--floating" role="toolbar" aria-label="图片操作" style={point}>
     <button disabled={blocked} onClick={view}>查看大图</button>
+    <button disabled={blocked} onClick={crop}>裁剪</button>
+    {restore && <button disabled={blocked} onClick={restore}>恢复完整图片</button>}
     <button disabled={blocked} onClick={() => rotate('left')}>向左旋转90°</button>
     <button disabled={blocked} onClick={() => rotate('right')}>向右旋转90°</button>
     <button disabled={blocked} onClick={remove}>删除图片</button>

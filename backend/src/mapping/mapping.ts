@@ -1,4 +1,4 @@
-import { createImage, readImages, transformImage, rotateImage, deleteImage } from './image.js';
+import { cropImage, createImage, readImages, transformImage, rotateImage, deleteImage } from './image.js';
 import type { ImageVersion } from './image-contracts.js';
 import { moveCanvas } from './canvas-move.js';
 import { createStroke, deleteStroke, readStrokes } from './stroke.js';
@@ -301,9 +301,9 @@ export class Mapping {
         let travel: ReturnType<typeof travelHistory> | undefined;
         let revision: number;
         let changedIds: string[];
-        if (command.type === 'image.create' || command.type === 'image.transform' || command.type === 'image.rotate' || command.type === 'image.delete') {
+        if (command.type === 'image.create' || command.type === 'image.crop' || command.type === 'image.transform' || command.type === 'image.rotate' || command.type === 'image.delete') {
           const project = this.project(command.projectId);
-          imageChange = command.type === 'image.create' ? { before: null, after: createImage(this.db, command) } : command.type === 'image.delete' ? deleteImage(this.db, command) : command.type === 'image.rotate' ? rotateImage(this.db, command) : transformImage(this.db, command) ?? undefined;
+          imageChange = command.type === 'image.create' ? { before: null, after: createImage(this.db, command) } : command.type === 'image.crop' ? cropImage(this.db, command) ?? undefined : command.type === 'image.delete' ? deleteImage(this.db, command) : command.type === 'image.rotate' ? rotateImage(this.db, command) : transformImage(this.db, command) ?? undefined;
           if (!imageChange) return unchanged(project.revision);
           const image = imageChange.after ?? imageChange.before!;
           after = null; changedIds = [...(imageChange.before?.versionId !== imageChange.after?.versionId ? [image.id] : []), ...(imageChange.before?.item.versionId !== imageChange.after?.item.versionId ? [image.item.id] : [])]; revision = project.revision + 1;

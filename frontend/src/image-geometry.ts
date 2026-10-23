@@ -10,12 +10,13 @@ export function useImageGeometry(authority: () => ProjectState | null, commit: (
   const request = useRef<Command | null>(null), running = useRef(false);
   const [poses, setPoses] = useState<Record<string, ImagePose>>({});
   const [dragging, setDragging] = useState(false), [pending, setPending] = useState(false);
+  const [cropping, setCropping] = useState<{ projectId: string; value: CanvasImage } | null>(null);
   const [error, setError] = useState('');
   const rejectedRequest = useRef<Command | null>(null), [rejected, setRejected] = useState(false);
   function clear(command: Command) {
     if (request.current !== command) return;
     request.current = null; rejectedRequest.current = null;
-    setRejected(false); setPoses({}); setPending(false); setError('');
+    setRejected(false); setPoses({}); setCropping(null); setPending(false); setError('');
   }
   async function retry() {
     const command = request.current;
@@ -45,7 +46,7 @@ export function useImageGeometry(authority: () => ProjectState | null, commit: (
     finally { running.current = false; }
   }
   function send(command: Command) { request.current = command; setPending(true); void retry(); }
-  function cancel() { gesture.current = null; setDragging(false); if (!request.current) setPoses({}); }
+  function cancel() { gesture.current = null; setDragging(false); if (!request.current) { setPoses({}); setCropping(null); } }
   useEffect(() => { cancel(); }, [authority()?.project.id]);
   function start(value: CanvasImage) {
     const current = authority();
@@ -66,16 +67,25 @@ export function useImageGeometry(authority: () => ProjectState | null, commit: (
     send({ commandId: crypto.randomUUID(), projectId, type: 'image.transform',
       expected: { image: value.versionId, pose: value.item.versionId }, payload: { id: value.id, pose: layout } });
   }
+  function beginCrop(value: CanvasImage) { if (start(value)) setCropping(gesture.current); }
+  function finishCrop(crop: CanvasImage['content']['crop']) {
+    const captured = gesture.current;
+    if (!captured || !cropping) return;
+    gesture.current = null; setDragging(false);
+    const { value, projectId } = captured;
+    send({ commandId: crypto.randomUUID(), projectId, type: 'image.crop',
+      expected: { image: value.versionId, pose: value.item.versionId }, payload: { id: value.id, crop } });
+  }
   function adjust(value: CanvasImage, next: ImagePose | null) { if (next && start(value)) finish(next); }
-  function operate(value: CanvasImage, direction: 'left' | 'right' | 'delete') {
+  function operate(value: CanvasImage, direction: 'left' | 'right' | 'delete' | 'restore') {
     const current = authority();
     if (!current || historyBlocked() || gesture.current || request.current) return;
     const command: Command = { commandId: crypto.randomUUID(), projectId: current.project.id,
       expected: { image: value.versionId, pose: value.item.versionId },
-      ...(direction === 'delete' ? { type: 'image.delete', payload: { id: value.id } } : { type: 'image.rotate', payload: { id: value.id, direction } }) };
+      ...(direction === 'restore' ? { type: 'image.crop', payload: { id: value.id, crop: { x: 0, y: 0, width: 1, height: 1 } } } : direction === 'delete' ? { type: 'image.delete', payload: { id: value.id } } : { type: 'image.rotate', payload: { id: value.id, direction } }) };
     send(command);
   }
-  return { poses, dragging, pending, start, preview, finish, adjust, cancel, operate, error, retry, rejected, abandon,
+  return { poses, dragging, pending, cropping, beginCrop, finishCrop, start, preview, finish, adjust, cancel, operate, error, retry, rejected, abandon,
     hasPending: (projectId?: string) => projectId === undefined ? !!request.current || !!gesture.current
       : request.current?.projectId === projectId || gesture.current?.projectId === projectId };
 }
