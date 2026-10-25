@@ -53,12 +53,12 @@ function refresh(){
     else syncProperties();
   }
   const ids=[...S().selected],{nodes,edges}=chosen(ids),n=nodes[0],single=nodes.length===1&&edges.length===0;
-  if(!nodes.length&&!edges.length||C().isEditing?.()||C().isCropping?.()){bar.hidden=true;return;}
+  if(!nodes.length&&!edges.length||C().isEditing?.()||C().isCropping?.()||single&&n.type==='video'&&window.FWVideo?.isPlaying(n.id)){bar.hidden=true;return;}
   const card=single&&n.type==='card',image=single&&n.type==='image',group=single&&n.type==='group';
   const text=single&&['text','shape','frame','group'].includes(n.type),b=selectionBounds(nodes,edges);
   const focused=bar.contains(document.activeElement)?document.activeElement.dataset.action:null;
   bar.hidden=false;
-  bar.innerHTML=(card?button('edit','编辑卡片标题','title')+button('file','打开写字板','edit'):'')+(text?button('edit','编辑文字','text'):'')+(image?button('expand','查看图片','view'):'')+button('shape','外观','style')+(card?button('sparkles','AI 工具（模拟）','ai'):'')+button('copy','复制副本','duplicate')+(nodes.length>1&&!edges.length?button('frame','组合','group'):'')+(group?button('frame','取消组合','ungroup'):'')+button('more','更多操作','more');
+  bar.innerHTML=(card?button('edit','编辑卡片标题','title')+button('file','打开写字板','edit'):'')+(text?button('edit','编辑文字','text'):'')+(image?button('expand','查看图片','view'):'')+(single&&n.type==='video'?'':button('shape','外观','style'))+(card?button('sparkles','AI 工具（模拟）','ai'):'')+button('copy','复制副本','duplicate')+(nodes.length>1&&!edges.length?button('frame','组合','group'):'')+(group?button('frame','取消组合','ungroup'):'')+button('more','更多操作','more');
   const root=$('canvasEngine').getBoundingClientRect(),v=S().viewport,x=root.left+(b.x+b.w/2)*v.zoom+v.x,y=root.top+b.y*v.zoom+v.y-54;
   bar.style.left=Math.max(10,Math.min(innerWidth-bar.offsetWidth-10,x-bar.offsetWidth/2))+'px';
   bar.style.top=Math.max(82,Math.min(innerHeight-110,y))+'px';

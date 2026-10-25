@@ -5,6 +5,7 @@
 backend/dist/
 backend/web/canvas/
 prototype/canvas-built/
+prototype/open-canvas-r2-20261011/artifacts/video-interaction-20261024/
 backend/artifacts/
 **/.data/
 **/.env
