@@ -24,6 +24,18 @@ it('普通连线拒绝两端绑定同一对象', () => {
   } finally { f.close(); }
 });
 
+it('普通连线拒绝零长度自由连线', () => {
+  const f = connectorMap();
+  try {
+    const before = f.state(), historyBefore = f.history();
+    expect(() => f.run({ type: 'connector.create', expected: null, payload: { id: 'zero-line',
+      start: { kind: 'free', point: { x: 12, y: -8 } }, end: { kind: 'free', point: { x: 12, y: -8 } },
+    } })).toThrowError(expect.objectContaining({ code: 'INVALID_ENDPOINT' }));
+    expect(f.state()).toEqual(before);
+    expect(f.history()).toEqual(historyBefore);
+  } finally { f.close(); }
+});
+
 it('普通连线拒绝绑定其他项目的画布项', () => {
   const f = connectorMap();
   try {

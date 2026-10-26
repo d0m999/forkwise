@@ -1,6 +1,6 @@
 import { test, expect } from './writing-board-fixture';
 import type { Command } from '../../backend/src/mapping/contracts';
-import { connectorSurfaceBox, connectorSvgEnds, connectorWorldPoint, seedConnectorCard, connectorReconnectAckLoss, connectorReconnectVersionConflict } from './connector-ui-fixture';
+import { connectorSurfaceBox, connectorSvgEnds, connectorWorldPoint, seedConnectorCard, connectorReconnectAckLoss, connectorReconnectVersionConflict, connectorCardPair } from './connector-ui-fixture';
 
 test('拖动连线端点重接到新对象而保留另一端', async ({ page, workspace }) => {
   const a = await seedConnectorCard(page, workspace, 'reconnect-a', 130, 150);
@@ -290,4 +290,25 @@ test('重接普通连线未知ACK时明确重试原命令', async ({ page, works
 
 test('重接普通连线确定版本冲突后不自动重发', async ({ page, workspace }) => {
   await connectorReconnectVersionConflict(page, workspace);
+});
+
+test('点击空白、其他对象或按Escape取消普通连线选择', async ({ page, workspace }) => {
+  const pair = await connectorCardPair(page, workspace), projectId = (await workspace.state()).project.id;
+  await workspace.execute(page, { commandId: crypto.randomUUID(), projectId, type: 'connector.create', expected: null,
+    payload: { id: 'selection-line', path: 'straight', start: pair.expected.start, end: pair.expected.end } });
+  await page.reload(); await expect(page.getByRole('status')).toHaveText('已保存到本机');
+  const line = page.getByRole('button', { name: '普通连线', exact: true });
+  const handle = page.getByRole('button', { name: '连线终点', exact: true }), controls = page.getByRole('group', { name: '连线路径', exact: true });
+  await expect(line).toHaveCount(1);
+  async function select() { await line.click(); await expect(line).toHaveAttribute('aria-pressed', 'true'); await expect(handle).toHaveCount(1); await expect(controls).toHaveCount(1); }
+  async function cleared(phase: string) {
+    await expect(line, phase).toHaveAttribute('aria-pressed', 'false'); await expect(handle).toHaveCount(0); await expect(controls).toHaveCount(0);
+  }
+  const pane = await page.locator('.react-flow__pane').boundingBox(); expect(pane).not.toBeNull();
+  await select();
+  await page.mouse.click(Math.round(pane!.x + pane!.width * 0.08), Math.round(pane!.y + pane!.height * 0.9));
+  await cleared('点击空白后应取消普通连线选择');
+  await select(); await page.keyboard.press('Escape'); await cleared('Escape应取消普通连线选择');
+  await select(); await page.getByRole('button', { name: '连线的卡片', exact: true }).first().click(); await cleared('点击其他对象后应取消普通连线选择');
+  console.log('issue26-connector-selection-clear', JSON.stringify({ pane, selection: await page.locator('.thought-card.selected').count(), pressed: await line.getAttribute('aria-pressed') }));
 });

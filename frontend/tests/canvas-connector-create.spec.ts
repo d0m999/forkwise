@@ -72,6 +72,35 @@ test('两端自由普通连线拖动时预览且松开只保存一条直线', as
   } finally { page.off('request', record); }
 });
 
+test('按下未拖动即松开不创建零长度连线且工具保持可用', async ({ page, workspace }) => {
+  const before = await workspace.state(), projectId = before.project.id;
+  const historyUrl = workspace.origin + '/api/mapping/projects/' + encodeURIComponent(projectId) + '/history';
+  const beforeHistory = await (await page.request.get(historyUrl)).json(), commands: unknown[] = [];
+  const tool = page.getByRole('button', { name: '连线', exact: true });
+  const record = (request: Request) => {
+    if (request.url().endsWith('/api/mapping/execute') && request.method() === 'POST' && request.postDataJSON()?.type === 'connector.create') commands.push(request.postDataJSON());
+  };
+  page.on('request', record);
+  try {
+    await tool.click(); await expect(tool).toHaveAttribute('aria-pressed', 'true');
+    const pane = await page.locator('.react-flow__pane').boundingBox(); expect(pane).not.toBeNull();
+    const point = { x: Math.round(pane!.x + pane!.width * 0.4), y: Math.round(pane!.y + pane!.height * 0.4) };
+    await page.mouse.move(point.x, point.y); await page.mouse.down(); await page.mouse.up();
+    await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+    expect(commands, '未拖动就松开不应提交普通连线').toHaveLength(0);
+    await expect(page.getByRole('img', { name: '连线预览', exact: true })).toHaveCount(0);
+    expect(await workspace.state()).toEqual(before);
+    expect(await (await page.request.get(historyUrl)).json()).toEqual(beforeHistory);
+    await expect(tool).toHaveAttribute('aria-pressed', 'true');
+    const end = { x: point.x + 180, y: point.y + 90 };
+    const saved = page.waitForResponse(response => response.url().endsWith('/api/mapping/execute') && response.request().postDataJSON()?.type === 'connector.create');
+    await page.mouse.move(point.x, point.y); await page.mouse.down(); await page.mouse.move(end.x, end.y, { steps: 6 }); await page.mouse.up();
+    expect((await saved).status()).toBe(200); await expect(page.getByRole('status')).toHaveText('已保存到本机');
+    expect(commands).toHaveLength(1); expect((await workspace.state()).connectors).toHaveLength(1);
+    console.log('issue26-click-no-drag', JSON.stringify({ point, end, commands, connectors: (await workspace.state()).connectors }));
+  } finally { page.off('request', record); }
+});
+
 test('从卡片连接到空白保留起点绑定和自由终点', async ({ page, workspace }) => {
   const card = await seedConnectorCard(page, workspace);
   await page.getByRole('button', { name: '连线', exact: true }).click();

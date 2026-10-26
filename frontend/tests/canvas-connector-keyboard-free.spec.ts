@@ -290,3 +290,42 @@ test('键盘移动整线仅调整自由端', async ({ page, workspace }) => {
       variants: ['both-free', 'bound-start-free-end', 'free-start-bound-end'], boundary: 'both-bound entry disabled; real keys cannot detach or write; one complete whole-line movement behavior' }));
   } finally { await page.unrouteAll({ behavior: 'wait' }); }
 });
+
+test('键盘未移动自由端直接确认不创建零长度连线', async ({ page, workspace }) => {
+  const before = await workspace.state(), projectId = before.project.id;
+  const historyUrl = workspace.origin + '/api/mapping/projects/' + encodeURIComponent(projectId) + '/history';
+  const history = async () => { const response = await page.request.get(historyUrl); expect(response.status()).toBe(200); return await response.json() as ProjectHistory; };
+  const beforeHistory = await history(), commands: Command[] = [];
+  const tool = page.getByRole('button', { name: '连线', exact: true }), blank = page.getByRole('button', { name: '从空白处开始连线', exact: true });
+  const free = page.getByRole('button', { name: '连线自由终点', exact: true }), preview = page.getByRole('img', { name: '连线预览', exact: true });
+  const frame = async () => await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+  const record = (request: import('@playwright/test').Request) => {
+    if (request.url().endsWith('/api/mapping/execute') && request.method() === 'POST' && request.postDataJSON()?.type === 'connector.create') commands.push(request.postDataJSON());
+  };
+  async function tabTo(target: Locator) {
+    await expect(target).toBeVisible();
+    for (let step = 0; step < 100; step++) {
+      if (await target.evaluate(element => element === document.activeElement)) return;
+      await page.keyboard.press(await target.evaluate(element =>
+        element.compareDocumentPosition(document.activeElement ?? document.body) & Node.DOCUMENT_POSITION_PRECEDING ? 'Tab' : 'Shift+Tab'));
+    }
+    throw new Error('正常 Tab 顺序无法到达连线创建控件');
+  }
+  page.on('request', record);
+  try {
+    await tabTo(tool); await page.keyboard.press('Enter'); await expect(tool).toHaveAttribute('aria-pressed', 'true');
+    await tabTo(blank); await page.keyboard.press('Enter'); await expect(preview).toBeVisible(); await expect(free).toBeFocused();
+    await page.keyboard.press('Enter'); await frame();
+    expect(commands, '未移动自由端就确认不应提交普通连线').toHaveLength(0);
+    await expect(preview).toHaveCount(0); await expect(blank).toBeFocused();
+    expect(await workspace.state()).toEqual(before); expect(await history()).toEqual(beforeHistory);
+    await expect(tool).toHaveAttribute('aria-pressed', 'true');
+    await page.keyboard.press('Enter'); await expect(preview).toBeVisible(); await expect(free).toBeFocused();
+    for (const key of ['ArrowRight', 'ArrowDown']) await page.keyboard.press(key); await frame();
+    const saved = page.waitForResponse(response => response.url().endsWith('/api/mapping/execute') && response.request().postDataJSON()?.type === 'connector.create');
+    await page.keyboard.press('Enter'); expect((await saved).status()).toBe(200);
+    await expect(page.getByRole('status')).toHaveText('已保存到本机'); expect(commands).toHaveLength(1);
+    expect((await workspace.state()).connectors).toHaveLength(1);
+    console.log('issue26-keyboard-no-move', JSON.stringify({ commands, connectors: (await workspace.state()).connectors }));
+  } finally { page.off('request', record); }
+});

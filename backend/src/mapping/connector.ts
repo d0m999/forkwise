@@ -21,6 +21,9 @@ export function createConnector(db: Database.Database, command: Extract<Connecto
     'ID_CONFLICT', '身份已使用，请重新创建', 409);
   requireThat(payload.start.kind !== 'bound' || payload.end.kind !== 'bound' || payload.start.itemId !== payload.end.itemId,
     'INVALID_ENDPOINT', '普通连线不能将两端绑定到同一个对象', 400);
+  requireThat(payload.start.kind !== 'free' || payload.end.kind !== 'free' ||
+    payload.start.point.x !== payload.end.point.x || payload.start.point.y !== payload.end.point.y,
+    'INVALID_ENDPOINT', '普通连线不能创建零长度连线', 400);
   requireConnectorEndpoint(db, projectId, payload.start);
   requireConnectorEndpoint(db, projectId, payload.end);
   const value: CanvasConnector = { ...payload, kind: 'connector', versionId: randomUUID() };

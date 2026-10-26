@@ -8,6 +8,7 @@ import type { ConnectorTarget } from './connector-targets';
 
 type Create = Extract<Command, { type: 'connector.create' }>;
 export type ConnectorDraft = { projectId: string; start: ConnectorPoint; end: ConnectorPoint; startEndpoint: ConnectorEndpoint; endEndpoint: ConnectorEndpoint };
+const MIN_CONNECTOR_LENGTH = 4;
 type Adapters = {
   current: () => ProjectState | null;
   blocked: () => boolean;
@@ -32,7 +33,7 @@ export function useConnectorCreate(adapters: Adapters) {
   const [rejected, setRejected] = useState(false);
   const [focusId, setFocusId] = useState<string | null>(null);
   const keyboard = useRef<{ value: ConnectorDraft; origin: HTMLElement } | null>(null);
-  const active = useRef<{ value: ConnectorDraft; pointerId: number; element: HTMLElement } | null>(null);
+  const active = useRef<{ value: ConnectorDraft; pointerId: number; element: HTMLElement; startClient: ConnectorPoint } | null>(null);
   const pending = useRef<Create | null>(null), activation = useRef(0), click = useRef<ConnectorPoint | null>(null);
   const confirmed = useRef<Receipt | null>(null);
   async function activate() {
@@ -134,6 +135,7 @@ export function useConnectorCreate(adapters: Adapters) {
   function chooseFree() {
     const captured = keyboard.current;
     if (!captured || keyboardBlocked() || captured.value.projectId !== latest.current.current()?.project.id) return;
+    if (Math.hypot(captured.value.end.x - captured.value.start.x, captured.value.end.y - captured.value.start.y) < MIN_CONNECTOR_LENGTH) { cancelDraft(); return; }
     const value = { ...captured.value, endEndpoint: { kind: 'free' as const, point: captured.value.end } };
     keyboard.current = null; submit(value, true);
   }
@@ -168,7 +170,7 @@ export function useConnectorCreate(adapters: Adapters) {
       if (entry && !bound) return false;
       const start = bound?.point ?? latest.current.point(client);
       const value = { projectId, start, end: start, startEndpoint: bound?.endpoint ?? { kind: 'free' as const, point: start }, endEndpoint: { kind: 'free' as const, point: start } };
-      active.current = { value, pointerId: event.pointerId, element: event.currentTarget };
+      active.current = { value, pointerId: event.pointerId, element: event.currentTarget, startClient: client };
       event.preventDefault(); event.stopPropagation(); event.currentTarget.setPointerCapture(event.pointerId); setDraft(value);
       return true;
     }
@@ -181,6 +183,9 @@ export function useConnectorCreate(adapters: Adapters) {
     const value = { ...captured.value, end, endEndpoint: bound?.endpoint ?? { kind: 'free' as const, point: end } };
     if (event.type === 'pointermove') { captured.value = value; setDraft(value); return true; }
     if (event.type !== 'pointerup') return false;
+    if (Math.hypot(client.x - captured.startClient.x, client.y - captured.startClient.y) < MIN_CONNECTOR_LENGTH) {
+      click.current = client; cancelDraft(); return true;
+    }
     if (value.startEndpoint.kind === 'bound' && value.endEndpoint.kind === 'bound' && value.startEndpoint.itemId === value.endEndpoint.itemId) {
       click.current = client; cancelDraft(); setError('普通连线不能连接同一个对象'); return true;
     }

@@ -1010,6 +1010,9 @@ function Workspace() {
       if (connectorEdit.hasGesture() || connectorCreate.hasGesture() || strokeDraw.hasGesture() || pose.dragging || canvasMove.dragging || shapeMove.dragging || marqueeSelection.current) {
         event.preventDefault();
         cancel();
+      } else if (selectedConnector) {
+        event.preventDefault();
+        setSelectedConnector(null);
       }
     };
     window.addEventListener("pointercancel", cancel, true);
@@ -2260,6 +2263,7 @@ function Workspace() {
             nodes={orderCanvas([...nodes, ...textNodes, ...imageNodes(state.images ?? [], state.project.id, selection, (id, extend) => void chooseCanvasItem(id, extend), busy || historyBlocked || composition.current || !!pendingAction.current || placing || !!shapePreset || texts.placing || panTool || !!strokeDraw.mode || !!shapeText.session || texts.geometryBlocked, imageGeometry, (value, dx, dy) => { if (canvasMove.start(value.item.id)) canvasMove.finish({ x: value.item.pose.x + dx, y: value.item.pose.y + dy }); }), ...shapeNodes(state.shapes ?? [], selection, (id, extend) => void chooseCanvasItem(id, extend), busy || historyBlocked || placing || !!shapePreset || texts.placing || panTool, id => void beginShapeText(id), !!shapeText.session, (id, trigger) => void beginShapeAppearance(id, trigger), value => void removeShape(value), shapeMove.positions, shapeMove, composition.current || !!pendingAction.current || pose.pending || pose.dragging || canvasMove.dragging || texts.hasPending() || appearance.pending || cardLayout.pending), ...strokeNodes(state.strokes ?? [], selection, (id, extend) => void chooseStrokeItem(id, extend), value => void removeStroke(value), busy || historyBlocked || !!pendingAction.current || placing || !!shapePreset || texts.placing || panTool || !!strokeDraw.mode || !!shapeText.session)].map(node => ({ ...node, position: shapeMove.positions[node.id] ?? canvasMove.positions[node.id] ?? node.position, draggable: node.draggable !== false && !strokeSelected && !strokeDraw.mode && !busy && !historyBlocked && !panTool && !placing && !shapePreset && !texts.placing && !texts.geometryBlocked && !shapeText.session && !shapeMove.pending })), state, selection)}
             onNodeClick={(event, node) => {
               awaitBodySelection.current = false;
+              setSelectedConnector(null);
               if (event.shiftKey)
                 setSelection((previous) => [
                   ...new Set([...previous, node.id]),
@@ -2345,6 +2349,7 @@ function Workspace() {
             nodesConnectable={false}
             deleteKeyCode={null}
             onPaneClick={(event) => {
+              if (!event.shiftKey) setSelectedConnector(null);
               if (placing && !busy && !historyBlocked) {
                 const point = flow.screenToFlowPosition({
                   x: event.clientX,
