@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "groups": {
+    "workspace-source": [
+      {"path": "backend/src"},
+      {"path": "backend/scripts"},
+      {"path": "backend/drizzle"},
+      {"path": "backend", "patterns": ["package*.json", "tsconfig*.json"]},
+      {"path": "frontend/src"},
+      {"path": "frontend/public", "optional": true},
+      {"path": "frontend", "patterns": ["package*.json", "tsconfig*.json", "vite.config.*", "index.html"]},
+      {"path": "public-data-core"},
+      {"path": "prototype/open-canvas-r2-20261011/vendor"}
+    ],
+    "installed-dependencies": [
+      {"path": "backend/node_modules"},
+      {"path": "frontend/node_modules"}
+    ],
+    "frontend-tests": [
+      {"path": "frontend/tests"},
+      {"path": "frontend/playwright.config.ts"},
+      {"path": "backend/tests"}
+    ],
+    "workspace-artifacts": [
+      {"path": "backend/dist"},
+      {"path": "backend/dist/src/workspace-server.js"},
+      {"path": "backend/dist/workspace/index.html"},
+      {"path": "frontend/dist"},
+      {"path": "frontend/dist/index.html"}
+    ]
+  },
+  "checks": [
+    {
+      "id": "workspace-build", "kind": "build", "cwd": "backend",
+      "command": ["npm", "run", "build:workspace"],
+      "inputs": ["workspace-source", "installed-dependencies"],
+      "outputs": ["workspace-artifacts"], "tools": ["node", "npm", "sh", "cp", "mkdir"], "depends_on": []
+    },
+    {
+      "id": "frontend-playwright", "kind": "playwright", "cwd": "frontend",
+      "command": ["npm", "test"],
+      "inputs": ["workspace-source", "installed-dependencies", "frontend-tests", "workspace-artifacts"],
+      "outputs": [], "tools": ["node", "npm", "sh", "chromium"], "depends_on": ["workspace-build"]
+    }
+  ]
+}

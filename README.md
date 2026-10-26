@@ -19,8 +19,9 @@ The project consists of a local backend (Node + Hono + SQLite) and a browser wor
 Brief flow:
 
 ```sh
-cd prototype/canvas-lab && npm ci        # install canvas frontend dependencies first
-cd ../../backend && npm ci              # then install backend dependencies
+npm --prefix frontend ci                # install the open workspace dependencies
+npm --prefix backend/canvas ci          # install the legacy research canvas dependencies
+cd backend && npm ci                    # then install backend dependencies
 npm run build                           # build canvas + backend
 npm start                               # start; defaults to http://127.0.0.1:8787
 ```

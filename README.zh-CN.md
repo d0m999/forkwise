@@ -19,8 +19,9 @@
 简要流程：
 
 ```sh
-cd prototype/canvas-lab && npm ci        # 先装画布前端依赖
-cd ../../backend && npm ci              # 再装后端依赖
+npm --prefix frontend ci                # 安装正式开放工作台依赖
+npm --prefix backend/canvas ci          # 安装旧研究画布依赖
+cd backend && npm ci                    # 再装后端依赖
 npm run build                           # 构建画布 + 后端
 npm start                               # 启动，默认 http://127.0.0.1:8787
 ```

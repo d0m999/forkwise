@@ -6,16 +6,19 @@
 
 ## 安装和启动
 
-要求 Node.js >= 22.22.2、npm，首轮实现实际使用 Node.js 24.4.1。原画布构建还需要 `prototype/canvas-lab` 的依赖。
+要求 Node.js >= 22.22.2、npm，首轮实现实际使用 Node.js 24.4.1。完整构建包含正式开放工作台与旧研究画布，两者依赖分别安装。
 
 ```sh
-cd /Users/d0m999/Desktop/forkwise/prototype/canvas-lab
-npm ci
-cd ../../backend
+cd /Users/d0m999/Desktop/forkwise
+npm --prefix frontend ci
+npm --prefix backend/canvas ci
+cd backend
 npm ci
 npm run build
 npm start
 ```
+
+`build:canvas` 从 `canvas/` 构建到 `web/canvas/`，完整 `build` 再将旧工作台资源复制到 `dist/web/`。正式工作台的构建与入口仍为 `build:workspace` / `start:workspace`，使用独立数据目录，见[开放工作台说明](../docs/open-workspace.md)。
 
 默认绑定 `http://127.0.0.1:8787`。本机会话入口写入 `.data/local-access.json`，权限为 `0600`；使用其中 `url` 打开工作台，不要将该文件分享或加入版本库。URL 中的会话令牌在加载后从地址栏移除。数据库、原文件、备份及任务历史在 `.data/`。服务使用数据目录进程锁，不能同时启动两个实例操作同一目录。
 

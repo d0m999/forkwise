@@ -19,7 +19,7 @@
 
 ## 本地开发与检查
 
-后端（Node + Hono + SQLite）与画布前端（`prototype/canvas-lab`）需分别安装依赖。完整安装、构建与启动步骤见 [backend/README.md](backend/README.md)。
+后端（`backend/`）、正式开放工作台（`frontend/`）与旧研究画布（`backend/canvas/`）需分别安装锁定依赖。完整安装、构建与启动步骤见 [backend/README.md](backend/README.md)。
 
 常用命令（在 `backend/` 目录）：
 
