@@ -102,7 +102,8 @@ def create(root, definition_path, bindings):
         if any(part in key.upper() for part in ("TOKEN", "SECRET", "PASSWORD", "API_KEY", "CREDENTIAL")):
             environment[key] = "REDACTED"
             environment_issues.append("SENSITIVE_ENVIRONMENT_UNSUPPORTED:" + key)
-    external_settings = {"node_options", "node_path", "npm_config_userconfig", "npm_config_globalconfig", "npm_config_script_shell"}
+    external_settings = {"node_options", "node_path", "npm_config_userconfig", "npm_config_globalconfig",
+                         "npm_config_script_shell", "forkwise_native_clipboard_guard"}
     for key, value in environment.items():
         if key.lower() in external_settings and value:
             environment_issues.append("UNDECLARED_ENVIRONMENT_INPUT:" + key)

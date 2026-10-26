@@ -104,6 +104,7 @@ class GateFixture(unittest.TestCase):
                              "failed": [], "skipped": [], "flaky": []},
             }
             if check["kind"] == "playwright":
+                receipt["attachments"] = []
                 report = self.put(name + ".report.json", json.dumps({
                     "config": {"shard": None, "forbidOnly": True,
                                "projects": [{"id": "chromium", "repeatEach": 1, "retries": 0}]},

@@ -18,6 +18,8 @@ python3 -B scripts/gate.py plan --root . --summary
 
 这是显式声明的范围，不是自动依赖分析。新的包、外部输入或构建路径需要审阅定义；不能从“指纹相同”推断声明已经穷尽所有依赖。`.npmrc`、`.env*`、Node 预加载等未声明的外部输入会阻止复用；`.env*` 只检查名称，不读取正文。npm 配置环境按大小写不敏感识别，敏感值不写入输出，也不被采纳为可复用条件。
 
+当前尚未支持通过 `FORKWISE_NATIVE_CLIPBOARD_GUARD` 声明外部守卫程序；该变量非空时标记 `UNDECLARED_ENVIRONMENT_INPUT`，拒绝执行与复用。路径字符串不能证明程序内容和执行权限未变；不读取或执行该未声明程序。需要该守卫的测试应继续沿既有受控门禁运行。
+
 执行环境只传递声明的语言/时区/CI 和 `NODE_*`、`FORKWISE_*`、`PLAYWRIGHT_*`、`VITE_*`、npm 配置；有 Node 绑定时 PATH 固定为该 Node 目录及系统目录。HOME、临时目录、npm cache、JSON reporter 和资源日志位于本次新目录；其生成规则参与指纹，实际路径在 argv/运行记录中保留。不会继承未声明的凭据环境。
 
 ## 显式执行并登记
@@ -156,11 +158,14 @@ python3 -B scripts/gate.py verify --root . \
 | `coverage` | `collected` 与 `executed` 为相同、非空、无重复的标识集合；`failed`、`skipped`、`flaky` 均为空。构建用实际完成的步骤标识 |
 | `upstream` | 构建为 `{}`；前端须关联已合格构建的 `{run_id, input_key, output_key}` |
 | `report` | Playwright 检查另提供原始 JSON reporter 文件的 `{path, sha256}` |
+| `attachments` | Playwright 报告引用的文件附件 `{path, sha256}` 清单，在原运行中固定；路径相对该回执目录、排序去重，无文件附件时为 `[]`。复用前核对报告引用的完整集合和每项原摘要；缺失清单、遗漏、删除、改写、越界或链接替换均阻止复用 |
 | `discovery` | 独立 `--list` 报告的 `{path, sha256, command, exit_code}`；必须成功结束且无执行结果，集合与执行报告一致 |
 
 `report.command` 和 `discovery.command` 必须匹配工具固定的完整选择合同；`run` 另记真实解析后的 `executed_command`，含隔离路径。原 v1 回执保持历史身份，不就地升级；本工具不给旧合同自动复用信用。
 
 Playwright 覆盖标识为 `file::spec.id::projectId::repeatEachIndex`，缺少 `repeatEachIndex` 时为 `0`。核验 JSON reporter 的原始用例结果、错误、重试和统计，与回执覆盖集合对应。当前实现对 retry、flaky、skip 及无法唯一识别的重复运行保守拒绝复用，不改变项目对原始结果的历史处置。
+
+附件从每个用例执行结果的 `attachments[].path` 采集，必须是本次回执目录内的普通文件；不跟随文件或祖先目录的符号链接。内嵌 `body` 由原始报告摘要覆盖。核验时不按当前剩余附件补写或缩小清单，也不为缺少清单的旧回执补造复用资格。
 
 仅有 list 日志、`.last-run.json` 或旧格式回执时，工具保留证据缺口，不自动转换为新合同；可继续由总控人工核验原证据，不应仅为适配这个工具而重跑。#26 的 561/561 尚未由本工具接纳或写入台账；当前真实运行是独立的新结果。
 

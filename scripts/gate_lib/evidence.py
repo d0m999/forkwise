@@ -3,7 +3,7 @@ from datetime import datetime
 from pathlib import Path
 
 from .files import Invalid, Inventory, read_json, relative
-from .reports import full_command, full_selection, read_proof, tests
+from .reports import attachment_manifest, full_command, full_selection, read_proof, tests
 from .control import validate_closeout
 
 
@@ -20,6 +20,11 @@ def _report_reasons(item, receipt, path):
         if issues or entry.get("kind") != "file" or entry.get("sha256") != proof["sha256"]:
             return ["TEST_REPORT_MISSING_OR_CHANGED"]
         report = read_json(target, expected_sha256=proof["sha256"])
+        try:
+            if receipt.get("attachments") != attachment_manifest(report, Path(path).absolute().parent):
+                return ["TEST_ATTACHMENTS_MISSING_OR_CHANGED"]
+        except (KeyError, TypeError, ValueError, OSError, AttributeError):
+            return ["TEST_ATTACHMENTS_MISSING_OR_CHANGED"]
         discovery = read_proof(Path(path).absolute().parent, receipt["discovery"])
         discovery_proof = receipt["discovery"]
         if (discovery_proof["path"] == proof["path"]

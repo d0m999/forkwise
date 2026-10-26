@@ -1,7 +1,7 @@
 """Playwright 原始发现/执行报告的公共读取合同。"""
 from pathlib import Path
 
-from .files import read_json, relative
+from .files import Invalid, Inventory, read_json, relative
 
 
 def full_command(item, *, discover=False):
@@ -31,6 +31,31 @@ def tests(report):
     for suite in report["suites"]:
         visit(suite)
     return found
+
+
+def attachment_manifest(report, directory):
+    """只采集报告引用的本次普通附件；内嵌 body 已由报告摘要覆盖。"""
+    directory = Path(directory).absolute()
+    names = set()
+    for _, _, test in tests(report):
+        for result in test["results"]:
+            for attachment in result.get("attachments", []):
+                if "path" not in attachment:
+                    continue
+                value = attachment["path"]
+                if not isinstance(value, str) or not value:
+                    raise Invalid("附件路径必须为非空字符串")
+                path = Path(value)
+                name = str(path.relative_to(directory)) if path.is_absolute() else value
+                names.add(relative(name))
+    inventory, manifest = Inventory(), []
+    for name in sorted(names):
+        _, issues = inventory.capture(directory / name, name)
+        entry = inventory.entries.get(name, {})
+        if issues or entry.get("kind") != "file":
+            raise Invalid("原始附件缺失或不是本次目录内的普通文件：" + name)
+        manifest.append({"path": name, "sha256": entry["sha256"]})
+    return manifest
 
 
 def full_selection(report):

@@ -16,7 +16,7 @@ from .files import Invalid, Inventory, _parent, read_json
 from .plans import create
 from .runtime import RESOURCE_LOGS, argv, environment, validate_resolution
 from .processes import execute, reclaim
-from .reports import coverage, full_command, full_selection, tests
+from .reports import attachment_manifest, coverage, full_command, full_selection, tests
 
 
 def timestamp():
@@ -222,7 +222,9 @@ def run(root, definition, bindings, plan_path, check_id, destination, timeout=18
                 receipt["discovery"] = {**proof(directory, "discovery.json"), "command": discovery_command,
                                         "executed_command": discovery_actual, "exit_code": discovery_process["exit_code"]}
                 receipt["report"] = {**proof(directory, "report.json"), "command": command}
-                receipt["coverage"] = coverage(read_json(directory / "discovery.json"), read_json(directory / "report.json"))
+                report = read_json(directory / "report.json")
+                receipt["coverage"] = coverage(read_json(directory / "discovery.json"), report)
+                receipt["attachments"] = attachment_manifest(report, directory)
                 report_reasons = _report_reasons(item, receipt, directory / "receipt.json")
             except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
                 report_reasons = ["RAW_REPORT_INCOMPLETE:" + type(exc).__name__]

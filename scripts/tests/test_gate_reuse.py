@@ -183,10 +183,14 @@ class ReuseTests(GateFixture):
         self.put("frontend/playwright.config.ts", "module.exports={testDir:'./tests',workers:1,timeout:10000,"
                  "use:{headless:true,launchOptions:{executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH}}};\n")
         test_source = ("const {test,expect}=require(" + json.dumps(str(installed / "@playwright/test")) + ");\n"
-                       "test('renders built input',async({page})=>{"
+                       "test('renders built input',async({page},info)=>{"
                        "const fs=require('node:fs'); const value=fs.readFileSync('../backend/dist/server.js','utf8').trim();"
                        "await page.setContent('<h1>'+value+'</h1>');"
                        "await expect(page.getByRole('heading')).toHaveText('built by actual process');"
+                       "const path=info.outputPath('observations.json');"
+                       "fs.writeFileSync(path,JSON.stringify({heading:'built by actual process'}));"
+                       "await info.attach('observations',{path,contentType:'application/json'});"
+                       "await info.attach('inline',{body:'inline evidence',contentType:'text/plain'});"
                        "fs.appendFileSync('../browser-executions.txt','rendered\\n')});\n")
         self.put("frontend/tests/example.spec.js", test_source)
         receipts, proofs = [], []
@@ -211,6 +215,26 @@ class ReuseTests(GateFixture):
                                    "--output", self.root / "second-request", *self.receipt_args(receipts), *proofs)
         self.assertEqual(code, 0, reused)
         self.assertEqual(reused["status"], "reused")
+        report = json.loads((output / "report.json").read_text())
+        attachments = report["suites"][0]["specs"][0]["tests"][0]["results"][0]["attachments"]
+        attached = Path(next(a["path"] for a in attachments if a["name"] == "observations"))
+        contents = attached.read_bytes()
+        self.assertEqual(json.loads(receipts[1].read_text())["attachments"],
+                         [{"path": str(attached.relative_to(output)), "sha256": hashlib.sha256(contents).hexdigest()}])
+        shutil.rmtree(output / "test-results")
+        code, missing = self.invoke("verify", "--plan", ready, *self.receipt_args(receipts), *proofs, "--summary")
+        self.assertEqual(code, 1, missing)
+        self.assertIn("TEST_ATTACHMENTS_MISSING_OR_CHANGED", missing["coverage_report"][1]["reasons"])
+        destination = self.root / "missing-attachments"
+        code, refused = self.invoke("run", "--reuse", "--plan", ready, "--check", "frontend-playwright",
+                                    "--output", destination, *self.receipt_args(receipts), *proofs)
+        self.assertEqual(code, 1, refused)
+        self.assertEqual(refused["status"], "reuse_refused")
+        self.assertFalse(destination.exists())
+        attached.parent.mkdir(parents=True)
+        attached.write_bytes(contents)
+        code, restored = self.invoke("verify", "--plan", ready, *self.receipt_args(receipts), *proofs, "--summary")
+        self.assertEqual(code, 0, restored)
         self.put("frontend/tests/example.spec.js", test_source.replace("built by actual process');", "different requirement');"))
         code, changed = self.invoke("verify", "--plan", self.save_plan(self.plan()),
                                     *self.receipt_args(receipts), *proofs, "--summary")
