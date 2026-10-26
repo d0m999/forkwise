@@ -62,12 +62,12 @@ export function useConnectorEdit(adapters: Adapters) {
       });
     };
   }
-  function cancel() {
+  function cancel(options: { restoreFocus?: boolean } = {}) {
     clearPathFocus();
     const keys = keyboard.current;
     if (keys) {
       keyboard.current = null; setDraft(null);
-      if (latest.current.current()?.project.id === keys.value.projectId && keys.origin.isConnected) keys.origin.focus();
+      if (options.restoreFocus !== false && latest.current.current()?.project.id === keys.value.projectId && keys.origin.isConnected) keys.origin.focus();
     }
     const captured = active.current; if (!captured) return;
     active.current = null; setDraft(null);

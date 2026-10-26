@@ -895,6 +895,10 @@ function Workspace() {
       return { submitted, confirmed };
     },
   });
+  function clearConnectorSelection() {
+    connectorEdit.cancel({ restoreFocus: false });
+    setSelectedConnector(null);
+  }
   function beginCreationToolChoice() {
     const epoch = ++editorEpoch.current;
     connectorEdit.cancel();
@@ -1661,6 +1665,7 @@ function Workspace() {
     if (!(await shapeMove.flush()) || !(await shapeText.finish()) || !(await texts.finish()) || !(await appearance.flush()) || !(await cardLayout.flush()) || !(await pose.flush()) || !(await flush())) return;
     if (epoch !== editorEpoch.current || authority.current?.project.id !== projectId ||
       ![...(authority.current.shapes ?? []), ...(authority.current.images ?? [])].some(item => item.item.id === itemId)) return;
+    clearConnectorSelection();
     setEditing(null); titleGroup.current = null; awaitBodySelection.current = false;
     setSelection(previous => extend ? [...new Set([...previous, itemId])]
       : previous.includes(itemId) && previous.length > 1 ? previous : [itemId]);
@@ -1688,6 +1693,7 @@ function Workspace() {
       !(await cardLayout.flush()) || !(await pose.flush()) || !(await flush())) return;
     if (!projectId || editorEpoch.current !== epoch || authority.current?.project.id !== projectId ||
       !authority.current.strokes?.some(stroke => stroke.item.id === itemId)) return;
+    clearConnectorSelection();
     setEditing(null); titleGroup.current = null; awaitBodySelection.current = false;
     setSelection(previous => extend ? [...new Set([...previous, itemId])] : [itemId]);
   }
@@ -1883,6 +1889,7 @@ function Workspace() {
     if (bodyCard) { if (!(await editCard(card.id, 'body', valid))) return false; setSearchSeed(reading); setBodySearchReading(reading); }
     if (!valid() || authority.current?.project.id !== projectId) return false;
     awaitBodySelection.current = true;
+    clearConnectorSelection();
     setSelection([card.item.id]);
     setPlacing(false); setPanTool(false);
     requestAnimationFrame(() => {
@@ -1956,7 +1963,7 @@ function Workspace() {
       window.removeEventListener("beforeunload", beforeUnload);
     };
   }, []);
-  const texts = useCanvasTexts(state, selection, ids => { void shapeMove.flush().then(ok => ok && shapeText.finish()).then(ok => { if (ok) setSelection(ids); }); }, updateState, async () => await shapeText.finish() && await flush());
+  const texts = useCanvasTexts(state, selection, ids => { void shapeMove.flush().then(ok => ok && shapeText.finish()).then(ok => { if (ok) { clearConnectorSelection(); setSelection(ids); } }); }, updateState, async () => await shapeText.finish() && await flush());
   const canvasMove = useCanvasMove(state, selection, (prepare, done) => texts.enqueueGeometry(async () => {
     if (!(await shapeMove.flush())) throw new Error("请先确认形状布局保存，整组移动意图仍保留");
     return prepare();
@@ -2263,7 +2270,7 @@ function Workspace() {
             nodes={orderCanvas([...nodes, ...textNodes, ...imageNodes(state.images ?? [], state.project.id, selection, (id, extend) => void chooseCanvasItem(id, extend), busy || historyBlocked || composition.current || !!pendingAction.current || placing || !!shapePreset || texts.placing || panTool || !!strokeDraw.mode || !!shapeText.session || texts.geometryBlocked, imageGeometry, (value, dx, dy) => { if (canvasMove.start(value.item.id)) canvasMove.finish({ x: value.item.pose.x + dx, y: value.item.pose.y + dy }); }), ...shapeNodes(state.shapes ?? [], selection, (id, extend) => void chooseCanvasItem(id, extend), busy || historyBlocked || placing || !!shapePreset || texts.placing || panTool, id => void beginShapeText(id), !!shapeText.session, (id, trigger) => void beginShapeAppearance(id, trigger), value => void removeShape(value), shapeMove.positions, shapeMove, composition.current || !!pendingAction.current || pose.pending || pose.dragging || canvasMove.dragging || texts.hasPending() || appearance.pending || cardLayout.pending), ...strokeNodes(state.strokes ?? [], selection, (id, extend) => void chooseStrokeItem(id, extend), value => void removeStroke(value), busy || historyBlocked || !!pendingAction.current || placing || !!shapePreset || texts.placing || panTool || !!strokeDraw.mode || !!shapeText.session)].map(node => ({ ...node, position: shapeMove.positions[node.id] ?? canvasMove.positions[node.id] ?? node.position, draggable: node.draggable !== false && !strokeSelected && !strokeDraw.mode && !busy && !historyBlocked && !panTool && !placing && !shapePreset && !texts.placing && !texts.geometryBlocked && !shapeText.session && !shapeMove.pending })), state, selection)}
             onNodeClick={(event, node) => {
               awaitBodySelection.current = false;
-              setSelectedConnector(null);
+              clearConnectorSelection();
               if (event.shiftKey)
                 setSelection((previous) => [
                   ...new Set([...previous, node.id]),
