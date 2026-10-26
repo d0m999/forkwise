@@ -223,3 +223,34 @@ test('连线编辑确定拒绝后可继续明确操作', async ({ page, workspac
     } finally { await page.unrouteAll({ behavior: 'wait' }); }
   }
 });
+
+test('重接自由端到另一自由端不创建零长度连线', async ({ page, workspace }) => {
+  const projectId = (await workspace.state()).project.id;
+  await workspace.execute(page, { commandId: crypto.randomUUID(), projectId, type: 'connector.create', expected: null,
+    payload: { id: 'zero-reconnect-line', path: 'straight', start: { kind: 'free', point: { x: 220, y: 200 } }, end: { kind: 'free', point: { x: 600, y: 400 } } } });
+  await page.reload(); await expect(page.getByRole('status')).toHaveText('已保存到本机');
+  const before = await workspace.state(), original = before.connectors![0]!, historyUrl = workspace.origin + '/api/mapping/projects/' + encodeURIComponent(projectId) + '/history';
+  const history = await (await page.request.get(historyUrl)).json() as ProjectHistory, attempts: { command: Command; status: number; body: unknown }[] = [];
+  await page.route('**/api/mapping/execute', async route => {
+    const command = route.request().postDataJSON() as Command;
+    if (command.type !== 'connector.reconnect') { await route.continue(); return; }
+    const response = await route.fetch(); attempts.push({ command, status: response.status(), body: await response.json() }); await route.fulfill({ response });
+  });
+  try {
+    const line = page.getByRole('button', { name: '普通连线', exact: true }); await line.click();
+    const start = page.getByRole('button', { name: '连线起点', exact: true }), end = page.getByRole('button', { name: '连线终点', exact: true });
+    const startBox = await start.boundingBox(), endBox = await end.boundingBox(); expect(startBox).not.toBeNull(); expect(endBox).not.toBeNull();
+    const target = { x: startBox!.x + startBox!.width / 2, y: startBox!.y + startBox!.height / 2 };
+    const refused = page.waitForResponse(response => response.url().endsWith('/api/mapping/execute') && response.request().postDataJSON()?.type === 'connector.reconnect');
+    await end.hover(); await page.mouse.down(); await page.mouse.move(target.x, target.y, { steps: 6 }); await page.mouse.up();
+    const response = await refused, failure = await response.json() as { code: string; message: string };
+    expect(response.status()).toBe(400); expect(failure.code).toBe('INVALID_ENDPOINT');
+    await expect(page.getByRole('alert').filter({ hasText: failure.message })).toBeVisible();
+    await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+    expect(attempts).toHaveLength(1); expect(attempts[0]!.command).toMatchObject({ projectId, type: 'connector.reconnect', expected: original.versionId,
+      payload: { id: original.id, endpoint: 'end', value: { kind: 'free', point: { x: 220, y: 200 } } } });
+    expect(await workspace.state()).toEqual(before); expect(await (await page.request.get(historyUrl)).json()).toEqual(history);
+    expect((await workspace.state()).connectors![0]).toEqual(original);
+    console.log('issue26-zero-reconnect-rejection', JSON.stringify({ attempts, failure, original, boundary: 'actual endpoint-handle drag onto the other free end; backend400, no state/history write, no automatic retry' }));
+  } finally { await page.unrouteAll({ behavior: 'wait' }); }
+});

@@ -33,6 +33,15 @@ it('普通连线拒绝零长度自由连线', () => {
     } })).toThrowError(expect.objectContaining({ code: 'INVALID_ENDPOINT' }));
     expect(f.state()).toEqual(before);
     expect(f.history()).toEqual(historyBefore);
+    f.run({ type: 'connector.create', expected: null, payload: { id: 'reconnect-zero-line',
+      start: { kind: 'free', point: { x: 12, y: -8 } }, end: { kind: 'free', point: { x: 112, y: 42 } },
+    } });
+    const created = f.state(), createdHistory = f.history(), line = created.connectors![0]!;
+    expect(() => f.run({ type: 'connector.reconnect', expected: line.versionId,
+      payload: { id: line.id, endpoint: 'end', value: { kind: 'free', point: { x: 12, y: -8 } } },
+    })).toThrowError(expect.objectContaining({ code: 'INVALID_ENDPOINT' }));
+    expect(f.state()).toEqual(created);
+    expect(f.history()).toEqual(createdHistory);
   } finally { f.close(); }
 });
 

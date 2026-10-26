@@ -2,7 +2,7 @@ import { requireConnectorEndpoint } from './connector-endpoints.js';
 import type Database from 'better-sqlite3';
 import { randomUUID } from 'node:crypto';
 import { requireThat } from '../domain/errors.js';
-import type { CanvasConnector, ConnectorChange, ConnectorCommand } from './connector-contracts.js';
+import type { CanvasConnector, ConnectorChange, ConnectorCommand, ConnectorEndpoint } from './connector-contracts.js';
 
 export function initializeConnectors(db: Database.Database) {
   db.exec(`CREATE TABLE IF NOT EXISTS mapping_connectors(id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES mapping_projects(id), value TEXT NOT NULL);
@@ -21,9 +21,7 @@ export function createConnector(db: Database.Database, command: Extract<Connecto
     'ID_CONFLICT', '身份已使用，请重新创建', 409);
   requireThat(payload.start.kind !== 'bound' || payload.end.kind !== 'bound' || payload.start.itemId !== payload.end.itemId,
     'INVALID_ENDPOINT', '普通连线不能将两端绑定到同一个对象', 400);
-  requireThat(payload.start.kind !== 'free' || payload.end.kind !== 'free' ||
-    payload.start.point.x !== payload.end.point.x || payload.start.point.y !== payload.end.point.y,
-    'INVALID_ENDPOINT', '普通连线不能创建零长度连线', 400);
+  requireDistinctFreeEndpoints(payload.start, payload.end);
   requireConnectorEndpoint(db, projectId, payload.start);
   requireConnectorEndpoint(db, projectId, payload.end);
   const value: CanvasConnector = { ...payload, kind: 'connector', versionId: randomUUID() };
@@ -38,6 +36,7 @@ export function reconnectConnector(db: Database.Database, command: Extract<Conne
   after[command.payload.endpoint] = command.payload.value;
   requireThat(after.start.kind !== 'bound' || after.end.kind !== 'bound' || after.start.itemId !== after.end.itemId,
     'INVALID_ENDPOINT', '普通连线不能将两端绑定到同一个对象', 400);
+  requireDistinctFreeEndpoints(after.start, after.end);
   requireConnectorEndpoint(db, command.projectId, after.start);
   requireConnectorEndpoint(db, command.projectId, after.end);
   if (JSON.stringify(before) === JSON.stringify(after)) return null;
@@ -105,6 +104,12 @@ export function restoreConnector(
   if (after) saveConnector(db, projectId, after);
   else db.prepare('DELETE FROM mapping_connectors WHERE id=? AND project_id=?').run(identity.id, projectId);
   return { before, after };
+}
+
+function requireDistinctFreeEndpoints(start: ConnectorEndpoint, end: ConnectorEndpoint) {
+  requireThat(start.kind !== 'free' || end.kind !== 'free' ||
+    start.point.x !== end.point.x || start.point.y !== end.point.y,
+  'INVALID_ENDPOINT', '普通连线不能创建零长度连线', 400);
 }
 
 function requireConnector(db: Database.Database, command: Exclude<ConnectorCommand, { type: 'connector.create' }>): CanvasConnector {
