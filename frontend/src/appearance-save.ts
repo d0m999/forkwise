@@ -1,5 +1,6 @@
 import { TITLE_COLORS } from "../../backend/src/mapping/presentation-values";
 import { useRef, useState } from "react";
+import type { Receipt } from "../../backend/src/mapping/contracts";
 import {
   api,
   MappingError,
@@ -65,6 +66,7 @@ export function useAppearanceSave(
   current: () => ProjectState | null,
   refresh: (id: string) => Promise<ProjectState>,
   beforeSubmit: () => Promise<boolean>,
+  acknowledged?: (command: StyleCommand, receipt: Receipt) => void,
 ) {
   const inputs = useRef(new Map<string, Input>()),
     initialized = useRef(false),
@@ -148,6 +150,7 @@ export function useAppearanceSave(
           if (!persist()) return false;
           const original = input.command!;
           const receipt = await api.execute(original);
+          acknowledged?.(original, receipt);
           const latest = await refresh(input.projectId);
           const active = inputs.current.get(target);
           if (active !== input) continue;

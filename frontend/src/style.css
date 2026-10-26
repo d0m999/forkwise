@@ -1,4 +1,16 @@
 :root {
+  --connector-ink: #626e81;
+  --connector-stroke: 4;
+  --connector-endpoint-size: 14px;
+  --connector-endpoint-radius: 50%;
+  --connector-endpoint-surface: white;
+  --connector-control-border-width: 1px;
+  --connector-focus-width: 2px;
+  --connector-focus-offset: 3px;
+  --connector-controls-layer: 5;
+  --connector-tools-bottom: 82px;
+  --connector-tools-compact-bottom: 160px;
+  --connector-toolbar-gutter: 16px;
   --tag-ink: #403b36;
   --tag-border: #dedbd6;
   --tag-surface: #faf9f7;
@@ -254,6 +266,16 @@ body:has(.workspace[data-board-full="true"]) .card-tooltip { display: none; }
   color: #626e81;
   padding: 0 10px;
 }
+.canvas-connector { position: absolute; overflow: visible; pointer-events: none; color: var(--connector-ink); }
+.canvas-connector path { fill: none; stroke: currentColor; stroke-width: var(--connector-stroke); stroke-linecap: round; pointer-events: stroke; }
+.canvas-connector[aria-pressed=true], .connector-preview { color: var(--canvas-selection-color); }
+.canvas-connector:focus-visible { outline: var(--connector-focus-width) solid var(--canvas-selection-color); outline-offset: var(--connector-focus-offset); }
+.connector-preview path { pointer-events: none; }
+.connector-entry { position: absolute; transform: translate(-50%, -50%); width: var(--connector-endpoint-size); height: var(--connector-endpoint-size); padding: 0; border: var(--connector-control-border-width) solid var(--canvas-selection-color); border-radius: var(--connector-endpoint-radius); background: var(--connector-endpoint-surface); z-index: var(--connector-controls-layer); cursor: crosshair; pointer-events: auto; }
+.connector-entry:focus-visible { outline: var(--connector-focus-width) solid var(--canvas-selection-color); outline-offset: var(--connector-focus-offset); }
+.connector-endpoint { position: absolute; transform: translate(-50%, -50%); width: var(--connector-endpoint-size); height: var(--connector-endpoint-size); padding: 0; border: var(--connector-control-border-width) solid var(--canvas-selection-color); border-radius: var(--connector-endpoint-radius); background: var(--connector-endpoint-surface); z-index: var(--connector-controls-layer); cursor: grab; touch-action: none; pointer-events: auto; }
+.connector-endpoint:focus-visible { outline: var(--connector-focus-width) solid var(--canvas-selection-color); outline-offset: var(--connector-focus-offset); }
+.connector-tools { bottom: var(--connector-tools-bottom); z-index: var(--connector-controls-layer); }
 .body-editor {
   position: absolute;
   right: 0;
@@ -484,7 +506,11 @@ body:has(.workspace[data-board-full="true"]) .card-tooltip { display: none; }
   .board-toolbar { padding: 12px 16px; }
   .creation-tools {
     bottom: 55px;
+    width: max-content;
+    max-width: calc(100% - var(--connector-toolbar-gutter));
+    flex-wrap: wrap;
   }
+  .connector-tools { bottom: var(--connector-tools-compact-bottom); }
   .topbar {
     gap: 0;
   }

@@ -517,6 +517,7 @@ test('finish ACK丢失后刷新以完整持久化正文与资产确认，保单�
   await expect
     .poll(async () => (await workspace.state()).cards[0]!.body.blocks.at(-1)?.text)
     .toBe('完成后新输入');
+  await expect.poll(() => page.evaluate(() => Object.keys(localStorage).filter(key => key.startsWith('forkwise:recovery:v1:')))).toEqual([]);
   const before = await workspace.state();
   await page.unroute('**/api/mapping/execute');
   await workspace.restart();

@@ -39,7 +39,7 @@ export const ShapeDeleteCommand = z.object({
   commandId: Id,
   projectId: Id,
   type: z.literal('shape.delete'),
-  expected: z.object({ shape: Id, pose: Id }).strict(),
+  expected: z.object({ shape: Id, pose: Id, connectors: z.record(Id, Id).optional() }).strict(),
   payload: z.object({ id: Id }).strict(),
 }).strict();
 export const ShapeTransformCommand = z.object({

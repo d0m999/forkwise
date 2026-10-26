@@ -14,7 +14,7 @@ const Content = z.object({ assetId: Id, crop: Crop }).strict();
 export const ImageCommands = z.discriminatedUnion('type', [
   z.object({ commandId: Id, projectId: Id, type: z.literal('image.crop'), expected: z.object({ image: Id, pose: Id }).strict(),
     payload: z.object({ id: Id, crop: Crop }).strict() }).strict(),
-  z.object({ commandId: Id, projectId: Id, type: z.literal('image.delete'), expected: z.object({ image: Id, pose: Id }).strict(),
+  z.object({ commandId: Id, projectId: Id, type: z.literal('image.delete'), expected: z.object({ image: Id, pose: Id, connectors: z.record(Id, Id).optional() }).strict(),
     payload: z.object({ id: Id }).strict() }).strict(),
   z.object({ commandId: Id, projectId: Id, type: z.literal('image.rotate'), expected: z.object({ image: Id, pose: Id }).strict(),
     payload: z.object({ id: Id, direction: z.enum(['left', 'right']) }).strict() }).strict(),

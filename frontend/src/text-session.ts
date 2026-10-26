@@ -93,6 +93,7 @@ export function useCanvasTexts(
         { ...session.value, content: session.content },
         command,
       ),
+    () => stateRef.current,
   );
   const { session, current } = save;
   const creation = useTextCreate((latest, command) => {
@@ -215,6 +216,7 @@ export function useCanvasTexts(
   }
   async function finish(): Promise<boolean> {
     if (mixedConflict.hasPending()) return false;
+    if (!save.prepareClose()) return false;
     if (
       !(await conflicts.flush()) ||
       !(await creation.flush()) ||

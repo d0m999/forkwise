@@ -24,6 +24,7 @@ export type Workspace = {
   agentBody: (projectId: string, cardId: string, snapshot: string) => Promise<any>;
   installOriginalBody: (id: string, blocks: Block[]) => Promise<void>;
   installOriginalTagColor: (id: string, color: string) => Promise<void>;
+  installOriginalShapeItem: (id: string, itemId: string) => Promise<void>;
 };
 export const test = base.extend<{ workspace: Workspace }>({
   workspace: async ({ page }, use, testInfo) => {
@@ -128,6 +129,33 @@ export const test = base.extend<{ workspace: Workspace }>({
       await use({
         origin,
         directory,
+        installOriginalShapeItem: async (id, itemId) => {
+          await stop();
+          try {
+            const db = new Database(join(directory, 'workspace.sqlite'));
+            try {
+              const projects = db.prepare('SELECT id,revision FROM mapping_projects').all() as { id: string; revision: number }[];
+              if (projects.length !== 1 || !id || !itemId || id === itemId || id.length > 160 || itemId.length > 160) throw new Error('legacy Shape 初始化要求单一空项目和不同的有效身份');
+              const project = projects[0]!;
+              for (const table of ['mapping_cards', 'mapping_shapes', 'mapping_texts', 'mapping_images', 'mapping_strokes', 'mapping_connectors']) {
+                if (db.prepare(`SELECT 1 FROM ${table} WHERE project_id=?`).get(project.id)) throw new Error('legacy Shape 只能初始化空画布');
+              }
+              if (db.prepare('SELECT 1 FROM mapping_shape_ids WHERE id=?').get(id) || db.prepare("SELECT 1 FROM mapping_versions WHERE domain='pose' AND id=?").get(itemId)) throw new Error('legacy Shape 身份已经存在');
+              const value: NonNullable<ProjectState['shapes']>[number] = { id, kind: 'shape', versionId: crypto.randomUUID(),
+                content: { shapeType: 'rectangle', shortText: '特殊身份', fill: '#dce8dd', stroke: '#403b36', strokeWidth: 2 },
+                item: { id: itemId, versionId: crypto.randomUUID(), createdOrder: project.revision, pose: { x: 180, y: 170, width: 220, height: 120 } } };
+              // Stopped-server fixture input only; do not manufacture a production command or history.
+              db.transaction(() => {
+                db.prepare('INSERT INTO mapping_shape_ids VALUES(?,?)').run(id, project.id);
+                db.prepare('INSERT INTO mapping_shapes VALUES(?,?,?)').run(id, project.id, JSON.stringify(value));
+                const version = db.prepare('INSERT INTO mapping_versions VALUES(?,?,?,?,?)');
+                version.run(project.id, 'shape', id, value.versionId, JSON.stringify({ id, versionId: value.versionId, content: value.content }));
+                version.run(project.id, 'pose', itemId, value.item.versionId, JSON.stringify(value.item));
+              })();
+              record({ event: 'legacy-shape-item-fixture-input', projectId: project.id, shapeId: id, itemId, itemVersion: value.item.versionId, createdOrder: value.item.createdOrder });
+            } finally { db.close(); }
+          } finally { await start(); }
+        },
         installOriginalTagColor: async (id, color) => {
           await stop();
           try {

@@ -1,3 +1,4 @@
+import { resource } from './connector-transport-fixture.js';
 import { expect, it } from 'vitest';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
@@ -9,10 +10,10 @@ import { randomUUID } from 'node:crypto';
 import { createMcpServer, httpTransport } from '../src/mcp-server.js';
 import { openMapping } from '../src/mapping/storage.js';
 import { createWorkspaceApp } from '../src/mapping/http.js';
-import type { CompactPage, CompactItem, CardIndex, TextIndex, ShapeIndex, StrokeIndex, ImageIndex, DetailChunk } from '../src/mapping/compact-contracts.js';
+import type { CompactPage, CompactItem, CardIndex, TextIndex, ShapeIndex, StrokeIndex, ImageIndex, ConnectorIndex, DetailChunk } from '../src/mapping/compact-contracts.js';
 import type { ObservePage } from '../src/mapping/observe-contracts.js';
 
-it('真实 MCP 固定混合地图变化终点，预算错误与过旧游标仅凭协议恢复信息完整重建六种视图', async () => {
+it('真实 MCP 固定混合地图变化终点，预算错误与过旧游标仅凭协议恢复信息完整重建七种视图', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'forkwise-stroke-mcp-recovery-'));
   const mapping = openMapping(directory, { observe: { retentionRevisions: 2 } });
   let http: ReturnType<typeof serve> | undefined;
@@ -41,12 +42,15 @@ it('真实 MCP 固定混合地图变化终点，预算错误与过旧游标仅�
     run({ type: 'asset.save', expected: null, payload: { id: 'image-asset', name: '恢复图片.svg', mime: 'image/svg+xml', base64: Buffer.from(svg).toString('base64') } });
     run({ type: 'image.create', expected: null, payload: { id: 'image', content: { assetId: 'image-asset', crop: { x: 0.25, y: 0.125, width: 0.5, height: 0.75 } },
       pose: { x: -40, y: 60, width: 30, height: 40, rotation: 90 } } });
+    const cardItem = state().cards[0]!.item.id, shapeItem = state().shapes![0]!.item.id;
+    run({ type: 'connector.create', expected: null, payload: { id: 'recovery-line', start: { kind: 'bound', itemId: cardItem, side: 'right' }, end: { kind: 'bound', itemId: shapeItem, side: 'left' } } });
     const r0 = state();
     let app: ReturnType<typeof createWorkspaceApp>;
     http = serve({ hostname: '127.0.0.1', port: 0, fetch: request => app.fetch(request) });
     await new Promise<void>((resolve, reject) => { http!.once('listening', resolve); http!.once('error', reject); });
     const origin = `http://127.0.0.1:${(http.address() as { port: number }).port}`;
     app = createWorkspaceApp(mapping, origin, () => new Response(''));
+    resource('listening', { kind: 'http-server', port: (http.address() as { port: number }).port, host: '127.0.0.1' });
     server = createMcpServer(httpTransport(origin, mapping.access.issue('agent', ['p'])));
     client = new Client({ name: 'stroke-recovery-sdk', version: '1' });
     const [left, right] = InMemoryTransport.createLinkedPair();
@@ -104,8 +108,12 @@ it('真实 MCP 固定混合地图变化终点，预算错误与过旧游标仅�
     const readTool = tools.find(value => value.name === 'forkwise_read_map');
     expect(readTool?.annotations?.readOnlyHint).toBe(true);
     expect(readTool?.inputSchema).toMatchObject({ properties: {
-      view: { enum: expect.arrayContaining(['index', 'tags', 'text-index', 'shape-index', 'stroke-index', 'stroke-detail', 'image-index', 'image-detail']) },
-      strokeId: { type: 'string' }, imageId: { type: 'string' } } });
+      view: { enum: expect.arrayContaining(['index', 'tags', 'text-index', 'shape-index', 'stroke-index', 'stroke-detail', 'image-index', 'image-detail', 'connector-index', 'connector-detail']) },
+      strokeId: { type: 'string' }, imageId: { type: 'string' }, connectorId: { type: 'string' } } });
+    for (const name of ['forkwise_read_map', 'forkwise_observe_map']) {
+      const tool = tools.find(value => value.name === name);
+      for (const view of ['index', 'tags', 'text-index', 'shape-index', 'stroke-index', 'image-index', 'connector-index']) expect(tool?.description).toContain(view);
+    }
     const pages = async (snapshot: string, revision: number, view: string, extra: Record<string, unknown> = {}) => {
       const items: CompactItem[] = [];
       let cursor: string | undefined;
@@ -144,6 +152,12 @@ it('真实 MCP 固定混合地图变化终点，预算错误与过旧游标仅�
       const shapes = await pages(snapshot, revision, 'shape-index') as ShapeIndex[];
       const strokes = await pages(snapshot, revision, 'stroke-index') as StrokeIndex[];
       const images = await pages(snapshot, revision, 'image-index') as ImageIndex[];
+      const connectorIndex = await pages(snapshot, revision, 'connector-index') as ConnectorIndex[];
+      const connectors = await Promise.all(connectorIndex.map(async value => {
+        const full = await detail(snapshot, revision, 'connector-detail', { connectorId: value.id });
+        expect(full).toEqual({ id: value.id, kind: 'connector', versionId: value.versionId, path: value.path, start: value.start, end: value.end });
+        return full;
+      }));
       const cards = await Promise.all(cardIndex.map(async value => {
         const { type: _, order: __, body, ...metadata } = value;
         const full = await detail(snapshot, revision, 'detail', { cardId: value.id });
@@ -157,7 +171,7 @@ it('真实 MCP 固定混合地图变化终点，预算错误与过旧游标仅�
         if (kind === 'stroke') expect(full.content.path).toHaveLength((value as StrokeIndex).content.pointCount);
         return { kind, ...full, item: value.item };
       }));
-      return { project: base.project, cards, tags, texts: await expand(texts, 'text'), shapes: await expand(shapes, 'shape'), strokes: await expand(strokes, 'stroke'), images: await expand(images, 'image') };
+      return { project: base.project, cards, tags, connectors, texts: await expand(texts, 'text'), shapes: await expand(shapes, 'shape'), strokes: await expand(strokes, 'stroke'), images: await expand(images, 'image') };
     };
     expect(await rebuild(first.snapshot, r2.project.revision)).toEqual(r2);
     expect(await rebuild(recoveryR3, r3.project.revision)).toEqual(r3);
@@ -171,9 +185,15 @@ it('真实 MCP 固定混合地图变化终点，预算错误与过旧游标仅�
     expect({ ...rebuiltR4, strokes: [...rebuiltR4.strokes].sort(byId) }).toEqual({ ...r4, strokes: [...r4.strokes!].sort(byId) });
     expect(state()).toEqual(r4);
   } finally {
-    await client?.close();
-    await server?.close();
-    if (http) await new Promise<void>((resolve, reject) => http!.close(error => error ? reject(error) : resolve()));
+    if (client) { await client.close(); resource('sdk-client-closed', { kind: 'mcp-client' }); }
+    if (server) { await server.close(); resource('sdk-server-closed', { kind: 'mcp-server' }); }
+    if (http) {
+      const port = (http.address() as { port: number }).port;
+      await new Promise<void>((resolve, reject) => http!.close(error => {
+        resource('close-callback', { kind: 'http-server', port, error: error?.message ?? null });
+        if (error) reject(error); else resolve();
+      }));
+    }
     mapping.close();
     rmSync(directory, { recursive: true, force: true });
   }

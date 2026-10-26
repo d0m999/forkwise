@@ -6,6 +6,7 @@ import type {
   TextContent,
 } from "../../backend/src/mapping/text-contracts";
 import { TextRecovery } from "./text-recovery";
+import { incidentConnectorVersions } from "./connector-deletion";
 export type TextSession = {
   projectId: string;
   value: CanvasText;
@@ -18,10 +19,13 @@ export type TextSubmitted = { session: TextSession; command: TextCommand };
 export function useTextSave(
   publish: (state: ProjectState) => void,
   conflict: (session: TextSession, command: TextCommand) => Promise<void>,
+  project: () => ProjectState | null,
 ) {
   const [session, setSession] = useState<TextSession | null>(null);
   const current = useRef<TextSession | null>(null),
     pending = useRef<TextSubmitted | null>(null);
+  const deleteIntent = useRef<{ session: TextSession; connectors: Record<string, string> } | null>(null);
+  const closeAttempt = useRef<TextSession | null>(null);
   const [journal] = useState(() => new TextRecovery());
   const [recoveries, setRecoveries] = useState(() => journal.list());
   const saving = useRef<Promise<boolean> | null>(null),
@@ -41,6 +45,7 @@ export function useTextSave(
     }
   }
   function update(value: TextSession | null) {
+    if (!value) { deleteIntent.current = null; closeAttempt.current = null; }
     current.current = value;
     setSession(value);
     persist();
@@ -59,15 +64,47 @@ export function useTextSave(
       void flush();
     }, 2000);
   }
-  async function flush(close = false): Promise<boolean> {
+  function sameClose(value: TextSession | null, captured: TextSession) {
+    return !!value && value.projectId === captured.projectId && value.value.id === captured.value.id &&
+      value.value.item.id === captured.value.item.id && value.generation === captured.generation;
+  }
+  function prepareClose(): boolean {
+    const value = current.current;
+    if (!value || composing.current) return true;
+    if (closeAttempt.current && sameClose(value, closeAttempt.current)) return true;
+    closeAttempt.current = null; deleteIntent.current = null;
+    if (pending.current?.command.type === 'text.delete' || value.content.runs.some(run => run.text.trim())) {
+      closeAttempt.current = value; return true;
+    }
+    const snapshot = project(), target = snapshot?.texts?.find(text => text.id === value.value.id);
+    const connectors = snapshot && incidentConnectorVersions(snapshot, value.value.item.id);
+    if (!snapshot || snapshot.project.id !== value.projectId || !target || target.item.id !== value.value.item.id ||
+      target.versionId !== value.value.versionId || target.item.versionId !== value.value.item.versionId || !connectors) {
+      setError('请先确认原文字和完整连线投影，再明确结束编辑'); return false;
+    }
+    deleteIntent.current = { session: structuredClone(value), connectors }; closeAttempt.current = value; return true;
+  }
+  async function flush(close = false, closing: TextSession | null = null): Promise<boolean> {
     clearTimers();
     if (composing.current) {
       if (close) deferredClose.current = true;
       return false;
     }
+    if (close && !current.current) return saving.current ? await saving.current : true;
+    if (close && !closing) {
+      if (!closeAttempt.current && !prepareClose()) return false;
+      closing = closeAttempt.current;
+    }
+    // Waiting for an ACK cannot turn an older finish into a later draft's delete.
+    if (close && closing && (closeAttempt.current !== closing || !sameClose(current.current, closing))) {
+      if (closeAttempt.current === closing) { closeAttempt.current = null; deleteIntent.current = null; }
+      if (current.current?.projectId === closing.projectId && current.current.value.id === closing.value.id)
+        setError('文字已变化，请再次明确结束编辑');
+      return false;
+    }
     if (saving.current) {
       if (!(await saving.current)) return false;
-      return flush(close);
+      return flush(close, closing);
     }
     const value = current.current;
     if (!value) return true;
@@ -82,19 +119,21 @@ export function useTextSave(
       if (close) update(null);
       return true;
     }
+    const captured = empty ? (deleteIntent.current?.session ?? value) : value;
     const submitted = pending.current ?? {
-      session: value,
+      session: captured,
       command: empty
         ? {
             commandId: crypto.randomUUID(),
-            projectId: value.projectId,
+            projectId: captured.projectId,
             type: "text.delete",
             expected: {
-              text: value.value.versionId,
-              pose: value.value.item.versionId,
+              text: captured.value.versionId,
+              pose: captured.value.item.versionId,
+              connectors: deleteIntent.current!.connectors,
             },
-            editGroup: value.group,
-            payload: { id: value.value.id },
+            editGroup: captured.group,
+            payload: { id: captured.value.id },
           }
         : {
             commandId: crypto.randomUUID(),
@@ -111,6 +150,18 @@ export function useTextSave(
     saving.current = (async () => {
       try {
         const receipt = await api.execute(submitted.command);
+        const intent = deleteIntent.current;
+        // Only this original save may advance the captured text version. The
+        // incident set stays fixed even if the following read includes peers.
+        if (submitted.command.type === 'text.edit' && intent &&
+          intent.session.projectId === submitted.session.projectId &&
+          intent.session.value.id === submitted.session.value.id &&
+          intent.session.value.item.id === submitted.session.value.item.id &&
+          intent.session.value.versionId === submitted.command.expected &&
+          receipt.commandId === submitted.command.commandId && receipt.projectId === submitted.command.projectId && receipt.textVersions?.text) {
+          intent.session = { ...intent.session, value: { ...intent.session.value,
+            content: submitted.session.content, versionId: receipt.textVersions.text } };
+        }
         const latest = await api.project(submitted.session.projectId);
         publish(latest);
         const newer = current.current;
@@ -162,7 +213,7 @@ export function useTextSave(
     saving.current = null;
     setWorking(false);
     if (!result) return false;
-    if (close) return flush(true);
+    if (close) return flush(true, closing);
     if (
       current.current &&
       current.current.generation > current.current.confirmed
@@ -171,6 +222,7 @@ export function useTextSave(
     return true;
   }
   function begin(value: Omit<TextSession, "generation" | "confirmed">) {
+    deleteIntent.current = null; closeAttempt.current = null;
     update({ ...value, generation: 0, confirmed: 0 });
   }
   function change(content: TextContent) {
@@ -219,6 +271,7 @@ export function useTextSave(
     begin,
     change,
     compose,
+    prepareClose,
     flush,
     error,
     recoveries,

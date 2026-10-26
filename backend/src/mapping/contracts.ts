@@ -1,3 +1,4 @@
+import { ConnectorCommands, type CanvasConnector, type ConnectorChange } from './connector-contracts.js';
 import { ImageCommands, type CanvasImage, type ImageChange } from './image-contracts.js';
 import { TagCommandSchema } from './tag-contracts.js';
 import { TextCommands, type CanvasText, type TextChange } from './text-contracts.js';
@@ -26,6 +27,7 @@ const BodyInput = {
 };
 export { TagCommandSchema } from './tag-contracts.js';
 export const MappingCommand = z.discriminatedUnion('type', [
+  ...ConnectorCommands.options,
   ...ImageCommands.options,
   StrokeCreateCommand,
   StrokeDeleteCommand,
@@ -49,7 +51,7 @@ export const MappingCommand = z.discriminatedUnion('type', [
     .object({
       ...Envelope,
       type: z.literal('thought.delete'),
-      expected: z.object({ thought: Id, body: Id, pose: Id, appearance: Id.nullable(), cardTags: Id.nullable().optional() }).strict(),
+      expected: z.object({ thought: Id, body: Id, pose: Id, appearance: Id.nullable(), cardTags: Id.nullable().optional(), connectors: z.record(Id, Id).optional() }).strict(),
       payload: z.object({ id: Id }).strict(),
     })
     .strict(),
@@ -231,6 +233,7 @@ export interface Card {
 }
 export interface Tag { id: string; versionId: string; name: string; color: string; deleted: boolean }
 export interface ProjectState {
+  connectors?: CanvasConnector[];
   images?: CanvasImage[];
   project: Project;
   cards: Card[];
@@ -240,6 +243,8 @@ export interface ProjectState {
   strokes?: CanvasStroke[];
 }
 export interface Receipt {
+  cardPoseVersions?: Record<string, string>;
+  connectorVersions?: Record<string, string>;
   imageVersions?: { image: string; pose: string };
   strokeVersions?: { stroke: string; pose: string };
   shapeVersions?: { shape: string; pose: string };
@@ -256,7 +261,7 @@ export interface Receipt {
 export type VersionQuery = {
   type: 'version';
   projectId: string;
-  domain: 'body' | 'pose' | 'appearance' | 'tag' | 'cardTags' | 'shape' | 'stroke' | 'image';
+  domain: 'body' | 'pose' | 'appearance' | 'tag' | 'cardTags' | 'shape' | 'stroke' | 'image' | 'connector';
   id: string;
   versionId: string;
 };
@@ -276,6 +281,7 @@ export type ReadQuery =
   | { type: 'project'; projectId: string }
   | VersionQuery;
 export interface Change extends Receipt {
+  connectorChanges?: ConnectorChange[];
   imageChanges?: ImageChange[];
   imageChange?: ImageChange;
   strokeChange?: StrokeChange;

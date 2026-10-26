@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { CanvasImage } from '../../backend/src/mapping/image-contracts';
 import type { Command, ProjectState } from './api';
+import { incidentConnectorVersions } from './connector-deletion';
 export type ImagePose = CanvasImage['item']['pose'];
 // Only the execute boundary may classify a write as rejected. A failed read
 // after an acknowledged write still requires confirmation of that request.
@@ -80,9 +81,19 @@ export function useImageGeometry(authority: () => ProjectState | null, commit: (
   function operate(value: CanvasImage, direction: 'left' | 'right' | 'delete' | 'restore') {
     const current = authority();
     if (!current || historyBlocked() || gesture.current || request.current) return;
+    if (direction === 'delete') {
+      const visible = current.images?.find(image => image.id === value.id && image.item.id === value.item.id);
+      const connectors = incidentConnectorVersions(current, value.item.id);
+      if (!visible || visible.versionId !== value.versionId || visible.item.versionId !== value.item.versionId || !connectors) {
+        setError('请先确认原图片和完整连线投影，再明确删除'); return;
+      }
+      send({ commandId: crypto.randomUUID(), projectId: current.project.id, type: 'image.delete',
+        expected: { image: value.versionId, pose: value.item.versionId, connectors }, payload: { id: value.id } });
+      return;
+    }
     const command: Command = { commandId: crypto.randomUUID(), projectId: current.project.id,
       expected: { image: value.versionId, pose: value.item.versionId },
-      ...(direction === 'restore' ? { type: 'image.crop', payload: { id: value.id, crop: { x: 0, y: 0, width: 1, height: 1 } } } : direction === 'delete' ? { type: 'image.delete', payload: { id: value.id } } : { type: 'image.rotate', payload: { id: value.id, direction } }) };
+      ...(direction === 'restore' ? { type: 'image.crop', payload: { id: value.id, crop: { x: 0, y: 0, width: 1, height: 1 } } } : { type: 'image.rotate', payload: { id: value.id, direction } }) };
     send(command);
   }
   return { poses, dragging, pending, cropping, beginCrop, finishCrop, start, preview, finish, adjust, cancel, operate, error, retry, rejected, abandon,

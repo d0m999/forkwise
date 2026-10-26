@@ -1,3 +1,5 @@
+import type { CanvasConnector } from '../../backend/src/mapping/connector-contracts';
+import type { ConnectorIndex } from '../../backend/src/mapping/compact-contracts';
 import type { CanvasImage, ImageVersion } from '../../backend/src/mapping/image-contracts';
 import type { ImageIndex } from '../../backend/src/mapping/compact-contracts';
 import type { CanvasText } from '../../backend/src/mapping/text-contracts';
@@ -175,6 +177,23 @@ export async function readCompactMap(
       throw new Error('图片版本与地图快照不一致，请重新读取');
     images.push({ ...value, kind: 'image', item: item.item });
   }
+  const connectorPage = await collect<ConnectorIndex>({ view: 'connector-index', snapshot: index.first.snapshot });
+  if (connectorPage.first.revision !== index.first.revision || connectorPage.first.snapshot !== index.first.snapshot)
+    throw new Error('连线索引与地图快照不一致，请重新读取');
+  const connectors: CanvasConnector[] = [];
+  for (const item of [...connectorPage.items].sort((a, b) => a.order - b.order)) {
+    const detail = await collect<DetailChunk>({ view: 'connector-detail', connectorId: item.id, snapshot: index.first.snapshot });
+    const target = detail.first.target;
+    if (detail.first.revision !== index.first.revision || detail.first.snapshot !== index.first.snapshot ||
+      !target || !('connectorId' in target) || target.connectorId !== item.id || target.versionId !== item.versionId ||
+      detail.items.some((chunk, i) => chunk.id !== item.id || chunk.chunkIndex !== i || chunk.chunkCount !== detail.items.length))
+      throw new Error('连线详情与地图快照不一致，请重新读取');
+    const value = JSON.parse(detail.items.map(chunk => chunk.jsonText).join('')) as CanvasConnector;
+    if (value.id !== item.id || value.kind !== 'connector' || value.versionId !== item.versionId || value.path !== item.path ||
+      JSON.stringify(value.start) !== JSON.stringify(item.start) || JSON.stringify(value.end) !== JSON.stringify(item.end))
+      throw new Error('连线端点版本与地图快照不一致，请重新读取');
+    connectors.push(value);
+  }
   return {
     project: index.first.project,
     cards,
@@ -183,6 +202,7 @@ export async function readCompactMap(
     shapes,
     strokes,
     images,
+    connectors,
     snapshot: index.first.snapshot,
   };
 }

@@ -1,3 +1,5 @@
+import type { CanvasConnector } from './connector-contracts.js';
+import { createConnector, reconnectConnector, changeConnectorPath, moveConnector, deleteConnector, prepareIncidentConnectorDeletion, applyIncidentConnectorDeletion, readConnectors } from './connector.js';
 import { cropImage, createImage, readImages, transformImage, rotateImage, deleteImage } from './image.js';
 import type { ImageVersion } from './image-contracts.js';
 import { moveCanvas } from './canvas-move.js';
@@ -95,7 +97,8 @@ export class Mapping {
   read(query: VersionQuery & { domain: 'shape' }, actor: Principal): ShapeVersion;
   read(query: VersionQuery & { domain: 'stroke' }, actor: Principal): StrokeVersion;
   read(query: VersionQuery & { domain: 'image' }, actor: Principal): ImageVersion;
-  read(query: VersionQuery, actor: Principal): Card['body'] | Card['item'] | Card['appearance'] | Tag | NonNullable<Card['cardTags']> | ShapeVersion | StrokeVersion | ImageVersion;
+  read(query: VersionQuery & { domain: 'connector' }, actor: Principal): CanvasConnector;
+  read(query: VersionQuery, actor: Principal): Card['body'] | Card['item'] | Card['appearance'] | Tag | NonNullable<Card['cardTags']> | ShapeVersion | StrokeVersion | ImageVersion | CanvasConnector;
   read(
     query: ReadQuery,
     actor: Principal,
@@ -113,6 +116,7 @@ export class Mapping {
     | ShapeVersion
     | StrokeVersion
     | ImageVersion
+    | CanvasConnector
     | MediaAsset
     | SearchStateView
     | Promise<SearchResult> {
@@ -161,7 +165,7 @@ export class Mapping {
           | { value: string }
           | undefined;
         requireThat(row, 'NOT_FOUND', '版本不存在于当前项目', 404);
-        return JSON.parse(row.value) as Card['body'] | Card['item'] | ShapeVersion | StrokeVersion | ImageVersion;
+        return JSON.parse(row.value) as Card['body'] | Card['item'] | ShapeVersion | StrokeVersion | ImageVersion | CanvasConnector;
       }
       const project = this.project(query.projectId);
       if (query.type === 'history') return readHistory(this.db, project);
@@ -172,7 +176,7 @@ export class Mapping {
           )
           .all(query.projectId) as { value: string }[]
       ).map((row) => JSON.parse(row.value) as Card);
-      return { project, cards, images: readImages(this.db, project.id), tags: readTags(this.db, project.id), texts: readTexts(this.db, project.id), shapes: readShapes(this.db, project.id), strokes: readStrokes(this.db, project.id) };
+      return { project, cards, connectors: readConnectors(this.db, project.id), images: readImages(this.db, project.id), tags: readTags(this.db, project.id), texts: readTexts(this.db, project.id), shapes: readShapes(this.db, project.id), strokes: readStrokes(this.db, project.id) };
     })();
   }
 
@@ -289,6 +293,7 @@ export class Mapping {
         };
         let before: Card | Project | null = null;
         let after: Card | Project | null;
+        let connectorChanges: Change['connectorChanges'];
         let cardChanges: Change['cardChanges'];
         let tagChange: Change['tagChange'];
         let textChange: Change['textChange'];
@@ -301,12 +306,27 @@ export class Mapping {
         let travel: ReturnType<typeof travelHistory> | undefined;
         let revision: number;
         let changedIds: string[];
-        if (command.type === 'image.create' || command.type === 'image.crop' || command.type === 'image.transform' || command.type === 'image.rotate' || command.type === 'image.delete') {
+        if (command.type === 'connector.create' || command.type === 'connector.reconnect' || command.type === 'connector.path' || command.type === 'connector.move' || command.type === 'connector.delete') {
           const project = this.project(command.projectId);
+          const result = command.type === 'connector.create' ? { before: null, after: createConnector(this.db, command) } : command.type === 'connector.reconnect' ? reconnectConnector(this.db, command) : command.type === 'connector.path' ? changeConnectorPath(this.db, command) : command.type === 'connector.move' ? moveConnector(this.db, command) : deleteConnector(this.db, command);
+          if (!result) return unchanged(project.revision);
+          connectorChanges = [result];
+          after = null; changedIds = [(result.after ?? result.before!).id]; revision = project.revision + 1;
+          this.db.prepare('UPDATE mapping_projects SET revision=? WHERE id=?').run(revision, project.id);
+        } else if (command.type === 'image.create' || command.type === 'image.crop' || command.type === 'image.transform' || command.type === 'image.rotate' || command.type === 'image.delete') {
+          const project = this.project(command.projectId);
+          let incident: NonNullable<Change['connectorChanges']> = [];
+          if (command.type === 'image.delete') {
+            const host = readImages(this.db, project.id).find(value => value.id === command.payload.id);
+            requireThat(host, 'NOT_FOUND', '图片不存在于当前项目', 404);
+            incident = prepareIncidentConnectorDeletion(this.db, project.id, host.item.id, command.expected.connectors ?? {});
+          }
           imageChange = command.type === 'image.create' ? { before: null, after: createImage(this.db, command) } : command.type === 'image.crop' ? cropImage(this.db, command) ?? undefined : command.type === 'image.delete' ? deleteImage(this.db, command) : command.type === 'image.rotate' ? rotateImage(this.db, command) : transformImage(this.db, command) ?? undefined;
           if (!imageChange) return unchanged(project.revision);
+          applyIncidentConnectorDeletion(this.db, project.id, incident);
+          if (incident.length) connectorChanges = incident;
           const image = imageChange.after ?? imageChange.before!;
-          after = null; changedIds = [...(imageChange.before?.versionId !== imageChange.after?.versionId ? [image.id] : []), ...(imageChange.before?.item.versionId !== imageChange.after?.item.versionId ? [image.item.id] : [])]; revision = project.revision + 1;
+          after = null; changedIds = [...new Set([...(imageChange.before?.versionId !== imageChange.after?.versionId ? [image.id] : []), ...(imageChange.before?.item.versionId !== imageChange.after?.item.versionId ? [image.item.id] : []), ...incident.map(change => change.before!.id)])]; revision = project.revision + 1;
           this.db.prepare('UPDATE mapping_projects SET revision=? WHERE id=?').run(revision, project.id);
         } else if (command.type === 'stroke.create' || command.type === 'stroke.delete') {
           const project = this.project(command.projectId);
@@ -324,6 +344,12 @@ export class Mapping {
           this.db.prepare('UPDATE mapping_projects SET revision=? WHERE id=?').run(revision, project.id);
         } else if (command.type === 'shape.create' || command.type === 'shape.edit' || command.type === 'shape.move' || command.type === 'shape.delete' || command.type === 'shape.transform') {
           const project = this.project(command.projectId);
+          let incident: NonNullable<Change['connectorChanges']> = [];
+          if (command.type === 'shape.delete') {
+            const host = readShapes(this.db, project.id).find(value => value.id === command.payload.id);
+            requireThat(host, 'NOT_FOUND', '形状不存在于当前项目', 404);
+            incident = prepareIncidentConnectorDeletion(this.db, project.id, host.item.id, command.expected.connectors ?? {});
+          }
           const result = command.type === 'shape.create'
             ? { before: null, after: createShape(this.db, command) }
             : command.type === 'shape.edit' ? editShape(this.db, command)
@@ -331,21 +357,32 @@ export class Mapping {
             : command.type === 'shape.transform' ? transformShape(this.db, command) : deleteShape(this.db, command);
           if (!result) return unchanged(project.revision);
           shapeChange = result;
+          applyIncidentConnectorDeletion(this.db, project.id, incident);
+          if (incident.length) connectorChanges = incident;
           const shape = result.after ?? result.before!;
           after = null;
           changedIds = [
             ...(result.before?.versionId !== result.after?.versionId ? [shape.id] : []),
             ...(result.before?.item.versionId !== result.after?.item.versionId ? [shape.item.id] : []),
+            ...incident.map(change => change.before!.id),
           ];
           revision = project.revision + 1;
           this.db.prepare('UPDATE mapping_projects SET revision=? WHERE id=?').run(revision, project.id);
         } else if (command.type === 'text.create' || command.type === 'text.edit' || command.type === 'text.transform' || command.type === 'text.move' || command.type === 'text.delete' || command.type === 'text.copy' || command.type === 'text.layout') {
           const project = this.project(command.projectId);
+          let incident: NonNullable<Change['connectorChanges']> = [];
+          if (command.type === 'text.delete') {
+            const host = readTexts(this.db, project.id).find(value => value.id === command.payload.id);
+            requireThat(host, 'NOT_FOUND', '文字不存在于当前项目', 404);
+            incident = prepareIncidentConnectorDeletion(this.db, project.id, host.item.id, command.expected.connectors ?? {});
+          }
           const result = writeText(this.db, command);
           if (!result) return unchanged(project.revision);
           textChange = result;
+          applyIncidentConnectorDeletion(this.db, project.id, incident);
+          if (incident.length) connectorChanges = incident;
           after = null;
-          changedIds = [...(result.before?.versionId !== result.after?.versionId ? [(result.after ?? result.before)!.id] : []), ...(result.before?.item.versionId !== result.after?.item.versionId ? [(result.after ?? result.before)!.item.id] : [])];
+          changedIds = [...new Set([...(result.before?.versionId !== result.after?.versionId ? [(result.after ?? result.before)!.id] : []), ...(result.before?.item.versionId !== result.after?.item.versionId ? [(result.after ?? result.before)!.item.id] : []), ...incident.map(change => change.before!.id)])];
           revision = project.revision + 1;
           this.db.prepare('UPDATE mapping_projects SET revision=? WHERE id=?').run(revision, project.id);
         } else if (command.type === 'history.undo' || command.type === 'history.redo') {
@@ -358,6 +395,7 @@ export class Mapping {
           );
           travel = travelHistory(this.db, project, command.type, command.payload.actionId);
           ({ before, after, changedIds } = travel);
+          connectorChanges = travel.connectorChanges;
           cardChanges = travel.cardChanges;
           tagChange = travel.tagChange;
           textChange = travel.textChange;
@@ -422,7 +460,14 @@ export class Mapping {
           completeMediaHistory(this.db,project.id,card.id,command.expected,replacement,revision);
         } else if (command.type === 'thought.delete') {
           const project = this.project(command.projectId);
+          const row = this.db.prepare('SELECT value FROM mapping_cards WHERE id=? AND project_id=?').get(command.payload.id, project.id) as { value: string } | undefined;
+          requireThat(row, 'NOT_FOUND', '卡片不存在于当前项目', 404);
+          const card = JSON.parse(row.value) as Card;
+          const incident = prepareIncidentConnectorDeletion(this.db, project.id, card.item.id, command.expected.connectors ?? {});
           ({ before, after, changedIds } = deleteCard(this.db, command));
+          applyIncidentConnectorDeletion(this.db, project.id, incident);
+          if (incident.length) connectorChanges = incident;
+          changedIds = [...new Set([...changedIds, ...incident.map(change => change.before!.id)])];
           revision = project.revision + 1;
           this.db.prepare('UPDATE mapping_projects SET revision=? WHERE id=?').run(revision, project.id);
         } else if (command.type === 'pose.batch') {
@@ -651,6 +696,9 @@ export class Mapping {
           projectId: command.projectId,
           revision,
           changedIds,
+          ...(command.type === 'pose.batch' && cardChanges ? { cardPoseVersions: Object.fromEntries(cardChanges.map(({ after }) => [after.item.id, after.item.versionId])) } : {}),
+          ...(connectorChanges?.some(change => !change.after) ? { deletedIds: connectorChanges.filter(change => !change.after).map(change => change.before!.id) } : {}),
+          ...(connectorChanges ? { connectorVersions: Object.fromEntries(connectorChanges.filter(change => change.after).map(change => [change.after!.id, change.after!.versionId])) } : {}),
           ...(imageChange?.after ? { imageVersions: { image: imageChange.after.versionId, pose: imageChange.after.item.versionId } } : {}),
           ...(strokeChange?.after ? { strokeVersions: { stroke: strokeChange.after.versionId, pose: strokeChange.after.item.versionId } } : {}),
           ...(shapeChange?.after ? { shapeVersions: { shape: shapeChange.after.versionId, pose: shapeChange.after.item.versionId } } : {}),
@@ -677,6 +725,7 @@ export class Mapping {
           ...receipt,
           before,
           after,
+          ...(connectorChanges ? { connectorChanges } : {}),
           ...(imageChange ? { imageChange } : {}),
           ...(imageChanges ? { imageChanges } : {}),
           ...(tagChange ? { tagChange } : {}),

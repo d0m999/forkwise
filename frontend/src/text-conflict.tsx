@@ -1,5 +1,6 @@
 import { useRef, useState } from "react";
 import { api, MappingError, type ProjectState, type Command } from "./api";
+import { incidentConnectorVersions } from "./connector-deletion";
 import {
   TextContentSchema,
   TextPoseSchema,
@@ -17,12 +18,17 @@ type Conflict = {
   projectId: string;
   local: CanvasText;
   remote: CanvasText | null;
+  remoteConnectors?: Record<string, string> | undefined;
   rejected: Command;
   followup?: TextContent;
   replaceContent?: boolean;
   resolution?: { copy: Create; followup?: Create; replace?: Replacement };
 };
 const prefix = "forkwise:text-conflict-recovery:v1:";
+function remoteSnapshot(state: ProjectState, id: string) {
+  const remote = state.texts?.find(text => text.id === id) ?? null;
+  return { remote, remoteConnectors: remote ? incidentConnectorVersions(state, remote.item.id) ?? undefined : undefined };
+}
 function validText(value: CanvasText) {
   return (
     value &&
@@ -56,6 +62,9 @@ export function useTextConflicts(publish: (value: ProjectState) => void) {
           (c.remote !== null && !validText(c.remote))
         )
           continue;
+        if (c.remoteConnectors !== undefined && (!c.remoteConnectors || typeof c.remoteConnectors !== 'object' ||
+          Array.isArray(c.remoteConnectors) || !Object.entries(c.remoteConnectors).every(([id, version]) =>
+            id.length > 0 && id.length <= 160 && typeof version === 'string' && version.length > 0 && version.length <= 160))) continue;
         if (
           !TextCommands.safeParse(c.rejected).success ||
           c.rejected.projectId !== c.projectId ||
@@ -103,7 +112,7 @@ export function useTextConflicts(publish: (value: ProjectState) => void) {
     store({
       projectId,
       local,
-      remote: latest.texts?.find((t) => t.id === local.id) ?? null,
+      ...remoteSnapshot(latest, local.id),
       rejected,
       ...(followup ? { followup } : {}),
       ...(replaceContent ? { replaceContent } : {}),
@@ -142,7 +151,7 @@ export function useTextConflicts(publish: (value: ProjectState) => void) {
           const latest = await api.project(value.projectId);
           store({
             ...retained,
-            remote: latest.texts?.find((t) => t.id === value.local.id) ?? null,
+            ...remoteSnapshot(latest, value.local.id),
           });
           setError("对方再次更新，请重新比较两份文字");
         } else
@@ -165,6 +174,14 @@ export function useTextConflicts(publish: (value: ProjectState) => void) {
       return;
     }
     if (value.rejected.type === "text.copy") choice = "remote";
+    if (choice === 'mine' && value.remote && value.rejected.type === 'text.delete' && value.remoteConnectors === undefined) {
+      try {
+        const latest = await api.project(value.projectId);
+        store({ ...value, ...remoteSnapshot(latest, value.local.id) });
+        setError('已重新读取，请再次明确确认保留我的文字');
+      } catch { setError('无法重新比较原文字和关联线，请保留原记录后重试'); }
+      return;
+    }
     const losing =
       choice === "mine" && value.remote ? value.remote : value.local;
     const pose = losing.item.pose;
@@ -205,7 +222,7 @@ export function useTextConflicts(publish: (value: ProjectState) => void) {
               ? {
                   ...common,
                   type: "text.delete",
-                  expected,
+                  expected: { ...expected, connectors: value.remoteConnectors },
                   payload: { id: value.local.id },
                 }
               : {

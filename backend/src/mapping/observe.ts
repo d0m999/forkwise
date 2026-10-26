@@ -15,33 +15,40 @@ export interface ObserveOptions {
 
 function delta(change: Change): Delta {
   const domains: Delta['domains'] = [];
+  const complete = (): Delta => {
+    for (const connector of change.connectorChanges ?? []) {
+      if (connector.before?.versionId !== connector.after?.versionId)
+        domains.push({ domain: 'connector', id: (connector.after ?? connector.before!).id });
+    }
+    return { ...change, domains, deletedIds: change.deletedIds ?? [] };
+  };
   if (change.imageChange) {
     const { before, after } = change.imageChange;
     const value = after ?? before!;
     if (before?.versionId !== after?.versionId) domains.push({ domain: 'image', id: value.id });
     if (before?.item.versionId !== after?.item.versionId) domains.push({ domain: 'pose', id: value.item.id });
-    return { ...change, domains, deletedIds: change.deletedIds ?? [] };
+    return complete();
   }
   if (change.strokeChange) {
     const { before, after } = change.strokeChange;
     const identity = after ?? before!;
     if (before?.versionId !== after?.versionId) domains.push({ domain: 'stroke', id: identity.id });
     if (before?.item.versionId !== after?.item.versionId) domains.push({ domain: 'pose', id: identity.item.id });
-    return { ...change, domains, deletedIds: change.deletedIds ?? [] };
+    return complete();
   }
   if (change.shapeChange) {
     const { before, after } = change.shapeChange;
     const identity = after ?? before!;
     if (before?.versionId !== after?.versionId) domains.push({ domain: 'shape', id: identity.id });
     if (before?.item.versionId !== after?.item.versionId) domains.push({ domain: 'pose', id: identity.item.id });
-    return { ...change, domains, deletedIds: change.deletedIds ?? [] };
+    return complete();
   }
   if (change.textChange) {
     const { before, after } = change.textChange;
     const identity = after ?? before!;
     if (before?.versionId !== after?.versionId) domains.push({ domain: 'text', id: identity.id });
     if (before?.item.versionId !== after?.item.versionId) domains.push({ domain: 'pose', id: identity.item.id });
-    return { ...change, domains, deletedIds: change.deletedIds ?? [] };
+    return complete();
   }
   for (const image of change.imageChanges ?? []) {
     const identity = image.after ?? image.before!;
@@ -68,7 +75,7 @@ function delta(change: Change): Delta {
     }
     const order = new Map(change.changedIds.map((id, index) => [id, index]));
     domains.sort((a, b) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0));
-    return { ...change, domains, deletedIds: change.deletedIds ?? [] };
+    return complete();
   }
   const card = [change.after, change.before].find(
     (value): value is Card => !!value && 'body' in value,
@@ -85,8 +92,8 @@ function delta(change: Change): Delta {
       domains.push({ domain: 'appearance', id: `appearance:${card.id}` });
     if (before?.cardTags?.versionId !== after?.cardTags?.versionId)
       domains.push({ domain: 'cardTags', id: `cardTags:${card.id}` });
-  } else if (!change.tagChange) domains.push({ domain: 'project', id: change.projectId });
-  return { ...change, domains, deletedIds: change.deletedIds ?? [] };
+  } else if (!change.tagChange && !change.connectorChanges?.length) domains.push({ domain: 'project', id: change.projectId });
+  return complete();
 }
 
 // Called inside Mapping's authorized SQLite read transaction. Cache is read-only.

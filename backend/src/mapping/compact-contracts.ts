@@ -1,3 +1,4 @@
+import type { CanvasConnector } from './connector-contracts.js';
 import type { CanvasImage } from './image-contracts.js';
 import type { CanvasText } from './text-contracts.js';
 import type { CanvasShape } from './shape-contracts.js';
@@ -13,6 +14,8 @@ const common = {
   budget: z.number().int().positive().max(1_048_576).default(131_072),
 };
 export const CompactQuerySchema = z.discriminatedUnion('view', [
+  z.object({ ...common, view: z.literal('connector-index') }).strict(),
+  z.object({ ...common, view: z.literal('connector-detail'), connectorId: z.string().min(1).max(160), snapshot: z.string().uuid() }).strict(),
   z.object({ ...common, view: z.literal('image-index') }).strict(),
   z.object({ ...common, view: z.literal('image-detail'), imageId: z.string().min(1).max(160), snapshot: z.string().uuid() }).strict(),
   z.object({ ...common, view: z.literal('stroke-index') }).strict(),
@@ -68,9 +71,10 @@ export type TextIndex = Omit<CanvasText, 'kind' | 'content'> & { type: 'text'; o
 export type ShapeIndex = Omit<CanvasShape, 'kind' | 'content'> & { type: 'shape'; order: number; content: Omit<CanvasShape['content'], 'shortText'> & { availability: 'not_fetched' } };
 export type StrokeIndex = Omit<CanvasStroke, 'kind' | 'content'> & { type: 'stroke'; order: number; content: Omit<CanvasStroke['content'], 'path'> & { pointCount: number; availability: 'not_fetched' } };
 export type ImageIndex = Omit<CanvasImage, 'kind' | 'content'> & { type: 'image'; order: number; content: { assetId: string; availability: 'not_fetched' } };
-export type CompactItem = ImageIndex | StrokeIndex | ShapeIndex | TextIndex | CardIndex | BodySlice | DetailChunk | Tag;
+export type ConnectorIndex = Omit<CanvasConnector, 'kind'> & { type: 'connector'; order: number };
+export type CompactItem = ConnectorIndex | ImageIndex | StrokeIndex | ShapeIndex | TextIndex | CardIndex | BodySlice | DetailChunk | Tag;
 export interface CompactPage<T = CompactItem> {
-  scope: { types: ('thought' | 'text' | 'shape' | 'stroke' | 'image')[]; relations: 'not_implemented'; order: 'creation_ordinal' };
+  scope: { types: ('thought' | 'text' | 'shape' | 'stroke' | 'image' | 'connector')[]; relations: 'not_implemented' | 'connectors'; order: 'creation_ordinal' };
   project: Project;
   snapshot: string;
   revision: number;
@@ -79,9 +83,9 @@ export interface CompactPage<T = CompactItem> {
   bytes: number;
   totalItems: number;
   coverage: { start: number; end: number; complete: boolean };
-  fidelity: 'index' | 'partial_body' | 'lossless_json_chunks' | 'tags' | 'text-index' | 'shape-index' | 'stroke-index' | 'image-index';
+  fidelity: 'index' | 'partial_body' | 'lossless_json_chunks' | 'tags' | 'text-index' | 'shape-index' | 'stroke-index' | 'image-index' | 'connector-index';
   availability: 'available' | 'deleted' | 'not_found';
-  target?: { imageId: string; versionId?: string } | { cardId: string; bodyId?: string; versionId?: string } | { shapeId: string; versionId?: string } | { strokeId: string; versionId?: string };
+  target?: { connectorId: string; versionId?: string } | { imageId: string; versionId?: string } | { cardId: string; bodyId?: string; versionId?: string } | { shapeId: string; versionId?: string } | { strokeId: string; versionId?: string };
   summary: null;
   nextCursor: string | null;
   items: T[];

@@ -57,7 +57,7 @@ export const TextCommands = z.discriminatedUnion('type', [
     .object({
       ...envelope,
       type: z.literal('text.delete'),
-      expected: z.object({ text: Id, pose: Id }).strict(),
+      expected: z.object({ text: Id, pose: Id, connectors: z.record(Id, Id).optional() }).strict(),
       payload: z.object({ id: Id }).strict(),
     })
     .strict(),

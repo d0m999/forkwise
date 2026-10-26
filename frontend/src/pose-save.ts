@@ -1,4 +1,5 @@
 import { useRef, useState } from "react";
+import type { Receipt } from "../../backend/src/mapping/contracts";
 import {
   api,
   MappingError,
@@ -23,6 +24,7 @@ interface Pending {
 // One completed gesture owns one command. Body ACKs cannot clear its preview.
 export function usePoseSave(
   refresh: (projectId: string) => Promise<ProjectState>,
+  acknowledged?: (command: GeometryCommand, receipt: Receipt) => void,
 ) {
   const [positions, setPositions] = useState<Record<string, Pose>>({});
   const previewPoses = useRef<Record<string, Pose>>({});
@@ -52,7 +54,8 @@ export function usePoseSave(
         if (current.order && !(await current.order.beforeSubmit()))
           throw new Error("请先确认此移动之前的正文保存，再重试布局保存");
         try {
-          await api.execute(current.command);
+          const receipt = await api.execute(current.command);
+          acknowledged?.(current.command, receipt);
         } finally {
           current.order?.afterAttempt();
         }

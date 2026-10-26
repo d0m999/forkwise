@@ -19,6 +19,12 @@ import { CanvasStrokeNode, strokeNodes } from './canvas-stroke';
 import { StrokeTools, type PenKind } from './stroke-tools';
 import { StrokePreview, useStrokeDraw } from './stroke-draw';
 import { StrokeCreateRecovery } from './stroke-create-recovery';
+import { useConnectorCreate } from './connector-create';
+import { useConnectorEdit } from './connector-edit';
+import { captureCardDeletion, incidentConnectorVersions } from './connector-deletion';
+import { ConnectorCreateControls, ConnectorEndpointControls, ConnectorHandles, ConnectorPathControls } from './connector-controls';
+import { useConnectorTargets } from './connector-targets';
+import { CanvasConnector, ConnectorPreview, ConnectorEntries } from './canvas-connector';
 import { ShapeTools, type ShapeType } from './shape-tools';
 import { useCanvasTexts } from './text-session';
 import { ProjectSearch } from './project-search';
@@ -31,7 +37,7 @@ import { bodyText } from "../../backend/src/mapping/body-text";
 import { WritingBoard } from "./writing-board";
 import { ParagraphEditor, type TextCursor } from "./paragraph-editor";
 import type { Block } from "../../backend/src/mapping/contracts";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { createRoot } from "react-dom/client";
 import {
   Background,
@@ -247,6 +253,7 @@ function Workspace() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [state, setState] = useState<ProjectState | null>(null);
   const authority = useRef<ProjectState | null>(null);
+  const [selectedConnector, setSelectedConnector] = useState<string | null>(null);
   const strokeSelected = selection.some(id => state?.strokes?.some(stroke => stroke.item.id === id));
   const [syncNotice, setSyncNotice] = useState("");
   const [nav, setNav] = useState(false),
@@ -469,6 +476,7 @@ function Workspace() {
     command: Command;
     onDone?: () => void;
   } | null>(null);
+  const cardDeletion = useRef<ReturnType<typeof captureCardDeletion>>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const maxTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const composition = useRef(false),
@@ -487,14 +495,15 @@ function Workspace() {
     { type: "history.undo" | "history.redo" }
   > | null>(null);
   const historyActionId = useRef<string | null>(null);
-  const historyBlocked = historyBusy || !!historyCommand.current;
+  const connectorPending = useRef<() => boolean>(() => false);
+  const historyBlocked = historyBusy || !!historyCommand.current || connectorPending.current();
   async function travel(
     direction: "undo" | "redo" | "retry",
     restoreActionId?: string,
   ) {
     const ownerProjectId = authority.current?.project.id;
     if (
-      !ownerProjectId || imageGeometry.hasPending(ownerProjectId) || imageInput.hasPending(ownerProjectId) ||
+      !ownerProjectId || connectorPending.current() || imageGeometry.hasPending(ownerProjectId) || imageInput.hasPending(ownerProjectId) ||
       historyLock.current ||
       composition.current ||
       busy ||
@@ -504,7 +513,7 @@ function Workspace() {
     )
       return;
     if (!(await shapeMove.flush()) || !(await shapeText.finish()) || !(await texts.finish())) return;
-    if (authority.current?.project.id !== ownerProjectId || imageGeometry.hasPending(ownerProjectId) || imageInput.hasPending(ownerProjectId) ||
+    if (authority.current?.project.id !== ownerProjectId || connectorPending.current() || imageGeometry.hasPending(ownerProjectId) || imageInput.hasPending(ownerProjectId) ||
       historyLock.current || composition.current || pendingAction.current || strokeDraw.hasPending() ||
       (historyCommand.current ? direction !== "retry" : direction === "retry")) return;
     editorEpoch.current++;
@@ -700,6 +709,7 @@ function Workspace() {
       }
     }
     authority.current = value;
+    setSelectedConnector(previous => current?.project.id === value.project.id && value.connectors?.some(line => line.id === previous) ? previous : null);
     setSelection((previous) =>
       current?.project.id !== value.project.id
         ? []
@@ -815,8 +825,10 @@ function Workspace() {
       window.removeEventListener("focus", resume);
     };
   }, [state?.project.id]);
-  const pose = usePoseSave(refresh);
-  const cardLayout = useCardLayoutSave(refresh, () => authority.current);
+  const pose = usePoseSave(refresh,
+    (command, receipt) => cardDeletion.current?.acknowledge(command, receipt));
+  const cardLayout = useCardLayoutSave(refresh, () => authority.current,
+    (command, receipt) => cardDeletion.current?.acknowledge(command, receipt));
   const appearance = useAppearanceSave(
     () => authority.current,
     refresh,
@@ -824,6 +836,7 @@ function Workspace() {
       breakBodyGroup();
       return await shapeText.finish() && await flush();
     },
+    (command, receipt) => cardDeletion.current?.acknowledge(command, receipt),
   );
   const imageGeometry = useImageGeometry(() => authority.current, action, refresh,
     () => historyLock.current || !!historyCommand.current);
@@ -838,13 +851,64 @@ function Workspace() {
       cardLayout.hasPending() || pose.hasPending(),
     point: client => flow.screenToFlowPosition(client), commit: action,
   });
+  const connectorTargets = useConnectorTargets(state, client => flow.screenToFlowPosition(client, { snapToGrid: false }));
+  function connectorCreationBlocked() {
+    return busy || historyBusy || !!historyCommand.current || composition.current || !!pendingAction.current || strokeDraw.hasPending() ||
+      shapeMove.hasPending() || !!shapeText.session || texts.hasPending() || appearance.hasPending() || cardLayout.hasPending() || pose.hasPending();
+  }
+  const connectorCreate = useConnectorCreate({
+    current: () => authority.current,
+    blocked: () => connectorCreationBlocked() || connectorEdit.hasPending(),
+    prepare: async projectId => {
+      const epoch = ++editorEpoch.current;
+      if (!(await shapeMove.flush()) || !(await shapeText.finish()) || !(await texts.finish()) || !(await appearance.flush()) ||
+        !(await cardLayout.flush()) || !(await pose.flush()) || !(await flush())) return false;
+      if (authority.current?.project.id !== projectId || editorEpoch.current !== epoch) return false;
+      strokeDraw.setMode(null); setSelection([]); setSelectedConnector(null); setPlacing(false); setShapePreset(null); texts.setPlacing(false); setPanTool(false);
+      return true;
+    },
+    point: client => flow.screenToFlowPosition(client, { snapToGrid: false }),
+    center: () => {
+      const element = document.querySelector('.canvas .react-flow');
+      if (!element) return null;
+      const rect = element.getBoundingClientRect();
+      return flow.screenToFlowPosition({ x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 }, { snapToGrid: false });
+    },
+    origin: client => connectorTargets.origin(client),
+    execute: command => api.execute(command), read: projectId => api.project(projectId),
+    publish: (value, id) => {
+      if (authority.current?.project.id !== value.project.id) return;
+      updateState(value); setSelection([]); setSelectedConnector(value.connectors?.some(line => line.id === id) ? id : null);
+      setStatus('已保存到本机'); setError('');
+    },
+  });
+  connectorPending.current = connectorCreate.hasPending;
+  const connectorEdit = useConnectorEdit({
+    current: () => authority.current,
+    blocked: () => busy || historyBlocked || composition.current || !!pendingAction.current || connectorCreate.hasPending() || strokeDraw.hasPending(),
+    point: client => flow.screenToFlowPosition(client, { snapToGrid: false }), origin: connectorTargets.origin,
+    resolve: connectorTargets.resolve,
+    commit: async (command, done) => {
+      let submitted = false, confirmed = false;
+      try { confirmed = (await action(command, done, () => { submitted = true; return true; })) === true; }
+      catch (error) { fail(error); }
+      return { submitted, confirmed };
+    },
+  });
+  function beginCreationToolChoice() {
+    const epoch = ++editorEpoch.current;
+    connectorEdit.cancel();
+    connectorCreate.deactivate();
+    return epoch;
+  }
   async function chooseStroke(kind: PenKind) {
     const projectId = authority.current?.project.id;
     if (!projectId || busy || historyBlocked || composition.current || pendingAction.current ||
       shapeAppearance || shapeRecoveryRunning.current || strokeDraw.hasPending()) return;
+    const epoch = beginCreationToolChoice();
     if (!(await shapeMove.flush()) || !(await shapeText.finish()) || !(await texts.finish()) ||
       !(await appearance.flush()) || !(await cardLayout.flush()) || !(await pose.flush()) || !(await flush())) return;
-    if (authority.current?.project.id !== projectId || historyLock.current || historyCommand.current ||
+    if (authority.current?.project.id !== projectId || editorEpoch.current !== epoch || historyLock.current || historyCommand.current ||
       composition.current || pendingAction.current) return;
     setSelection([]); setPlacing(false); setShapePreset(null); texts.setPlacing(false); setPanTool(false);
     strokeDraw.setMode(kind);
@@ -898,6 +962,8 @@ function Workspace() {
     zoom: () => flow.getZoom(),
   });
   function cancelGesture() {
+    connectorEdit.cancel();
+    connectorCreate.cancelDraft();
     strokeDraw.cancel();
     pose.cancel();
     canvasMove.cancel();
@@ -941,7 +1007,7 @@ function Workspace() {
       )
         return;
       setShapePreset(null);
-      if (strokeDraw.hasGesture() || pose.dragging || canvasMove.dragging || shapeMove.dragging || marqueeSelection.current) {
+      if (connectorEdit.hasGesture() || connectorCreate.hasGesture() || strokeDraw.hasGesture() || pose.dragging || canvasMove.dragging || shapeMove.dragging || marqueeSelection.current) {
         event.preventDefault();
         cancel();
       }
@@ -1119,6 +1185,7 @@ function Workspace() {
     saving.current = (async () => {
       try {
         const receipt = await api.execute(command);
+        cardDeletion.current?.acknowledge(command, receipt);
         await refresh(current.projectId);
         for (const newer of [
           ...closedDrafts.current,
@@ -1379,7 +1446,8 @@ function Workspace() {
       resolving.current = false;
     }
   }
-  async function action(command: Command, onDone?: () => void) {
+  async function action(command: Command, onDone?: () => void, beforeSubmit?: () => boolean) {
+    if (connectorCreate.hasPending()) return false;
     const imageCommand = command.type.startsWith('image.');
     const backgroundImage = () => imageCommand && command.projectId !== authority.current?.project.id;
     const finishImage = async () => {
@@ -1417,12 +1485,15 @@ function Workspace() {
     if (command.type === "stroke.create" && command.projectId !== authority.current?.project.id) {
       fail(new Error("笔迹所属项目已变化，请在原项目明确恢复")); return false;
     }
+    if (beforeSubmit && !beforeSubmit()) return false;
     pendingAction.current = { command, ...(onDone ? { onDone } : {}) };
     setBusy(true);
     setStatus("正在保存…");
+    let executed = false;
     try {
       if (command.type === "stroke.create") { strokeJournal.write(command); scanStrokeRecoveries(); }
       await api.execute(command);
+      executed = true;
       if (command.projectId !== authority.current?.project.id) {
         if (!(await handoff(command.projectId))) return;
       } else {
@@ -1436,6 +1507,13 @@ function Workspace() {
       onDone?.();
       return true;
     } catch (e) {
+      if (!executed && e instanceof MappingError &&
+        ((['connector.reconnect', 'connector.path', 'connector.move', 'connector.delete'].includes(command.type) && ['VERSION_CONFLICT', 'NOT_FOUND'].includes(e.code)) ||
+          (command.type === 'connector.reconnect' && e.code === 'INVALID_ENDPOINT'))) {
+        pendingAction.current = null;
+        onDone?.();
+        try { await refresh(command.projectId); } catch { /* Retain the explicit rejection if the read also fails. */ }
+      }
       if ((command.type === "thought.delete" || command.type === "shape.delete" || command.type === "stroke.delete" || command.type.startsWith("tag.") || command.type === "card.tags") && e instanceof MappingError && ["VERSION_CONFLICT", "TAG_NAME_CONFLICT", "NOT_FOUND", "UNAUTHORIZED", "PROJECT_FORBIDDEN", "UNTRUSTED_PRINCIPAL"].includes(e.code)) {
         pendingAction.current = null;
         try { await refresh(command.projectId); } catch { /* Keep the unconfirmed view; authorization polling owns retraction. */ }
@@ -1468,6 +1546,7 @@ function Workspace() {
   }
   const mediaQueue = useMediaQueue(state?.project.id, state?.cards ?? [], async (command) => {
     if (
+      connectorPending.current() ||
       composition.current ||
       historyLock.current ||
       historyCommand.current ||
@@ -1478,6 +1557,7 @@ function Workspace() {
       return "wait";
     if (!(await flush())) return "wait";
     if (
+      connectorPending.current() ||
       composition.current ||
       historyLock.current ||
       historyCommand.current ||
@@ -1546,14 +1626,28 @@ function Workspace() {
     await action({commandId:crypto.randomUUID(),projectId,type:'body.edit',expected:card.body.versionId,payload:{id:cardId,blocks:after,copyOriginals:true}});
   }
   async function removeCard(id: string) {
-    if (composition.current || busy || historyBlocked || strokeSelected) return;
-    const projectId = authority.current?.project.id;
-    if (!projectId) return;
-    breakBodyGroup();
-    if (!(await appearance.flush()) || !(await cardLayout.flush()) || !(await pose.flush()) || !(await flush())) return;
-    const card = authority.current?.project.id === projectId ? authority.current.cards.find(c => c.id === id) : undefined;
-    if (!card) return;
-    await action({ commandId: crypto.randomUUID(), projectId, type: "thought.delete", expected: { thought: card.versionId, body: card.body.versionId, pose: card.item.versionId, appearance: card.appearance?.versionId ?? null, cardTags: card.cardTags?.versionId ?? null }, payload: { id } });
+    if (composition.current || busy || historyBlocked || strokeSelected || cardDeletion.current || pendingAction.current) return;
+    const snapshot = authority.current, visible = snapshot?.cards.find(card => card.id === id);
+    if (!snapshot || !visible) return;
+    const intent = captureCardDeletion(snapshot, id);
+    if (!intent) { fail(new Error('请等待完整连线投影后重试删除')); return; }
+    cardDeletion.current = intent;
+    try {
+      breakBodyGroup();
+      if (!(await appearance.flush()) || !(await cardLayout.flush()) || !(await pose.flush()) || !(await flush())) return;
+      if (cardDeletion.current !== intent || authority.current?.project.id !== intent.projectId ||
+        !authority.current.cards.some(card => card.id === id && card.item.id === intent.itemId)) return;
+      await action(intent.command(), undefined, () => {
+        if (cardDeletion.current !== intent || pendingAction.current || historyLock.current || historyCommand.current ||
+          authority.current?.project.id !== intent.projectId ||
+          !authority.current.cards.some(card => card.id === id && card.item.id === intent.itemId)) return false;
+        if (intent.seal()) return true;
+        fail(new Error('本次删除的自身保存依据未能确认，请重新明确删除'));
+        return false;
+      });
+    } finally {
+      if (cardDeletion.current === intent) cardDeletion.current = null;
+    }
   }
   async function chooseCanvasItem(itemId: string, extend: boolean) {
     if (busy || historyLock.current || historyCommand.current || composition.current || pendingAction.current) return;
@@ -1614,8 +1708,10 @@ function Workspace() {
   async function removeShape(value: CanvasShape) {
     if (busy || historyBlocked || composition.current || pendingAction.current || shapeRecoveryRunning.current ||
       shapeDeleteRunning.current || selection.length !== 1 || selection[0] !== value.item.id) return;
-    const projectId = authority.current?.project.id;
-    if (!projectId) return;
+    const snapshot = authority.current, visible = snapshot?.shapes?.find(shape => shape.id === value.id && shape.item.id === value.item.id);
+    if (!snapshot || !visible || visible.versionId !== value.versionId || visible.item.versionId !== value.item.versionId) return;
+    const projectId = snapshot.project.id, connectors = incidentConnectorVersions(snapshot, value.item.id);
+    if (!connectors) { fail(new Error('请等待完整连线投影后重试删除')); return; }
     const captured = structuredClone(value), epoch = ++editorEpoch.current;
     const ownText = shapeText.currentSession()?.projectId === projectId && shapeText.currentSession()?.value.id === value.id;
     const ownGeometry = shapeMove.hasPending();
@@ -1631,7 +1727,7 @@ function Workspace() {
       // Waiting may reveal peer changes. Only this visible snapshot and our
       // own intervening ACKs authorize deletion; a fresh read never does.
       await action({ commandId: crypto.randomUUID(), projectId, type: "shape.delete",
-        expected: { shape: textAck?.value.versionId ?? captured.versionId, pose: poseAck?.value.item.versionId ?? captured.item.versionId },
+        expected: { shape: textAck?.value.versionId ?? captured.versionId, pose: poseAck?.value.item.versionId ?? captured.item.versionId, connectors },
         payload: { id: captured.id } });
     } finally { shapeDeleteRunning.current = false; }
   }
@@ -2080,6 +2176,7 @@ function Workspace() {
             payload: { id: crypto.randomUUID(), title: '', text, x: point.x - 140, y: point.y - 80 } });
         }}
         onClickCapture={(event) => {
+          if (connectorCreate.consumeClick({ x: event.clientX, y: event.clientY })) { event.preventDefault(); event.stopPropagation(); return; }
           if (imageGeometry.cropping?.projectId === state?.project.id && state && !(event.target as Element).closest('.image-crop')) {
             event.preventDefault(); event.stopPropagation(); return;
           }
@@ -2119,12 +2216,13 @@ function Workspace() {
             void createCard(point.x, point.y);
           }
         }}
-        onPointerMoveCapture={strokeDraw.move}
-        onPointerUpCapture={strokeDraw.finish}
+        onPointerMoveCapture={event => { if (!connectorEdit.input(event) && !connectorCreate.input(event)) strokeDraw.move(event); }}
+        onPointerUpCapture={event => { if (!connectorEdit.input(event) && !connectorCreate.input(event)) strokeDraw.finish(event); }}
         onPointerDownCapture={(event) => {
           if (imageGeometry.cropping?.projectId === state?.project.id && state && event.button === 0 && !(event.target as Element).closest('.image-crop')) {
             event.preventDefault(); event.stopPropagation(); return;
           }
+          if (connectorCreate.input(event)) return;
           if (strokeDraw.start(event)) return;
           if (shapeText.session && (event.target as Element).closest('.react-flow__node, .react-flow__pane') && !(event.target as Element).closest('.shape-text-session, .shape-text-actions')) {
             event.preventDefault(); event.stopPropagation(); return;
@@ -2152,6 +2250,7 @@ function Workspace() {
       >
         {state ? (
           <ReactFlow
+            style={{ '--connector-controls-layer': connectorTargets.controlsLayer } as CSSProperties}
             ariaLabelConfig={{
               "controls.ariaLabel": "画布视图",
               "controls.zoomIn.ariaLabel": "放大",
@@ -2168,7 +2267,7 @@ function Workspace() {
               else if (!selection.includes(node.id) || selection.length === 1) setSelection([node.id]);
             }}
             nodeDragThreshold={0}
-            selectionOnDrag={!placing && !shapePreset && !strokeDraw.mode && !panTool && !texts.placing && !shapeText.session}
+            selectionOnDrag={!placing && !shapePreset && !strokeDraw.mode && !connectorCreate.mode && !panTool && !texts.placing && !shapeText.session}
             selectionKeyCode={null}
             multiSelectionKeyCode="Shift"
             selectionMode={SelectionMode.Full}
@@ -2259,6 +2358,19 @@ function Workspace() {
             <Background gap={24} color="#dce0e7" />
             <Controls showInteractive={false} />
             <ViewportPortal>
+              {(state.connectors ?? []).map(value => <CanvasConnector key={value.id} value={value} selected={selectedConnector === value.id} resolve={connectorTargets.resolve}
+                focus={connectorCreate.focusId === value.id || connectorEdit.focusId === value.id}
+                focused={() => { if (connectorCreate.focusId === value.id) connectorCreate.focused(); if (connectorEdit.focusId === value.id) connectorEdit.focused(); }}
+                drag={event => connectorEdit.move(value, event)}
+                choose={() => { if (!connectorCreate.hasPending() && !connectorEdit.hasPending()) { setSelection([]); setSelectedConnector(value.id); } }} />)}
+              {(state.connectors ?? []).filter(value => value.id === selectedConnector).map(value => <ConnectorHandles key={value.id} value={value}
+                resolve={connectorTargets.resolve} blocked={busy || historyBlocked || composition.current || !!pendingAction.current}
+                start={(endpoint, event) => connectorEdit.start(value, endpoint, event)} activate={(endpoint, origin) => connectorEdit.startKeyboard(value, endpoint, origin)} />)}
+              <ConnectorPreview draft={connectorEdit.draft?.projectId === state.project.id ? connectorEdit.draft : null} />
+              <ConnectorPreview draft={connectorCreate.draft?.projectId === state.project.id ? connectorCreate.draft : null} />
+              {!connectorEdit.keyboardMoving && (connectorCreate.mode || connectorEdit.keyboardEndpoint) && <ConnectorEntries values={connectorTargets.values}
+                choose={connectorEdit.keyboardEndpoint ? connectorEdit.chooseAnchor : connectorCreate.chooseAnchor}
+                preview={connectorEdit.keyboardEndpoint ? connectorEdit.previewAnchor : connectorCreate.previewAnchor} />}
               <StrokePreview draft={strokeDraw.draft} />
               {shapeText.session && <ShapeTextEditor key={shapeText.session.projectId + ":" + shapeText.session.value.id}
                 session={shapeText.session} locked={shapeText.locked} error={shapeText.error}
@@ -2295,12 +2407,25 @@ function Workspace() {
             <p>新建研究，在画布上记下第一张卡片。</p>
           </div>
         )}
+        {state && connectorCreate.mode && <ConnectorCreateControls active={connectorCreate.keyboardActive} focusFree={connectorCreate.draft?.startEndpoint.kind === 'free'}
+          blocked={connectorCreate.keyboardBlocked()} composing={() => composition.current} start={connectorCreate.startBlank}
+          preview={connectorCreate.previewFree} choose={connectorCreate.chooseFree} cancel={connectorCreate.cancelDraft} />}
+        {state && connectorEdit.keyboardEndpoint && <ConnectorEndpointControls endpoint={connectorEdit.keyboardEndpoint}
+          blocked={connectorEdit.keyboardBlocked()} composing={() => composition.current} preview={connectorEdit.previewFree}
+          choose={connectorEdit.chooseFree} cancel={connectorEdit.cancel} />}
+        {state && (!connectorEdit.keyboardActive || connectorEdit.keyboardMoving) && (state.connectors ?? []).filter(value => value.id === selectedConnector).map(value =>
+          <ConnectorPathControls key={value.id} value={value} blocked={busy || historyBlocked || composition.current || !!pendingAction.current || connectorEdit.hasPending()}
+            choose={(path, origin) => connectorEdit.path(value, path, origin)} remove={() => connectorEdit.remove(value)}
+            move={{ active: connectorEdit.keyboardMoving, blocked: connectorEdit.keyboardBlocked(), composing: () => composition.current,
+              start: origin => connectorEdit.startKeyboard(value, 'line', origin), preview: connectorEdit.previewMove, finish: connectorEdit.chooseMove, cancel: connectorEdit.cancel }} />)}
         {state && (
           <div className="creation-tools" aria-label="创作工具">
             <button
-              aria-pressed={!placing && !shapePreset && !strokeDraw.mode && !panTool && !texts.placing}
+              aria-pressed={!placing && !shapePreset && !strokeDraw.mode && !connectorCreate.mode && !panTool && !texts.placing}
               onClick={() => {
-                if (strokeDraw.hasPending()) return;
+                if (strokeDraw.hasPending() || connectorCreate.hasPending()) return;
+                connectorEdit.cancel();
+                connectorCreate.deactivate();
                 strokeDraw.setMode(null);
                 setPlacing(false);
                 setShapePreset(null);
@@ -2314,6 +2439,9 @@ function Workspace() {
               aria-pressed={panTool}
               onClick={() => {
                 if (strokeDraw.hasPending()) return;
+                editorEpoch.current++;
+                connectorEdit.cancel();
+                connectorCreate.deactivate();
                 strokeDraw.setMode(null);
                 setPlacing(false);
                 setShapePreset(null);
@@ -2336,6 +2464,7 @@ function Workspace() {
               disabled={busy || historyBlocked}
               onClick={() => {
                 if (strokeDraw.hasPending()) return;
+                beginCreationToolChoice();
                 strokeDraw.setMode(null);
                 setPanTool(false);
                 setShapePreset(null);
@@ -2345,8 +2474,15 @@ function Workspace() {
             >
               卡片
             </button>
-            <button aria-pressed={texts.placing} disabled={busy || historyBlocked || strokeDraw.drawing} onClick={() => { strokeDraw.setMode(null); setPlacing(false); setShapePreset(null); setPanTool(false); texts.setPlacing(true); }}>文字</button>
+            <button aria-pressed={connectorCreate.mode} disabled={busy || historyBlocked || connectorCreate.hasPending() || strokeDraw.hasPending()}
+              onClick={() => {
+                if (!authority.current?.project.id || connectorCreationBlocked() || connectorCreate.hasPending()) return;
+                connectorEdit.cancel();
+                void connectorCreate.activate();
+              }}>连线</button>
+            <button aria-pressed={texts.placing} disabled={busy || historyBlocked || strokeDraw.drawing} onClick={() => { beginCreationToolChoice(); strokeDraw.setMode(null); setPlacing(false); setShapePreset(null); setPanTool(false); texts.setPlacing(true); }}>文字</button>
             <ShapeTools placing={shapePreset} disabled={busy || historyBlocked || strokeDraw.drawing} choose={type => {
+              beginCreationToolChoice();
               strokeDraw.setMode(null); setPlacing(false); texts.setPlacing(false); setPanTool(false); setShapePreset(type);
             }} />
             <StrokeTools active={strokeDraw.mode} disabled={busy || historyBlocked || strokeDraw.drawing} choose={chooseStroke} />
@@ -2542,6 +2678,11 @@ function Workspace() {
         </div>
       )}
       <div className="save-state">
+        {connectorCreate.error && <><span role="alert">{connectorCreate.error}</span>
+          {connectorCreate.retryable && <button disabled={connectorCreate.working} onClick={() => void connectorCreate.retry()}>重试保存连线</button>}
+          {connectorCreate.rejected && <button disabled={connectorCreate.working} onClick={() => void connectorCreate.abandon()}>放弃本次连线</button>}</>}
+        {connectorCreate.recoveries.map(record => <button key={record.key} disabled={connectorCreate.working}
+          onClick={() => void connectorCreate.recover(record.key)}>恢复未确认连线</button>)}
         {imageGeometry.error && <><span role="alert">{imageGeometry.error}</span>{imageGeometry.rejected
           ? <button onClick={() => void imageGeometry.abandon()}>放弃本次图片调整，保留已保存状态</button>
           : <button onClick={() => void imageGeometry.retry()}>重试图片调整</button>}</>}
@@ -2563,7 +2704,7 @@ function Workspace() {
         {texts.error && <><span role="alert">{texts.error}</span><button onClick={() => void texts.retry()}>重试{texts.operationScope}保存</button></>}
         {mediaQueue.hasUnconfirmed && <button onClick={mediaQueue.retryUnconfirmed} disabled={historyBlocked}>重试媒体保存确认</button>}
         <span role="status" aria-live="polite">
-          {shapeMove.status || shapeText.status || texts.status || (appearance.error
+          {connectorCreate.working ? '正在保存…' : shapeMove.status || shapeText.status || texts.status || (appearance.error
             ? "外观保存未完成"
             : appearance.pending
               ? "外观等待保存…"

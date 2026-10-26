@@ -1,4 +1,5 @@
 import { useRef, useState } from "react";
+import type { Receipt } from '../../backend/src/mapping/contracts';
 import {
   api,
   MappingError,
@@ -11,6 +12,7 @@ type LayoutCommand = Extract<Command, { type: "card.layout" }>;
 export function useCardLayoutSave(
   refresh: (id: string) => Promise<ProjectState>,
   current: () => ProjectState | null,
+  acknowledged?: (command: LayoutCommand, receipt: Receipt) => void,
 ) {
   const commands = useRef(new Map<string, LayoutCommand>());
   const running = useRef<Promise<boolean> | null>(null);
@@ -22,7 +24,8 @@ export function useCardLayoutSave(
       while (commands.current.size) {
         const [key, command] = commands.current.entries().next().value!;
         try {
-          await api.execute(command);
+          const receipt = await api.execute(command);
+          acknowledged?.(command, receipt);
           // Release the acknowledged measurement before publishing readback.
           // Its new title/body may need another measurement during that render.
           commands.current.delete(key);
