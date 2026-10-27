@@ -1,4 +1,4 @@
-import type { CanvasConnector } from './connector-contracts.js';
+import type { CanvasConnector, ConnectorLabel } from './connector-contracts.js';
 import type { CanvasImage } from './image-contracts.js';
 import type { CanvasText } from './text-contracts.js';
 import type { CanvasShape } from './shape-contracts.js';
@@ -71,7 +71,8 @@ export type TextIndex = Omit<CanvasText, 'kind' | 'content'> & { type: 'text'; o
 export type ShapeIndex = Omit<CanvasShape, 'kind' | 'content'> & { type: 'shape'; order: number; content: Omit<CanvasShape['content'], 'shortText'> & { availability: 'not_fetched' } };
 export type StrokeIndex = Omit<CanvasStroke, 'kind' | 'content'> & { type: 'stroke'; order: number; content: Omit<CanvasStroke['content'], 'path'> & { pointCount: number; availability: 'not_fetched' } };
 export type ImageIndex = Omit<CanvasImage, 'kind' | 'content'> & { type: 'image'; order: number; content: { assetId: string; availability: 'not_fetched' } };
-export type ConnectorIndex = Omit<CanvasConnector, 'kind'> & { type: 'connector'; order: number };
+export type ConnectorIndex = Omit<CanvasConnector, 'kind' | 'label'> & { type: 'connector'; order: number;
+  label?: (Omit<ConnectorLabel, 'text'> & { availability: 'not_fetched'; textCodePoints: number; textJsonSha256: string }) | null };
 export type CompactItem = ConnectorIndex | ImageIndex | StrokeIndex | ShapeIndex | TextIndex | CardIndex | BodySlice | DetailChunk | Tag;
 export interface CompactPage<T = CompactItem> {
   scope: { types: ('thought' | 'text' | 'shape' | 'stroke' | 'image' | 'connector')[]; relations: 'not_implemented' | 'connectors'; order: 'creation_ordinal' };

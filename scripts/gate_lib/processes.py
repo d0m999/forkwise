@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 import shutil
 import stat
+import base64
 
 
 def snapshot():
@@ -109,7 +110,22 @@ def execute(command, cwd, environment, stdout, stderr, timeout):
 def reclaim(directory, *, passed, processes_closed):
     """仅清理本次创建的目录；只检查元数据，不读取 profile/数据库正文。"""
     removed, retained = [], []
-    handles = subprocess.run(["/usr/sbin/lsof", "-Fapf", "+D", str(directory)], capture_output=True, text=True, timeout=15)
+    handle_checks = []
+    def observe_handles(stage, argv, **options):
+        started_at = datetime.now(timezone.utc).isoformat()
+        result = subprocess.run(argv, capture_output=True, timeout=15, **options)
+        check = {"stage": stage, "argv": argv, "started_at": started_at,
+                 "finished_at": datetime.now(timezone.utc).isoformat(), "returncode": result.returncode}
+        for stream in ("stdout", "stderr"):
+            value = getattr(result, stream)
+            check[stream] = value if isinstance(value, str) else value.decode("utf-8", errors="replace")
+            if isinstance(value, bytes):
+                check[stream + "_base64"] = base64.b64encode(value).decode("ascii")
+        # Keep diagnostics in memory until the caller writes the receipt, so
+        # recording the scan cannot itself create a writer inside its scope.
+        handle_checks.append(check)
+        return result
+    handles = observe_handles("output", ["/usr/sbin/lsof", "-FpcRgfatn", "+D", str(directory)], text=True)
     writers, pid = set(), None
     for line in handles.stdout.splitlines():
         if line.startswith("p"):
@@ -133,11 +149,11 @@ def reclaim(directory, *, passed, processes_closed):
         if not processes_closed or not passed or not safe(path):
             retained.append({"path": name, "reason": "failure_or_unreleased_or_special_entry"})
             continue
-        handles = subprocess.run(["/usr/sbin/lsof", "-t", "+D", str(path)], capture_output=True, timeout=15)
+        handles = observe_handles(name, ["/usr/sbin/lsof", "-FpcRgfatn", "+D", str(path)])
         if handles.returncode != 1 or handles.stdout or handles.stderr:
             retained.append({"path": name, "reason": "open_handles_or_unknown"})
             continue
         shutil.rmtree(path)
         removed.append(name)
     return {"removed": removed, "retained": retained, "complete": not retained and processes_closed,
-            "output_writers": sorted(writers), "output_handle_check_known": handles_known}
+            "output_writers": sorted(writers), "output_handle_check_known": handles_known, "handle_checks": handle_checks}

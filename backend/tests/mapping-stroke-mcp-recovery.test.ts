@@ -155,7 +155,8 @@ it('真实 MCP 固定混合地图变化终点，预算错误与过旧游标仅�
       const connectorIndex = await pages(snapshot, revision, 'connector-index') as ConnectorIndex[];
       const connectors = await Promise.all(connectorIndex.map(async value => {
         const full = await detail(snapshot, revision, 'connector-detail', { connectorId: value.id });
-        expect(full).toEqual({ id: value.id, kind: 'connector', versionId: value.versionId, path: value.path, start: value.start, end: value.end });
+        expect(full).toEqual({ id: value.id, kind: 'connector', versionId: value.versionId, path: value.path, start: value.start, end: value.end,
+          style: { startMarker: 'none', endMarker: 'open-arrow', color: '#626e81', width: 4, dash: 'solid' } });
         return full;
       }));
       const cards = await Promise.all(cardIndex.map(async value => {

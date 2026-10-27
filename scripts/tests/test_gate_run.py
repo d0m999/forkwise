@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import signal
 import shlex
+from datetime import datetime
 
 from gate_fixture import GateFixture
 from gate_fixture import CLI
@@ -20,6 +21,99 @@ class RunTests(GateFixture):
         self.definition["checks"][0]["tools"] = ["python"]
         self.bindings = {"python": Path(sys.executable).resolve()}
         self.put("definition.json", json.dumps(self.definition))
+
+    def test_cleanup_retains_raw_lsof_observations_for_real_resource_boundaries(self):
+        for kind in ("none", "reader", "writer", "scan-error"):
+            with self.subTest(kind=kind):
+                peer = None
+                try:
+                    output = self.root / ("lsof-" + kind)
+                    if kind == "scan-error":
+                        argv = [sys.executable, "-B", "-c",
+                                "import json,sys\nfrom pathlib import Path\nsys.path.insert(0,sys.argv[1])\n"
+                                "from gate_lib.processes import reclaim\n"
+                                "print(json.dumps(reclaim(Path(sys.argv[2]),passed=True,processes_closed=True)))\n",
+                                str(CLI.parent), str(output)]
+                        actual = subprocess.run(argv, capture_output=True, text=True, env=self.environment, timeout=20)
+                        print(json.dumps({"fixture": kind, "argv": argv, "parent_wait_exit": actual.returncode,
+                                          "stdout": actual.stdout, "stderr": actual.stderr}), flush=True)
+                        self.assertEqual(actual.returncode, 0, actual.stderr)
+                        cleanup = json.loads(actual.stdout)
+                        self.assertFalse(cleanup["complete"])
+                        self.assertFalse(output.exists())
+                    else:
+                        self.configure_command("import os,time\nfrom pathlib import Path\np=Path(os.environ['TMPDIR'])\n"
+                            "(p/'held-resource').write_text('owned resource fixture')\n" +
+                            ("while not (p.parent/'peer-ready').exists(): time.sleep(0.02)\n" if kind != "none" else ""))
+                        if kind != "none":
+                            helper = ("import sys,time\nfrom pathlib import Path\np=Path(sys.argv[1])\n"
+                                      "while not (p/'tmp/held-resource').exists(): time.sleep(0.02)\n"
+                                      "with (p/'tmp/held-resource').open(sys.argv[2]):\n"
+                                      " (p/'peer-ready').touch()\n time.sleep(30)\n")
+                            peer = subprocess.Popen([sys.executable, "-B", "-c", helper, str(output), "rb" if kind == "reader" else "r+b"])
+                        code, result = self.invoke("run", "--plan", self.save_plan(self.plan()), "--check", "workspace-build", "--output", output, "--timeout", "5")
+                        receipt = json.loads((output / "receipt.json").read_text())
+                        cleanup = receipt["cleanup"]
+                        print(json.dumps({"fixture": kind, "cli_parent_wait_exit": code, "product_exit": receipt["exit_code"],
+                                          "status": receipt["status"], "cleanup": cleanup}), flush=True)
+                        self.assertEqual(receipt["exit_code"], 0)
+                        self.assertEqual(code, 0 if kind == "none" else 1, result)
+                        if kind == "none":
+                            self.assertTrue(cleanup["complete"])
+                        else:
+                            self.assertFalse(cleanup["complete"])
+                            self.assertTrue((output / "tmp/held-resource").exists())
+                    self.assertIn("handle_checks", cleanup, "every lsof decision needs its original invocation and output")
+                    checks = cleanup["handle_checks"]
+                    self.assertTrue(checks)
+                    for check in checks:
+                        self.assertEqual(check["argv"][0], "/usr/sbin/lsof")
+                        self.assertIn("-FpcRgfatn", check["argv"], "the original scan must identify the process and its handle")
+                        self.assertNotIn("-t", check["argv"])
+                        self.assertNotIn("-w", check["argv"])
+                        self.assertEqual(check["argv"][-1], str(output if check["stage"] == "output" else output / check["stage"]))
+                        self.assertLessEqual(datetime.fromisoformat(check["started_at"]), datetime.fromisoformat(check["finished_at"]))
+                        self.assertIsInstance(check["returncode"], int)
+                        self.assertIsInstance(check["stdout"], str)
+                        self.assertIsInstance(check["stderr"], str)
+                    self.assertEqual(checks[0]["stage"], "output")
+                    if kind == "none":
+                        self.assertEqual([check["stage"] for check in checks], ["output", "home", "tmp", "cache"])
+                        self.assertTrue(all((check["returncode"], check["stdout"], check["stderr"]) == (1, "", "") for check in checks))
+                    elif kind == "reader":
+                        self.assertEqual(cleanup["output_writers"], [])
+                        self.assertIn("p" + str(peer.pid) + "\n", checks[0]["stdout"])
+                        temporary = next(check for check in checks if check["stage"] == "tmp")
+                        self.assertIn(temporary["returncode"], (0, 1))
+                        self.assertIn("p" + str(peer.pid), temporary["stdout"].splitlines())
+                    elif kind == "writer":
+                        self.assertEqual([check["stage"] for check in checks], ["output"])
+                        self.assertIn(peer.pid, cleanup["output_writers"])
+                        self.assertIn("p" + str(peer.pid) + "\n", checks[0]["stdout"])
+                    else:
+                        self.assertEqual([check["stage"] for check in checks], ["output"])
+                        self.assertNotEqual(checks[0]["returncode"], 0)
+                        self.assertTrue(checks[0]["stderr"])
+                    if peer:
+                        for check in checks:
+                            if check["stage"] not in ("output", "tmp"):
+                                continue
+                            fields = check["stdout"].splitlines()
+                            start = fields.index("p" + str(peer.pid))
+                            end = next((i for i in range(start + 1, len(fields)) if fields[i].startswith("p")), len(fields))
+                            fields = fields[start:end]
+                            self.assertTrue(any(field.startswith("c") and len(field) > 1 for field in fields))
+                            self.assertIn("R" + str(os.getpid()), fields)
+                            self.assertIn("g" + str(os.getpgid(peer.pid)), fields)
+                            self.assertTrue(any(field.startswith("f") and field[1:].isdigit() for field in fields))
+                            self.assertIn("ar" if kind == "reader" else "au", fields)
+                            self.assertIn("tREG", fields)
+                            self.assertIn("n" + str(output / "tmp/held-resource"), fields)
+                finally:
+                    if peer:
+                        peer.terminate()
+                        result = peer.wait(timeout=5)
+                        print(json.dumps({"fixture": kind, "peer_pid": peer.pid, "peer_parent_wait_exit": result}), flush=True)
 
     def test_run_registers_actual_exit_logs_and_new_build_outputs(self):
         self.configure_command("from pathlib import Path\nprint('actual child output')\nPath('dist/server.js').write_text('new build')\n")
@@ -35,6 +129,29 @@ class RunTests(GateFixture):
         self.assertEqual(receipt["input_before"], receipt["input_after"])
         self.assertFalse(receipt["integrity"]["exclusive_inputs"])
         self.assertEqual(receipt["acceptance"], "NOT_EVALUATED")
+
+    def test_invalid_resource_log_preserves_failed_run_directories_and_external_target(self):
+        target = self.put("external-resource-target", "external fixture evidence must stay unchanged\n")
+        target.chmod(0o640)
+        original = (target.read_bytes(), target.lstat().st_mode)
+        for kind in ("symlink", "directory"):
+            with self.subTest(kind=kind):
+                self.configure_command("import os\nfrom pathlib import Path\n"
+                    "for name in ('HOME','TMPDIR','npm_config_cache'):\n"
+                    " Path(os.environ[name], 'retained-marker').write_text('owned runtime evidence')\n"
+                    "log=Path(os.environ['FORKWISE_ISSUE10_RESOURCE_LOG'])\n" +
+                    ("log.symlink_to(" + repr(str(target)) + ")\n" if kind == "symlink" else "log.mkdir()\n"))
+                output = self.root / ("invalid-resource-" + kind)
+                code, result = self.invoke("run", "--plan", self.save_plan(self.plan()), "--check", "workspace-build", "--output", output)
+                self.assertEqual(code, 1, result)
+                receipt = json.loads((output / "receipt.json").read_text())
+                self.assertEqual((receipt["status"], receipt["exit_code"]), ("incomplete", 0))
+                self.assertTrue(any(gap.startswith("RESOURCE_LOG_INVALID:resources.jsonl:") for gap in receipt["evidence_gaps"]))
+                self.assertEqual((target.read_bytes(), target.lstat().st_mode), original)
+                self.assertEqual(receipt["cleanup"]["removed"], [])
+                for name in ("home", "tmp", "cache"):
+                    self.assertTrue((output / name).is_dir(), "failed resource proof must preserve " + name)
+                    self.assertEqual((output / name / "retained-marker").read_text(), "owned runtime evidence")
 
     def test_timeout_stops_the_child_tree_and_preserves_real_failure(self):
         self.configure_command("import os,subprocess,sys,time\nfrom pathlib import Path\n"

@@ -52,7 +52,23 @@ for (const target of ['卡片', '形状', '图片', '笔迹', '文字键盘', '�
         await page.getByRole('group', { name: '独立文字：方向键调整位置，Enter编辑', exact: true }).focus();
         await page.keyboard.press('Enter');
       }
-      else await page.locator('.react-flow__pane').click({ position: { x: 650, y: 650 } });
+      else {
+        const pane = page.locator('.react-flow__pane');
+        const blank = await pane.evaluate(element => {
+          const box = element.getBoundingClientRect();
+          const oldHit = document.elementFromPoint(box.left + 650, box.top + 650);
+          for (const y of [24, box.height / 2, box.height - 24]) for (const x of [24, box.width / 2, box.width - 24]) {
+            const screenX = box.left + x, screenY = box.top + y;
+            if (x <= 0 || y <= 0 || screenX < 0 || screenY < 0 || screenX >= innerWidth || screenY >= innerHeight) continue;
+            if (document.elementFromPoint(screenX, screenY) === element) return { position: { x, y }, screen: { x: screenX, y: screenY },
+              hitClass: element.className, oldPointHitClass: oldHit?.getAttribute('class') ?? null,
+              oldPointInsideConnectorTools: !!oldHit?.closest('.creation-tools.connector-tools') };
+          }
+          throw new Error('当前视口没有可真实点击且未被控件遮挡的空白pane位置');
+        });
+        console.log('issue27-deselect-visible-pane-hit', JSON.stringify(blank));
+        await pane.click({ position: blank.position });
+      }
       await expect(line).toHaveAttribute('aria-pressed', 'false');
       await expect(preview).toHaveCount(0); await expect(move).toHaveCount(0);
       if (target === '形状') await expect(page.getByRole('img', { name: '取消连线选择的形状', exact: true })).toBeFocused();

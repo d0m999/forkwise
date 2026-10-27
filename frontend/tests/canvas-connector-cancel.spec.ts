@@ -121,7 +121,8 @@ test('切换工具取消未提交连线编辑后可明确新建', async ({ page,
     expect(command.payload.start.point.x).toBeCloseTo(expectedStart.x, 6); expect(command.payload.start.point.y).toBeCloseTo(expectedStart.y, 6);
     expect(command.payload.end.point.x).toBeCloseTo(expectedEnd.x, 6); expect(command.payload.end.point.y).toBeCloseTo(expectedEnd.y, 6);
     const created = after.connectors!.find(value => value.id === command.payload.id)!;
-    expect(created).toEqual({ ...command.payload, kind: 'connector', versionId: receipt.connectorVersions![created.id] });
+    expect(created).toEqual({ ...command.payload, kind: 'connector', versionId: receipt.connectorVersions![created.id],
+      style: { startMarker: 'none', endMarker: 'open-arrow', color: '#626e81', width: 4, dash: 'solid' } });
     expect(receipt.commandId).toBe(command.commandId); expect(receipt.projectId).toBe(projectId); expect(receipt.changedIds).toEqual([created.id]);
     expect(after.connectors).toEqual([...before.connectors!, created]);
     for (const key of ['cards', 'tags', 'texts', 'shapes', 'images', 'strokes'] as const) expect(after[key]).toEqual(before[key]);

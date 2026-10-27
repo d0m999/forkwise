@@ -78,7 +78,13 @@ export function recordAction(
   const stack = load(db, command.projectId);
   if (change.connectorChanges?.length && !change.before && !change.after && !change.textChange && !change.shapeChange && !change.imageChange) {
     const value = change.connectorChanges[0]!.after ?? change.connectorChanges[0]!.before!;
-    stack.undo.push({ session, lastRevision: change.revision, id: command.commandId, label: command.type,
+    const editGroup = command.type === 'connector.label' ? command.editGroup : undefined, previous = stack.undo.at(-1);
+    if (editGroup && previous?.editGroup === editGroup && previous.label === 'connector.label' &&
+      previous.session === session && previous.actor.id === change.actor.id && previous.target.id === value.id &&
+      previous.lastRevision === change.revision - 1 && !stack.redo.length && previous.connectorChanges?.length === 1 && change.connectorChanges.length === 1) {
+      previous.connectorChanges[0]!.after = change.connectorChanges[0]!.after;
+      previous.lastRevision = change.revision;
+    } else stack.undo.push({ session, lastRevision: change.revision, ...(editGroup ? { editGroup } : {}), id: command.commandId, label: command.type,
       target: { id: value.id, title: '连线' }, actor: change.actor, before: null, after: null,
       connectorChanges: change.connectorChanges, changedIds: change.changedIds });
     stack.undo = stack.undo.slice(-40); stack.redo = []; save(db, command.projectId, stack); return;

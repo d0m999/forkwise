@@ -3,6 +3,7 @@ import type Database from 'better-sqlite3';
 import { randomUUID } from 'node:crypto';
 import { requireThat } from '../domain/errors.js';
 import type { CanvasConnector, ConnectorChange, ConnectorCommand, ConnectorEndpoint } from './connector-contracts.js';
+import { DEFAULT_CONNECTOR_STYLE } from './connector-contracts.js';
 
 export function initializeConnectors(db: Database.Database) {
   db.exec(`CREATE TABLE IF NOT EXISTS mapping_connectors(id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES mapping_projects(id), value TEXT NOT NULL);
@@ -24,7 +25,7 @@ export function createConnector(db: Database.Database, command: Extract<Connecto
   requireDistinctFreeEndpoints(payload.start, payload.end);
   requireConnectorEndpoint(db, projectId, payload.start);
   requireConnectorEndpoint(db, projectId, payload.end);
-  const value: CanvasConnector = { ...payload, kind: 'connector', versionId: randomUUID() };
+  const value: CanvasConnector = { ...payload, kind: 'connector', versionId: randomUUID(), style: { ...DEFAULT_CONNECTOR_STYLE } };
   db.prepare('INSERT INTO mapping_connector_ids VALUES(?,?)').run(value.id, projectId);
   saveConnector(db, projectId, value);
   return value;
@@ -64,6 +65,41 @@ export function moveConnector(db: Database.Database, command: Extract<ConnectorC
   const after = { ...before, start: translate(before.start), end: translate(before.end) };
   if (JSON.stringify(before) === JSON.stringify(after)) return null;
   after.versionId = randomUUID();
+  saveConnector(db, command.projectId, after);
+  return { before, after };
+}
+
+export function styleConnector(db: Database.Database, command: Extract<ConnectorCommand, { type: 'connector.style' }>): ConnectorChange | null {
+  const before = requireConnector(db, command);
+  const current = before.style ?? DEFAULT_CONNECTOR_STYLE, patch = command.payload.style;
+  const style = { startMarker: patch.startMarker ?? current.startMarker, endMarker: patch.endMarker ?? current.endMarker,
+    color: patch.color ?? current.color, width: patch.width ?? current.width, dash: patch.dash ?? current.dash };
+  if (JSON.stringify(style) === JSON.stringify(current)) return null;
+  const after = { ...before, style, versionId: randomUUID() };
+  saveConnector(db, command.projectId, after);
+  return { before, after };
+}
+
+export function reverseConnectors(db: Database.Database, command: Extract<ConnectorCommand, { type: 'connector.reverse' }>): ConnectorChange[] {
+  requireThat(Object.keys(command.expected).length === command.payload.ids.length &&
+    command.payload.ids.every(id => Object.hasOwn(command.expected, id)), 'VERSION_CONFLICT', '反向连线范围或版本已更新，请重新读取', 409);
+  const originals = command.payload.ids.map(id => requireConnector(db, {
+    projectId: command.projectId, expected: command.expected[id]!, payload: { id },
+  }));
+  return originals.flatMap(before => {
+    const style = before.style ?? DEFAULT_CONNECTOR_STYLE;
+    if (style.startMarker === style.endMarker) return [];
+    const after = { ...before, versionId: randomUUID(), style: { ...style, startMarker: style.endMarker, endMarker: style.startMarker } };
+    saveConnector(db, command.projectId, after);
+    return [{ before, after }];
+  });
+}
+
+export function labelConnector(db: Database.Database, command: Extract<ConnectorCommand, { type: 'connector.label' }>): ConnectorChange | null {
+  const before = requireConnector(db, command);
+  const label = command.payload.label?.text.trim() ? command.payload.label : null;
+  if (JSON.stringify(before.label ?? null) === JSON.stringify(label)) return null;
+  const after = { ...before, label, versionId: randomUUID() };
   saveConnector(db, command.projectId, after);
   return { before, after };
 }
@@ -112,7 +148,7 @@ function requireDistinctFreeEndpoints(start: ConnectorEndpoint, end: ConnectorEn
   'INVALID_ENDPOINT', '普通连线不能创建零长度连线', 400);
 }
 
-function requireConnector(db: Database.Database, command: Exclude<ConnectorCommand, { type: 'connector.create' }>): CanvasConnector {
+function requireConnector(db: Database.Database, command: { projectId: string; expected: string; payload: { id: string } }): CanvasConnector {
   const row = db.prepare('SELECT c.value FROM mapping_connectors c JOIN mapping_connector_ids i ON i.id=c.id WHERE c.project_id=? AND c.id=?')
     .get(command.projectId, command.payload.id) as { value: string } | undefined;
   requireThat(row, 'NOT_FOUND', '连线不存在于当前项目', 404);

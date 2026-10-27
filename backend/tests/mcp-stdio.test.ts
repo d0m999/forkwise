@@ -25,7 +25,12 @@ it('独立 MCP 子进程通过 stdio 与真实本机 HTTP 往返，保持项目�
     command: process.execPath,
     args: ['--import', 'tsx', 'src/mcp.ts'],
     cwd: process.cwd(),
-    env: { PATH: process.env.PATH ?? '', FORKWISE_URL: origin, FORKWISE_AGENT_TOKEN: token },
+    env: {
+      PATH: process.env.PATH ?? '',
+      FORKWISE_URL: origin,
+      FORKWISE_AGENT_TOKEN: token,
+      ...(process.env.TMPDIR ? { TMPDIR: process.env.TMPDIR } : {}),
+    },
     stderr: 'pipe',
   });
   const client = new Client({ name: 'stdio-validation', version: '1.0.0' });

@@ -51,7 +51,8 @@ test('键盘可创建包含自由端的普通连线', async ({ page, workspace }
     expect(command.commandId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
     expect(command.payload.id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
     expect(before.connectors?.some(value => value.id === command.payload.id)).toBe(false); endpoint(command.payload.start, expectedStart); endpoint(command.payload.end, expectedEnd);
-    expect(created).toEqual({ ...command.payload, kind: 'connector', versionId: receipt.connectorVersions![command.payload.id] });
+    expect(created).toEqual({ ...command.payload, kind: 'connector', versionId: receipt.connectorVersions![command.payload.id],
+      style: { startMarker: 'none', endMarker: 'open-arrow', color: '#626e81', width: 4, dash: 'solid' } });
     expect(receipt.commandId).toBe(command.commandId); expect(receipt.changedIds).toEqual([created.id]);
     expect(after.connectors).toEqual([...(before.connectors ?? []), created]);
     for (const key of ['cards', 'tags', 'texts', 'shapes', 'images', 'strokes'] as const) expect(after[key]).toEqual(before[key]);

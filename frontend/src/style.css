@@ -269,6 +269,15 @@ body:has(.workspace[data-board-full="true"]) .card-tooltip { display: none; }
 .canvas-connector { position: absolute; overflow: visible; pointer-events: none; color: var(--connector-ink); }
 .canvas-connector path { fill: none; stroke: currentColor; stroke-width: var(--connector-stroke); stroke-linecap: round; pointer-events: stroke; }
 .canvas-connector[aria-pressed=true], .connector-preview { color: var(--canvas-selection-color); }
+.canvas-connector[aria-pressed=true] path { filter: drop-shadow(0 0 2px var(--canvas-selection-color)); }
+.connector-label { position: absolute; transform: translate(-50%, -50%); max-width: 280px; white-space: pre-wrap; overflow-wrap: anywhere; text-align: center; line-height: 1.4; z-index: var(--connector-controls-layer); background: #f6f7f9; border: 0; padding: 2px 4px; pointer-events: auto; }
+.connector-label-input { display: block; width: 280px; max-width: 100%; min-height: 28px; resize: none; overflow: hidden; box-sizing: border-box; font: inherit; color: inherit; text-align: center; background: white; border: 1px solid var(--canvas-selection-color); }
+.connector-label-differences { color: #252933; font: 400 12px/1.4 system-ui; text-align: left; }
+.connector-label-differences p { margin: 4px 0; }
+.connector-label-position { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; }
+.connector-label-position input { width: 6em; }
+.connector-label-position p { margin: 0; font-size: 12px; }
+.connector-label:not(.connector-label-session) { cursor: grab; touch-action: none; user-select: none; }
 .canvas-connector:focus-visible { outline: var(--connector-focus-width) solid var(--canvas-selection-color); outline-offset: var(--connector-focus-offset); }
 .connector-preview path { pointer-events: none; }
 .connector-entry { position: absolute; transform: translate(-50%, -50%); width: var(--connector-endpoint-size); height: var(--connector-endpoint-size); padding: 0; border: var(--connector-control-border-width) solid var(--canvas-selection-color); border-radius: var(--connector-endpoint-radius); background: var(--connector-endpoint-surface); z-index: var(--connector-controls-layer); cursor: crosshair; pointer-events: auto; }

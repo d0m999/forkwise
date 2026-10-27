@@ -192,6 +192,21 @@ export async function readCompactMap(
     if (value.id !== item.id || value.kind !== 'connector' || value.versionId !== item.versionId || value.path !== item.path ||
       JSON.stringify(value.start) !== JSON.stringify(item.start) || JSON.stringify(value.end) !== JSON.stringify(item.end))
       throw new Error('连线端点版本与地图快照不一致，请重新读取');
+    const styleFields = ['startMarker', 'endMarker', 'color', 'width', 'dash'] as const;
+    if (value.style === undefined ? item.style !== undefined : !item.style || styleFields.some(field => value.style![field] !== item.style![field]))
+      throw new Error('连线外观与地图快照不一致，请重新读取');
+    if (value.label == null) {
+      if (value.label !== item.label) throw new Error('连线文字与地图快照不一致，请重新读取');
+    } else {
+      const label = value.label, summary = item.label;
+      if (!summary || summary.availability !== 'not_fetched' || summary.position !== label.position ||
+        summary.fontSize !== label.fontSize || summary.color !== label.color || summary.bold !== label.bold ||
+        summary.textCodePoints !== Array.from(label.text).length)
+        throw new Error('连线文字与地图快照不一致，请重新读取');
+      const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify(label.text)));
+      const checksum = Array.from(new Uint8Array(hash), byte => byte.toString(16).padStart(2, '0')).join('');
+      if (checksum !== summary.textJsonSha256) throw new Error('连线文字与地图快照不一致，请重新读取');
+    }
     connectors.push(value);
   }
   return {

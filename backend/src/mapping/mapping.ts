@@ -1,5 +1,5 @@
 import type { CanvasConnector } from './connector-contracts.js';
-import { createConnector, reconnectConnector, changeConnectorPath, moveConnector, deleteConnector, prepareIncidentConnectorDeletion, applyIncidentConnectorDeletion, readConnectors } from './connector.js';
+import { createConnector, reconnectConnector, changeConnectorPath, moveConnector, styleConnector, reverseConnectors, labelConnector, deleteConnector, prepareIncidentConnectorDeletion, applyIncidentConnectorDeletion, readConnectors } from './connector.js';
 import { cropImage, createImage, readImages, transformImage, rotateImage, deleteImage } from './image.js';
 import type { ImageVersion } from './image-contracts.js';
 import { moveCanvas } from './canvas-move.js';
@@ -306,9 +306,15 @@ export class Mapping {
         let travel: ReturnType<typeof travelHistory> | undefined;
         let revision: number;
         let changedIds: string[];
-        if (command.type === 'connector.create' || command.type === 'connector.reconnect' || command.type === 'connector.path' || command.type === 'connector.move' || command.type === 'connector.delete') {
+        if (command.type === 'connector.reverse') {
           const project = this.project(command.projectId);
-          const result = command.type === 'connector.create' ? { before: null, after: createConnector(this.db, command) } : command.type === 'connector.reconnect' ? reconnectConnector(this.db, command) : command.type === 'connector.path' ? changeConnectorPath(this.db, command) : command.type === 'connector.move' ? moveConnector(this.db, command) : deleteConnector(this.db, command);
+          connectorChanges = reverseConnectors(this.db, command);
+          if (!connectorChanges.length) return unchanged(project.revision);
+          after = null; changedIds = connectorChanges.map(change => change.after!.id); revision = project.revision + 1;
+          this.db.prepare('UPDATE mapping_projects SET revision=? WHERE id=?').run(revision, project.id);
+        } else if (command.type === 'connector.create' || command.type === 'connector.reconnect' || command.type === 'connector.path' || command.type === 'connector.move' || command.type === 'connector.style' || command.type === 'connector.label' || command.type === 'connector.delete') {
+          const project = this.project(command.projectId);
+          const result = command.type === 'connector.create' ? { before: null, after: createConnector(this.db, command) } : command.type === 'connector.reconnect' ? reconnectConnector(this.db, command) : command.type === 'connector.path' ? changeConnectorPath(this.db, command) : command.type === 'connector.move' ? moveConnector(this.db, command) : command.type === 'connector.style' ? styleConnector(this.db, command) : command.type === 'connector.label' ? labelConnector(this.db, command) : deleteConnector(this.db, command);
           if (!result) return unchanged(project.revision);
           connectorChanges = [result];
           after = null; changedIds = [(result.after ?? result.before!).id]; revision = project.revision + 1;

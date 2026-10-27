@@ -1,8 +1,9 @@
-import { useLayoutEffect, useRef, type PointerEvent } from 'react';
-import type { CanvasConnector as Connector, ConnectorEndpoint } from '../../backend/src/mapping/connector-contracts';
+import { useId, useLayoutEffect, useRef, type PointerEvent } from 'react';
+import { DEFAULT_CONNECTOR_STYLE, type CanvasConnector as Connector, type ConnectorEndpoint, type ConnectorStyle } from '../../backend/src/mapping/connector-contracts';
 import type { ConnectorDraft } from './connector-create';
 import { freeLineGeometry, type ConnectorPoint } from './connector-geometry';
 import type { ConnectorTarget } from './connector-targets';
+import { ConnectorLabel, type LabelEditor } from './connector-label';
 
 export function ConnectorEntries({ values, choose, preview }: { values: ConnectorTarget[];
   choose: (value: ConnectorTarget, element: HTMLElement) => void; preview: (value: ConnectorTarget) => void }) {
@@ -15,25 +16,41 @@ export function ConnectorEntries({ values, choose, preview }: { values: Connecto
     style={{ left: value.point.x, top: value.point.y }} />)}</>;
 }
 
-export function CanvasConnector({ value, selected, choose, resolve, drag, focus, focused }: {
-  value: Connector; selected: boolean; choose: () => void; resolve: (endpoint: ConnectorEndpoint) => ConnectorPoint | null;
+export function CanvasConnector({ value, selected, choose, resolve, drag, focus, focused, labelEditor }: {
+  value: Connector; selected: boolean; choose: (extend: boolean) => void; resolve: (endpoint: ConnectorEndpoint) => ConnectorPoint | null;
   drag: (event: PointerEvent<SVGSVGElement>) => void;
   focus: boolean; focused: () => void;
+  labelEditor: LabelEditor;
 }) {
   const element = useRef<SVGSVGElement>(null);
+  const path = useRef<SVGPathElement>(null);
+  const markerId = useId();
   useLayoutEffect(() => { if (focus && selected && element.current) { element.current.focus(); focused(); } }, [focus, selected, focused]);
   const start = resolve(value.start), end = resolve(value.end);
   if (!start || !end) return null;
   const line = freeLineGeometry(start, end, value.path);
-  return <svg ref={element} role="button" aria-label="普通连线" aria-pressed={selected} tabIndex={0}
+  const style = value.style ?? DEFAULT_CONNECTOR_STYLE;
+  function marker(side: 'start' | 'end', kind: ConnectorStyle['startMarker']) {
+    if (kind === 'none') return null;
+    return <marker id={`${markerId}-${side}`} viewBox="0 0 10 10" refX="9" refY="5" markerWidth="4" markerHeight="4" orient="auto-start-reverse">
+      {kind === 'open-arrow' ? <polyline points="1,1 9,5 1,9" fill="none" stroke={style.color} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+        : kind === 'dot' ? <circle cx="5" cy="5" r="4" fill={style.color} />
+        : <polygon points={kind === 'triangle' ? '1,1 9,5 1,9' : '1,5 5,1 9,5 5,9'} fill={style.color} />}
+    </marker>;
+  }
+  return <><svg ref={element} role="button" aria-label="普通连线" aria-pressed={selected} tabIndex={0} data-connector-id={value.id}
     className="canvas-connector nodrag nopan" width={line.width} height={line.height} style={{ left: line.x, top: line.y }}
-    onPointerDown={drag} onClick={event => { event.stopPropagation(); choose(); }}
+    onPointerDown={drag} onClick={event => { event.stopPropagation(); choose(event.shiftKey); }}
+    onDoubleClick={event => { event.stopPropagation(); if (!value.label) labelEditor.begin(event.currentTarget); }}
     onKeyDown={event => {
       if (event.nativeEvent.isComposing || event.keyCode === 229) return;
-      if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); event.stopPropagation(); choose(); }
+      if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); event.stopPropagation(); choose(event.shiftKey); }
     }}>
-    <path d={line.path} />
-  </svg>;
+    <defs>{marker('start', style.startMarker)}{marker('end', style.endMarker)}</defs>
+    <path ref={path} d={line.path} style={{ stroke: style.color, strokeWidth: style.width, strokeDasharray: style.dash === 'dashed' ? `${style.width * 2} ${style.width * 2}` : undefined }}
+      markerStart={style.startMarker === 'none' ? undefined : `url(#${markerId}-start)`}
+      markerEnd={style.endMarker === 'none' ? undefined : `url(#${markerId}-end)`} />
+  </svg><ConnectorLabel value={value} path={path} origin={line} geometry={line.path} editor={labelEditor} choose={choose} /></>;
 }
 
 export function ConnectorPreview({ draft }: { draft: ConnectorDraft | null }) {

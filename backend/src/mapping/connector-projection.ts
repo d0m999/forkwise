@@ -1,4 +1,5 @@
 import type Database from 'better-sqlite3';
+import { createHash } from 'node:crypto';
 import type { ConnectorIndex, DetailChunk } from './compact-contracts.js';
 import { readConnectors } from './connector.js';
 import { requireThat } from '../domain/errors.js';
@@ -9,8 +10,17 @@ export function connectorIndex(db: Database.Database, projectId: string): { item
   const items = readConnectors(db, projectId).map((value): ConnectorIndex => {
     const ordinal = order.get(value.id);
     requireThat(ordinal !== undefined, 'SNAPSHOT_UNAVAILABLE', '连线创建序位不可读取，请重新开始', 503);
-    const { kind: _, ...geometry } = value;
-    return { ...geometry, type: 'connector', order: ordinal };
+    const { kind: _, label, ...geometry } = value;
+    const index: ConnectorIndex = { ...geometry, type: 'connector', order: ordinal };
+    if (label !== undefined) {
+      if (label === null) index.label = null;
+      else {
+        const { text, ...appearance } = label;
+        index.label = { ...appearance, availability: 'not_fetched', textCodePoints: Array.from(text).length,
+          textJsonSha256: createHash('sha256').update(JSON.stringify(text)).digest('hex') };
+      }
+    }
+    return index;
   }).sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
   return { items, knownIds: identities.map(value => value.id) };
 }

@@ -232,10 +232,6 @@ def run(root, definition, bindings, plan_path, check_id, destination, timeout=18
             receipt["evidence_gaps"] = report_reasons
             if report_reasons and receipt["status"] == "passed":
                 receipt["status"] = "incomplete"
-        receipt["cleanup"] = reclaim(directory, passed=receipt["status"] == "passed",
-                                     processes_closed=process["observed_processes_closed"])
-        if receipt["status"] == "passed" and not receipt["cleanup"]["complete"]:
-            receipt["status"] = "incomplete"
         receipt["resource_logs"] = []
         for name in RESOURCE_LOGS:
             try:
@@ -248,6 +244,10 @@ def run(root, definition, bindings, plan_path, check_id, destination, timeout=18
                 receipt.setdefault("evidence_gaps", []).append("RESOURCE_LOG_INVALID:" + name + ":" + str(exc))
                 if receipt["status"] == "passed":
                     receipt["status"] = "incomplete"
+        receipt["cleanup"] = reclaim(directory, passed=receipt["status"] == "passed",
+                                     processes_closed=process["observed_processes_closed"])
+        if receipt["status"] == "passed" and not receipt["cleanup"]["complete"]:
+            receipt["status"] = "incomplete"
         if admission is not None:
             try:
                 receipt["control_release_check"] = live_grant(admission["grant"], item, root, directory)

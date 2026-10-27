@@ -3345,12 +3345,20 @@ test("S5-R3 原请求缺省媒体要求的损坏恢复隔离原字节，合法�
       raw,
     );
     await expect(page.getByRole("status")).not.toHaveText("已保存到本机");
+    const keysBeforeValid = await page.evaluate(() => Object.keys(localStorage));
     const valid = await seedRecoveryJournal(
       page,
       projectId,
       card,
       "同库合法恢复正文",
     );
+    const validKeys = await page.evaluate(
+      (beforeKeys) => Object.keys(localStorage).filter((key) => !beforeKeys.includes(key)),
+      keysBeforeValid,
+    );
+    expect(validKeys).toHaveLength(1);
+    const validKey = validKeys[0];
+    expect(validKey).toMatch(/^forkwise:recovery:v1:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
     await page.reload();
     await expect(restore).toHaveCount(1);
     await restore.click();
@@ -3362,6 +3370,18 @@ test("S5-R3 原请求缺省媒体要求的损坏恢复隔离原字节，合法�
     expect(await page.evaluate((key) => localStorage.getItem(key), key)).toBe(
       raw,
     );
+    // A durable server readback does not establish that this browser confirmed
+    // the receipt. Keep the damaged bytes while the seeded and owner journals clear.
+    await page.waitForFunction(({ damagedKey, raw, validKey, projectId, cardId }) => {
+      if (localStorage.getItem(damagedKey) !== raw) throw new Error("损坏恢复原串在确认期间改变");
+      if (localStorage.getItem(validKey) !== null) return false;
+      const prefix = "forkwise:recovery:v1:";
+      return !Object.keys(localStorage).some((key) => {
+        if (!key.startsWith(prefix + "[")) return false;
+        const owner = JSON.parse(key.slice(prefix.length));
+        return owner[1] === projectId && owner[2] === cardId;
+      });
+    }, { damagedKey: key, raw, validKey, projectId, cardId: card.id }, { timeout: 5000 });
     await page.reload();
     await expect(page.getByRole("tab", { selected: true })).toHaveAttribute(
       "title",
@@ -3392,6 +3412,153 @@ test("S5-R3 原请求缺省媒体要求的损坏恢复隔离原字节，合法�
     await page.screenshot({
       path: testInfo.outputPath("missing-requirements.png"),
     });
+  }
+});
+
+
+test("S5-R3 损坏原串与已提交未确认正文共存，重开明确重试保持原请求和唯一变更", async ({
+  page,
+}, testInfo) => {
+  await openWorkspace(page);
+  const projectId = await newCard(page);
+  const before = await draftProject(page);
+  const card = before.cards[0];
+  const damagedKey = "forkwise:recovery:v1:pending-with-damaged";
+  const damagedCommand = { commandId: crypto.randomUUID(), projectId, type: "body.edit",
+    expected: card.body.versionId, payload: { id: card.id, text: "损坏记录声明未持久资源" } };
+  const raw = "\n" + JSON.stringify({
+    schema: 1, projectId, cardId: card.id,
+    drafts: [{ projectId, cardId: card.id, field: "body", value: damagedCommand.payload.text,
+      generation: 1, expected: damagedCommand.expected, requiredAssetIds: ["missing-resource"], command: damagedCommand }],
+    closed: [], pending: null,
+  }, null, 2) + "\n";
+  await page.evaluate(({ key, raw }) => localStorage.setItem(key, raw), { key: damagedKey, raw });
+  await page.reload();
+  await expect(page.getByRole("tab", { selected: true })).toHaveAttribute("title", projectId);
+  await expect(page.getByText("部分恢复记录损坏，原件已保留；其他草稿仍可恢复")).toBeVisible();
+  await expect(page.getByRole("button", { name: "恢复草稿", exact: true })).toHaveCount(0);
+  expect(await draftProject(page)).toEqual(before);
+  const requests: Command[] = [], forwarded: Command[] = [];
+  const responses: { status: number; body: any }[] = [];
+  let release!: () => void, finishFirst!: () => void;
+  const responseRelease = new Promise<void>((resolve) => { release = resolve; });
+  const firstFinished = new Promise<void>((resolve) => { finishFirst = resolve; });
+  const readJournals = () => page.evaluate(({ projectId, cardId }) => {
+    const prefix = "forkwise:recovery:v1:";
+    return Object.keys(localStorage).filter((key) => {
+      if (!key.startsWith(prefix + "[")) return false;
+      const owner = JSON.parse(key.slice(prefix.length));
+      return owner[1] === projectId && owner[2] === cardId;
+    }).map((key) => ({ key, value: JSON.parse(localStorage.getItem(key)!) }));
+  }, { projectId, cardId: card.id });
+  page.on("request", (request) => {
+    if (request.url().endsWith("/api/mapping/execute")) {
+      const command = request.postDataJSON();
+      if (command.type === "body.edit") requests.push(command);
+    }
+  });
+  await page.route("**/api/mapping/execute", async (route) => {
+    const command = route.request().postDataJSON();
+    if (command.type !== "body.edit") { await route.continue(); return; }
+    forwarded.push(command);
+    const first = forwarded.length === 1;
+    try {
+      const response = await route.fetch();
+      responses.push({ status: response.status(), body: await response.json() });
+      if (first) await responseRelease;
+      await route.fulfill({ response });
+    } finally {
+      if (first) finishFirst();
+    }
+  });
+  const text = "损坏原串旁的已提交未确认正文";
+  try {
+    await page.getByRole("button", { name: "编辑正文", exact: true }).click();
+    await page.getByLabel("卡片正文", { exact: true }).fill(text);
+    await expect.poll(() => responses.length).toBe(1);
+    expect(responses[0].status).toBe(200);
+    await expect.poll(async () => (await draftProject(page)).cards[0].body.blocks[0].text).toBe(text);
+    expect(requests).toHaveLength(1);
+    const original = structuredClone(requests[0]);
+    expect(original.projectId).toBe(projectId);
+    expect(original.type).toBe("body.edit");
+    expect(original.expected).toBe(card.body.versionId);
+    expect(original.payload.id).toBe(card.id);
+    expect(forwarded).toEqual([original]);
+    expect(responses[0].body.commandId).toBe(original.commandId);
+    expect(responses[0].body.projectId).toBe(projectId);
+    const held = await readJournals();
+    expect(held).toHaveLength(1);
+    expect(held[0].value.pending.command).toEqual(original);
+    expect(await page.evaluate((key) => localStorage.getItem(key), damagedKey)).toBe(raw);
+    // A committed server write still has no delivered receipt in this browser.
+    await page.reload();
+    await expect(page.getByRole("tab", { selected: true })).toHaveAttribute("title", projectId);
+    release();
+    await firstFinished;
+    const restore = page.getByRole("button", { name: "恢复草稿", exact: true });
+    await expect(restore).toHaveCount(1);
+    const reopened = await readJournals();
+    expect(reopened).toHaveLength(1);
+    expect(reopened[0].key).toBe(held[0].key);
+    expect(reopened[0].value.pending.command).toEqual(original);
+    expect(await page.evaluate((key) => localStorage.getItem(key), damagedKey)).toBe(raw);
+    expect(requests).toEqual([original]);
+    await restore.click();
+    await expect.poll(() => responses.length).toBe(2);
+    expect(responses.map((response) => response.status)).toEqual([200, 200]);
+    // Deep equality covers all canonical fields, arrays, expected and editGroup.
+    // No media defaults or transport-token equality are introduced.
+    expect(requests).toEqual([original, original]);
+    expect(forwarded).toEqual([original, original]);
+    expect(responses[1].body).toEqual(responses[0].body);
+    await page.waitForFunction(({ damagedKey, raw, projectId, cardId }) => {
+      if (localStorage.getItem(damagedKey) !== raw) throw new Error("损坏恢复原串在重试确认期间改变");
+      const prefix = "forkwise:recovery:v1:";
+      return !Object.keys(localStorage).some((key) => {
+        if (!key.startsWith(prefix + "[")) return false;
+        const owner = JSON.parse(key.slice(prefix.length));
+        return owner[1] === projectId && owner[2] === cardId;
+      });
+    }, { damagedKey, raw, projectId, cardId: card.id }, { timeout: 5000 });
+    let afterRevision = before.project.revision;
+    let snapshot: string | undefined;
+    const pages: any[] = [];
+    for (;;) {
+      const query = new URLSearchParams({ after: String(afterRevision) });
+      if (snapshot) query.set("snapshot", snapshot);
+      const response = await page.request.get(origin + "/api/mapping/projects/" + projectId + "/changes?" + query);
+      expect(response.status()).toBe(200);
+      const result = await response.json();
+      expect(result.status).toBe("OK");
+      expect(typeof result.complete).toBe("boolean");
+      if (snapshot) expect(result.snapshot).toBe(snapshot);
+      else snapshot = result.snapshot;
+      pages.push(result);
+      if (result.complete) break;
+      expect(typeof result.nextRevision).toBe("number");
+      afterRevision = result.nextRevision;
+    }
+    const changes = pages.flatMap((page) => page.changes).filter((change) => change.commandId === original.commandId);
+    expect(changes).toHaveLength(1);
+    expect(changes[0].projectId).toBe(projectId);
+    expect(changes[0].actor).toEqual({ id: "local-owner", type: "human" });
+    expect(changes[0].domains).toEqual([{ domain: "body", id: card.body.id }]);
+    expect(changes[0].before.body.versionId).toBe(original.expected);
+    expect(changes[0].after.body.versionId).toBe(responses[0].body.versions.body);
+    expect(changes[0].after.body.blocks[0].text).toBe(text);
+    await page.reload();
+    await expect(page.getByRole("tab", { selected: true })).toHaveAttribute("title", projectId);
+    await expect(restore).toHaveCount(0);
+    expect((await draftProject(page)).cards[0].body.blocks[0].text).toBe(text);
+    expect(await page.evaluate((key) => localStorage.getItem(key), damagedKey)).toBe(raw);
+    expect(requests).toEqual([original, original]);
+    await testInfo.attach("damaged-pending-retry-runtime", { contentType: "application/json",
+      body: JSON.stringify({ projectId, original, requests, forwarded, responses, held, reopened, pages,
+        damagedRaw: raw, retained: await page.evaluate((key) => localStorage.getItem(key), damagedKey) }) });
+  } finally {
+    release();
+    await page.unrouteAll({ behavior: "wait" });
   }
 });
 

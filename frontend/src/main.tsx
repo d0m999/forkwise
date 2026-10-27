@@ -25,6 +25,9 @@ import { captureCardDeletion, incidentConnectorVersions } from './connector-dele
 import { ConnectorCreateControls, ConnectorEndpointControls, ConnectorHandles, ConnectorPathControls } from './connector-controls';
 import { useConnectorTargets } from './connector-targets';
 import { CanvasConnector, ConnectorPreview, ConnectorEntries } from './canvas-connector';
+import { useConnectorLabelEdit } from './connector-label-edit';
+import { DetachedConnectorLabelEditor } from './connector-label';
+import type { CanvasConnector as Connector } from '../../backend/src/mapping/connector-contracts';
 import { ShapeTools, type ShapeType } from './shape-tools';
 import { useCanvasTexts } from './text-session';
 import { ProjectSearch } from './project-search';
@@ -253,7 +256,9 @@ function Workspace() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [state, setState] = useState<ProjectState | null>(null);
   const authority = useRef<ProjectState | null>(null);
-  const [selectedConnector, setSelectedConnector] = useState<string | null>(null);
+  const [selectedConnectors, setSelectedConnectors] = useState<string[]>([]);
+  const selectedConnector = selectedConnectors.length === 1 ? selectedConnectors[0]! : null;
+  function setSelectedConnector(id: string | null) { setSelectedConnectors(id ? [id] : []); }
   const strokeSelected = selection.some(id => state?.strokes?.some(stroke => stroke.item.id === id));
   const [syncNotice, setSyncNotice] = useState("");
   const [nav, setNav] = useState(false),
@@ -495,11 +500,14 @@ function Workspace() {
     { type: "history.undo" | "history.redo" }
   > | null>(null);
   const historyActionId = useRef<string | null>(null);
+  const connectorLabelHistory = useRef<{ projectId: string; id: string; versionId: string } | null>(null);
+  const [connectorLabelHistoryBusy, setConnectorLabelHistoryBusy] = useState(false);
   const connectorPending = useRef<() => boolean>(() => false);
   const historyBlocked = historyBusy || !!historyCommand.current || connectorPending.current();
   async function travel(
     direction: "undo" | "redo" | "retry",
     restoreActionId?: string,
+    keepConnectorLabel = false,
   ) {
     const ownerProjectId = authority.current?.project.id;
     if (
@@ -512,10 +520,17 @@ function Workspace() {
       (historyCommand.current ? direction !== "retry" : direction === "retry")
     )
       return;
-    if (!(await shapeMove.flush()) || !(await shapeText.finish()) || !(await texts.finish())) return;
+    if (!(await shapeMove.flush()) ||
+      (!connectorLabelHistory.current && !(await (keepConnectorLabel ? connectorLabel.flush() : connectorLabel.finish()))) ||
+      !(await shapeText.finish()) || !(await texts.finish())) return;
     if (authority.current?.project.id !== ownerProjectId || connectorPending.current() || imageGeometry.hasPending(ownerProjectId) || imageInput.hasPending(ownerProjectId) ||
       historyLock.current || composition.current || pendingAction.current || strokeDraw.hasPending() ||
       (historyCommand.current ? direction !== "retry" : direction === "retry")) return;
+    if (keepConnectorLabel && !connectorLabelHistory.current) {
+      const editingLabel = connectorLabel.currentSession();
+      if (!editingLabel || editingLabel.projectId !== ownerProjectId) return;
+      connectorLabelHistory.current = { projectId: ownerProjectId, id: editingLabel.value.id, versionId: editingLabel.value.versionId };
+    }
     editorEpoch.current++;
     historyLock.current = true;
     setHistoryBusy(true);
@@ -567,6 +582,12 @@ function Workspace() {
       )
         { binding.removalActionId = historyActionId.current; binding.restoreDirection = command.type === "history.undo" ? "redo" : "undo"; }
       await refresh(projectId);
+      const labelOwner = connectorLabelHistory.current;
+      if (labelOwner?.projectId === projectId) {
+        const value = authority.current?.connectors?.find(line => line.id === labelOwner.id) ?? null;
+        const expected = receipt.connectorVersions?.[labelOwner.id] ?? labelOwner.versionId;
+        connectorLabel.acceptHistory(value, receipt.deletedIds?.includes(labelOwner.id) ? value !== null : value?.versionId !== expected);
+      }
       historyCommand.current = null;
       historyActionId.current = null;
       setHistoryNotice(
@@ -598,6 +619,8 @@ function Workspace() {
     } finally {
       historyLock.current = false;
       setHistoryBusy(false);
+      if (!historyCommand.current) connectorLabelHistory.current = null;
+      setConnectorLabelHistoryBusy(!!connectorLabelHistory.current && !!historyCommand.current);
     }
   }
   useEffect(() => {
@@ -620,7 +643,7 @@ function Workspace() {
           ["text", "search", "email", "url", "tel", "password", "number"].includes(
             input.type,
           )) ||
-        target.closest(".card-title, .shape-text-input, [contenteditable=true]")
+        target.closest(".card-title, .shape-text-input, .connector-label-input, [contenteditable=true]")
       )
         return;
       event.preventDefault();
@@ -709,7 +732,7 @@ function Workspace() {
       }
     }
     authority.current = value;
-    setSelectedConnector(previous => current?.project.id === value.project.id && value.connectors?.some(line => line.id === previous) ? previous : null);
+    setSelectedConnectors(previous => current?.project.id === value.project.id ? previous.filter(id => value.connectors?.some(line => line.id === id)) : []);
     setSelection((previous) =>
       current?.project.id !== value.project.id
         ? []
@@ -742,6 +765,103 @@ function Workspace() {
   const shapeText = useShapeTextSave(value => {
     if (authority.current?.project.id === value.project.id) updateState(value);
   });
+  const connectorLabel = useConnectorLabelEdit(value => {
+    if (authority.current?.project.id === value.project.id) updateState(value);
+  }, () => authority.current);
+  async function travelConnectorLabel(direction: 'undo' | 'redo') {
+    if (connectorLabelHistoryBusy || !connectorLabel.currentSession() || connectorLabel.isComposing()) return;
+    setConnectorLabelHistoryBusy(true);
+    try { await travel(direction, undefined, true); }
+    finally { setConnectorLabelHistoryBusy(!!connectorLabelHistory.current && !!historyCommand.current); }
+  }
+  const connectorLabelOrigin = useRef<{ projectId: string; id: string; element: HTMLElement | SVGElement } | null>(null);
+  async function finishConnectorLabel() {
+    const session = connectorLabel.currentSession(), origin = connectorLabelOrigin.current;
+    const focused = document.activeElement, epoch = editorEpoch.current;
+    if (!session || !(await connectorLabel.finish())) return;
+    requestAnimationFrame(() => {
+      if (authority.current?.project.id !== session.projectId || editorEpoch.current !== epoch || connectorLabel.currentSession() ||
+        document.activeElement !== focused && document.activeElement !== document.body) return;
+      if (origin?.projectId === session.projectId && origin.id === session.value.id && origin.element.isConnected) origin.element.focus();
+      else document.querySelector<SVGSVGElement>(`.canvas-connector[data-connector-id="${CSS.escape(session.value.id)}"]`)?.focus();
+    });
+  }
+  async function beginConnectorLabel(id: string, origin: HTMLElement | SVGElement) {
+    if (busy || historyBlocked || composition.current || pendingAction.current || connectorEdit.hasPending() || connectorCreate.hasPending()) return;
+    const projectId = authority.current?.project.id, epoch = editorEpoch.current;
+    if (!(await connectorLabel.finish()) || !(await shapeMove.flush()) || !(await shapeText.finish()) || !(await texts.finish()) || !(await appearance.flush()) || !(await cardLayout.flush()) || !(await pose.flush()) || !(await flush())) return;
+    const current = authority.current, value = current?.connectors?.find(line => line.id === id);
+    if (!current || !value || current.project.id !== projectId || editorEpoch.current !== epoch) return;
+    connectorLabelOrigin.current = { projectId: current.project.id, id, element: origin };
+    setSelection([]); setSelectedConnector(id); connectorLabel.begin(current.project.id, value);
+  }
+  async function recoverConnectorLabel(key: string, targetId: string) {
+    const projectId = authority.current?.project.id;
+    if (!projectId || busy || historyBlocked || composition.current || pendingAction.current ||
+      shapeAppearanceOwner.current || shapeRecoveryRunning.current || connectorCreate.hasPending() || connectorEdit.hasPending()) return;
+    const record = connectorLabel.recoveries.find(record => record.key === key && record.value.session.projectId === projectId && record.value.session.value.id === targetId);
+    if (!record) return;
+    const epoch = ++editorEpoch.current;
+    const stillCurrent = () => authority.current?.project.id === projectId && editorEpoch.current === epoch &&
+      !historyLock.current && !historyCommand.current && !pendingAction.current && !composition.current && !connectorLabel.isComposing() &&
+      !shapeAppearanceOwner.current && !shapeRecoveryRunning.current && !connectorCreate.hasPending() && !connectorEdit.hasPending();
+    try {
+      for (const finish of [shapeMove.flush, connectorLabel.finish, shapeText.finish, texts.finish, appearance.flush, cardLayout.flush, pose.flush, flush]) {
+        if (!stillCurrent() || !(await finish()) || !stillCurrent()) return;
+      }
+      const latest = await api.project(projectId);
+      if (!stillCurrent() || connectorLabel.currentSession() || shapeText.currentSession()) return;
+      updateState(latest); // Refresh comparison only; recovery keeps its original request and expected version.
+      if (connectorLabel.restore(key, targetId)) { connectorLabelOrigin.current = null; setSelection([]); setSelectedConnector(targetId); }
+    } catch (failure) { fail(failure); }
+  }
+  async function recoverCanvasText(key: string, kind: 'draft' | 'conflict' | 'create' | 'format') {
+    const projectId = authority.current?.project.id;
+    if (!projectId || busy || historyBlocked || composition.current || pendingAction.current ||
+      shapeAppearanceOwner.current || shapeRecoveryRunning.current || connectorCreate.hasPending() || connectorEdit.hasPending()) return;
+    const found = kind === 'draft' ? texts.recoveries.some(record => record.key === key && record.value.session.projectId === projectId)
+      : kind === 'conflict' ? texts.conflictRecoveries.some(record => record.key === key && record.value.projectId === projectId)
+        : kind === 'create' ? texts.createRecoveries.some(record => record.key === key && record.command.projectId === projectId)
+          : texts.formatRecoveries.some(record => record.key === key && record.projectId === projectId);
+    if (!found) return;
+    const epoch = ++editorEpoch.current;
+    const stillCurrent = () => authority.current?.project.id === projectId && editorEpoch.current === epoch &&
+      !historyLock.current && !historyCommand.current && !pendingAction.current && !composition.current && !connectorLabel.isComposing() &&
+      !shapeAppearanceOwner.current && !shapeRecoveryRunning.current && !connectorCreate.hasPending() && !connectorEdit.hasPending();
+    try {
+      for (const finish of [shapeMove.flush, connectorLabel.finish, shapeText.finish, texts.finish, appearance.flush, cardLayout.flush, pose.flush, flush]) {
+        if (!stillCurrent() || !(await finish()) || !stillCurrent()) return;
+      }
+      const latest = await api.project(projectId);
+      if (!stillCurrent() || connectorLabel.currentSession() || shapeText.currentSession()) return;
+      updateState(latest); // Authorization and display only; each recovery retains its original command.
+      if (kind === 'draft') await texts.recover(key);
+      else if (kind === 'conflict') texts.recoverConflict(key);
+      else if (kind === 'create') await texts.recoverCreate(key);
+      else texts.recoverFormat(key);
+    } catch (failure) { fail(failure); }
+  }
+  async function afterConnectorLabel(value: Connector, perform: (prepared: Connector) => void) {
+    const projectId = authority.current?.project.id, own = connectorLabel.currentSession();
+    if (!projectId) return;
+    if (!(await connectorLabel.finish()) || authority.current?.project.id !== projectId) return;
+    if (own && own.projectId === projectId && own.value.id === value.id) {
+      const acknowledged = connectorLabel.confirmed();
+      if (!acknowledged || acknowledged.projectId !== projectId || acknowledged.value.id !== value.id) return;
+      perform(acknowledged.value);
+    } else perform(value);
+  }
+  async function leaveConnectorLabel(itemId: string | null, lineId: string | null, extend: boolean) {
+    if (connectorLabelHistoryBusy) return;
+    const projectId = authority.current?.project.id, epoch = ++editorEpoch.current;
+    if (!(await connectorLabel.finish()) || authority.current?.project.id !== projectId || epoch !== editorEpoch.current) return;
+    if (lineId && authority.current?.connectors?.some(line => line.id === lineId)) {
+      setSelection([]); setSelectedConnectors(previous => extend ? previous.includes(lineId) ? previous.filter(id => id !== lineId) : [...previous, lineId] : [lineId]); return;
+    }
+    if (!itemId) { marqueeSelection.current = null; if (extend) return; }
+    clearConnectorSelection(); setEditing(null); titleGroup.current = null; awaitBodySelection.current = false;
+    setSelection(previous => itemId ? extend ? [...new Set([...previous, itemId])] : [itemId] : extend ? previous : []);
+  }
   const [shapeTextRecoveries, setShapeTextRecoveries] = useState<ReturnType<typeof shapeText.journal.list>>([]);
   const [shapeTextRecoveryError, setShapeTextRecoveryError] = useState("");
   useEffect(() => {
@@ -834,7 +954,7 @@ function Workspace() {
     refresh,
     async () => {
       breakBodyGroup();
-      return await shapeText.finish() && await flush();
+      return await connectorLabel.finish() && await shapeText.finish() && await flush();
     },
     (command, receipt) => cardDeletion.current?.acknowledge(command, receipt),
   );
@@ -842,7 +962,7 @@ function Workspace() {
     () => historyLock.current || !!historyCommand.current);
   const shapeMove = useShapeMove(() => authority.current, value => {
     if (authority.current?.project.id === value.project.id) updateState(value);
-  }, async () => await shapeText.finish() && await texts.finish() && await appearance.flush() &&
+  }, async () => await connectorLabel.finish() && await shapeText.finish() && await texts.finish() && await appearance.flush() &&
     await cardLayout.flush() && await pose.flush() && await flush());
   const strokeDraw = useStrokeDraw({
     projectId: () => authority.current?.project.id,
@@ -861,7 +981,7 @@ function Workspace() {
     blocked: () => connectorCreationBlocked() || connectorEdit.hasPending(),
     prepare: async projectId => {
       const epoch = ++editorEpoch.current;
-      if (!(await shapeMove.flush()) || !(await shapeText.finish()) || !(await texts.finish()) || !(await appearance.flush()) ||
+      if (!(await shapeMove.flush()) || !(await connectorLabel.finish()) || !(await shapeText.finish()) || !(await texts.finish()) || !(await appearance.flush()) ||
         !(await cardLayout.flush()) || !(await pose.flush()) || !(await flush())) return false;
       if (authority.current?.project.id !== projectId || editorEpoch.current !== epoch) return false;
       strokeDraw.setMode(null); setSelection([]); setSelectedConnector(null); setPlacing(false); setShapePreset(null); texts.setPlacing(false); setPanTool(false);
@@ -899,6 +1019,18 @@ function Workspace() {
     connectorEdit.cancel({ restoreFocus: false });
     setSelectedConnector(null);
   }
+  async function reverseConnectors() {
+    const current = authority.current;
+    if (!current || busy || historyBlocked || composition.current || pendingAction.current || connectorEdit.hasPending()) return;
+    const lines = (current.connectors ?? []).filter(line => selectedConnectors.includes(line.id));
+    if (!lines.length) return;
+    const own = connectorLabel.currentSession();
+    if (!(await connectorLabel.finish()) || authority.current?.project.id !== current.project.id) return;
+    const acknowledged = connectorLabel.confirmed();
+    const prepared = lines.map(line => own?.projectId === current.project.id && own.value.id === line.id && acknowledged?.value.id === line.id ? acknowledged.value : line);
+    void action({ commandId: crypto.randomUUID(), projectId: current.project.id, type: 'connector.reverse',
+      expected: Object.fromEntries(prepared.map(line => [line.id, line.versionId])), payload: { ids: prepared.map(line => line.id) } });
+  }
   function beginCreationToolChoice() {
     const epoch = ++editorEpoch.current;
     connectorEdit.cancel();
@@ -910,7 +1042,7 @@ function Workspace() {
     if (!projectId || busy || historyBlocked || composition.current || pendingAction.current ||
       shapeAppearance || shapeRecoveryRunning.current || strokeDraw.hasPending()) return;
     const epoch = beginCreationToolChoice();
-    if (!(await shapeMove.flush()) || !(await shapeText.finish()) || !(await texts.finish()) ||
+    if (!(await shapeMove.flush()) || !(await connectorLabel.finish()) || !(await shapeText.finish()) || !(await texts.finish()) ||
       !(await appearance.flush()) || !(await cardLayout.flush()) || !(await pose.flush()) || !(await flush())) return;
     if (authority.current?.project.id !== projectId || editorEpoch.current !== epoch || historyLock.current || historyCommand.current ||
       composition.current || pendingAction.current) return;
@@ -1014,7 +1146,7 @@ function Workspace() {
       if (connectorEdit.hasGesture() || connectorCreate.hasGesture() || strokeDraw.hasGesture() || pose.dragging || canvasMove.dragging || shapeMove.dragging || marqueeSelection.current) {
         event.preventDefault();
         cancel();
-      } else if (selectedConnector) {
+      } else if (selectedConnectors.length) {
         event.preventDefault();
         setSelectedConnector(null);
       }
@@ -1073,7 +1205,7 @@ function Workspace() {
     const all = await api.projects();
     // Keep the old project's authority while the destination is loading: the
     // visible editors may still accept input during those requests.
-    if (!(await shapeMove.flush()) || !(await shapeText.finish()) || !(await texts.finish()) || !(await pose.flush()) || !(await flush())) return false;
+    if (!(await shapeMove.flush()) || !(await connectorLabel.finish()) || !(await shapeText.finish()) || !(await texts.finish()) || !(await pose.flush()) || !(await flush())) return false;
     updateState(value);
     setProjects(all);
     return true;
@@ -1087,7 +1219,7 @@ function Workspace() {
     editorEpoch.current++;
     breakBodyGroup();
     if (
-      !(await shapeMove.flush()) || !(await shapeText.finish()) || !(await texts.finish()) ||
+      !(await shapeMove.flush()) || !(await connectorLabel.finish()) || !(await shapeText.finish()) || !(await texts.finish()) ||
       !(await appearance.flush()) ||
       !(await cardLayout.flush()) ||
       !(await pose.flush()) ||
@@ -1481,7 +1613,7 @@ function Workspace() {
     editorEpoch.current++;
     breakBodyGroup();
     if (
-      !(await shapeMove.flush()) || !(await shapeText.finish()) || !(await texts.finish()) ||
+      !(await shapeMove.flush()) || !(await connectorLabel.finish()) || !(await shapeText.finish()) || !(await texts.finish()) ||
       !(await appearance.flush()) ||
       !(await cardLayout.flush()) ||
       !(await pose.flush()) ||
@@ -1515,7 +1647,7 @@ function Workspace() {
       return true;
     } catch (e) {
       if (!executed && e instanceof MappingError &&
-        ((['connector.reconnect', 'connector.path', 'connector.move', 'connector.delete'].includes(command.type) && ['VERSION_CONFLICT', 'NOT_FOUND'].includes(e.code)) ||
+        ((['connector.reconnect', 'connector.path', 'connector.move', 'connector.delete', 'connector.style', 'connector.reverse', 'connector.label'].includes(command.type) && ['VERSION_CONFLICT', 'NOT_FOUND'].includes(e.code)) ||
           (command.type === 'connector.reconnect' && e.code === 'INVALID_ENDPOINT'))) {
         pendingAction.current = null;
         onDone?.();
@@ -1615,13 +1747,15 @@ function Workspace() {
     const point = flow.screenToFlowPosition({ x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 });
     return { projectId: current.project.id, ...point, maxWidth: rect.width * 0.6 / zoom, maxHeight: rect.height * 0.6 / zoom };
   }, action, () => historyLock.current || !!historyCommand.current);
-  const saveStatus = imageGeometry.rejected ? '图片调整未保存' : imageGeometry.pending ? '图片布局尚未确认' : imageInput.pending ? (imageInput.error ? '图片保存失败 · 原输入保留' : '图片处理中 · 尚未保存') : imageInput.recoveryError ? '部分图片恢复记录未确认' : mediaQueue.hasUnconfirmed
+  const saveStatus = connectorLabel.status || (connectorLabel.recoveryError ? '部分连线文字恢复记录未确认'
+    : connectorLabel.recoveries.some(record => record.value.session.projectId === state?.project.id && record.value.purpose !== 'preserved-remote') ? '连线文字草稿待处理'
+    : imageGeometry.rejected ? '图片调整未保存' : imageGeometry.pending ? '图片布局尚未确认' : imageInput.pending ? (imageInput.error ? '图片保存失败 · 原输入保留' : '图片处理中 · 尚未保存') : imageInput.recoveryError ? '部分图片恢复记录未确认' : mediaQueue.hasUnconfirmed
     ? "媒体结果尚未确认 · 重试确认"
     : status === "已保存到本机" && mediaTasks.length
       ? mediaTasks.some((task) => task.status === "failed")
         ? "媒体保存失败 · 重试或移除"
         : "媒体处理中 · 尚未保存"
-      : status;
+      : status);
   async function copyOriginalBody(cardId: string, before: Block[], after: Block[]) {
     const projectId=authority.current?.project.id;
     if (!projectId || !(await flush())) return;
@@ -1634,6 +1768,8 @@ function Workspace() {
   }
   async function removeCard(id: string) {
     if (composition.current || busy || historyBlocked || strokeSelected || cardDeletion.current || pendingAction.current) return;
+    const ownerProject = authority.current?.project.id;
+    if (!(await connectorLabel.finish()) || authority.current?.project.id !== ownerProject) return;
     const snapshot = authority.current, visible = snapshot?.cards.find(card => card.id === id);
     if (!snapshot || !visible) return;
     const intent = captureCardDeletion(snapshot, id);
@@ -1662,7 +1798,7 @@ function Workspace() {
     if (!projectId) return;
     const epoch = ++editorEpoch.current;
     breakBodyGroup();
-    if (!(await shapeMove.flush()) || !(await shapeText.finish()) || !(await texts.finish()) || !(await appearance.flush()) || !(await cardLayout.flush()) || !(await pose.flush()) || !(await flush())) return;
+    if (!(await shapeMove.flush()) || !(await connectorLabel.finish()) || !(await shapeText.finish()) || !(await texts.finish()) || !(await appearance.flush()) || !(await cardLayout.flush()) || !(await pose.flush()) || !(await flush())) return;
     if (epoch !== editorEpoch.current || authority.current?.project.id !== projectId ||
       ![...(authority.current.shapes ?? []), ...(authority.current.images ?? [])].some(item => item.item.id === itemId)) return;
     clearConnectorSelection();
@@ -1689,7 +1825,7 @@ function Workspace() {
     if (busy || historyBlocked || composition.current || pendingAction.current || strokeDraw.hasPending()) return;
     const projectId = authority.current?.project.id, epoch = ++editorEpoch.current;
     breakBodyGroup();
-    if (!(await shapeMove.flush()) || !(await shapeText.finish()) || !(await texts.finish()) || !(await appearance.flush()) ||
+    if (!(await shapeMove.flush()) || !(await connectorLabel.finish()) || !(await shapeText.finish()) || !(await texts.finish()) || !(await appearance.flush()) ||
       !(await cardLayout.flush()) || !(await pose.flush()) || !(await flush())) return;
     if (!projectId || editorEpoch.current !== epoch || authority.current?.project.id !== projectId ||
       !authority.current.strokes?.some(stroke => stroke.item.id === itemId)) return;
@@ -1705,7 +1841,7 @@ function Workspace() {
     if (!projectId) return;
     strokeDeleteRunning.current = true;
     try {
-      if (!(await shapeMove.flush()) || !(await shapeText.finish()) || !(await texts.finish()) || !(await appearance.flush()) ||
+      if (!(await shapeMove.flush()) || !(await connectorLabel.finish()) || !(await shapeText.finish()) || !(await texts.finish()) || !(await appearance.flush()) ||
         !(await cardLayout.flush()) || !(await pose.flush()) || !(await flush())) return;
       if (editorEpoch.current !== epoch || authority.current?.project.id !== projectId ||
         !authority.current.strokes?.some(stroke => stroke.id === captured.id && stroke.item.id === captured.item.id)) return;
@@ -1717,6 +1853,8 @@ function Workspace() {
   async function removeShape(value: CanvasShape) {
     if (busy || historyBlocked || composition.current || pendingAction.current || shapeRecoveryRunning.current ||
       shapeDeleteRunning.current || selection.length !== 1 || selection[0] !== value.item.id) return;
+    const ownerProject = authority.current?.project.id;
+    if (!(await connectorLabel.finish()) || authority.current?.project.id !== ownerProject) return;
     const snapshot = authority.current, visible = snapshot?.shapes?.find(shape => shape.id === value.id && shape.item.id === value.item.id);
     if (!snapshot || !visible || visible.versionId !== value.versionId || visible.item.versionId !== value.item.versionId) return;
     const projectId = snapshot.project.id, connectors = incidentConnectorVersions(snapshot, value.item.id);
@@ -1726,7 +1864,7 @@ function Workspace() {
     const ownGeometry = shapeMove.hasPending();
     shapeDeleteRunning.current = true;
     try {
-      if (!(await shapeMove.flush()) || !(await shapeText.finish()) || !(await texts.finish()) || !(await appearance.flush()) ||
+      if (!(await shapeMove.flush()) || !(await connectorLabel.finish()) || !(await shapeText.finish()) || !(await texts.finish()) || !(await appearance.flush()) ||
         !(await cardLayout.flush()) || !(await pose.flush()) || !(await flush())) return;
       if (editorEpoch.current !== epoch || authority.current?.project.id !== projectId ||
         !authority.current.shapes?.some(shape => shape.id === captured.id && shape.item.id === captured.item.id)) return;
@@ -1749,7 +1887,7 @@ function Workspace() {
     shapeRecoveryRunning.current = true;
     try {
       const ownText = shapeText.session?.projectId === current.project.id && shapeText.session.value.id === id;
-      if (!(await shapeMove.flush()) || !(await shapeText.finish()) || !(await texts.finish()) || !(await appearance.flush()) || !(await cardLayout.flush()) || !(await pose.flush()) || !(await flush())) return;
+      if (!(await shapeMove.flush()) || !(await connectorLabel.finish()) || !(await shapeText.finish()) || !(await texts.finish()) || !(await appearance.flush()) || !(await cardLayout.flush()) || !(await pose.flush()) || !(await flush())) return;
       const live = authority.current;
       if (editorEpoch.current !== editingIdentity || shapeAppearanceOwner.current || live?.project.id !== current.project.id ||
         !live.shapes?.some(shape => shape.id === id && shape.item.id === visible.item.id)) return;
@@ -1767,7 +1905,7 @@ function Workspace() {
     shapeRecoveryRunning.current = true;
     try {
       const record = shapeJournal.list().find(value => value.key === key && value.value.projectId === projectId);
-      if (!record || !(await shapeMove.flush()) || !(await shapeText.finish()) || !(await texts.finish()) || !(await appearance.flush()) || !(await cardLayout.flush()) || !(await pose.flush()) || !(await flush())) return;
+      if (!record || !(await shapeMove.flush()) || !(await connectorLabel.finish()) || !(await shapeText.finish()) || !(await texts.finish()) || !(await appearance.flush()) || !(await cardLayout.flush()) || !(await pose.flush()) || !(await flush())) return;
       await api.project(projectId); // Recheck current authorization; never use this read as the draft's expected version.
       if (authority.current?.project.id !== projectId || editorEpoch.current !== editingIdentity || shapeAppearanceOwner.current) return;
       shapeJournal.write(record.value); // Adopt durably before retiring the selected old record.
@@ -1787,7 +1925,7 @@ function Workspace() {
   }
   async function beginShapeText(id: string) {
     if (busy || historyBlocked || composition.current || pendingAction.current || shapeRecoveryRunning.current) return;
-    if (!(await shapeMove.flush()) || !(await shapeText.finish()) || !(await texts.finish()) || !(await appearance.flush()) || !(await cardLayout.flush()) || !(await pose.flush()) || !(await flush())) return;
+    if (!(await shapeMove.flush()) || !(await connectorLabel.finish()) || !(await shapeText.finish()) || !(await texts.finish()) || !(await appearance.flush()) || !(await cardLayout.flush()) || !(await pose.flush()) || !(await flush())) return;
     const current = authority.current, value = current?.shapes?.find(shape => shape.id === id);
     if (!current || !value) return;
     setSelection([value.item.id]); setEditing(null); titleGroup.current = null;
@@ -1800,7 +1938,7 @@ function Workspace() {
     shapeRecoveryRunning.current = true;
     try {
       const record = shapeText.journal.list().find(value => value.key === key && value.value.session.projectId === projectId);
-      if (!record || !(await shapeMove.flush()) || !(await shapeText.finish()) || !(await texts.finish()) || !(await appearance.flush()) || !(await cardLayout.flush()) || !(await pose.flush()) || !(await flush())) return;
+      if (!record || !(await shapeMove.flush()) || !(await connectorLabel.finish()) || !(await shapeText.finish()) || !(await texts.finish()) || !(await appearance.flush()) || !(await cardLayout.flush()) || !(await pose.flush()) || !(await flush())) return;
       const editingIdentity = editorEpoch.current;
       await api.project(projectId); // Authorization only; the journal retains its own expected versions.
       if (authority.current?.project.id !== projectId || editorEpoch.current !== editingIdentity || shapeText.currentSession()) return;
@@ -1812,7 +1950,7 @@ function Workspace() {
   }
   async function leaveShapeSelection(itemId: string | null, extend: boolean) {
     const projectId = authority.current?.project.id;
-    if (!(await shapeMove.flush()) || !(await shapeText.finish()) || authority.current?.project.id !== projectId) return;
+    if (!(await shapeMove.flush()) || !(await connectorLabel.finish()) || !(await shapeText.finish()) || authority.current?.project.id !== projectId) return;
     const current = authority.current;
     if (itemId && current && [...current.cards, ...(current.texts ?? []), ...(current.shapes ?? [])].some(value => value.item.id === itemId)) {
       setSelection(previous => extend ? [...new Set([...previous, itemId])] : [itemId]);
@@ -1858,7 +1996,7 @@ function Workspace() {
     const projectId = authority.current?.project.id;
     breakBodyGroup();
     await flush();
-    if (!(await shapeMove.flush()) || !(await shapeText.finish())) return;
+    if (!(await shapeMove.flush()) || !(await connectorLabel.finish()) || !(await shapeText.finish())) return;
     if (authority.current?.project.id !== projectId || (field === "body" && epoch !== editorEpoch.current) || !valid()) return;
     // A failed save belongs to the old card; switching the visible editor
     // never changes that draft's target or its pending command.
@@ -1882,7 +2020,7 @@ function Workspace() {
   async function openSearch(reading: SearchReading, valid: () => boolean) {
     const projectId = authority.current?.project.id;
     if (!valid() || !projectId || composition.current || historyLock.current) return false;
-    if (!(await shapeMove.flush()) || !(await shapeText.finish())) return false;
+    if (!(await shapeMove.flush()) || !(await connectorLabel.finish()) || !(await shapeText.finish())) return false;
     const identity = await api.cardIdentity(projectId, reading.result.cardId);
     if (!valid() || authority.current?.project.id !== projectId || identity.availability !== 'available' || identity.card.body.versionId !== reading.result.bodyVersion || identity.card.versionId !== reading.result.thoughtVersion) return false;
     const card = identity.card;
@@ -1963,7 +2101,7 @@ function Workspace() {
       window.removeEventListener("beforeunload", beforeUnload);
     };
   }, []);
-  const texts = useCanvasTexts(state, selection, ids => { void shapeMove.flush().then(ok => ok && shapeText.finish()).then(ok => { if (ok) { clearConnectorSelection(); setSelection(ids); } }); }, updateState, async () => await shapeText.finish() && await flush());
+  const texts = useCanvasTexts(state, selection, ids => { void shapeMove.flush().then(ok => ok && connectorLabel.finish()).then(ok => ok && shapeText.finish()).then(ok => { if (ok) { clearConnectorSelection(); setSelection(ids); } }); }, updateState, async () => await connectorLabel.finish() && await shapeText.finish() && await flush());
   const canvasMove = useCanvasMove(state, selection, (prepare, done) => texts.enqueueGeometry(async () => {
     if (!(await shapeMove.flush())) throw new Error("请先确认形状布局保存，整组移动意图仍保留");
     return prepare();
@@ -1972,7 +2110,12 @@ function Workspace() {
     ...node,
     data: {
       ...node.data,
-      edit: () => { void shapeMove.flush().then(ok => ok && shapeText.finish()).then(ok => { if (ok) node.data.edit(); }); },
+      edit: () => {
+        const projectId = authority.current?.project.id, epoch = ++editorEpoch.current;
+        const stillCurrent = () => authority.current?.project.id === projectId && editorEpoch.current === epoch;
+        void shapeMove.flush().then(ok => ok && stillCurrent() && connectorLabel.finish())
+          .then(ok => ok && stillCurrent() && shapeText.finish()).then(ok => { if (ok && stillCurrent()) node.data.edit(); });
+      },
       moveDisabled: strokeSelected || node.data.moveDisabled || busy || historyBlocked || pose.pending || shapeMove.pending || shapeMove.dragging || !!shapeText.session,
       move: (dx: number, dy: number) => {
         if (strokeSelected || busy || historyBlocked || pose.pending || node.data.moveDisabled) return;
@@ -2087,6 +2230,14 @@ function Workspace() {
       className="workspace"
       data-snapshot={state?.snapshot}
       data-revision={state?.project.revision}
+      onClickCapture={event => {
+        const target = event.target as Element;
+        if (connectorLabel.currentSession() && !connectorLabelHistoryBusy && !target.closest('.connector-label-session') &&
+          (!target.closest('.connector-tools') || target.closest('.connector-label-position input')) &&
+          (target.closest('.react-flow__controls') || !target.closest('.react-flow__node, .react-flow__pane, .canvas-connector, .connector-label'))) {
+          void connectorLabel.finish();
+        }
+      }}
     >
       {syncNotice && (
         <div className="recovery-error" aria-live="polite">
@@ -2187,6 +2338,13 @@ function Workspace() {
         }}
         onClickCapture={(event) => {
           if (connectorCreate.consumeClick({ x: event.clientX, y: event.clientY })) { event.preventDefault(); event.stopPropagation(); return; }
+          if (connectorLabel.session && !(event.target as Element).closest('.connector-label-session, .connector-tools, .react-flow__controls') &&
+            (event.target as Element).closest('.react-flow__node, .react-flow__pane, .canvas-connector, .connector-label')) {
+            event.preventDefault(); event.stopPropagation();
+            const target = event.target as Element, itemId = target.closest<HTMLElement>('.react-flow__node')?.dataset.id ?? null;
+            const lineId = target.closest<HTMLElement | SVGElement>('[data-connector-id]')?.dataset.connectorId ?? null;
+            void leaveConnectorLabel(itemId, lineId, event.shiftKey); return;
+          }
           if (imageGeometry.cropping?.projectId === state?.project.id && state && !(event.target as Element).closest('.image-crop')) {
             event.preventDefault(); event.stopPropagation(); return;
           }
@@ -2267,7 +2425,7 @@ function Workspace() {
               "controls.zoomOut.ariaLabel": "缩小",
               "controls.fitView.ariaLabel": "适应画布",
             }}
-            nodes={orderCanvas([...nodes, ...textNodes, ...imageNodes(state.images ?? [], state.project.id, selection, (id, extend) => void chooseCanvasItem(id, extend), busy || historyBlocked || composition.current || !!pendingAction.current || placing || !!shapePreset || texts.placing || panTool || !!strokeDraw.mode || !!shapeText.session || texts.geometryBlocked, imageGeometry, (value, dx, dy) => { if (canvasMove.start(value.item.id)) canvasMove.finish({ x: value.item.pose.x + dx, y: value.item.pose.y + dy }); }), ...shapeNodes(state.shapes ?? [], selection, (id, extend) => void chooseCanvasItem(id, extend), busy || historyBlocked || placing || !!shapePreset || texts.placing || panTool, id => void beginShapeText(id), !!shapeText.session, (id, trigger) => void beginShapeAppearance(id, trigger), value => void removeShape(value), shapeMove.positions, shapeMove, composition.current || !!pendingAction.current || pose.pending || pose.dragging || canvasMove.dragging || texts.hasPending() || appearance.pending || cardLayout.pending), ...strokeNodes(state.strokes ?? [], selection, (id, extend) => void chooseStrokeItem(id, extend), value => void removeStroke(value), busy || historyBlocked || !!pendingAction.current || placing || !!shapePreset || texts.placing || panTool || !!strokeDraw.mode || !!shapeText.session)].map(node => ({ ...node, position: shapeMove.positions[node.id] ?? canvasMove.positions[node.id] ?? node.position, draggable: node.draggable !== false && !strokeSelected && !strokeDraw.mode && !busy && !historyBlocked && !panTool && !placing && !shapePreset && !texts.placing && !texts.geometryBlocked && !shapeText.session && !shapeMove.pending })), state, selection)}
+            nodes={orderCanvas([...nodes, ...textNodes, ...imageNodes(state.images ?? [], state.project.id, selection, (id, extend) => void chooseCanvasItem(id, extend), busy || historyBlocked || composition.current || !!pendingAction.current || placing || !!shapePreset || texts.placing || panTool || !!strokeDraw.mode || !!shapeText.session || texts.geometryBlocked, imageGeometry, (value, dx, dy) => { if (canvasMove.start(value.item.id)) canvasMove.finish({ x: value.item.pose.x + dx, y: value.item.pose.y + dy }); }), ...shapeNodes(state.shapes ?? [], selection, (id, extend) => void chooseCanvasItem(id, extend), busy || historyBlocked || placing || !!shapePreset || texts.placing || panTool, id => void beginShapeText(id), !!shapeText.session, (id, trigger) => void beginShapeAppearance(id, trigger), value => void removeShape(value), shapeMove.positions, shapeMove, composition.current || !!pendingAction.current || pose.pending || pose.dragging || canvasMove.dragging || texts.hasPending() || appearance.pending || cardLayout.pending), ...strokeNodes(state.strokes ?? [], selection, (id, extend) => void chooseStrokeItem(id, extend), value => void removeStroke(value), busy || historyBlocked || !!pendingAction.current || placing || !!shapePreset || texts.placing || panTool || !!strokeDraw.mode || !!shapeText.session)].map(node => ({ ...node, position: shapeMove.positions[node.id] ?? canvasMove.positions[node.id] ?? node.position, draggable: node.draggable !== false && !strokeSelected && !strokeDraw.mode && !busy && !historyBlocked && !panTool && !placing && !shapePreset && !texts.placing && !texts.geometryBlocked && !shapeText.session && !connectorLabel.session && !shapeMove.pending })), state, selection)}
             onNodeClick={(event, node) => {
               awaitBodySelection.current = false;
               clearConnectorSelection();
@@ -2278,7 +2436,7 @@ function Workspace() {
               else if (!selection.includes(node.id) || selection.length === 1) setSelection([node.id]);
             }}
             nodeDragThreshold={0}
-            selectionOnDrag={!placing && !shapePreset && !strokeDraw.mode && !connectorCreate.mode && !panTool && !texts.placing && !shapeText.session}
+            selectionOnDrag={!placing && !shapePreset && !strokeDraw.mode && !connectorCreate.mode && !panTool && !texts.placing && !shapeText.session && !connectorLabel.session}
             selectionKeyCode={null}
             multiSelectionKeyCode="Shift"
             selectionMode={SelectionMode.Full}
@@ -2317,7 +2475,7 @@ function Workspace() {
               const keep = marqueeSelection.current?.shift
                 ? marqueeSelection.current.previous
                 : [];
-              if (selected.length && !shapeText.session)
+              if (selected.length && !shapeText.session && !connectorLabel.session)
                 setSelection((previous) => {
                   const next = new Set(previous);
                   for (const change of selected)
@@ -2370,12 +2528,18 @@ function Workspace() {
             <Background gap={24} color="#dce0e7" />
             <Controls showInteractive={false} />
             <ViewportPortal>
-              {(state.connectors ?? []).map(value => <CanvasConnector key={value.id} value={value} selected={selectedConnector === value.id} resolve={connectorTargets.resolve}
+              {(state.connectors ?? []).map(value => <CanvasConnector key={value.id} value={value} selected={selectedConnectors.includes(value.id)} resolve={connectorTargets.resolve}
+                labelEditor={{ ...connectorLabel, begin: origin => void beginConnectorLabel(value.id, origin), finish: () => void finishConnectorLabel(),
+                  history: travelConnectorLabel, locked: connectorLabelHistoryBusy,
+                  blocked: busy || historyBlocked || composition.current || !!pendingAction.current || !!connectorLabel.session || connectorEdit.hasPending(),
+                  move: (original, position) => { if (original.label) void action({ commandId: crypto.randomUUID(), projectId: state.project.id, type: 'connector.label', expected: original.versionId,
+                    payload: { id: original.id, label: { ...original.label, position } } }); } }}
                 focus={connectorCreate.focusId === value.id || connectorEdit.focusId === value.id}
                 focused={() => { if (connectorCreate.focusId === value.id) connectorCreate.focused(); if (connectorEdit.focusId === value.id) connectorEdit.focused(); }}
-                drag={event => connectorEdit.move(value, event)}
-                choose={() => { if (!connectorCreate.hasPending() && !connectorEdit.hasPending()) { setSelection([]); setSelectedConnector(value.id); } }} />)}
-              {(state.connectors ?? []).filter(value => value.id === selectedConnector).map(value => <ConnectorHandles key={value.id} value={value}
+                drag={event => { if (!connectorLabel.session) connectorEdit.move(value, event); }}
+                choose={extend => { if (!connectorCreate.hasPending() && !connectorEdit.hasPending()) { editorEpoch.current++; setSelection([]);
+                  setSelectedConnectors(previous => extend ? previous.includes(value.id) ? previous.filter(id => id !== value.id) : [...previous, value.id] : [value.id]); } }} />)}
+              {!connectorLabel.session && (state.connectors ?? []).filter(value => value.id === selectedConnector).map(value => <ConnectorHandles key={value.id} value={value}
                 resolve={connectorTargets.resolve} blocked={busy || historyBlocked || composition.current || !!pendingAction.current}
                 start={(endpoint, event) => connectorEdit.start(value, endpoint, event)} activate={(endpoint, origin) => connectorEdit.startKeyboard(value, endpoint, origin)} />)}
               <ConnectorPreview draft={connectorEdit.draft?.projectId === state.project.id ? connectorEdit.draft : null} />
@@ -2427,9 +2591,19 @@ function Workspace() {
           choose={connectorEdit.chooseFree} cancel={connectorEdit.cancel} />}
         {state && (!connectorEdit.keyboardActive || connectorEdit.keyboardMoving) && (state.connectors ?? []).filter(value => value.id === selectedConnector).map(value =>
           <ConnectorPathControls key={value.id} value={value} blocked={busy || historyBlocked || composition.current || !!pendingAction.current || connectorEdit.hasPending()}
-            choose={(path, origin) => connectorEdit.path(value, path, origin)} remove={() => connectorEdit.remove(value)}
+            appearance={style => void afterConnectorLabel(value, prepared => { void action({ commandId: crypto.randomUUID(), projectId: state.project.id, type: 'connector.style', expected: prepared.versionId, payload: { id: prepared.id, style } }); })}
+            reverse={reverseConnectors}
+            editLabel={origin => void beginConnectorLabel(value.id, origin)}
+            labelStyle={patch => void afterConnectorLabel(value, prepared => {
+              if (prepared.label) void action({ commandId: crypto.randomUUID(), projectId: state.project.id, type: 'connector.label', expected: prepared.versionId,
+                payload: { id: prepared.id, label: { ...prepared.label, ...patch } } });
+            })}
+            choose={(path, origin) => void afterConnectorLabel(value, prepared => connectorEdit.path(prepared, path, origin))} remove={() => void afterConnectorLabel(value, connectorEdit.remove)}
             move={{ active: connectorEdit.keyboardMoving, blocked: connectorEdit.keyboardBlocked(), composing: () => composition.current,
-              start: origin => connectorEdit.startKeyboard(value, 'line', origin), preview: connectorEdit.previewMove, finish: connectorEdit.chooseMove, cancel: connectorEdit.cancel }} />)}
+              start: origin => void afterConnectorLabel(value, prepared => connectorEdit.startKeyboard(prepared, 'line', origin)), preview: connectorEdit.previewMove, finish: connectorEdit.chooseMove, cancel: connectorEdit.cancel }} />)}
+        {state && selectedConnectors.length > 1 && <div className="creation-tools connector-tools" role="toolbar" aria-label="连线多选">
+          <span>已选 {selectedConnectors.length} 条连线</span><button type="button" disabled={busy || historyBlocked || composition.current || !!pendingAction.current || connectorEdit.hasPending()} onClick={reverseConnectors}>反转方向</button>
+        </div>}
         {state && (
           <div className="creation-tools" aria-label="创作工具">
             <button
@@ -2644,6 +2818,15 @@ function Workspace() {
           </button>
         </section>
       )}
+      {connectorLabel.session?.projectId === state?.project.id && !state?.connectors?.some(line => line.id === connectorLabel.session?.value.id) &&
+        <DetachedConnectorLabelEditor editor={{ ...connectorLabel, finish: () => void finishConnectorLabel(), history: travelConnectorLabel, locked: connectorLabelHistoryBusy }} />}
+      {(connectorLabel.recoveryError || connectorLabel.recoveries.some(record => record.value.session.projectId === state?.project.id)) &&
+        <section className="recovery-panel" aria-label="连线文字恢复">
+          {connectorLabel.recoveryError && <p role="alert">{connectorLabel.recoveryError}</p>}
+          {connectorLabel.recoveries.filter(record => record.value.session.projectId === state?.project.id).map(record =>
+            <button key={record.key} disabled={busy || historyBlocked || !!connectorLabel.session}
+              onClick={() => void recoverConnectorLabel(record.key, record.value.session.value.id)}>{record.value.purpose === 'preserved-remote' ? '查看已保存文字副本' : '恢复连线文字'}</button>)}
+        </section>}
       {hasRecovery && (
         <section className="recovery-panel" aria-label="草稿恢复">
           <h2>可恢复草稿</h2>
@@ -2709,10 +2892,10 @@ function Workspace() {
         {state && shapeTextRecoveryError && <span role="alert">{shapeTextRecoveryError}</span>}
         {shapeMove.error && <><span role="alert">{shapeMove.error}</span><button disabled={shapeMove.working || !!shapeMove.conflict} onClick={() => void shapeMove.retry()}>{shapeMove.transforming ? "重试保存形状尺寸" : "重试保存形状位置"}</button></>}
         {texts.mixedRecoveries.map(record => <button key={record.key} onClick={() => texts.recoverMixedMove(record.key)}>恢复混合移动草稿</button>)}
-        {texts.conflictRecoveries.map(record => <button key={record.key} onClick={() => texts.recoverConflict(record.key)}>恢复独立文字草稿</button>)}
-        {texts.createRecoveries.map(record => <button key={record.key} onClick={() => void texts.recoverCreate(record.key)}>恢复独立文字草稿</button>)}
-        {texts.formatRecoveries.map(record => <button key={record.key} onClick={() => texts.recoverFormat(record.key)}>恢复独立文字草稿</button>)}
-        {texts.recoveries.map(record => <button key={record.key} onClick={() => void texts.recover(record.key)}>恢复独立文字草稿</button>)}
+        {texts.conflictRecoveries.map(record => <button key={record.key} onClick={() => void recoverCanvasText(record.key, 'conflict')}>恢复独立文字草稿</button>)}
+        {texts.createRecoveries.map(record => <button key={record.key} onClick={() => void recoverCanvasText(record.key, 'create')}>恢复独立文字草稿</button>)}
+        {texts.formatRecoveries.map(record => <button key={record.key} onClick={() => void recoverCanvasText(record.key, 'format')}>恢复独立文字草稿</button>)}
+        {texts.recoveries.map(record => <button key={record.key} onClick={() => void recoverCanvasText(record.key, 'draft')}>恢复独立文字草稿</button>)}
         {texts.error && <><span role="alert">{texts.error}</span><button onClick={() => void texts.retry()}>重试{texts.operationScope}保存</button></>}
         {mediaQueue.hasUnconfirmed && <button onClick={mediaQueue.retryUnconfirmed} disabled={historyBlocked}>重试媒体保存确认</button>}
         <span role="status" aria-live="polite">
