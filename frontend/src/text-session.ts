@@ -157,6 +157,16 @@ export function useCanvasTexts(
     moving.current = state?.texts?.find((text) => text.item.id === id) ?? null;
     return !!moving.current;
   }
+  function cancelMove() {
+    const value = moving.current;
+    moving.current = null;
+    if (!value) return;
+    setPositions((previous) => {
+      const next = { ...previous };
+      delete next[value.item.id];
+      return next;
+    });
+  }
   function previewMove(id: string, point: { x: number; y: number }) {
     if (!state?.texts?.some((text) => text.item.id === id)) return false;
     setPositions((previous) => ({ ...previous, [id]: point }));
@@ -459,6 +469,8 @@ export function useCanvasTexts(
       (await save.flush()),
     enqueueGeometry,
     geometryBlocked: operations.pending || mixedConflict.hasPending(),
+    hasMove: () => !!moving.current,
+    cancelMove,
     startMove,
     previewMove,
     finishMove,

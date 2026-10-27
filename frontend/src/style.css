@@ -1147,3 +1147,23 @@ body:has(.workspace[data-board-full="true"]) .card-tooltip { display: none; }
 .image-crop-frame { position: absolute; border: var(--body-focus-outline-width) solid var(--canvas-selection-color); }
 .image-crop-handle { position: absolute; transform: translate(-50%, -50%); width: var(--image-handle-size); height: var(--image-handle-size); padding: 0; border: var(--text-tool-stroke) solid var(--canvas-selection-color); background: var(--card-color-ffffff); touch-action: none; }
 .image-crop-actions { position: absolute; display: flex; flex-wrap: wrap; width: max-content; white-space: nowrap; }
+
+.canvas-group-outline {
+  position: absolute;
+  pointer-events: none;
+  border: 1px solid var(--canvas-selection-color);
+  border-radius: 6px;
+  opacity: 0.5;
+}
+.canvas-group-outline[data-selected="true"] { border-width: 2px; opacity: 1; }
+.canvas-group-tools {
+  position: absolute;
+  display: flex;
+  gap: 6px;
+  padding: 5px;
+  background: var(--card-color-ffffff);
+  border: 1px solid var(--canvas-selection-color);
+  border-radius: 8px;
+  pointer-events: auto;
+  z-index: 1000;
+}

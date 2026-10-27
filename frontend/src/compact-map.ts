@@ -1,4 +1,5 @@
 import type { CanvasConnector } from '../../backend/src/mapping/connector-contracts';
+import { groupProjection, type Containment, type GroupIndex } from './canvas-group-projection';
 import type { ConnectorIndex } from '../../backend/src/mapping/compact-contracts';
 import type { CanvasImage, ImageVersion } from '../../backend/src/mapping/image-contracts';
 import type { ImageIndex } from '../../backend/src/mapping/compact-contracts';
@@ -209,6 +210,10 @@ export async function readCompactMap(
     }
     connectors.push(value);
   }
+  const groupPage = await collect<GroupIndex>({ view: 'group-index', snapshot: index.first.snapshot });
+  const containmentPage = await collect<Containment>({ view: 'containment', snapshot: index.first.snapshot });
+  const grouping = groupProjection(index.first, groupPage, containmentPage,
+    [...cards, ...texts, ...shapes, ...images, ...strokes]);
   return {
     project: index.first.project,
     cards,
@@ -218,6 +223,7 @@ export async function readCompactMap(
     strokes,
     images,
     connectors,
+    ...grouping,
     snapshot: index.first.snapshot,
   };
 }
