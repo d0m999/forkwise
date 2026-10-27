@@ -13,6 +13,42 @@ async function frameColors(frame: Locator) {
   return colors;
 }
 
+test('未成组GIF保存拖动后内联播放控件仍响应下一次真实点击', async ({ page, workspace }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  const projectId = (await workspace.state()).project.id, bytes = twoFrameGif();
+  await workspace.execute(page, { commandId: crypto.randomUUID(), projectId, type: 'asset.save', expected: null,
+    payload: { id: 'gif-drag-asset', name: '拖后动图.gif', mime: 'image/gif', base64: bytes.toString('base64') } });
+  await workspace.execute(page, { commandId: crypto.randomUUID(), projectId, type: 'image.create', expected: null,
+    payload: { id: 'gif-drag-image', content: { assetId: 'gif-drag-asset', crop: { x: 0, y: 0, width: 1, height: 1 } },
+      pose: { x: 300, y: 180, width: 160, height: 120, rotation: 0 } } });
+  await page.reload(); await expect(page.getByRole('status')).toHaveText('已保存到本机');
+  const visual = page.getByRole('img', { name: '拖后动图.gif', exact: true }); await visual.click();
+  const before = await workspace.state();
+  expect(before.images).toHaveLength(1); expect(before.groups).toEqual([]); expect(before.containment).toEqual([]);
+  expect(before.images![0]).toMatchObject({ id: 'gif-drag-image', content: { assetId: 'gif-drag-asset', crop: { x: 0, y: 0, width: 1, height: 1 } },
+    item: { pose: { x: 300, y: 180, width: 160, height: 120, rotation: 0 } } });
+  const asset = await (await page.request.get(workspace.origin + '/api/mapping/projects/' + projectId + '/assets/gif-drag-asset')).json();
+  expect(asset).toMatchObject({ name: '拖后动图.gif', mime: 'image/gif' }); expect(Buffer.from(asset.base64, 'base64')).toEqual(bytes);
+  const node = page.locator('.react-flow__node[data-id="' + before.images![0]!.item.id + '"]');
+  await expect(node).toHaveClass(/selected/);
+  const play = node.getByRole('button', { name: '播放动图', exact: true }), pause = node.getByRole('button', { name: '暂停动图', exact: true });
+  await play.click(); await expect(pause).toBeVisible();
+  expect(new Set(await frameColors(visual))).toEqual(new Set(['255,0,0,255', '0,255,0,255']));
+  await pause.click(); await expect(play).toBeVisible(); expect(new Set(await frameColors(visual)).size).toBe(1);
+  const writes: any[] = [];
+  page.on('request', request => { if (request.url().endsWith('/api/mapping/execute') && request.method() === 'POST') writes.push(request.postDataJSON()); });
+  const box = (await visual.boundingBox())!, x = box.x + box.width / 2, y = box.y + box.height / 2;
+  await page.mouse.move(x, y); await page.mouse.down(); await page.mouse.move(x + 80, y + 50, { steps: 5 }); await page.mouse.up();
+  await expect.poll(async () => (await workspace.state()).images![0]!.item.pose).toEqual({ x: 380, y: 230, width: 160, height: 120, rotation: 0 });
+  await expect(page.getByRole('status')).toHaveText('已保存到本机'); await expect(node).toHaveClass(/selected/);
+  expect(writes).toHaveLength(1); expect(writes[0]).toMatchObject({ type: 'canvas.move', payload: { targets: [{ kind: 'image', id: 'gif-drag-image', x: 380, y: 230 }] } });
+  const saved = await workspace.state();
+  // No ordinary node pointerdown intervenes between the completed drag and this control click.
+  await play.click(); await expect(pause).toBeVisible();
+  expect(new Set(await frameColors(visual))).toEqual(new Set(['255,0,0,255', '0,255,0,255']));
+  expect(await workspace.state()).toEqual(saved); expect(writes).toHaveLength(1);
+});
+
 test('独立GIF与大图复用播放暂停和减少动态，真实帧变化且原件保持', async ({ page, workspace }) => {
   await page.emulateMedia({ reducedMotion: 'reduce' });
   const bytes = twoFrameGif(), chooser = page.waitForEvent('filechooser'); await page.getByRole('button', { name: '图片', exact: true }).click();

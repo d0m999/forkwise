@@ -2404,7 +2404,7 @@ function Workspace() {
             return;
           }
           const itemId = (event.target as Element).closest<HTMLElement>('.react-flow__node')?.dataset.id;
-          if (itemId && canvasSelection.consumeClick(itemId, event.shiftKey)) { event.preventDefault(); event.stopPropagation(); }
+          if (itemId && !(event.target as Element).closest('.nodrag, input, textarea, [contenteditable=true]') && canvasSelection.consumeClick(itemId, event.shiftKey)) { event.preventDefault(); event.stopPropagation(); }
         }}
         onPointerMoveCapture={event => { if (!connectorEdit.input(event) && !connectorCreate.input(event)) strokeDraw.move(event); }}
         onPointerUpCapture={event => { if (!connectorEdit.input(event) && !connectorCreate.input(event)) strokeDraw.finish(event); }}
@@ -2422,6 +2422,7 @@ function Workspace() {
           if (shapeText.session && (event.target as Element).closest('.react-flow__node, .react-flow__pane') && !(event.target as Element).closest('.shape-text-session, .shape-text-actions')) {
             event.preventDefault(); event.stopPropagation(); return;
           }
+          canvasSelection.retirePointer();
           const hit = (event.target as Element).closest<HTMLElement>('.react-flow__node')?.dataset.id;
           if (hit && event.button === 0 && !(event.target as Element).closest('.nodrag, input, textarea, [contenteditable=true]')) {
             const captured = canvasSelection.capture(hit, event.shiftKey);

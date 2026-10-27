@@ -70,8 +70,9 @@ export function useCanvasSelection(state: ProjectState | null) {
     beginDrag(id: string) { const p = pointer.current; if (p?.id === id) { p.dragged = true; set(p.drag); } },
     finishDrag() { if (pointer.current) pointer.current.finished = true; },
     cancelDrag() { const p = pointer.current; if (p?.dragged && !p.finished) { set(p.before); p.finished = true; } },
+    retirePointer() { pointer.current = null; },
     consumeClick(id: string, extend: boolean) {
-      if (pointer.current?.dragged) return true;
+      if (pointer.current?.dragged && pointer.current.id === id) { pointer.current = null; return true; }
       if (state?.groups?.some(g => g.memberItemIds.includes(id))) { choose(id, extend); return true; }
       return false;
     },
