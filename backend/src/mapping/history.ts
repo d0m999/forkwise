@@ -131,7 +131,7 @@ export function recordAction(
     save(db, command.projectId, stack);
     return;
   }
-  if (command.type === 'canvas.move' || command.type === 'group.move') {
+  if (command.type === 'canvas.move' || command.type === 'group.move' || command.type === 'canvas.move-selection') {
     const target = change.cardChanges?.[0]?.after ?? change.textChanges?.[0]?.after ?? change.shapeChanges?.[0]?.after ?? change.imageChanges?.[0]?.after ?? change.strokeChanges?.[0]?.after;
     if (!target) return;
     stack.undo.push({ session, lastRevision: change.revision, id: command.commandId, label: command.type, target: { id: target.id, title: 'title' in target ? target.title : 'shortText' in target.content ? target.content.shortText : 'runs' in target.content ? target.content.runs.map(run => run.text).join('') : 'penKind' in target.content ? target.content.penKind === 'highlighter' ? '荧光笔' : '笔迹' : '图片' }, actor: change.actor, before: null, after: null, cardChanges: change.cardChanges ?? [], textChanges: change.textChanges ?? [], shapeChanges: change.shapeChanges ?? [], imageChanges: change.imageChanges ?? [], strokeChanges: change.strokeChanges ?? [], changedIds: change.changedIds });

@@ -9,6 +9,10 @@ const DeleteMember = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('stroke'), stroke: Id, pose: Id }).strict(),
 ]);
 export const GroupCommands = z.discriminatedUnion('type', [
+  z.object({ commandId: Id, projectId: Id, type: z.literal('canvas.move-selection'),
+    expected: z.object({ groups: z.record(Id, Id), containment: z.record(Id, Id.nullable()), poses: z.record(Id, Id) }).strict(),
+    payload: z.object({ groupIds: z.array(Id), directItemIds: z.array(Id), dx: z.number().finite(), dy: z.number().finite() })
+      .strict().refine(value => value.groupIds.length + value.directItemIds.length > 0, '至少选择一个移动目标') }).strict(),
   z.object({ commandId: Id, projectId: Id, type: z.literal('group.delete'),
     expected: z.object({ group: Id, containment: z.record(Id, Id), items: z.record(Id, DeleteMember), connectors: z.record(Id, Id) }).strict(),
     payload: z.object({ id: Id }).strict() }).strict(),

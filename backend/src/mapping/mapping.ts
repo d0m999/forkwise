@@ -1,5 +1,5 @@
 import { removeMember, ungroup, removeDeletedMember, groupOutcome, deleteGroup } from './group-lifecycle.js';
-import { createGroup, moveGroup, readGroups, readContainment } from './group.js';
+import { createGroup, moveGroup, moveSelection, readGroups, readContainment } from './group.js';
 import type { GroupRecord, Containment } from './group-contracts.js';
 import type { CanvasConnector } from './connector-contracts.js';
 import { createConnector, reconnectConnector, changeConnectorPath, moveConnector, styleConnector, reverseConnectors, labelConnector, deleteConnector, prepareIncidentConnectorDeletion, applyIncidentConnectorDeletion, readConnectors } from './connector.js';
@@ -363,9 +363,9 @@ export class Mapping {
           changedIds = [stroke.id, stroke.item.id];
           revision = project.revision + 1;
           this.db.prepare('UPDATE mapping_projects SET revision=? WHERE id=?').run(revision, project.id);
-        } else if (command.type === 'canvas.move' || command.type === 'group.move') {
+        } else if (command.type === 'canvas.move' || command.type === 'group.move' || command.type === 'canvas.move-selection') {
           const project = this.project(command.projectId);
-          ({ cardChanges, textChanges, shapeChanges, imageChanges, strokeChanges, changedIds } = command.type === 'group.move' ? moveGroup(this.db, command) : moveCanvas(this.db, command));
+          ({ cardChanges, textChanges, shapeChanges, imageChanges, strokeChanges, changedIds } = command.type === 'canvas.move-selection' ? moveSelection(this.db, command) : command.type === 'group.move' ? moveGroup(this.db, command) : moveCanvas(this.db, command));
           if (!changedIds.length) return unchanged(project.revision);
           after = null; revision = project.revision + 1;
           this.db.prepare('UPDATE mapping_projects SET revision=? WHERE id=?').run(revision, project.id);

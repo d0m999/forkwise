@@ -143,3 +143,27 @@ export function moveGroup(db: Database.Database, command: Extract<GroupCommand, 
   return moveCanvas(db, { commandId: command.commandId, projectId, type: 'canvas.move', expected: expected.poses,
     payload: { targets: members.map(({ kind, value }) => ({ kind, id: value.id, itemId: value.item.id, x: value.item.pose.x + payload.dx, y: value.item.pose.y + payload.dy })) } });
 }
+
+export function moveSelection(db: Database.Database, command: Extract<GroupCommand, { type: 'canvas.move-selection' }>) {
+  const { projectId, expected, payload } = command;
+  const groups = readGroupRecords(db, projectId), memberships = readContainment(db, projectId);
+  // Validate the captured facts before expanding today's selected groups.
+  for (const [id, version] of Object.entries(expected.groups))
+    requireThat(groups.some(group => group.id === id && group.versionId === version), 'VERSION_CONFLICT', '组合已更新，请重新读取', 409);
+  for (const [id, version] of Object.entries(expected.containment))
+    requireThat(version === (memberships.find(value => value.id === id)?.versionId ?? null), 'VERSION_CONFLICT', '成员归属已更新，请重新读取', 409);
+  const groupIds = new Set(payload.groupIds), ids = new Set(payload.directItemIds);
+  requireThat(Object.keys(expected.groups).length === groupIds.size && [...groupIds].every(id => Object.hasOwn(expected.groups, id)),
+    'EXPECTED_DOMAINS', '须校验全部选中组合版本', 400);
+  for (const id of groupIds) {
+    const group = groups.find(value => value.id === id);
+    requireThat(group, 'NOT_FOUND', '组合不存在于当前项目', 404);
+    for (const member of memberships.filter(value => value.parent?.kind === 'group' && value.parent.id === group.itemId)) ids.add(member.id);
+  }
+  requireThat(Object.keys(expected.containment).length === ids.size && [...ids].every(id => Object.hasOwn(expected.containment, id)),
+    'EXPECTED_DOMAINS', '须校验全部移动对象的归属版本', 400);
+  const members = groupItems(db, projectId).filter(value => ids.has(value.value.item.id));
+  requireThat(members.length === ids.size, 'NOT_FOUND', '移动对象不存在于当前项目', 404);
+  return moveCanvas(db, { commandId: command.commandId, projectId, type: 'canvas.move', expected: expected.poses,
+    payload: { targets: members.map(({ kind, value }) => ({ kind, id: value.id, itemId: value.item.id, x: value.item.pose.x + payload.dx, y: value.item.pose.y + payload.dy })) } });
+}
