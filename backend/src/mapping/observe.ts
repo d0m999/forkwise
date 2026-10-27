@@ -22,6 +22,11 @@ function delta(change: Change): Delta {
     }
     return { ...change, domains, deletedIds: change.deletedIds ?? [] };
   };
+  if (change.groupChanges) {
+    for (const value of change.groupChanges) domains.push({ domain: 'group', id: (value.after ?? value.before!).id });
+    for (const value of change.containmentChanges ?? []) domains.push({ domain: 'containment', id: (value.after ?? value.before!).id });
+    return complete();
+  }
   if (change.imageChange) {
     const { before, after } = change.imageChange;
     const value = after ?? before!;
@@ -49,6 +54,11 @@ function delta(change: Change): Delta {
     if (before?.versionId !== after?.versionId) domains.push({ domain: 'text', id: identity.id });
     if (before?.item.versionId !== after?.item.versionId) domains.push({ domain: 'pose', id: identity.item.id });
     return complete();
+  }
+  for (const stroke of change.strokeChanges ?? []) {
+    const identity = stroke.after ?? stroke.before!;
+    if (stroke.before?.versionId !== stroke.after?.versionId) domains.push({ domain: 'stroke', id: identity.id });
+    if (stroke.before?.item.versionId !== stroke.after?.item.versionId) domains.push({ domain: 'pose', id: identity.item.id });
   }
   for (const image of change.imageChanges ?? []) {
     const identity = image.after ?? image.before!;

@@ -1,3 +1,4 @@
+import { restoreGroups } from './group.js';
 import { restoreConnector } from './connector.js';
 import { restoreImage } from './image.js';
 import { restoreText } from './text.js';
@@ -15,10 +16,13 @@ import { bodyContentUnchanged } from './body.js';
 import { restoreTag, restoreTagCards } from './tags.js';
 
 interface StoredAction extends HistoryAction {
+  groupChanges?: Change['groupChanges'];
+  containmentChanges?: Change['containmentChanges'];
   connectorChanges?: Change['connectorChanges'];
   imageChanges?: Change['imageChanges'];
   imageChange?: Change['imageChange'];
   strokeChange?: Change['strokeChange'];
+  strokeChanges?: Change['strokeChanges'];
   shapeChange?: Change['shapeChange'];
   shapeChanges?: Change['shapeChanges'];
   textChange?: Change['textChange'];
@@ -76,6 +80,13 @@ export function recordAction(
 ) {
   if (command.type === 'project.create') return;
   const stack = load(db, command.projectId);
+  if (change.groupChanges) {
+    const value = change.groupChanges.find(value => value.after)?.after ?? change.groupChanges[0]!.before!;
+    stack.undo.push({ session, lastRevision: change.revision, id: command.commandId, label: command.type,
+      target: { id: value.id, title: '组合' }, actor: change.actor, before: null, after: null,
+      groupChanges: change.groupChanges, containmentChanges: change.containmentChanges ?? [], changedIds: change.changedIds });
+    stack.undo = stack.undo.slice(-40); stack.redo = []; save(db, command.projectId, stack); return;
+  }
   if (change.connectorChanges?.length && !change.before && !change.after && !change.textChange && !change.shapeChange && !change.imageChange) {
     const value = change.connectorChanges[0]!.after ?? change.connectorChanges[0]!.before!;
     const editGroup = command.type === 'connector.label' ? command.editGroup : undefined, previous = stack.undo.at(-1);
@@ -113,10 +124,10 @@ export function recordAction(
     save(db, command.projectId, stack);
     return;
   }
-  if (command.type === 'canvas.move') {
-    const target = change.cardChanges?.[0]?.after ?? change.textChanges?.[0]?.after ?? change.shapeChanges?.[0]?.after ?? change.imageChanges?.[0]?.after;
+  if (command.type === 'canvas.move' || command.type === 'group.move') {
+    const target = change.cardChanges?.[0]?.after ?? change.textChanges?.[0]?.after ?? change.shapeChanges?.[0]?.after ?? change.imageChanges?.[0]?.after ?? change.strokeChanges?.[0]?.after;
     if (!target) return;
-    stack.undo.push({ session, lastRevision: change.revision, id: command.commandId, label: command.type, target: { id: target.id, title: 'title' in target ? target.title : 'shortText' in target.content ? target.content.shortText : 'runs' in target.content ? target.content.runs.map(run => run.text).join('') : '图片' }, actor: change.actor, before: null, after: null, cardChanges: change.cardChanges ?? [], textChanges: change.textChanges ?? [], shapeChanges: change.shapeChanges ?? [], imageChanges: change.imageChanges ?? [], changedIds: change.changedIds });
+    stack.undo.push({ session, lastRevision: change.revision, id: command.commandId, label: command.type, target: { id: target.id, title: 'title' in target ? target.title : 'shortText' in target.content ? target.content.shortText : 'runs' in target.content ? target.content.runs.map(run => run.text).join('') : '图片' }, actor: change.actor, before: null, after: null, cardChanges: change.cardChanges ?? [], textChanges: change.textChanges ?? [], shapeChanges: change.shapeChanges ?? [], imageChanges: change.imageChanges ?? [], strokeChanges: change.strokeChanges ?? [], changedIds: change.changedIds });
     stack.undo = stack.undo.slice(-40); stack.redo = []; save(db, command.projectId, stack); return;
   }
   if (change.textChange) {
@@ -215,7 +226,7 @@ export function recordAction(
   save(db, command.projectId, stack);
 }
 type HistoryTravel = Pick<Change, 'before' | 'after' | 'changedIds'> & {
-  [K in 'connectorChanges' | 'cardChanges' | 'tagChange' | 'textChange' | 'textChanges' | 'shapeChange' | 'shapeChanges' | 'strokeChange' | 'imageChange' | 'imageChanges']?: Change[K] | undefined;
+  [K in 'groupChanges' | 'containmentChanges' | 'connectorChanges' | 'cardChanges' | 'tagChange' | 'textChange' | 'textChanges' | 'shapeChange' | 'shapeChanges' | 'strokeChange' | 'strokeChanges' | 'imageChange' | 'imageChanges']?: Change[K] | undefined;
 } & {
   deletedIds: string[];
   target: HistoryAction['target'] & { label: string };
@@ -231,6 +242,13 @@ export function travelHistory(
   requireThat(!actionId || from.at(-1)?.id === actionId, 'HISTORY_TARGET_CHANGED', '历史目标已变化，不能撤销其他操作', 409);
   const action = from.pop();
   requireThat(action, 'HISTORY_EMPTY', '没有可撤销或重做的操作', 409);
+  if (action.groupChanges) {
+    const changes = restoreGroups(db, project.id, action.groupChanges, action.containmentChanges ?? [], type);
+    (type === 'history.undo' ? stack.redo : stack.undo).push(action); save(db, project.id, stack);
+    return { before: null, after: null, ...changes, changedIds: action.changedIds,
+      deletedIds: changes.groupChanges.filter(change => !change.after).flatMap(change => [change.before!.id, change.before!.itemId]),
+      target: { ...action.target, label: action.label } };
+  }
   if (action.connectorChanges?.length && !action.before && !action.after && !action.textChange && !action.shapeChange && !action.imageChange) {
     const connectorChanges = action.connectorChanges.map(change => restoreConnector(db, project.id, change, type));
     (type === 'history.undo' ? stack.redo : stack.undo).push(action); save(db, project.id, stack);
@@ -260,13 +278,14 @@ export function travelHistory(
     return { before: null, after: null, shapeChange, ...(connectorChanges?.length ? { connectorChanges } : {}), changedIds: action.changedIds,
       deletedIds: shapeChange.after ? [] : action.changedIds, target: { ...action.target, label: action.label } };
   }
-  if (action.textChanges || action.shapeChanges || action.imageChanges) {
+  if (action.textChanges || action.shapeChanges || action.imageChanges || action.strokeChanges) {
     const textChanges = (action.textChanges ?? []).map(change => restoreText(db, project.id, change, type));
     const shapeChanges = (action.shapeChanges ?? []).map(change => restoreShape(db, project.id, change, type));
+    const strokeChanges = (action.strokeChanges ?? []).map(change => restoreStroke(db, project.id, change, type));
     const imageChanges = (action.imageChanges ?? []).map(change => restoreImage(db, project.id, change, type));
     const cardChanges = restoreGeometry(db, project.id, action.cardChanges ?? [], type);
     (type === 'history.undo' ? stack.redo : stack.undo).push(action); save(db, project.id, stack);
-    return { before: null, after: null, cardChanges, textChanges, shapeChanges, imageChanges, changedIds: action.changedIds, deletedIds: [], target: { ...action.target, label: action.label } };
+    return { before: null, after: null, cardChanges, textChanges, shapeChanges, imageChanges, strokeChanges, changedIds: action.changedIds, deletedIds: [], target: { ...action.target, label: action.label } };
   }
   if (action.textChange) {
     const textChange = restoreText(db, project.id, action.textChange, type);

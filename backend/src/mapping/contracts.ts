@@ -1,3 +1,4 @@
+import { GroupCommands, type CanvasGroup, type Containment, type GroupChange, type ContainmentChange } from './group-contracts.js';
 import { ConnectorCommands, type CanvasConnector, type ConnectorChange } from './connector-contracts.js';
 import { ImageCommands, type CanvasImage, type ImageChange } from './image-contracts.js';
 import { TagCommandSchema } from './tag-contracts.js';
@@ -5,11 +6,9 @@ import { TextCommands, type CanvasText, type TextChange } from './text-contracts
 import { StrokeCreateCommand, StrokeDeleteCommand, type CanvasStroke, type StrokeChange } from './stroke-contracts.js';
 import { ShapeCreateCommand, ShapeEditCommand, ShapeMoveCommand, ShapeDeleteCommand, ShapeTransformCommand, type CanvasShape, type ShapeChange } from './shape-contracts.js';
 import { z } from 'zod';
-import type { CompactQuery } from './compact-contracts.js';
 import { TITLE_COLORS } from './presentation-values.js';
 import { bodyText } from './body-text.js';
-import type { SearchQuery } from './search-contracts.js';
-import { SearchConditionsSchema, type SearchStateView, type SearchStateQuery } from './search-contracts.js';
+import { SearchConditionsSchema, type SearchStateView } from './search-contracts.js';
 const Id = z.string().min(1).max(160);
 const Name = z.string().trim().min(1).max(240);
 const Envelope = { commandId: Id, projectId: Id };
@@ -27,6 +26,7 @@ const BodyInput = {
 };
 export { TagCommandSchema } from './tag-contracts.js';
 export const MappingCommand = z.discriminatedUnion('type', [
+  ...GroupCommands.options,
   ...ConnectorCommands.options,
   ...ImageCommands.options,
   StrokeCreateCommand,
@@ -73,7 +73,7 @@ export const MappingCommand = z.discriminatedUnion('type', [
         .strict(),
     })
     .strict(),
-  z.object({ ...Envelope, type: z.literal('canvas.move'), expected: z.record(Id, Id), payload: z.object({ targets: z.array(z.object({ kind: z.enum(['card', 'text', 'shape', 'image']), id: Id, itemId: Id, x: z.number().finite(), y: z.number().finite() }).strict()).min(1) }).strict() }).strict(),
+  z.object({ ...Envelope, type: z.literal('canvas.move'), expected: z.record(Id, Id), payload: z.object({ targets: z.array(z.object({ kind: z.enum(['card', 'text', 'shape', 'image', 'stroke']), id: Id, itemId: Id, x: z.number().finite(), y: z.number().finite() }).strict()).min(1) }).strict() }).strict(),
   z
     .object({
       ...Envelope,
@@ -233,6 +233,8 @@ export interface Card {
 }
 export interface Tag { id: string; versionId: string; name: string; color: string; deleted: boolean }
 export interface ProjectState {
+  groups?: CanvasGroup[];
+  containment?: Containment[];
   connectors?: CanvasConnector[];
   images?: CanvasImage[];
   project: Project;
@@ -258,33 +260,15 @@ export interface Receipt {
   historyTarget?: { id: string; title: string; label: string };
   versions?: { thought: string; body: string; pose: string; appearance?: string };
 }
-export type VersionQuery = {
-  type: 'version';
-  projectId: string;
-  domain: 'body' | 'pose' | 'appearance' | 'tag' | 'cardTags' | 'shape' | 'stroke' | 'image' | 'connector';
-  id: string;
-  versionId: string;
-};
-export type CardIdentity =
-  | { availability: 'available'; card: Card }
-  | { availability: 'deleted' | 'not_found' };
-export type IdentityQuery = { type: 'card.identity'; projectId: string; id: string };
-export type AssetQuery = { type:'asset'; projectId:string; id:string };
-export type ReadQuery =
-  | SearchStateQuery
-  | SearchQuery
-  | AssetQuery
-  | CompactQuery
-  | IdentityQuery
-  | { type: 'history'; projectId: string }
-  | { type: 'projects' }
-  | { type: 'project'; projectId: string }
-  | VersionQuery;
+export type { VersionQuery, CardIdentity, IdentityQuery, AssetQuery, ReadQuery } from './read-contracts.js';
 export interface Change extends Receipt {
+  groupChanges?: GroupChange[];
+  containmentChanges?: ContainmentChange[];
   connectorChanges?: ConnectorChange[];
   imageChanges?: ImageChange[];
   imageChange?: ImageChange;
   strokeChange?: StrokeChange;
+  strokeChanges?: StrokeChange[];
   shapeChange?: ShapeChange;
   shapeChanges?: ShapeChange[];
   textChanges?: TextChange[];

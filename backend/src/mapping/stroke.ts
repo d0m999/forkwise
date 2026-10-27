@@ -41,6 +41,14 @@ export function deleteStroke(db: Database.Database, command: z.infer<typeof Stro
   return { before, after: null };
 }
 
+// The canvas operation already validated this typed member and its Pose version.
+export function moveStroke(db: Database.Database, projectId: string, before: CanvasStroke, point: { x: number; y: number }): StrokeChange {
+  const after = { ...before, item: { ...before.item, versionId: randomUUID(), pose: { ...before.item.pose, ...point } } };
+  db.prepare('UPDATE mapping_strokes SET value=? WHERE id=? AND project_id=?').run(JSON.stringify(after), after.id, projectId);
+  retainStrokeVersions(db, projectId, after);
+  return { before, after };
+}
+
 export function restoreStroke(
   db: Database.Database,
   projectId: string,
@@ -52,7 +60,9 @@ export function restoreStroke(
   const before = readStrokes(db, projectId).find(stroke => stroke.id === identity.id) ?? null;
   const after = desired ? structuredClone(desired) : null;
   if (after) {
-    after.versionId = randomUUID();
+    const poseOnly = change.before && change.after && change.before.versionId === change.after.versionId && before;
+    after.versionId = poseOnly ? before.versionId : randomUUID();
+    if (poseOnly) after.content = before.content;
     after.item.versionId = randomUUID();
     db.prepare('INSERT OR IGNORE INTO mapping_stroke_ids VALUES(?,?)').run(after.id, projectId);
     db.prepare('INSERT INTO mapping_strokes VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET value=excluded.value')

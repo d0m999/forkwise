@@ -1,3 +1,5 @@
+import { createGroup, moveGroup, readGroups, readContainment } from './group.js';
+import type { GroupRecord, Containment } from './group-contracts.js';
 import type { CanvasConnector } from './connector-contracts.js';
 import { createConnector, reconnectConnector, changeConnectorPath, moveConnector, styleConnector, reverseConnectors, labelConnector, deleteConnector, prepareIncidentConnectorDeletion, applyIncidentConnectorDeletion, readConnectors } from './connector.js';
 import { cropImage, createImage, readImages, transformImage, rotateImage, deleteImage } from './image.js';
@@ -98,7 +100,9 @@ export class Mapping {
   read(query: VersionQuery & { domain: 'stroke' }, actor: Principal): StrokeVersion;
   read(query: VersionQuery & { domain: 'image' }, actor: Principal): ImageVersion;
   read(query: VersionQuery & { domain: 'connector' }, actor: Principal): CanvasConnector;
-  read(query: VersionQuery, actor: Principal): Card['body'] | Card['item'] | Card['appearance'] | Tag | NonNullable<Card['cardTags']> | ShapeVersion | StrokeVersion | ImageVersion | CanvasConnector;
+  read(query: VersionQuery & { domain: 'group' }, actor: Principal): GroupRecord;
+  read(query: VersionQuery & { domain: 'containment' }, actor: Principal): Containment;
+  read(query: VersionQuery, actor: Principal): Card['body'] | Card['item'] | Card['appearance'] | Tag | NonNullable<Card['cardTags']> | ShapeVersion | StrokeVersion | ImageVersion | CanvasConnector | GroupRecord | Containment;
   read(
     query: ReadQuery,
     actor: Principal,
@@ -117,6 +121,8 @@ export class Mapping {
     | StrokeVersion
     | ImageVersion
     | CanvasConnector
+    | GroupRecord
+    | Containment
     | MediaAsset
     | SearchStateView
     | Promise<SearchResult> {
@@ -165,7 +171,7 @@ export class Mapping {
           | { value: string }
           | undefined;
         requireThat(row, 'NOT_FOUND', '版本不存在于当前项目', 404);
-        return JSON.parse(row.value) as Card['body'] | Card['item'] | ShapeVersion | StrokeVersion | ImageVersion | CanvasConnector;
+        return JSON.parse(row.value) as Card['body'] | Card['item'] | ShapeVersion | StrokeVersion | ImageVersion | CanvasConnector | GroupRecord | Containment;
       }
       const project = this.project(query.projectId);
       if (query.type === 'history') return readHistory(this.db, project);
@@ -176,7 +182,7 @@ export class Mapping {
           )
           .all(query.projectId) as { value: string }[]
       ).map((row) => JSON.parse(row.value) as Card);
-      return { project, cards, connectors: readConnectors(this.db, project.id), images: readImages(this.db, project.id), tags: readTags(this.db, project.id), texts: readTexts(this.db, project.id), shapes: readShapes(this.db, project.id), strokes: readStrokes(this.db, project.id) };
+      return { project, cards, groups: readGroups(this.db, project.id), containment: readContainment(this.db, project.id), connectors: readConnectors(this.db, project.id), images: readImages(this.db, project.id), tags: readTags(this.db, project.id), texts: readTexts(this.db, project.id), shapes: readShapes(this.db, project.id), strokes: readStrokes(this.db, project.id) };
     })();
   }
 
@@ -293,12 +299,15 @@ export class Mapping {
         };
         let before: Card | Project | null = null;
         let after: Card | Project | null;
+        let groupChanges: Change['groupChanges'];
+        let containmentChanges: Change['containmentChanges'];
         let connectorChanges: Change['connectorChanges'];
         let cardChanges: Change['cardChanges'];
         let tagChange: Change['tagChange'];
         let textChange: Change['textChange'];
         let shapeChange: Change['shapeChange'];
         let strokeChange: Change['strokeChange'];
+        let strokeChanges: Change['strokeChanges'];
         let imageChange: Change['imageChange'];
         let imageChanges: Change['imageChanges'];
         let shapeChanges: Change['shapeChanges'];
@@ -306,7 +315,12 @@ export class Mapping {
         let travel: ReturnType<typeof travelHistory> | undefined;
         let revision: number;
         let changedIds: string[];
-        if (command.type === 'connector.reverse') {
+        if (command.type === 'group.create') {
+          const project = this.project(command.projectId);
+          ({ groupChanges, containmentChanges, changedIds } = createGroup(this.db, command));
+          after = null; revision = project.revision + 1;
+          this.db.prepare('UPDATE mapping_projects SET revision=? WHERE id=?').run(revision, project.id);
+        } else if (command.type === 'connector.reverse') {
           const project = this.project(command.projectId);
           connectorChanges = reverseConnectors(this.db, command);
           if (!connectorChanges.length) return unchanged(project.revision);
@@ -342,9 +356,9 @@ export class Mapping {
           changedIds = [stroke.id, stroke.item.id];
           revision = project.revision + 1;
           this.db.prepare('UPDATE mapping_projects SET revision=? WHERE id=?').run(revision, project.id);
-        } else if (command.type === 'canvas.move') {
+        } else if (command.type === 'canvas.move' || command.type === 'group.move') {
           const project = this.project(command.projectId);
-          ({ cardChanges, textChanges, shapeChanges, imageChanges, changedIds } = moveCanvas(this.db, command));
+          ({ cardChanges, textChanges, shapeChanges, imageChanges, strokeChanges, changedIds } = command.type === 'group.move' ? moveGroup(this.db, command) : moveCanvas(this.db, command));
           if (!changedIds.length) return unchanged(project.revision);
           after = null; revision = project.revision + 1;
           this.db.prepare('UPDATE mapping_projects SET revision=? WHERE id=?').run(revision, project.id);
@@ -401,6 +415,8 @@ export class Mapping {
           );
           travel = travelHistory(this.db, project, command.type, command.payload.actionId);
           ({ before, after, changedIds } = travel);
+          groupChanges = travel.groupChanges;
+          containmentChanges = travel.containmentChanges;
           connectorChanges = travel.connectorChanges;
           cardChanges = travel.cardChanges;
           tagChange = travel.tagChange;
@@ -408,6 +424,7 @@ export class Mapping {
           textChanges = travel.textChanges;
           shapeChange = travel.shapeChange;
           strokeChange = travel.strokeChange;
+          strokeChanges = travel.strokeChanges;
           imageChange = travel.imageChange;
           imageChanges = travel.imageChanges;
           shapeChanges = travel.shapeChanges;
@@ -703,6 +720,7 @@ export class Mapping {
           revision,
           changedIds,
           ...(command.type === 'pose.batch' && cardChanges ? { cardPoseVersions: Object.fromEntries(cardChanges.map(({ after }) => [after.item.id, after.item.versionId])) } : {}),
+          ...(groupChanges?.some(change => !change.after) ? { deletedIds: groupChanges.filter(change => !change.after).flatMap(change => [change.before!.id, change.before!.itemId]) } : {}),
           ...(connectorChanges?.some(change => !change.after) ? { deletedIds: connectorChanges.filter(change => !change.after).map(change => change.before!.id) } : {}),
           ...(connectorChanges ? { connectorVersions: Object.fromEntries(connectorChanges.filter(change => change.after).map(change => [change.after!.id, change.after!.versionId])) } : {}),
           ...(imageChange?.after ? { imageVersions: { image: imageChange.after.versionId, pose: imageChange.after.item.versionId } } : {}),
@@ -731,12 +749,15 @@ export class Mapping {
           ...receipt,
           before,
           after,
+          ...(groupChanges ? { groupChanges } : {}),
+          ...(containmentChanges ? { containmentChanges } : {}),
           ...(connectorChanges ? { connectorChanges } : {}),
           ...(imageChange ? { imageChange } : {}),
           ...(imageChanges ? { imageChanges } : {}),
           ...(tagChange ? { tagChange } : {}),
           ...(shapeChange ? { shapeChange } : {}),
           ...(strokeChange ? { strokeChange } : {}),
+          ...(strokeChanges ? { strokeChanges } : {}),
           ...(shapeChanges ? { shapeChanges } : {}),
           ...(textChange ? { textChange } : {}),
           ...(textChanges ? { textChanges } : {}),
