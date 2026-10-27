@@ -1,7 +1,7 @@
 import type Database from 'better-sqlite3';
 import type { CompactMaps } from './compact.js';
 import { DomainError, requireThat } from '../domain/errors.js';
-import type { Card, Change } from './contracts.js';
+import type { Change } from './contracts.js';
 import {
   ObserveQuerySchema,
   type ObserveQuery,
@@ -14,96 +14,45 @@ export interface ObserveOptions {
 }
 
 function delta(change: Change): Delta {
-  const domains: Delta['domains'] = [];
-  const complete = (): Delta => {
-    for (const connector of change.connectorChanges ?? []) {
-      if (connector.before?.versionId !== connector.after?.versionId)
-        domains.push({ domain: 'connector', id: (connector.after ?? connector.before!).id });
-    }
-    return { ...change, domains, deletedIds: change.deletedIds ?? [] };
+  const domains: Delta['domains'] = [], seen = new Set<string>();
+  const add = (domain: Delta['domains'][number]['domain'], id: string) => {
+    const key = domain + ':' + id;
+    if (!seen.has(key)) { seen.add(key); domains.push({ domain, id }); }
   };
-  if (change.groupChanges) {
-    for (const value of change.groupChanges) domains.push({ domain: 'group', id: (value.after ?? value.before!).id });
-    for (const value of change.containmentChanges ?? []) domains.push({ domain: 'containment', id: (value.after ?? value.before!).id });
-    return complete();
+  for (const c of change.groupChanges ?? []) add('group', (c.after ?? c.before!).id);
+  for (const c of change.containmentChanges ?? []) add('containment', (c.after ?? c.before!).id);
+  const objects = [
+    ['text', [...(change.textChanges ?? []), ...(change.textChange ? [change.textChange] : [])]],
+    ['shape', [...(change.shapeChanges ?? []), ...(change.shapeChange ? [change.shapeChange] : [])]],
+    ['stroke', [...(change.strokeChanges ?? []), ...(change.strokeChange ? [change.strokeChange] : [])]],
+    ['image', [...(change.imageChanges ?? []), ...(change.imageChange ? [change.imageChange] : [])]],
+  ] as const;
+  for (const [domain, changes] of objects) for (const c of changes) {
+    const value = c.after ?? c.before!;
+    if (c.before?.versionId !== c.after?.versionId) add(domain, value.id);
+    if (c.before?.item.versionId !== c.after?.item.versionId) add('pose', value.item.id);
   }
-  if (change.imageChange) {
-    const { before, after } = change.imageChange;
-    const value = after ?? before!;
-    if (before?.versionId !== after?.versionId) domains.push({ domain: 'image', id: value.id });
-    if (before?.item.versionId !== after?.item.versionId) domains.push({ domain: 'pose', id: value.item.id });
-    return complete();
+  const cards = [...(change.cardLifecycleChanges ?? [])];
+  if (change.before && 'body' in change.before || change.after && 'body' in change.after)
+    cards.push({ before: change.before && 'body' in change.before ? change.before : null, after: change.after && 'body' in change.after ? change.after : null });
+  for (const c of cards) {
+    const value = c.after ?? c.before!;
+    if (c.before?.versionId !== c.after?.versionId) add('thought', value.id);
+    if (c.before?.body.versionId !== c.after?.body.versionId) add('body', value.body.id);
+    if (c.before?.item.versionId !== c.after?.item.versionId) add('pose', value.item.id);
+    if (c.before?.appearance?.versionId !== c.after?.appearance?.versionId) add('appearance', 'appearance:' + value.id);
+    if (c.before?.cardTags?.versionId !== c.after?.cardTags?.versionId) add('cardTags', 'cardTags:' + value.id);
   }
-  if (change.strokeChange) {
-    const { before, after } = change.strokeChange;
-    const identity = after ?? before!;
-    if (before?.versionId !== after?.versionId) domains.push({ domain: 'stroke', id: identity.id });
-    if (before?.item.versionId !== after?.item.versionId) domains.push({ domain: 'pose', id: identity.item.id });
-    return complete();
+  for (const c of change.cardChanges ?? []) {
+    if (c.before.item.versionId !== c.after.item.versionId) add('pose', c.after.item.id);
+    if (c.before.cardTags?.versionId !== c.after.cardTags?.versionId) add('cardTags', 'cardTags:' + c.after.id);
   }
-  if (change.shapeChange) {
-    const { before, after } = change.shapeChange;
-    const identity = after ?? before!;
-    if (before?.versionId !== after?.versionId) domains.push({ domain: 'shape', id: identity.id });
-    if (before?.item.versionId !== after?.item.versionId) domains.push({ domain: 'pose', id: identity.item.id });
-    return complete();
-  }
-  if (change.textChange) {
-    const { before, after } = change.textChange;
-    const identity = after ?? before!;
-    if (before?.versionId !== after?.versionId) domains.push({ domain: 'text', id: identity.id });
-    if (before?.item.versionId !== after?.item.versionId) domains.push({ domain: 'pose', id: identity.item.id });
-    return complete();
-  }
-  for (const stroke of change.strokeChanges ?? []) {
-    const identity = stroke.after ?? stroke.before!;
-    if (stroke.before?.versionId !== stroke.after?.versionId) domains.push({ domain: 'stroke', id: identity.id });
-    if (stroke.before?.item.versionId !== stroke.after?.item.versionId) domains.push({ domain: 'pose', id: identity.item.id });
-  }
-  for (const image of change.imageChanges ?? []) {
-    const identity = image.after ?? image.before!;
-    if (image.before?.versionId !== image.after?.versionId) domains.push({ domain: 'image', id: identity.id });
-    if (image.before?.item.versionId !== image.after?.item.versionId) domains.push({ domain: 'pose', id: identity.item.id });
-  }
-  for (const shape of change.shapeChanges ?? []) {
-    const identity = shape.after ?? shape.before!;
-    if (shape.before?.versionId !== shape.after?.versionId) domains.push({ domain: 'shape', id: identity.id });
-    if (shape.before?.item.versionId !== shape.after?.item.versionId) domains.push({ domain: 'pose', id: identity.item.id });
-  }
-  for (const text of change.textChanges ?? []) {
-    const identity = text.after ?? text.before!;
-    if (text.before?.versionId !== text.after?.versionId) domains.push({ domain: 'text', id: identity.id });
-    if (text.before?.item.versionId !== text.after?.item.versionId) domains.push({ domain: 'pose', id: identity.item.id });
-  }
-  if (change.tagChange) domains.push({ domain: 'tag', id: change.tagChange.after.id });
-  if (change.cardChanges) {
-    for (const c of change.cardChanges) {
-      if (c.before.item.versionId !== c.after.item.versionId)
-        domains.push({ domain: 'pose', id: c.after.item.id });
-      if (c.before.cardTags?.versionId !== c.after.cardTags?.versionId)
-        domains.push({ domain: 'cardTags', id: `cardTags:${c.after.id}` });
-    }
-    const order = new Map(change.changedIds.map((id, index) => [id, index]));
-    domains.sort((a, b) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0));
-    return complete();
-  }
-  const card = [change.after, change.before].find(
-    (value): value is Card => !!value && 'body' in value,
-  );
-  if (card) {
-    const before = change.before && 'body' in change.before ? change.before : null;
-    const after = change.after && 'body' in change.after ? change.after : null;
-    if (before?.versionId !== after?.versionId) domains.push({ domain: 'thought', id: card.id });
-    if (before?.body.versionId !== after?.body.versionId)
-      domains.push({ domain: 'body', id: card.body.id });
-    if (before?.item.versionId !== after?.item.versionId)
-      domains.push({ domain: 'pose', id: card.item.id });
-    if (before?.appearance?.versionId !== after?.appearance?.versionId)
-      domains.push({ domain: 'appearance', id: `appearance:${card.id}` });
-    if (before?.cardTags?.versionId !== after?.cardTags?.versionId)
-      domains.push({ domain: 'cardTags', id: `cardTags:${card.id}` });
-  } else if (!change.tagChange && !change.connectorChanges?.length) domains.push({ domain: 'project', id: change.projectId });
-  return complete();
+  if (change.tagChange) add('tag', change.tagChange.after.id);
+  for (const c of change.connectorChanges ?? []) if (c.before?.versionId !== c.after?.versionId) add('connector', (c.after ?? c.before!).id);
+  if (!domains.length) add('project', change.projectId);
+  const order = new Map(change.changedIds.map((id, index) => [id, index]));
+  domains.sort((a, b) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0));
+  return { ...change, domains, deletedIds: change.deletedIds ?? [] };
 }
 
 // Called inside Mapping's authorized SQLite read transaction. Cache is read-only.

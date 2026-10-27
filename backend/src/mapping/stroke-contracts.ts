@@ -1,3 +1,4 @@
+import { MembershipExpected } from './containment-contracts.js';
 import { z } from 'zod';
 
 const Id = z.string().min(1).max(160);
@@ -25,7 +26,7 @@ export const StrokeDeleteCommand = z.object({
   commandId: Id,
   projectId: Id,
   type: z.literal('stroke.delete'),
-  expected: z.object({ stroke: Id, pose: Id }).strict(),
+  expected: z.object({ stroke: Id, pose: Id, membership: MembershipExpected.optional() }).strict(),
   payload: z.object({ id: Id }).strict(),
 }).strict();
 export interface CanvasStroke {

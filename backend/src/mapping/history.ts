@@ -1,3 +1,5 @@
+import { restoreCard } from './card-history.js';
+import { restoreGroupAction } from './group-history.js';
 import { restoreGroups } from './group.js';
 import { restoreConnector } from './connector.js';
 import { restoreImage } from './image.js';
@@ -6,7 +8,6 @@ import { restoreShape } from './shape.js';
 import { restoreStroke } from './stroke.js';
 import { imageTask } from './media-blocks.js';
 import { retainCardVersions } from './versions.js';
-import { DEFAULT_APPEARANCE } from './presentation-values.js';
 import type Database from 'better-sqlite3';
 import { randomUUID } from 'node:crypto';
 import type { Card, Change, Command, HistoryAction, Project, ProjectHistory } from './contracts.js';
@@ -16,6 +17,7 @@ import { bodyContentUnchanged } from './body.js';
 import { restoreTag, restoreTagCards } from './tags.js';
 
 interface StoredAction extends HistoryAction {
+  cardLifecycleChanges?: Change['cardLifecycleChanges'];
   groupChanges?: Change['groupChanges'];
   containmentChanges?: Change['containmentChanges'];
   connectorChanges?: Change['connectorChanges'];
@@ -60,12 +62,14 @@ function save(db: Database.Database, id: string, stack: Stack) {
 }
 export function readHistory(db: Database.Database, project: Project): ProjectHistory {
   const stack = load(db, project.id);
-  const summary = ({ id, label, target, actor }: StoredAction): HistoryAction => ({
-    id,
-    label,
-    target,
-    actor,
-  });
+  const summary = (action: StoredAction): HistoryAction => {
+    const deletedCardIds = [...new Set([
+      ...(action.before && 'body' in action.before && !action.after ? [action.before.id] : []),
+      ...(action.cardLifecycleChanges ?? []).flatMap(change => change.before && !change.after ? [change.before.id] : []),
+    ])];
+    return { id: action.id, label: action.label, target: action.target, actor: action.actor,
+      ...(deletedCardIds.length ? { deletedCardIds } : {}) };
+  };
   return {
     revision: project.revision,
     undo: stack.undo.map(summary),
@@ -80,11 +84,14 @@ export function recordAction(
 ) {
   if (command.type === 'project.create') return;
   const stack = load(db, command.projectId);
-  if (change.groupChanges) {
-    const value = change.groupChanges.find(value => value.after)?.after ?? change.groupChanges[0]!.before!;
-    stack.undo.push({ session, lastRevision: change.revision, id: command.commandId, label: command.type,
-      target: { id: value.id, title: '组合' }, actor: change.actor, before: null, after: null,
-      groupChanges: change.groupChanges, containmentChanges: change.containmentChanges ?? [], changedIds: change.changedIds });
+  if ((change.groupChanges || change.containmentChanges) && !change.textChange) {
+    const value = change.groupChanges?.find(value => value.after)?.after ?? change.groupChanges?.[0]?.before;
+    const selected = change.before && 'body' in change.before ? { id: change.before.id, title: change.before.title }
+      : change.shapeChange?.before ? { id: change.shapeChange.before.id, title: change.shapeChange.before.content.shortText }
+      : change.imageChange?.before ? { id: change.imageChange.before.id, title: '图片' }
+      : change.strokeChange?.before ? { id: change.strokeChange.before.id, title: change.strokeChange.before.content.penKind === 'highlighter' ? '荧光笔' : '笔迹' }
+      : { id: value?.id ?? command.commandId, title: '组合' };
+    stack.undo.push({ ...change, session, lastRevision: change.revision, id: command.commandId, label: command.type, target: selected });
     stack.undo = stack.undo.slice(-40); stack.redo = []; save(db, command.projectId, stack); return;
   }
   if (change.connectorChanges?.length && !change.before && !change.after && !change.textChange && !change.shapeChange && !change.imageChange) {
@@ -127,7 +134,7 @@ export function recordAction(
   if (command.type === 'canvas.move' || command.type === 'group.move') {
     const target = change.cardChanges?.[0]?.after ?? change.textChanges?.[0]?.after ?? change.shapeChanges?.[0]?.after ?? change.imageChanges?.[0]?.after ?? change.strokeChanges?.[0]?.after;
     if (!target) return;
-    stack.undo.push({ session, lastRevision: change.revision, id: command.commandId, label: command.type, target: { id: target.id, title: 'title' in target ? target.title : 'shortText' in target.content ? target.content.shortText : 'runs' in target.content ? target.content.runs.map(run => run.text).join('') : '图片' }, actor: change.actor, before: null, after: null, cardChanges: change.cardChanges ?? [], textChanges: change.textChanges ?? [], shapeChanges: change.shapeChanges ?? [], imageChanges: change.imageChanges ?? [], strokeChanges: change.strokeChanges ?? [], changedIds: change.changedIds });
+    stack.undo.push({ session, lastRevision: change.revision, id: command.commandId, label: command.type, target: { id: target.id, title: 'title' in target ? target.title : 'shortText' in target.content ? target.content.shortText : 'runs' in target.content ? target.content.runs.map(run => run.text).join('') : 'penKind' in target.content ? target.content.penKind === 'highlighter' ? '荧光笔' : '笔迹' : '图片' }, actor: change.actor, before: null, after: null, cardChanges: change.cardChanges ?? [], textChanges: change.textChanges ?? [], shapeChanges: change.shapeChanges ?? [], imageChanges: change.imageChanges ?? [], strokeChanges: change.strokeChanges ?? [], changedIds: change.changedIds });
     stack.undo = stack.undo.slice(-40); stack.redo = []; save(db, command.projectId, stack); return;
   }
   if (change.textChange) {
@@ -146,11 +153,13 @@ export function recordAction(
     const editGroup = 'editGroup' in command ? command.editGroup : undefined;
     if (editGroup && previous?.editGroup === editGroup && previous.session === session && previous.actor.id === change.actor.id && previous.target.id === value.id && previous.lastRevision === change.revision - 1 && !stack.redo.length && (previous.label === command.type || (previous.label === 'text.create' && command.type === 'text.edit') || (previous.label === 'text.edit' && command.type === 'text.delete'))) {
       previous.textChange!.after = change.textChange.after;
+      if (change.groupChanges) previous.groupChanges = change.groupChanges;
+      if (change.containmentChanges) previous.containmentChanges = change.containmentChanges;
       if (change.connectorChanges?.length) previous.connectorChanges = [...(previous.connectorChanges ?? []), ...change.connectorChanges];
       previous.changedIds = [...new Set([...previous.changedIds, ...change.changedIds])];
       previous.lastRevision = change.revision;
       previous.target.title = value.content.runs.map(run => run.text).join('');
-    } else stack.undo.push({ session, lastRevision: change.revision, ...(editGroup ? { editGroup } : {}), id: command.commandId, label: command.type, target: { id: value.id, title: value.content.runs.map(run => run.text).join('') }, actor: change.actor, before: null, after: null, textChange: change.textChange, ...(change.connectorChanges?.length ? { connectorChanges: change.connectorChanges } : {}), changedIds: change.changedIds });
+    } else stack.undo.push({ session, lastRevision: change.revision, ...(editGroup ? { editGroup } : {}), id: command.commandId, label: command.type, target: { id: value.id, title: value.content.runs.map(run => run.text).join('') }, actor: change.actor, before: null, after: null, textChange: change.textChange, ...(change.groupChanges ? { groupChanges: change.groupChanges } : {}), ...(change.containmentChanges ? { containmentChanges: change.containmentChanges } : {}), ...(change.connectorChanges?.length ? { connectorChanges: change.connectorChanges } : {}), changedIds: change.changedIds });
     stack.undo = stack.undo.slice(-40); stack.redo = [];
     save(db, command.projectId, stack);
     return;
@@ -226,7 +235,7 @@ export function recordAction(
   save(db, command.projectId, stack);
 }
 type HistoryTravel = Pick<Change, 'before' | 'after' | 'changedIds'> & {
-  [K in 'groupChanges' | 'containmentChanges' | 'connectorChanges' | 'cardChanges' | 'tagChange' | 'textChange' | 'textChanges' | 'shapeChange' | 'shapeChanges' | 'strokeChange' | 'strokeChanges' | 'imageChange' | 'imageChanges']?: Change[K] | undefined;
+  [K in 'cardLifecycleChanges' | 'groupChanges' | 'containmentChanges' | 'connectorChanges' | 'cardChanges' | 'tagChange' | 'textChange' | 'textChanges' | 'shapeChange' | 'shapeChanges' | 'strokeChange' | 'strokeChanges' | 'imageChange' | 'imageChanges']?: Change[K] | undefined;
 } & {
   deletedIds: string[];
   target: HistoryAction['target'] & { label: string };
@@ -242,12 +251,10 @@ export function travelHistory(
   requireThat(!actionId || from.at(-1)?.id === actionId, 'HISTORY_TARGET_CHANGED', '历史目标已变化，不能撤销其他操作', 409);
   const action = from.pop();
   requireThat(action, 'HISTORY_EMPTY', '没有可撤销或重做的操作', 409);
-  if (action.groupChanges) {
-    const changes = restoreGroups(db, project.id, action.groupChanges, action.containmentChanges ?? [], type);
+  if (action.groupChanges || action.containmentChanges) {
+    const restored = restoreGroupAction(db, project.id, action, type);
     (type === 'history.undo' ? stack.redo : stack.undo).push(action); save(db, project.id, stack);
-    return { before: null, after: null, ...changes, changedIds: action.changedIds,
-      deletedIds: changes.groupChanges.filter(change => !change.after).flatMap(change => [change.before!.id, change.before!.itemId]),
-      target: { ...action.target, label: action.label } };
+    return { ...restored, target: { ...action.target, label: action.label } };
   }
   if (action.connectorChanges?.length && !action.before && !action.after && !action.textChange && !action.shapeChange && !action.imageChange) {
     const connectorChanges = action.connectorChanges.map(change => restoreConnector(db, project.id, change, type));
@@ -322,66 +329,17 @@ export function travelHistory(
       target: { ...action.target, label: action.label },
     };
   }
-  const row = db
-    .prepare('SELECT value FROM mapping_cards WHERE id=? AND project_id=?')
-    .get(action.target.id, project.id) as { value: string } | undefined;
   const identity = action.after ?? action.before!;
-  const before = 'body' in identity ? (row ? (JSON.parse(row.value) as Card) : null) : project;
-  let after: Card | Project | null = desired ? structuredClone(desired) : null;
-  if (after && 'body' in after) {
-    if (before && 'body' in before) {
-      if (!action.changedIds.includes(after.id)) {
-        after.title = before.title;
-        after.versionId = before.versionId;
-      }
-      if (!action.changedIds.includes(after.body.id)) after.body = before.body;
-      if (!action.changedIds.includes(after.item.id)) after.item = before.item;
-      if (!action.changedIds.includes(`cardTags:${after.id}`)) {
-        if (before.cardTags) after.cardTags = before.cardTags;
-        else delete after.cardTags;
-      }
-      if (!action.changedIds.includes(`appearance:${after.id}`)) {
-        if (before.appearance) after.appearance = before.appearance;
-        else delete after.appearance;
-      }
-    }
-    if (action.changedIds.includes(after.id)) after.versionId = randomUUID();
-    if (action.changedIds.includes(after.body.id)) after.body.versionId = randomUUID();
-    if (action.changedIds.includes(after.item.id)) after.item.versionId = randomUUID();
-    const restoringIdentity = !before && action.changedIds.includes(after.id);
-    if (action.changedIds.includes(`cardTags:${after.id}`) || (restoringIdentity && (after.cardTags || db.prepare("SELECT 1 FROM mapping_versions WHERE project_id=? AND domain='cardTags' AND id=? LIMIT 1").get(project.id, `cardTags:${after.id}`))))
-      after.cardTags = { id: `cardTags:${after.id}`, tagIds: after.cardTags?.tagIds ?? [], versionId: randomUUID() };
-    const appearanceId = `appearance:${after.id}`;
-    if (
-      action.changedIds.includes(appearanceId) ||
-      (restoringIdentity &&
-        db
-          .prepare(
-            "SELECT 1 FROM mapping_versions WHERE project_id=? AND domain='appearance' AND id=? LIMIT 1",
-          )
-          .get(project.id, appearanceId))
-    ) {
-      after.appearance = {
-        ...(after.appearance ?? { id: appearanceId, ...DEFAULT_APPEARANCE }),
-        versionId: randomUUID(),
-      };
-    }
-    db.prepare(
-      'INSERT INTO mapping_cards VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET value=excluded.value',
-    ).run(after.id, project.id, JSON.stringify(after));
-  } else if (after) {
-    after.versionId = randomUUID();
-    after.revision = project.revision + 1;
-    db.prepare('UPDATE mapping_projects SET name=?,version_id=? WHERE id=?').run(
-      after.name,
-      after.versionId,
-      project.id,
-    );
-  } else
-    db.prepare('DELETE FROM mapping_cards WHERE id=? AND project_id=?').run(
-      action.target.id,
-      project.id,
-    );
+  let before: Card | Project | null, after: Card | Project | null;
+  if ('body' in identity) {
+    ({ before, after } = restoreCard(db, project.id, {
+      before: action.before && 'body' in action.before ? action.before : null,
+      after: action.after && 'body' in action.after ? action.after : null,
+    }, type, action.changedIds));
+  } else {
+    before = project; after = desired ? { ...desired as Project, versionId: randomUUID(), revision: project.revision + 1 } : null;
+    if (after) db.prepare('UPDATE mapping_projects SET name=?,version_id=? WHERE id=?').run(after.name, after.versionId, project.id);
+  }
   const connectorChanges = action.connectorChanges?.map(change => restoreConnector(db, project.id, change, type));
   (type === 'history.undo' ? stack.redo : stack.undo).push(action);
   save(db, project.id, stack);
@@ -473,7 +431,7 @@ export function completeMediaHistory(
   for (const action of [...stack.undo, ...stack.redo]) {
     update(action.before);
     update(action.after);
-    for (const change of action.cardChanges ?? []) {
+    for (const change of [...(action.cardChanges ?? []), ...(action.cardLifecycleChanges ?? [])]) {
       update(change.before);
       update(change.after);
     }

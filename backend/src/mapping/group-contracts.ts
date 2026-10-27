@@ -1,7 +1,23 @@
 import { z } from 'zod';
 
 const Id = z.string().min(1).max(160);
+const DeleteMember = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('card'), thought: Id, body: Id, pose: Id, appearance: Id.nullable(), cardTags: Id.nullable() }).strict(),
+  z.object({ kind: z.literal('text'), text: Id, pose: Id }).strict(),
+  z.object({ kind: z.literal('shape'), shape: Id, pose: Id }).strict(),
+  z.object({ kind: z.literal('image'), image: Id, pose: Id }).strict(),
+  z.object({ kind: z.literal('stroke'), stroke: Id, pose: Id }).strict(),
+]);
 export const GroupCommands = z.discriminatedUnion('type', [
+  z.object({ commandId: Id, projectId: Id, type: z.literal('group.delete'),
+    expected: z.object({ group: Id, containment: z.record(Id, Id), items: z.record(Id, DeleteMember), connectors: z.record(Id, Id) }).strict(),
+    payload: z.object({ id: Id }).strict() }).strict(),
+  z.object({ commandId: Id, projectId: Id, type: z.literal('group.ungroup'),
+    expected: z.object({ group: Id, containment: z.record(Id, Id) }).strict(),
+    payload: z.object({ id: Id }).strict() }).strict(),
+  z.object({ commandId: Id, projectId: Id, type: z.literal('group.remove-member'),
+    expected: z.object({ group: Id, containment: Id }).strict(),
+    payload: z.object({ id: Id, itemId: Id }).strict() }).strict(),
   z.object({
     commandId: Id, projectId: Id, type: z.literal('group.create'),
     expected: z.object({ groups: z.record(Id, Id.nullable()), containment: z.record(Id, Id.nullable()) }).strict(),

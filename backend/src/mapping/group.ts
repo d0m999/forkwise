@@ -48,13 +48,13 @@ export function readGroups(db: Database.Database, projectId: string): CanvasGrou
   });
 }
 
-function writeGroup(db: Database.Database, projectId: string, value: GroupRecord) {
+export function writeGroup(db: Database.Database, projectId: string, value: GroupRecord) {
   db.prepare('INSERT OR IGNORE INTO mapping_group_ids VALUES(?,?)').run(value.id, projectId);
   db.prepare('INSERT INTO mapping_groups VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET value=excluded.value').run(value.id, projectId, JSON.stringify(value));
   db.prepare('INSERT OR IGNORE INTO mapping_versions VALUES(?,?,?,?,?)').run(projectId, 'group', value.id, value.versionId, JSON.stringify(value));
 }
 
-function writeContainment(db: Database.Database, projectId: string, value: Containment) {
+export function writeContainment(db: Database.Database, projectId: string, value: Containment) {
   db.prepare('INSERT INTO mapping_containment VALUES(?,?,?) ON CONFLICT(project_id,item_id) DO UPDATE SET value=excluded.value').run(projectId, value.id, JSON.stringify(value));
   db.prepare('INSERT OR IGNORE INTO mapping_versions VALUES(?,?,?,?,?)').run(projectId, 'containment', value.id, value.versionId, JSON.stringify(value));
 }

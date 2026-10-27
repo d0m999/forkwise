@@ -1,3 +1,4 @@
+import { MembershipExpected } from './containment-contracts.js';
 import { GroupCommands, type CanvasGroup, type Containment, type GroupChange, type ContainmentChange } from './group-contracts.js';
 import { ConnectorCommands, type CanvasConnector, type ConnectorChange } from './connector-contracts.js';
 import { ImageCommands, type CanvasImage, type ImageChange } from './image-contracts.js';
@@ -51,7 +52,7 @@ export const MappingCommand = z.discriminatedUnion('type', [
     .object({
       ...Envelope,
       type: z.literal('thought.delete'),
-      expected: z.object({ thought: Id, body: Id, pose: Id, appearance: Id.nullable(), cardTags: Id.nullable().optional(), connectors: z.record(Id, Id).optional() }).strict(),
+      expected: z.object({ thought: Id, body: Id, pose: Id, appearance: Id.nullable(), cardTags: Id.nullable().optional(), connectors: z.record(Id, Id).optional(), membership: MembershipExpected.optional() }).strict(),
       payload: z.object({ id: Id }).strict(),
     })
     .strict(),
@@ -262,6 +263,7 @@ export interface Receipt {
 }
 export type { VersionQuery, CardIdentity, IdentityQuery, AssetQuery, ReadQuery } from './read-contracts.js';
 export interface Change extends Receipt {
+  cardLifecycleChanges?: { before: Card | null; after: Card | null }[];
   groupChanges?: GroupChange[];
   containmentChanges?: ContainmentChange[];
   connectorChanges?: ConnectorChange[];

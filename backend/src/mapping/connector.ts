@@ -110,10 +110,11 @@ export function deleteConnector(db: Database.Database, command: Extract<Connecto
   return { before, after: null };
 }
 
-export function prepareIncidentConnectorDeletion(db: Database.Database, projectId: string, itemId: string, expected: Record<string, string>): ConnectorChange[] {
+export function prepareIncidentConnectorDeletion(db: Database.Database, projectId: string, itemId: string | readonly string[], expected: Record<string, string>): ConnectorChange[] {
+  const ids = new Set(typeof itemId === 'string' ? [itemId] : itemId);
   const incident = readConnectors(db, projectId).filter(value =>
-    value.start.kind === 'bound' && value.start.itemId === itemId ||
-    value.end.kind === 'bound' && value.end.itemId === itemId);
+    value.start.kind === 'bound' && ids.has(value.start.itemId) ||
+    value.end.kind === 'bound' && ids.has(value.end.itemId));
   requireThat(Object.keys(expected).length === incident.length && incident.every(value =>
     Object.hasOwn(expected, value.id) && expected[value.id] === value.versionId),
   'VERSION_CONFLICT', '相连连线范围或版本已更新，请重新读取', 409);

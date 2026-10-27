@@ -1,5 +1,6 @@
 import type { Change } from './contracts.js';
 export interface HistoryAction {
+  deletedCardIds?: string[];
   id: string;
   label: string;
   target: { id: string; title: string };

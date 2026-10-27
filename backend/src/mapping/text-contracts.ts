@@ -1,3 +1,4 @@
+import { MembershipExpected } from './containment-contracts.js';
 import { z } from 'zod';
 const Id = z.string().min(1).max(160);
 export const TextContentSchema = z
@@ -57,7 +58,7 @@ export const TextCommands = z.discriminatedUnion('type', [
     .object({
       ...envelope,
       type: z.literal('text.delete'),
-      expected: z.object({ text: Id, pose: Id, connectors: z.record(Id, Id).optional() }).strict(),
+      expected: z.object({ text: Id, pose: Id, connectors: z.record(Id, Id).optional(), membership: MembershipExpected.optional() }).strict(),
       payload: z.object({ id: Id }).strict(),
     })
     .strict(),

@@ -1,3 +1,4 @@
+import { removeMember, ungroup, removeDeletedMember, groupOutcome, deleteGroup } from './group-lifecycle.js';
 import { createGroup, moveGroup, readGroups, readContainment } from './group.js';
 import type { GroupRecord, Containment } from './group-contracts.js';
 import type { CanvasConnector } from './connector-contracts.js';
@@ -303,6 +304,7 @@ export class Mapping {
         let containmentChanges: Change['containmentChanges'];
         let connectorChanges: Change['connectorChanges'];
         let cardChanges: Change['cardChanges'];
+        let cardLifecycleChanges: Change['cardLifecycleChanges'];
         let tagChange: Change['tagChange'];
         let textChange: Change['textChange'];
         let shapeChange: Change['shapeChange'];
@@ -315,9 +317,14 @@ export class Mapping {
         let travel: ReturnType<typeof travelHistory> | undefined;
         let revision: number;
         let changedIds: string[];
-        if (command.type === 'group.create') {
+        if (command.type === 'group.delete') {
           const project = this.project(command.projectId);
-          ({ groupChanges, containmentChanges, changedIds } = createGroup(this.db, command));
+          ({ groupChanges, containmentChanges, cardLifecycleChanges, textChanges, shapeChanges, imageChanges, strokeChanges, connectorChanges, changedIds } = deleteGroup(this.db, command));
+          after = null; revision = project.revision + 1;
+          this.db.prepare('UPDATE mapping_projects SET revision=? WHERE id=?').run(revision, project.id);
+        } else if (command.type === 'group.create' || command.type === 'group.remove-member' || command.type === 'group.ungroup') {
+          const project = this.project(command.projectId);
+          ({ groupChanges, containmentChanges, changedIds } = command.type === 'group.create' ? createGroup(this.db, command) : command.type === 'group.remove-member' ? removeMember(this.db, command) : ungroup(this.db, command));
           after = null; revision = project.revision + 1;
           this.db.prepare('UPDATE mapping_projects SET revision=? WHERE id=?').run(revision, project.id);
         } else if (command.type === 'connector.reverse') {
@@ -419,6 +426,7 @@ export class Mapping {
           containmentChanges = travel.containmentChanges;
           connectorChanges = travel.connectorChanges;
           cardChanges = travel.cardChanges;
+          cardLifecycleChanges = travel.cardLifecycleChanges;
           tagChange = travel.tagChange;
           textChange = travel.textChange;
           textChanges = travel.textChanges;
@@ -708,12 +716,27 @@ export class Mapping {
             .prepare('UPDATE mapping_projects SET revision=? WHERE id=?')
             .run(revision, project.id);
         }
+        if (command.type === 'thought.delete' || command.type === 'text.delete' || command.type === 'shape.delete' || command.type === 'image.delete' || command.type === 'stroke.delete') {
+          const itemId = before && 'body' in before ? before.item.id : (textChange?.before ?? shapeChange?.before ?? imageChange?.before ?? strokeChange?.before)!.item.id;
+          const released = removeDeletedMember(this.db, command.projectId, itemId, command.expected.membership);
+          groupChanges = released.groupChanges; containmentChanges = released.containmentChanges;
+          changedIds = [...new Set([...changedIds, ...(released.changedIds ?? [])])];
+        }
+        for (const c of cardLifecycleChanges ?? []) {
+          reconcileMediaTasks(this.db, command.projectId, c.before, c.after);
+          if (c.after) {
+            this.db.prepare('INSERT INTO mapping_cards VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET value=excluded.value').run(c.after.id, command.projectId, JSON.stringify(c.after));
+            retainCardVersions(this.db, command.projectId, c.after);
+          }
+        }
         if (before && 'body' in before || after && 'body' in after) {
           reconcileMediaTasks(this.db,command.projectId,before&&'body' in before?before:null,after&&'body' in after?after:null);
           if(after&&'body' in after)this.db.prepare('UPDATE mapping_cards SET value=? WHERE id=? AND project_id=?').run(JSON.stringify(after),after.id,command.projectId);
         }
         if (after && 'body' in after) retainCardVersions(this.db, command.projectId, after);
         for (const c of cardChanges ?? []) retainCardVersions(this.db, command.projectId, c.after);
+        const structuralOutcome = groupChanges || containmentChanges ? groupOutcome({ before, after, groupChanges: groupChanges ?? [], containmentChanges: containmentChanges ?? [], cardLifecycleChanges: cardLifecycleChanges ?? [], textChange, shapeChange, imageChange, strokeChange, textChanges, shapeChanges, imageChanges, strokeChanges, connectorChanges, changedIds } as Partial<Change>) : null;
+        if (structuralOutcome) changedIds = structuralOutcome.changedIds;
         const receipt = {
           commandId: command.commandId,
           projectId: command.projectId,
@@ -745,6 +768,7 @@ export class Mapping {
               }
             : {}),
         };
+        if (structuralOutcome) Object.assign(receipt, { deletedIds: structuralOutcome.deletedIds });
         const change: Change = {
           ...receipt,
           before,
@@ -762,6 +786,7 @@ export class Mapping {
           ...(textChange ? { textChange } : {}),
           ...(textChanges ? { textChanges } : {}),
           ...(cardChanges ? { cardChanges } : {}),
+          ...(cardLifecycleChanges ? { cardLifecycleChanges } : {}),
           actor: actor.actor,
           writtenAt: new Date().toISOString(),
         };

@@ -1,3 +1,4 @@
+import { MembershipExpected } from './containment-contracts.js';
 import { z } from 'zod';
 
 const Id = z.string().min(1).max(160);
@@ -39,7 +40,7 @@ export const ShapeDeleteCommand = z.object({
   commandId: Id,
   projectId: Id,
   type: z.literal('shape.delete'),
-  expected: z.object({ shape: Id, pose: Id, connectors: z.record(Id, Id).optional() }).strict(),
+  expected: z.object({ shape: Id, pose: Id, connectors: z.record(Id, Id).optional(), membership: MembershipExpected.optional() }).strict(),
   payload: z.object({ id: Id }).strict(),
 }).strict();
 export const ShapeTransformCommand = z.object({
