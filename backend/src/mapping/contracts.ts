@@ -1,4 +1,5 @@
 import { MembershipExpected } from './containment-contracts.js';
+import { GroupGeometryCommands } from './group-geometry-contracts.js';
 import { GroupCommands, type CanvasGroup, type Containment, type GroupChange, type ContainmentChange } from './group-contracts.js';
 import { ConnectorCommands, type CanvasConnector, type ConnectorChange } from './connector-contracts.js';
 import { ImageCommands, type CanvasImage, type ImageChange } from './image-contracts.js';
@@ -27,6 +28,7 @@ const BodyInput = {
 };
 export { TagCommandSchema } from './tag-contracts.js';
 export const MappingCommand = z.discriminatedUnion('type', [
+  ...GroupGeometryCommands.options,
   ...GroupCommands.options,
   ...ConnectorCommands.options,
   ...ImageCommands.options,

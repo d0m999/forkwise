@@ -138,7 +138,7 @@ export function recordAction(
     save(db, command.projectId, stack);
     return;
   }
-  if (command.type === 'canvas.move' || command.type === 'group.move' || command.type === 'canvas.move-selection') {
+  if (command.type === 'group.scale' || command.type === 'group.rotate90' || command.type === 'canvas.move' || command.type === 'group.move' || command.type === 'canvas.move-selection') {
     const target = change.cardChanges?.[0]?.after ?? change.textChanges?.[0]?.after ?? change.shapeChanges?.[0]?.after ?? change.imageChanges?.[0]?.after ?? change.strokeChanges?.[0]?.after;
     if (!target) return;
     stack.undo.push({ session, lastRevision: change.revision, id: command.commandId, label: command.type, target: { id: target.id, title: 'title' in target ? target.title : 'shortText' in target.content ? target.content.shortText : 'runs' in target.content ? target.content.runs.map(run => run.text).join('') : 'penKind' in target.content ? target.content.penKind === 'highlighter' ? '荧光笔' : '笔迹' : '图片' }, actor: change.actor, before: null, after: null, cardChanges: change.cardChanges ?? [], textChanges: change.textChanges ?? [], shapeChanges: change.shapeChanges ?? [], imageChanges: change.imageChanges ?? [], strokeChanges: change.strokeChanges ?? [], changedIds: change.changedIds });
@@ -297,7 +297,7 @@ export function travelHistory(
     const shapeChanges = (action.shapeChanges ?? []).map(change => restoreShape(db, project.id, change, type));
     const strokeChanges = (action.strokeChanges ?? []).map(change => restoreStroke(db, project.id, change, type));
     const imageChanges = (action.imageChanges ?? []).map(change => restoreImage(db, project.id, change, type));
-    const cardChanges = restoreGeometry(db, project.id, action.cardChanges ?? [], type);
+    const cardChanges = restoreGeometry(db, project.id, action.cardChanges ?? [], type, action.label === 'group.scale');
     (type === 'history.undo' ? stack.redo : stack.undo).push(action); save(db, project.id, stack);
     return { before: null, after: null, cardChanges, textChanges, shapeChanges, imageChanges, strokeChanges, changedIds: action.changedIds, deletedIds: [], target: { ...action.target, label: action.label } };
   }

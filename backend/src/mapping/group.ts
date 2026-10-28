@@ -145,7 +145,14 @@ export function moveGroup(db: Database.Database, command: Extract<GroupCommand, 
 }
 
 export function moveSelection(db: Database.Database, command: Extract<GroupCommand, { type: 'canvas.move-selection' }>) {
-  const { projectId, expected, payload } = command;
+  const members = selectionMembers(db, command.projectId, command.payload, command.expected);
+  return moveCanvas(db, { commandId: command.commandId, projectId: command.projectId, type: 'canvas.move', expected: command.expected.poses,
+    payload: { targets: members.map(({ kind, value }) => ({ kind, id: value.id, itemId: value.item.id, x: value.item.pose.x + command.payload.dx, y: value.item.pose.y + command.payload.dy })) } });
+}
+
+export function selectionMembers(db: Database.Database, projectId: string,
+  payload: { groupIds: string[]; directItemIds: string[] },
+  expected: { groups: Record<string, string>; containment: Record<string, string | null> }) {
   const groups = readGroupRecords(db, projectId), memberships = readContainment(db, projectId);
   // Validate the captured facts before expanding today's selected groups.
   for (const [id, version] of Object.entries(expected.groups))
@@ -161,9 +168,8 @@ export function moveSelection(db: Database.Database, command: Extract<GroupComma
     for (const member of memberships.filter(value => value.parent?.kind === 'group' && value.parent.id === group.itemId)) ids.add(member.id);
   }
   requireThat(Object.keys(expected.containment).length === ids.size && [...ids].every(id => Object.hasOwn(expected.containment, id)),
-    'EXPECTED_DOMAINS', '须校验全部移动对象的归属版本', 400);
+    'EXPECTED_DOMAINS', '须校验全部选中对象的归属版本', 400);
   const members = groupItems(db, projectId).filter(value => ids.has(value.value.item.id));
-  requireThat(members.length === ids.size, 'NOT_FOUND', '移动对象不存在于当前项目', 404);
-  return moveCanvas(db, { commandId: command.commandId, projectId, type: 'canvas.move', expected: expected.poses,
-    payload: { targets: members.map(({ kind, value }) => ({ kind, id: value.id, itemId: value.item.id, x: value.item.pose.x + payload.dx, y: value.item.pose.y + payload.dy })) } });
+  requireThat(members.length === ids.size, 'NOT_FOUND', '选中对象不存在于当前项目', 404);
+  return members;
 }

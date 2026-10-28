@@ -1,6 +1,7 @@
 import { removeMember, ungroup, removeDeletedMember, groupOutcome, deleteGroup } from './group-lifecycle.js';
 import { deleteSelection } from './selection-delete.js';
 import { createGroup, moveGroup, moveSelection, readGroups, readContainment } from './group.js';
+import { scaleGroup, rotateGroup } from './group-geometry.js';
 import type { GroupRecord, Containment } from './group-contracts.js';
 import type { CanvasConnector } from './connector-contracts.js';
 import { createConnector, reconnectConnector, changeConnectorPath, moveConnector, styleConnector, reverseConnectors, labelConnector, deleteConnector, prepareIncidentConnectorDeletion, applyIncidentConnectorDeletion, readConnectors } from './connector.js';
@@ -363,6 +364,13 @@ export class Mapping {
           after = null;
           changedIds = [stroke.id, stroke.item.id];
           revision = project.revision + 1;
+          this.db.prepare('UPDATE mapping_projects SET revision=? WHERE id=?').run(revision, project.id);
+        } else if (command.type === 'group.scale' || command.type === 'group.rotate90') {
+          const project = this.project(command.projectId);
+          if (command.type === 'group.scale') ({ cardChanges, textChanges, shapeChanges, imageChanges, changedIds } = scaleGroup(this.db, command));
+          else ({ imageChanges, changedIds } = rotateGroup(this.db, command));
+          if (!changedIds.length) return unchanged(project.revision);
+          after = null; revision = project.revision + 1;
           this.db.prepare('UPDATE mapping_projects SET revision=? WHERE id=?').run(revision, project.id);
         } else if (command.type === 'canvas.move' || command.type === 'group.move' || command.type === 'canvas.move-selection') {
           const project = this.project(command.projectId);

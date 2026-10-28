@@ -18,6 +18,7 @@ import { captureSelectionDeletion } from './canvas-selection-delete';
 import { useCanvasMarquee } from './canvas-selection-boundary';
 import { captureMemberDeletion, createGroupCommand, removeMemberCommand, ungroupCommand } from './canvas-group-commands';
 import { CanvasGroups } from './canvas-groups';
+import { useGroupGeometry } from './group-geometry';
 import { CanvasTextNode } from './canvas-text';
 import { CanvasShapeNode, shapeNodes } from './canvas-shape';
 import { CanvasStrokeNode, strokeNodes } from './canvas-stroke';
@@ -520,7 +521,8 @@ function Workspace() {
   const connectorLabelHistory = useRef<{ projectId: string; id: string; versionId: string } | null>(null);
   const [connectorLabelHistoryBusy, setConnectorLabelHistoryBusy] = useState(false);
   const connectorPending = useRef<() => boolean>(() => false);
-  const historyBlocked = historyBusy || !!historyCommand.current || connectorPending.current();
+  const [groupGeometryLocked, setGroupGeometryLocked] = useState(false);
+  const historyBlocked = historyBusy || !!historyCommand.current || connectorPending.current() || groupGeometryLocked;
   async function travel(
     direction: "undo" | "redo" | "retry",
     restoreActionId?: string,
@@ -1120,6 +1122,7 @@ function Workspace() {
     zoom: () => flow.getZoom(),
   });
   function cancelGesture() {
+    groupGeometry.cancel();
     connectorEdit.cancel();
     connectorCreate.cancelDraft();
     strokeDraw.cancel();
@@ -1157,7 +1160,7 @@ function Workspace() {
       )
         return;
       setShapePreset(null);
-      if (connectorEdit.hasGesture() || connectorCreate.hasGesture() || strokeDraw.hasGesture() || pose.dragging || texts.hasMove() || canvasMove.dragging || shapeMove.dragging || imageGeometry.dragging || marqueeSelection.hasGesture()) {
+      if (groupGeometry.hasGesture() || connectorEdit.hasGesture() || connectorCreate.hasGesture() || strokeDraw.hasGesture() || pose.dragging || texts.hasMove() || canvasMove.dragging || shapeMove.dragging || imageGeometry.dragging || marqueeSelection.hasGesture()) {
         event.preventDefault();
         cancel();
         return;
@@ -1709,6 +1712,7 @@ function Workspace() {
       await refresh(pending.command.projectId);
       if (pendingAction.current !== pending) return;
       pendingAction.current = null;
+      if (pending.command.type === 'group.scale' || pending.command.type === 'group.rotate90') groupGeometry.discard();
       setError('');
       setStatus(pending.command.type === 'text.delete'
         ? '已保留当前保存状态，请重新明确删除' : '已保留当前保存状态，请重新明确组合操作');
@@ -2208,6 +2212,13 @@ function Workspace() {
     if (!(await shapeMove.flush())) throw new Error("请先确认形状布局保存，整组移动意图仍保留");
     return prepare();
   }, done, intent, discard));
+  const groupGeometry = useGroupGeometry({ state, selection: canvasSelection.value, current: () => authority.current,
+    generation: canvasSelection.generation, zoom: () => flow.getZoom(), lock: setGroupGeometryLocked, fail,
+    blocked: busy || historyBlocked || composition.current || !!pendingAction.current || canvasMove.dragging || pose.dragging ||
+      shapeMove.dragging || imageGeometry.dragging || imageGeometry.hasPending(state?.project.id) || texts.hasMove() || !!shapeText.session || !!connectorLabel.session,
+    flush: async () => await shapeMove.flush() && await connectorLabel.finish() && await shapeText.finish() && await texts.finish() &&
+      await appearance.flush() && await cardLayout.flush() && await pose.flush() && await flush(),
+    execute: action });
   function canvasDragPoint(event: MouseEvent | TouchEvent) {
     const pointer = 'touches' in event ? event.touches[0] ?? event.changedTouches[0] : event;
     return pointer ? flow.screenToFlowPosition({ x: pointer.clientX, y: pointer.clientY }, { snapToGrid: false }) : undefined;
@@ -2352,7 +2363,7 @@ function Workspace() {
       onDelete: () => void removeCard(card.id),
       onRemoveFromGroup: memberAction(card.item.id),
       onMeasure: cardLayout.measure,
-      measurable: !busy && !historyBlocked && !pose.pending && !pose.dragging && !shapeMove.hasPending(),
+      measurable: !groupGeometry.active && !busy && !historyBlocked && !pose.pending && !pose.dragging && !shapeMove.hasPending(),
       onAppearance: (value) => {
         const current = authority.current;
         const target = current?.cards.find((c) => c.id === card.id);
@@ -2617,7 +2628,7 @@ function Workspace() {
               "controls.zoomOut.ariaLabel": "缩小",
               "controls.fitView.ariaLabel": "适应画布",
             }}
-            nodes={orderCanvas([...nodes, ...textNodes, ...imageNodes(state.images ?? [], state.project.id, selection, (id, extend) => void chooseCanvasItem(id, extend), busy || historyBlocked || composition.current || !!pendingAction.current || placing || !!shapePreset || texts.placing || panTool || !!strokeDraw.mode || !!shapeText.session || texts.geometryBlocked, imageGeometry, (value, dx, dy) => { if (canvasMove.start(value.item.id)) canvasMove.finish({ x: value.item.pose.x + dx, y: value.item.pose.y + dy }); }, singleItemId, memberAction), ...shapeNodes(state.shapes ?? [], selection, (id, extend) => void chooseCanvasItem(id, extend), busy || historyBlocked || placing || !!shapePreset || texts.placing || panTool, id => void beginShapeText(id), !!shapeText.session, (id, trigger) => void beginShapeAppearance(id, trigger), value => void removeShape(value), shapeMove.positions, shapeMove, composition.current || !!pendingAction.current || pose.pending || pose.dragging || canvasMove.dragging || texts.hasPending() || appearance.pending || cardLayout.pending, singleItemId, memberAction), ...strokeNodes(state.strokes ?? [], selection, (id, extend) => void chooseStrokeItem(id, extend), value => void removeStroke(value), busy || historyBlocked || !!pendingAction.current || placing || !!shapePreset || texts.placing || panTool || !!strokeDraw.mode, singleItemId, memberAction)].map(node => ({ ...node, selected: flowSelection.includes(node.id), position: canvasMove.positions[node.id] ?? shapeMove.positions[node.id] ?? node.position, draggable: node.draggable !== false && !strokeDraw.mode && !busy && !historyBlocked && !panTool && !placing && !shapePreset && !texts.placing && !texts.geometryBlocked && !shapeText.session && !connectorLabel.session && !shapeMove.pending })), state, selection)}
+            nodes={orderCanvas([...nodes, ...textNodes, ...imageNodes(state.images ?? [], state.project.id, selection, (id, extend) => void chooseCanvasItem(id, extend), busy || historyBlocked || composition.current || !!pendingAction.current || placing || !!shapePreset || texts.placing || panTool || !!strokeDraw.mode || !!shapeText.session || texts.geometryBlocked, imageGeometry, (value, dx, dy) => { if (canvasMove.start(value.item.id)) canvasMove.finish({ x: value.item.pose.x + dx, y: value.item.pose.y + dy }); }, singleItemId, memberAction), ...shapeNodes(state.shapes ?? [], selection, (id, extend) => void chooseCanvasItem(id, extend), busy || historyBlocked || placing || !!shapePreset || texts.placing || panTool, id => void beginShapeText(id), !!shapeText.session, (id, trigger) => void beginShapeAppearance(id, trigger), value => void removeShape(value), shapeMove.positions, shapeMove, composition.current || !!pendingAction.current || pose.pending || pose.dragging || canvasMove.dragging || texts.hasPending() || appearance.pending || cardLayout.pending, singleItemId, memberAction), ...strokeNodes(state.strokes ?? [], selection, (id, extend) => void chooseStrokeItem(id, extend), value => void removeStroke(value), busy || historyBlocked || !!pendingAction.current || placing || !!shapePreset || texts.placing || panTool || !!strokeDraw.mode, singleItemId, memberAction)].map(node => groupGeometry.project({ ...node, selected: flowSelection.includes(node.id), position: canvasMove.positions[node.id] ?? shapeMove.positions[node.id] ?? node.position, draggable: node.draggable !== false && !groupGeometry.active && !strokeDraw.mode && !busy && !historyBlocked && !panTool && !placing && !shapePreset && !texts.placing && !texts.geometryBlocked && !shapeText.session && !connectorLabel.session && !shapeMove.pending })), state, selection)}
             onNodeClick={(event, node) => {
               awaitBodySelection.current = false;
               clearConnectorSelection();
@@ -2709,7 +2720,7 @@ function Workspace() {
             <Background gap={24} color="#dce0e7" />
             <Controls showInteractive={false} />
             <ViewportPortal>
-              <CanvasGroups state={state} selection={canvasSelection.value} positions={canvasMove.positions}
+              <CanvasGroups state={state} selection={canvasSelection.value} positions={{ ...canvasMove.positions, ...groupGeometry.poses }} geometry={groupGeometry}
                 blocked={busy || historyBlocked || !!pendingAction.current || texts.hasPending()}
                 create={() => void createSelectedGroup()}
                 ungroup={id => void ungroupSelected(id)}

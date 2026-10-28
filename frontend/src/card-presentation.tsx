@@ -9,6 +9,18 @@ export function bodyPreviewText(body: Card["body"]) {
   return bodyText(body);
 }
 
+export function measureCardPresentation(element: HTMLElement) {
+  const title = element.querySelector<HTMLElement>('.title-button,.card-title');
+  if (!title) throw new Error('卡片标题尚未就绪');
+  const tagHeight = element.querySelector<HTMLElement>('.card-visible-tags')?.offsetHeight ?? 0;
+  const style = getComputedStyle(element);
+  const borders = parseFloat(style.borderTopWidth) + parseFloat(style.borderBottomWidth);
+  const preview = element.querySelector<HTMLElement>('.preview');
+  const lineHeight = preview ? parseFloat(getComputedStyle(preview).lineHeight) : 22;
+  return { necessaryHeight: Math.ceil(title.offsetHeight + tagHeight + borders),
+    lines: Math.max(0, Math.floor((element.clientHeight - title.offsetHeight - tagHeight - 24) / lineHeight)) };
+}
+
 // A future tag owner renders its single visible row in .card-visible-tags;
 // measurement consumes that actual row, never the full tag count or demo data.
 export function useCardPresentation(
@@ -26,29 +38,7 @@ export function useCardPresentation(
     let active = true;
     function measure() {
       if (!active) return;
-      const title = element!.querySelector<HTMLElement>(
-        ".title-button,.card-title",
-      );
-      if (!title) return;
-      const tags = element!.querySelector<HTMLElement>(".card-visible-tags");
-      const tagHeight = tags?.offsetHeight ?? 0;
-      const style = getComputedStyle(element!);
-      const borders =
-        parseFloat(style.borderTopWidth) + parseFloat(style.borderBottomWidth);
-      const necessaryHeight = Math.ceil(
-        title.offsetHeight + tagHeight + borders,
-      );
-      const preview = element!.querySelector<HTMLElement>(".preview");
-      const lineHeight = preview
-        ? parseFloat(getComputedStyle(preview).lineHeight)
-        : 22;
-      const count = Math.max(
-        0,
-        Math.floor(
-          (element!.clientHeight - title.offsetHeight - tagHeight - 24) /
-            lineHeight,
-        ),
-      );
+      const { necessaryHeight, lines: count } = measureCardPresentation(element!);
       setLines((previous) => (previous === count ? previous : count));
       if (enabled) callback.current(card, necessaryHeight);
     }

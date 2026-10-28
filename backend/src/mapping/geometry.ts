@@ -2,11 +2,13 @@ import type Database from 'better-sqlite3';
 import { randomUUID } from 'node:crypto';
 import type { Card, Command } from './contracts.js';
 import { requireThat } from '../domain/errors.js';
+import type { GeometryMemberExpected } from './group-geometry-contracts.js';
 
 // Mapping owns the surrounding SQLite transaction, receipt and history.
 export function writeGeometry(
   db: Database.Database,
   command: Extract<Command, { type: 'pose.batch' }>,
+  measured?: Record<string, { expected: Extract<GeometryMemberExpected, { kind: 'card' }>; forWidth: number; necessaryHeight: number }>,
 ) {
   const ids = command.payload.poses.map((p) => p.id);
   requireThat(new Set(ids).size === ids.length, 'INVALID_COMMAND', '同一几何动作不可重复卡片', 400);
@@ -26,6 +28,15 @@ export function writeGeometry(
         .get(p.id, command.projectId) as { value: string } | undefined;
       requireThat(row, 'NOT_FOUND', '卡片不存在于当前项目', 404);
       const before = JSON.parse(row.value) as Card;
+      const layout = measured?.[p.id];
+      if (layout) {
+        const e = layout.expected;
+        requireThat(e.thought === before.versionId && e.body === before.body.versionId &&
+          e.appearance === (before.appearance?.versionId ?? null) && e.cardTags === (before.cardTags?.versionId ?? null),
+        'VERSION_CONFLICT', '卡片内容已更新，请重新读取', 409);
+        requireThat(layout.forWidth === p.width && p.height >= layout.necessaryHeight,
+          'INVALID_GEOMETRY', '卡片尺寸须容纳目标宽度下的完整标题和标签', 400);
+      }
       requireThat(
         command.expected[p.id] === before.item.versionId,
         'VERSION_CONFLICT',
@@ -38,7 +49,7 @@ export function writeGeometry(
       );
       const policy = before.item.heightPolicy;
       const heightPolicy =
-        p.height !== before.item.pose.height
+        layout ? { ...policy, manualHeight: p.height, necessaryHeight: layout.necessaryHeight } : p.height !== before.item.pose.height
           ? {
               ...policy,
               manualHeight: Math.max(p.height, policy?.necessaryHeight ?? 0),
@@ -78,6 +89,7 @@ export function restoreGeometry(
   projectId: string,
   changes: { before: Card; after: Card }[],
   direction: 'history.undo' | 'history.redo',
+  groupScale = false,
 ) {
   return changes.map((c) => {
     const desired = direction === 'history.undo' ? c.before : c.after;
@@ -86,6 +98,11 @@ export function restoreGeometry(
       .get(desired.id, projectId) as { value: string } | undefined;
     requireThat(row, 'NOT_FOUND', '几何历史目标已不可用', 409);
     const before = JSON.parse(row.value) as Card;
+    if (groupScale) {
+      const after = { ...before, item: { ...desired.item, versionId: randomUUID() } };
+      db.prepare('UPDATE mapping_cards SET value=? WHERE id=? AND project_id=?').run(JSON.stringify(after), after.id, projectId);
+      return { before, after };
+    }
     const policy = desired.item.heightPolicy;
     const necessaryHeight =
       before.item.heightPolicy?.necessaryHeight ?? policy?.necessaryHeight ?? 0;

@@ -52,11 +52,15 @@ export function transformImage(db: Database.Database, command: Extract<ImageComm
   requireThat(before, 'NOT_FOUND', '图片不存在于当前项目', 404);
   requireThat(command.expected.image === before.versionId && command.expected.pose === before.item.versionId, 'VERSION_CONFLICT', '图片或布局已更新，请重新读取', 409);
   const pose = { ...command.payload.pose, rotation: before.item.pose.rotation };
+  return writeImagePose(db, command.projectId, before, pose);
+}
+
+export function writeImagePose(db: Database.Database, projectId: string, before: CanvasImage, pose: CanvasImage['item']['pose']): ImageChange | null {
   if (Object.keys(pose).every(key => pose[key as keyof typeof pose] === before.item.pose[key as keyof typeof pose])) return null;
   const after = structuredClone(before);
   after.item = { ...after.item, versionId: randomUUID(), pose };
-  db.prepare('UPDATE mapping_images SET value=? WHERE id=? AND project_id=?').run(JSON.stringify(after), after.id, command.projectId);
-  retainImageVersions(db, command.projectId, after);
+  db.prepare('UPDATE mapping_images SET value=? WHERE id=? AND project_id=?').run(JSON.stringify(after), after.id, projectId);
+  retainImageVersions(db, projectId, after);
   return { before, after };
 }
 
@@ -93,15 +97,12 @@ export function rotateImage(db: Database.Database, command: Extract<ImageCommand
   const before = readImages(db, command.projectId).find(value => value.id === command.payload.id);
   requireThat(before, 'NOT_FOUND', '图片不存在于当前项目', 404);
   requireThat(command.expected.image === before.versionId && command.expected.pose === before.item.versionId, 'VERSION_CONFLICT', '图片或布局已更新，请重新读取', 409);
-  const p = before.item.pose, after = structuredClone(before);
+  const p = before.item.pose;
   const rotation = ((p.rotation + (command.payload.direction === 'right' ? 90 : 270)) % 360) as typeof p.rotation;
-  after.item = { ...after.item, versionId: randomUUID(), pose: {
+  return writeImagePose(db, command.projectId, before, {
     x: p.x + (p.width - p.height) / 2, y: p.y + (p.height - p.width) / 2,
     width: p.height, height: p.width, rotation,
-  } };
-  db.prepare('UPDATE mapping_images SET value=? WHERE id=? AND project_id=?').run(JSON.stringify(after), after.id, command.projectId);
-  retainImageVersions(db, command.projectId, after);
-  return { before, after };
+  })!;
 }
 
 export function deleteImage(db: Database.Database, command: Extract<ImageCommand, { type: 'image.delete' }>): ImageChange {

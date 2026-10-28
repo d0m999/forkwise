@@ -13,6 +13,7 @@ export type TextData = {
   editing: boolean;
   ending: boolean;
   measurable: boolean;
+  measurementRequest?: number;
   singleSelection: boolean;
   measure: (width: number, height: number) => void;
   change: (content: TextContent) => void;
@@ -89,6 +90,7 @@ export function CanvasTextNode({ data, selected }: NodeProps<Node<TextData>>) {
     JSON.stringify(content),
     data.editing,
     data.measurable,
+    data.measurementRequest,
     geometry.preview,
   ]);
   return (
