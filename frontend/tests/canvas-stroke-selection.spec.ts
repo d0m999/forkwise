@@ -23,7 +23,7 @@ test("两种细笔迹可实际命中和键盘选择，单笔删除可撤销重�
     response.request().postDataJSON()?.type === "card.layout");
   await page.reload(); expect((await layout).status()).toBe(200);
   await expect(page.getByRole("status")).toHaveText("已保存到本机");
-  const baseline = await workspace.state() as any;
+  let baseline = await workspace.state() as any;
   await expect(page.locator(".workspace")).toHaveAttribute("data-revision", String(baseline.project.revision));
   await page.locator("button.react-flow__controls-zoomout").click();
   await expect.poll(() => page.locator(".react-flow__viewport").evaluate(element =>
@@ -32,7 +32,8 @@ test("两种细笔迹可实际命中和键盘选择，单笔删除可撤销重�
     const response = await page.request.get(workspace.origin + "/api/mapping/projects/" + projectId + "/history");
     expect(response.status()).toBe(200); return response.json();
   };
-  const initialHistory = await history(), writes: any[] = [];
+  let initialHistory = await history();
+  const writes: any[] = [];
   page.on("request", request => {
     if (request.url().endsWith("/api/mapping/execute") && request.method() === "POST") writes.push(request.postDataJSON());
   });
@@ -57,18 +58,56 @@ test("两种细笔迹可实际命中和键盘选择，单笔删除可撤销重�
     await page.mouse.move(start.x + 50, start.y + 30, { steps: 4 }); await page.mouse.up();
     await expect(page.getByRole("button", { name: /^调整笔迹尺寸/ })).toHaveCount(0);
     expect(await workspace.state()).toEqual(baseline); expect(await history()).toEqual(initialHistory); expect(writes).toHaveLength(0);
+    await page.keyboard.press('Escape');
+    await expect(page.locator('.react-flow__node.selected')).toHaveCount(0);
+    expect(await workspace.state()).toEqual(baseline); expect(await history()).toEqual(initialHistory); expect(writes).toHaveLength(0);
   }
+  await hit(fixtures[0].label);
+  const outsideStart = await point(fixtures[0].label);
+  const toolbar = (await page.getByRole('button', { name: '新建研究', exact: true }).boundingBox())!;
+  await page.mouse.move(outsideStart.x, outsideStart.y); await page.mouse.down();
+  await page.mouse.move(toolbar.x + toolbar.width / 2, toolbar.y + toolbar.height / 2, { steps: 4 }); await page.mouse.up();
+  expect(await workspace.state()).toEqual(baseline); expect(await history()).toEqual(initialHistory); expect(writes).toHaveLength(0);
+  await page.keyboard.press('Escape');
+  await expect(page.locator('.react-flow__node.selected'), '画布外同窗口松开后Esc仍清理普通选择').toHaveCount(0);
+  expect(await workspace.state()).toEqual(baseline); expect(await history()).toEqual(initialHistory); expect(writes).toHaveLength(0);
   await hit(fixtures[0].label);
   await page.getByRole("button", { name: "选择保护卡", exact: true }).click({ modifiers: ["Shift"] });
   await expect(control(fixtures[0].label)).toHaveAttribute("aria-pressed", "true");
   await expect(page.getByRole("button", { name: "删除笔迹", exact: true })).toHaveCount(0);
-  await control(fixtures[0].label).focus(); await page.keyboard.press("Delete");
   const cardMove = page.getByRole("button", { name: "移动卡片：方向键调整位置", exact: true });
   await expect(cardMove).toBeDisabled();
   const cardBox = (await cardMove.boundingBox())!;
   await page.mouse.move(cardBox.x + cardBox.width / 2, cardBox.y + cardBox.height / 2); await page.mouse.down();
   await page.mouse.move(cardBox.x + cardBox.width / 2 + 60, cardBox.y + cardBox.height / 2 + 40, { steps: 4 }); await page.mouse.up();
   expect(await workspace.state()).toEqual(baseline); expect(await history()).toEqual(initialHistory); expect(writes).toHaveLength(0);
+  await control(fixtures[0].label).focus(); await page.keyboard.press('Delete');
+  await expect.poll(() => writes.filter(command => command.type === 'canvas.delete-selection').length).toBe(1);
+  await expect(page.getByRole('status')).toHaveText('已保存到本机');
+  const atomic = writes.filter(command => command.type === 'canvas.delete-selection')[0];
+  const stroke = baseline.strokes.find((value: any) => value.id === fixtures[0].id), card = baseline.cards[0];
+  expect(atomic.payload.groupIds).toEqual([]); expect(atomic.payload.directItemIds).toHaveLength(2);
+  expect(atomic.payload.directItemIds).toEqual(expect.arrayContaining([stroke.item.id, card.item.id]));
+  expect(Object.keys(atomic.expected.items).sort()).toEqual([stroke.item.id, card.item.id].sort());
+  expect(writes).toHaveLength(1);
+  const atomicDeleted = await workspace.state() as any;
+  expect(atomicDeleted).toEqual({ ...baseline, project: { ...baseline.project, revision: baseline.project.revision + 1 },
+    cards: [], strokes: baseline.strokes.filter((value: any) => value.id !== stroke.id) });
+  const atomicHistory = await history(); expect(atomicHistory.undo).toHaveLength(initialHistory.undo.length + 1);
+  expect(atomicHistory.undo.at(-1).label).toBe('canvas.delete-selection');
+  await page.getByRole('button', { name: '撤销', exact: true }).click();
+  await expect(page.getByRole('img', { name: fixtures[0].label, exact: true })).toBeVisible();
+  const atomicRestored = await workspace.state() as any;
+  expect(atomicRestored.cards).toHaveLength(1); expect(atomicRestored.cards[0]).toMatchObject({ id: card.id, title: card.title,
+    body: { id: card.body.id, blocks: card.body.blocks }, item: { id: card.item.id, pose: card.item.pose } });
+  expect(atomicRestored.strokes).toHaveLength(2);
+  expect(atomicRestored.strokes.find((value: any) => value.id === stroke.id)).toMatchObject({ id: stroke.id,
+    content: stroke.content, item: { id: stroke.item.id, createdOrder: stroke.item.createdOrder, pose: stroke.item.pose } });
+  expect(atomicRestored.strokes.find((value: any) => value.id !== stroke.id)).toEqual(baseline.strokes.find((value: any) => value.id !== stroke.id));
+  for (const key of ['texts', 'shapes', 'images', 'tags', 'groups', 'containment', 'connectors']) expect(atomicRestored[key]).toEqual(baseline[key]);
+  expect(atomicRestored.project.revision).toBe(atomicDeleted.project.revision + 1);
+  baseline = atomicRestored; initialHistory = await history();
+  const singleDeleteWritesStart = writes.length;
   await page.locator(".react-flow__pane").click({ position: { x: 80, y: 100 } });
   for (const [index, fixture] of fixtures.entries()) {
     if (index === 0) await hit(fixture.label);
@@ -110,7 +149,7 @@ test("两种细笔迹可实际命中和键盘选择，单笔删除可撤销重�
     expect(final.versionId).not.toBe(restored.versionId); expect(final.item.versionId).not.toBe(restored.item.versionId);
   }
   const saved = await workspace.state() as any; expect(saved.strokes).toHaveLength(2);
-  expect(writes.filter(command => command.type !== "stroke.delete" && command.type !== "history.undo" && command.type !== "history.redo")).toHaveLength(0);
+  expect(writes.slice(singleDeleteWritesStart).filter(command => command.type !== "stroke.delete" && command.type !== "history.undo" && command.type !== "history.redo")).toHaveLength(0);
   await page.reload();
   for (const fixture of fixtures) await expect(page.getByRole("img", { name: fixture.label, exact: true })).toBeVisible();
   expect(await workspace.state()).toEqual(saved);

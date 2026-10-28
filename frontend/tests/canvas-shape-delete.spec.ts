@@ -15,17 +15,22 @@ test("单形状Delete与具名删除保输入及混选，未知结果原样重�
     response.request().postDataJSON()?.type === "card.layout");
   await page.reload(); expect((await layout).status()).toBe(200);
   await expect(page.getByRole("status")).toHaveText("已保存到本机");
-  const original = await workspace.state() as any, shape = original.shapes[0];
+  let original = await workspace.state() as any, shape = original.shapes[0];
   const history = async () => {
     const response = await page.request.get(workspace.origin + "/api/mapping/projects/" + projectId + "/history");
     expect(response.status()).toBe(200); return response.json();
   };
-  const originalHistory = await history(), attempts: { command: any; status: number; body: any }[] = [];
+  let originalHistory = await history();
+  const attempts: { command: any; status: number; body: any }[] = [], mixed: { command: any; status: number }[] = [];
   let releaseNamed = () => {}, namedArrived = () => {};
   const namedGate = new Promise<void>(resolve => { releaseNamed = resolve; });
   const namedRequest = new Promise<void>(resolve => { namedArrived = resolve; });
   await page.route("**/api/mapping/execute", async route => {
     const command = route.request().postDataJSON();
+    if (command?.type === 'canvas.delete-selection') {
+      const response = await route.fetch(); mixed.push({ command, status: response.status() });
+      await route.fulfill({ response }); return;
+    }
     if (command?.type !== "shape.delete") { await route.continue(); return; }
     if (attempts.length === 2) { namedArrived(); await namedGate; }
     const response = await route.fetch(), body = await response.json();
@@ -47,7 +52,26 @@ test("单形状Delete与具名删除保输入及混选，未知结果原样重�
     await visual.click(); await page.getByRole("button", { name: "保护卡片", exact: true }).click({ modifiers: ["Shift"] });
     await expect(page.locator(".react-flow__node.selected")).toHaveCount(2);
     await visual.press("Delete");
-    expect(attempts).toEqual([]); expect(await workspace.state()).toEqual(original); expect(await history()).toEqual(originalHistory);
+    await expect.poll(() => mixed.length).toBe(1); expect(attempts).toEqual([]);
+    expect(mixed[0]).toMatchObject({ status: 200, command: { projectId, type: 'canvas.delete-selection', payload: { groupIds: [] } } });
+    expect(mixed[0].command.payload.directItemIds).toHaveLength(2);
+    expect(mixed[0].command.payload.directItemIds).toEqual(expect.arrayContaining([shape.item.id, original.cards[0].item.id]));
+    expect(Object.keys(mixed[0].command.expected.items).sort()).toEqual([shape.item.id, original.cards[0].item.id].sort());
+    const mixedDeleted = await workspace.state() as any, mixedHistory = await history();
+    expect(mixedDeleted).toEqual({ ...original, project: { ...original.project, revision: original.project.revision + 1 }, cards: [], shapes: [] });
+    expect(mixedHistory.undo).toHaveLength(originalHistory.undo.length + 1);
+    expect(mixedHistory.undo.at(-1).label).toBe('canvas.delete-selection');
+    await page.getByRole('button', { name: '撤销', exact: true }).click(); await expect(visual).toBeVisible();
+    const mixedRestored = await workspace.state() as any;
+    expect(mixedRestored.cards).toHaveLength(1);
+    expect(mixedRestored.cards[0]).toMatchObject({ id: original.cards[0].id, title: original.cards[0].title,
+      body: { id: original.cards[0].body.id, blocks: original.cards[0].body.blocks },
+      item: { id: original.cards[0].item.id, pose: original.cards[0].item.pose, createdOrder: original.cards[0].item.createdOrder } });
+    expect(mixedRestored.shapes).toHaveLength(1);
+    expect(mixedRestored.shapes[0]).toMatchObject({ id: shape.id, content: shape.content, item: { id: shape.item.id, pose: shape.item.pose } });
+    for (const key of ['texts', 'images', 'strokes', 'tags', 'groups', 'containment', 'connectors']) expect(mixedRestored[key]).toEqual(original[key]);
+    expect(mixedRestored.project.revision).toBe(mixedDeleted.project.revision + 1);
+    original = mixedRestored; shape = original.shapes[0]; originalHistory = await history();
     await page.locator(".react-flow__pane").click({ position: { x: 100, y: 510 } }); await visual.click();
     await expect(page.locator(".react-flow__node.selected")).toHaveCount(1);
     await visual.press("Delete");

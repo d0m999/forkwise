@@ -106,6 +106,28 @@ for (const zoomed of [false, true]) {
   });
 }
 
+test('Group armed小位移的Esc/blur/pointercancel保零写并消费尾随click，新独立click仍可进入成员', async ({ page, workspace }) => {
+  const { before, cardId, shapeId, timeline } = await seedGroup(page, workspace), commands = writes(page);
+  const mouse = await trustedMouse(page);
+  try {
+    for (const cancel of ['Escape', 'blur', 'pointercancel']) {
+      await selectGroup(page); const start = await center(page, shapeId);
+      await mouse.start(start); await mouse.move(offset(start, 2, 0));
+      await preview(page, workspace, before, { x: 100, y: 160 }, { x: 420, y: 200 });
+      if (cancel === 'Escape') await page.keyboard.press('Escape');
+      else if (cancel === 'blur') await page.evaluate(() => window.dispatchEvent(new Event('blur')));
+      else await node(page, shapeId).dispatchEvent('pointercancel');
+      await mouse.up(offset(start, 2, 0)); await mouse.trace();
+      await expect(node(page, cardId)).toHaveClass(/selected/); await expect(node(page, shapeId)).toHaveClass(/selected/);
+      expect(await workspace.state()).toEqual(before); expect(await history(page, workspace, before.project.id)).toEqual(timeline);
+      expect(commands).toEqual([]);
+      await node(page, shapeId).click();
+      await expect(page.locator('.react-flow__node.selected')).toHaveCount(1);
+      await expect(node(page, shapeId)).toHaveClass(/selected/); await expect(node(page, cardId)).not.toHaveClass(/selected/);
+    }
+  } finally { await mouse.close(); }
+});
+
 test('Group直接up原点零写，Esc恢复后迟到up不提交且新手势可保存', async ({ page, workspace }) => {
   const { before, shapeId, timeline } = await seedGroup(page, workspace), commands = writes(page), mouse = await trustedMouse(page);
   try {

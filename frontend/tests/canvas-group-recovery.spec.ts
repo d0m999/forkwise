@@ -275,3 +275,64 @@ test('移动队列真实409先保五类原意图，比较读取失败只重读�
     expect(await (await page.request.get(workspace.origin + '/api/mapping/projects/' + projectId + '/history')).json()).toEqual(timeline);
   } finally { if (pressed) await page.mouse.up(); await page.unrouteAll({ behavior: 'wait' }); }
 });
+
+
+test('结构owner确认写入后补读失败先保项目A，补读完成才切换项目B且不迟到抢回', async ({ page, workspace }) => {
+  const f = await fiveMembers(page, workspace), projectId = f.before.project.id;
+  await page.getByRole('button', { name: '新建研究', exact: true }).click();
+  await expect.poll(async () => {
+    const id = await page.getByRole('tab', { selected: true }).getAttribute('title'); return !!id && id !== projectId;
+  }).toBe(true);
+  const otherId = (await page.getByRole('tab', { selected: true }).getAttribute('title'))!;
+  expect(otherId).toBeTruthy(); expect(otherId).not.toBe(projectId);
+  const tabA = page.locator('[role="tab"][title="' + projectId + '"]'), tabB = page.locator('[role="tab"][title="' + otherId + '"]');
+  const readState = async (id: string) => {
+    const response = await page.request.get(workspace.origin + '/api/mapping/projects/' + id);
+    expect(response.status()).toBe(200); return response.json();
+  };
+  const readHistory = async (id: string) => {
+    const response = await page.request.get(workspace.origin + '/api/mapping/projects/' + id + '/history');
+    expect(response.status()).toBe(200); return response.json();
+  };
+  const other = await readState(otherId), otherHistory = await readHistory(otherId);
+  await tabA.click(); await expect(tabA).toHaveAttribute('aria-selected', 'true');
+  await f.visuals.shape.click(); await expect(page.locator('.react-flow__node.selected')).toHaveCount(5);
+  const before = await readState(projectId), timeline = await readHistory(projectId), group = before.groups[0];
+  const attempts: any[] = [], reads: number[] = [];
+  let applied = false, failRead = true;
+  await page.route('**/api/mapping/execute', async route => {
+    const command = route.request().postDataJSON();
+    if (command.type !== 'group.ungroup') { await route.continue(); return; }
+    const response = await route.fetch(); attempts.push({ command, status: response.status() });
+    applied = true; await route.fulfill({ response });
+  });
+  await page.route('**/api/mapping/projects/' + projectId + '/map?**', async route => {
+    if (!applied || new URL(route.request().url()).searchParams.get('view') !== 'index') { await route.continue(); return; }
+    const response = await route.fetch(); reads.push(response.status());
+    if (failRead) await route.abort('connectionreset'); else await route.fulfill({ response });
+  });
+  try {
+    await page.getByRole('button', { name: '取消组合', exact: true }).click();
+    const retry = page.getByRole('button', { name: '重试保存', exact: true }); await expect(retry).toBeVisible();
+    expect(attempts).toHaveLength(1); const failedReads = reads.length; expect(failedReads).toBeGreaterThan(0);
+    expect(attempts[0]).toEqual({ status: 200, command: expect.objectContaining({ projectId, type: 'group.ungroup',
+      expected: { group: group.versionId, containment: Object.fromEntries(before.containment.map((value: any) => [value.id, value.versionId])) }, payload: { id: group.id } }) });
+    const committed = await readState(projectId), committedHistory = await readHistory(projectId);
+    expect(committed.groups).toEqual([]); expect(committed.project.revision).toBe(before.project.revision + 1);
+    expect(committedHistory.undo).toHaveLength(timeline.undo.length + 1); expect(committedHistory.undo.at(-1).label).toBe('group.ungroup');
+    await tabB.click(); await expect(tabA).toHaveAttribute('aria-selected', 'true'); await expect(tabB).toHaveAttribute('aria-selected', 'false');
+    expect(attempts).toHaveLength(1); await expect(retry).toBeVisible();
+    expect(await readState(projectId)).toEqual(committed); expect(await readHistory(projectId)).toEqual(committedHistory);
+    expect(await readState(otherId)).toEqual(other); expect(await readHistory(otherId)).toEqual(otherHistory);
+    failRead = false; await retry.click(); await expect(retry).toHaveCount(0);
+    await expect(page.getByRole('status')).toHaveText('已保存到本机');
+    await expect(page.locator('.workspace')).toHaveAttribute('data-revision', String(committed.project.revision));
+    expect(attempts).toHaveLength(1); expect(reads.length).toBeGreaterThan(failedReads);
+    await tabB.click(); await expect(tabB).toHaveAttribute('aria-selected', 'true');
+    await expect(page.locator('.react-flow__node')).toHaveCount(0);
+    await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+    await expect(tabB).toHaveAttribute('aria-selected', 'true'); expect(attempts).toHaveLength(1);
+    expect(await readState(projectId)).toEqual(committed); expect(await readHistory(projectId)).toEqual(committedHistory);
+    expect(await readState(otherId)).toEqual(other); expect(await readHistory(otherId)).toEqual(otherHistory);
+  } finally { await page.unrouteAll({ behavior: 'wait' }); }
+});

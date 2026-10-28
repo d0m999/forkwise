@@ -161,6 +161,7 @@ export function CardMenu({
         role="toolbar"
         aria-label="卡片操作"
         style={positions.toolbar}
+        onClick={event => event.stopPropagation()}
       >
         <button disabled={blocked} onClick={onEdit}>
           编辑标题
@@ -210,6 +211,7 @@ export function CardMenu({
           role="dialog"
           aria-label={open === "外观" ? "卡片外观" : open}
           style={positions.popup}
+          onClick={event => event.stopPropagation()}
         >
           <div className="card-popup-heading">
             <strong>{open === "外观" ? "卡片外观" : open}</strong>

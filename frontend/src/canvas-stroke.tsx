@@ -50,12 +50,13 @@ export function CanvasStrokeNode({ data, selected }: NodeProps<Node<StrokeData>>
 }
 
 export function strokeNodes(strokes: CanvasStroke[], selection: string[], choose: (id: string, extend: boolean) => void,
-  remove: (value: CanvasStroke) => void, blocked: boolean, singleItemId: string | null, memberAction: (itemId: string) => (() => void) | undefined): Node<StrokeData>[] {
+  remove: (value: CanvasStroke) => void, blocked: boolean, singleItemId: string | null, memberAction: (itemId: string) => (() => void) | undefined,
+  canMove: (itemId: string) => boolean): Node<StrokeData>[] {
   return strokes.map(value => ({
     id: value.item.id, type: "canvasStroke", position: { x: value.item.pose.x, y: value.item.pose.y },
     initialWidth: value.item.pose.width, initialHeight: value.item.pose.height,
     style: { width: value.item.pose.width, height: value.item.pose.height, pointerEvents: "none" },
-    draggable: !blocked, selectable: !blocked, selected: selection.includes(value.item.id), connectable: false, focusable: false,
+    draggable: !blocked && canMove(value.item.id), selectable: !blocked, selected: selection.includes(value.item.id), connectable: false, focusable: false,
     data: { value, blocked, single: singleItemId === value.item.id, choose: extend => choose(value.item.id, extend), remove: () => remove(value), removeFromGroup: memberAction(value.item.id) },
   }));
 }

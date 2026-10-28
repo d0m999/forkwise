@@ -1140,6 +1140,7 @@ function Workspace() {
   }
   useEffect(() => {
     const cancel = () => cancelGesture();
+    const released = () => canvasMove.endArmedPointer();
     const lostCapture = (event: PointerEvent) => {
       if (event.target instanceof Element && event.target.closest('.image-crop')) return;
       cancel();
@@ -1160,7 +1161,7 @@ function Workspace() {
       )
         return;
       setShapePreset(null);
-      if (groupGeometry.hasGesture() || connectorEdit.hasGesture() || connectorCreate.hasGesture() || strokeDraw.hasGesture() || pose.dragging || texts.hasMove() || canvasMove.dragging || shapeMove.dragging || imageGeometry.dragging || marqueeSelection.hasGesture()) {
+      if (groupGeometry.hasGesture() || connectorEdit.hasGesture() || connectorCreate.hasGesture() || strokeDraw.hasGesture() || pose.dragging || texts.hasMove() || canvasMove.dragging || canvasMove.hasPointerGesture() || shapeMove.dragging || imageGeometry.dragging || marqueeSelection.hasGesture()) {
         event.preventDefault();
         cancel();
         return;
@@ -1170,6 +1171,7 @@ function Workspace() {
       canvasSelection.set({ targets: [], enteredGroupId: null });
       clearConnectorSelection();
     };
+    window.addEventListener("pointerup", released, true);
     window.addEventListener("pointercancel", cancel, true);
     window.addEventListener("lostpointercapture", lostCapture, true);
     window.addEventListener("blur", cancel);
@@ -1177,6 +1179,7 @@ function Workspace() {
     window.addEventListener("keydown", escape);
     document.addEventListener("visibilitychange", hidden);
     return () => {
+      window.removeEventListener("pointerup", released, true);
       window.removeEventListener("pointercancel", cancel, true);
       window.removeEventListener("lostpointercapture", lostCapture, true);
       window.removeEventListener("blur", cancel);
@@ -2223,6 +2226,16 @@ function Workspace() {
     const pointer = 'touches' in event ? event.touches[0] ?? event.changedTouches[0] : event;
     return pointer ? flow.screenToFlowPosition({ x: pointer.clientX, y: pointer.clientY }, { snapToGrid: false }) : undefined;
   }
+  function beginCanvasNodeDrag(event: MouseEvent | TouchEvent, node: { id: string; position: Position; type?: string | undefined }) {
+    canvasSelection.beginDrag(node.id);
+    const point = canvasMove.point(node.id, node.position, canvasDragPoint(event), 'touches' in event);
+    if (canvasMove.start(node.id, true)) { canvasMove.drag(point); return; }
+    if (canvasSelection.hasDirectStroke()) return;
+    if (node.type === 'canvasShape') { shapeMove.start(node.id); shapeMove.preview(node.id, point); return; }
+    if (texts.startMove(node.id)) { texts.previewMove(node.id, point); return; }
+    const card = authority.current?.cards.find(value => value.item.id === node.id);
+    if (card && startMove(authority.current!.project.id, card)) previewMove(point, 'altKey' in event && event.altKey);
+  }
   async function createSelectedGroup() {
     const snapshot = authority.current;
     if (!snapshot || busy || historyBlocked || composition.current || pendingAction.current) return;
@@ -2525,6 +2538,9 @@ function Workspace() {
             payload: { id: crypto.randomUUID(), title: '', text, x: point.x - 140, y: point.y - 80 } });
         }}
         onClickCapture={(event) => {
+          if ((event.target as Element).closest('.react-flow__node, .react-flow__pane') && canvasMove.consumeCancelledClick()) {
+            event.preventDefault(); event.stopPropagation(); return;
+          }
           if (connectorCreate.consumeClick({ x: event.clientX, y: event.clientY })) { event.preventDefault(); event.stopPropagation(); return; }
           if (connectorLabel.session && !(event.target as Element).closest('.connector-label-session, .connector-tools, .react-flow__controls') &&
             (event.target as Element).closest('.react-flow__node, .react-flow__pane, .canvas-connector, .connector-label')) {
@@ -2583,7 +2599,14 @@ function Workspace() {
         onMouseDownCapture={event => {
           const hit = (event.target as Element).closest<HTMLElement>('.react-flow__node')?.dataset.id;
           if (hit && event.button === 0 && !(event.target as Element).closest('.nodrag, input, textarea, [contenteditable=true]'))
-            canvasMove.mouseOrigin(hit, flow.screenToFlowPosition({ x: event.clientX, y: event.clientY }, { snapToGrid: false }));
+            canvasMove.mouseOrigin(hit, flow.screenToFlowPosition({ x: event.clientX, y: event.clientY }, { snapToGrid: false }),
+              { x: event.clientX, y: event.clientY });
+        }}
+        onTouchStartCapture={event => {
+          const hit = (event.target as Element).closest<HTMLElement>('.react-flow__node')?.dataset.id, touch = event.touches[0];
+          if (hit && touch && !(event.target as Element).closest('.nodrag, input, textarea, [contenteditable=true]'))
+            canvasMove.touchOrigin(hit, flow.screenToFlowPosition({ x: touch.clientX, y: touch.clientY }, { snapToGrid: false }),
+              { x: touch.clientX, y: touch.clientY });
         }}
         onPointerDownCapture={(event) => {
           if (imageGeometry.cropping?.projectId === state?.project.id && state && event.button === 0 && !(event.target as Element).closest('.image-crop')) {
@@ -2595,11 +2618,13 @@ function Workspace() {
             event.preventDefault(); event.stopPropagation(); return;
           }
           canvasSelection.retirePointer();
+          canvasMove.retirePointer();
           const hit = (event.target as Element).closest<HTMLElement>('.react-flow__node')?.dataset.id;
           if (hit && event.button === 0 && !(event.target as Element).closest('.nodrag, input, textarea, [contenteditable=true]')) {
             const captured = canvasSelection.capture(hit, event.shiftKey);
             if (captured) canvasMove.arm(hit, captured.state, captured.selection,
-              flow.screenToFlowPosition({ x: event.clientX, y: event.clientY }, { snapToGrid: false }));
+              flow.screenToFlowPosition({ x: event.clientX, y: event.clientY }, { snapToGrid: false }),
+              { x: event.clientX, y: event.clientY });
           }
           if (
             event.button === 0 &&
@@ -2628,13 +2653,13 @@ function Workspace() {
               "controls.zoomOut.ariaLabel": "缩小",
               "controls.fitView.ariaLabel": "适应画布",
             }}
-            nodes={orderCanvas([...nodes, ...textNodes, ...imageNodes(state.images ?? [], state.project.id, selection, (id, extend) => void chooseCanvasItem(id, extend), busy || historyBlocked || composition.current || !!pendingAction.current || placing || !!shapePreset || texts.placing || panTool || !!strokeDraw.mode || !!shapeText.session || texts.geometryBlocked, imageGeometry, (value, dx, dy) => { if (canvasMove.start(value.item.id)) canvasMove.finish({ x: value.item.pose.x + dx, y: value.item.pose.y + dy }); }, singleItemId, memberAction), ...shapeNodes(state.shapes ?? [], selection, (id, extend) => void chooseCanvasItem(id, extend), busy || historyBlocked || placing || !!shapePreset || texts.placing || panTool, id => void beginShapeText(id), !!shapeText.session, (id, trigger) => void beginShapeAppearance(id, trigger), value => void removeShape(value), shapeMove.positions, shapeMove, composition.current || !!pendingAction.current || pose.pending || pose.dragging || canvasMove.dragging || texts.hasPending() || appearance.pending || cardLayout.pending, singleItemId, memberAction), ...strokeNodes(state.strokes ?? [], selection, (id, extend) => void chooseStrokeItem(id, extend), value => void removeStroke(value), busy || historyBlocked || !!pendingAction.current || placing || !!shapePreset || texts.placing || panTool || !!strokeDraw.mode, singleItemId, memberAction)].map(node => groupGeometry.project({ ...node, selected: flowSelection.includes(node.id), position: canvasMove.positions[node.id] ?? shapeMove.positions[node.id] ?? node.position, draggable: node.draggable !== false && !groupGeometry.active && !strokeDraw.mode && !busy && !historyBlocked && !panTool && !placing && !shapePreset && !texts.placing && !texts.geometryBlocked && !shapeText.session && !connectorLabel.session && !shapeMove.pending })), state, selection)}
+            nodes={orderCanvas([...nodes, ...textNodes, ...imageNodes(state.images ?? [], state.project.id, selection, (id, extend) => void chooseCanvasItem(id, extend), busy || historyBlocked || composition.current || !!pendingAction.current || placing || !!shapePreset || texts.placing || panTool || !!strokeDraw.mode || !!shapeText.session || texts.geometryBlocked, imageGeometry, (value, dx, dy) => { if (canvasMove.start(value.item.id)) canvasMove.finish({ x: value.item.pose.x + dx, y: value.item.pose.y + dy }); }, singleItemId, memberAction), ...shapeNodes(state.shapes ?? [], selection, (id, extend) => void chooseCanvasItem(id, extend), busy || historyBlocked || placing || !!shapePreset || texts.placing || panTool, id => void beginShapeText(id), !!shapeText.session, (id, trigger) => void beginShapeAppearance(id, trigger), value => void removeShape(value), shapeMove.positions, shapeMove, composition.current || !!pendingAction.current || pose.pending || pose.dragging || canvasMove.dragging || texts.hasPending() || appearance.pending || cardLayout.pending, singleItemId, memberAction), ...strokeNodes(state.strokes ?? [], selection, (id, extend) => void chooseStrokeItem(id, extend), value => void removeStroke(value), busy || historyBlocked || !!pendingAction.current || placing || !!shapePreset || texts.placing || panTool || !!strokeDraw.mode, singleItemId, memberAction, itemId => !!state.groups?.some(group => group.memberItemIds.includes(itemId)) || (flowSelection.includes(itemId) && flowSelection.length > 1))].map(node => groupGeometry.project({ ...node, selected: flowSelection.includes(node.id), position: canvasMove.positions[node.id] ?? shapeMove.positions[node.id] ?? node.position, draggable: node.draggable !== false && !groupGeometry.active && !strokeDraw.mode && !busy && !historyBlocked && !panTool && !placing && !shapePreset && !texts.placing && !texts.geometryBlocked && !shapeText.session && !connectorLabel.session && !shapeMove.pending })), state, selection)}
             onNodeClick={(event, node) => {
               awaitBodySelection.current = false;
               clearConnectorSelection();
               canvasSelection.choose(node.id, event.shiftKey);
             }}
-            nodeDragThreshold={3}
+            nodeDragThreshold={0}
             nodeClickDistance={3}
             selectionOnDrag={!placing && !shapePreset && !strokeDraw.mode && !connectorCreate.mode && !panTool && !texts.placing && !shapeText.session && !connectorLabel.session}
             selectionKeyCode={null}
@@ -2645,19 +2670,14 @@ function Workspace() {
             onSelectionEnd={event => marqueeSelection.finish(event)}
             onNodeDragStart={(event, node) => {
               if (canvasMove.pointerEnded(node.id)) return;
-              canvasSelection.beginDrag(node.id);
-              const point = canvasMove.point(node.id, node.position, canvasDragPoint(event), 'touches' in event);
-              if (canvasMove.start(node.id, true)) { canvasMove.drag(point); return; }
-              if (canvasSelection.hasDirectStroke()) return;
-              if (node.type === "canvasShape") { shapeMove.start(node.id); shapeMove.preview(node.id, point); return; }
-              if (texts.startMove(node.id)) { texts.previewMove(node.id, point); return; }
-              const card = authority.current?.cards.find(
-                (c) => c.item.id === node.id,
-              );
-              if (card && startMove(authority.current!.project.id, card)) previewMove(point, 'altKey' in event && event.altKey);
+              if (canvasMove.pointerGate(node.id, event) === 'armed') return;
+              beginCanvasNodeDrag(event, node);
             }}
             onNodeDrag={(event, node) => {
               if (canvasMove.pointerEnded(node.id)) return;
+              const gate = canvasMove.pointerGate(node.id, event);
+              if (gate === 'armed') return;
+              if (gate === 'activate') { beginCanvasNodeDrag(event, node); return; }
               const point = canvasMove.point(node.id, node.position, canvasDragPoint(event), 'touches' in event);
               if (canvasMove.drag(point)) return;
               if (node.type === "canvasShape") { shapeMove.preview(node.id, point); return; }
@@ -2665,6 +2685,7 @@ function Workspace() {
             }}
             onNodeDragStop={(event, node) => {
               if (canvasMove.pointerEnded(node.id)) return;
+              if (canvasMove.pointerArmed(node.id)) { canvasMove.endPointer(); return; }
               const point = canvasMove.point(node.id, node.position, canvasDragPoint(event), 'touches' in event);
               canvasMove.endPointer();
               canvasSelection.finishDrag();

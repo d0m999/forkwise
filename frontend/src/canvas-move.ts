@@ -25,6 +25,7 @@ export function useCanvasMove(
   const ended = useRef(new Set<string>());
   const pointerSession = useRef<{
     id: string; state: ProjectState; selection: CanvasSelection; pointerWorld: Point; mouseWorld: Point | null; anchor: Point;
+    clientOrigin: Point; mouseClient: Point | null; threshold: number; cancelledClickConsumed: boolean;
     phase: 'armed' | 'active' | 'cancelled' | 'terminal';
   } | null>(null);
   function start(id: string, pointer = false) {
@@ -56,10 +57,10 @@ export function useCanvasMove(
       ...(snapshot.strokes ?? []).map(stroke => ({ kind: 'stroke' as const, id: stroke.id, item: stroke.item })),
     ].filter((value) => ids.includes(value.item.id)).map(value => ({ ...value, item: structuredClone(value.item) }));
     const anchor = targets.find((value) => value.item.id === id);
-    const grouped = selected.targets.some(t => t.kind === 'group') || targets.some(t => snapshot.containment?.some(c => c.id === t.item.id));
+    const grouped = selected.targets.some(t => t.kind === 'group') || targets.some(t => snapshot.groups?.some(group => group.memberItemIds.includes(t.item.id)));
     if (
       !anchor ||
-      (!grouped && targets.length < 2 && anchor.kind !== 'image' && anchor.kind !== 'stroke') ||
+      (!grouped && targets.length < 2 && anchor.kind !== 'image') ||
       targets.length !== ids.length ||
       (!grouped && !targets.some((value) => value.kind !== 'card'))
     )
@@ -134,22 +135,54 @@ export function useCanvasMove(
     return true;
   }
   function cancel() {
-    if (pointerSession.current) pointerSession.current.phase = 'cancelled';
+    if (pointerSession.current && pointerSession.current.phase !== 'terminal') pointerSession.current.phase = 'cancelled';
     if (gesture.current) ended.current = new Set(gesture.current.targets.map(value => value.item.id));
     gesture.current = null;
     setDragging(false);
     setPositions({});
   }
   return { start, preview, drag, finish, cancel, positions, dragging,
-    arm(id: string, source: ProjectState, roots: CanvasSelection, pointerWorld: Point) {
+    arm(id: string, source: ProjectState, roots: CanvasSelection, pointerWorld: Point, clientOrigin: Point) {
       const snapshot = structuredClone(source), anchor = canvasItems(snapshot).find(value => value.item.id === id);
+      const ids = selectedItemIds(snapshot, roots);
+      const grouped = roots.targets.some(target => target.kind === 'group') || snapshot.groups?.some(group => group.memberItemIds.some(itemId => ids.includes(itemId)));
+      const composite = ids.length > 1 && ids.some(itemId => !snapshot.cards.some(card => card.item.id === itemId));
       ended.current.clear();
       pointerSession.current = anchor ? { id, state: snapshot, selection: structuredClone(roots), pointerWorld,
-        mouseWorld: null, anchor: { x: anchor.item.pose.x, y: anchor.item.pose.y }, phase: 'armed' } : null;
+        mouseWorld: null, mouseClient: null, anchor: { x: anchor.item.pose.x, y: anchor.item.pose.y }, clientOrigin,
+        threshold: grouped || composite ? 3 : 0, cancelledClickConsumed: false, phase: 'armed' } : null;
     },
-    mouseOrigin(id: string, world: Point) {
+    pointerGate(id: string, event: MouseEvent | TouchEvent) {
       const session = pointerSession.current;
-      if (session?.id === id && session.phase === 'armed' && !session.mouseWorld) session.mouseWorld = world;
+      if (!session || session.id !== id) return 'ordinary';
+      if (session.phase === 'active') return 'active';
+      const point = 'touches' in event ? event.touches[0] ?? event.changedTouches[0] : event;
+      const origin = 'touches' in event ? session.clientOrigin : session.mouseClient;
+      return point && origin && Math.hypot(point.clientX - origin.x, point.clientY - origin.y) > session.threshold
+        ? 'activate' : 'armed';
+    },
+    pointerArmed: (id: string) => pointerSession.current?.id === id && pointerSession.current.phase === 'armed',
+    hasPointerGesture: () => !!pointerSession.current && ['armed', 'active'].includes(pointerSession.current.phase),
+    consumeCancelledClick() {
+      const session = pointerSession.current;
+      if (session?.phase !== 'cancelled' || session.cancelledClickConsumed) return false;
+      session.cancelledClickConsumed = true;
+      return true;
+    },
+    retirePointer() {
+      if (pointerSession.current && ['cancelled', 'terminal'].includes(pointerSession.current.phase)) pointerSession.current = null;
+    },
+    mouseOrigin(id: string, world: Point, client: Point) {
+      const session = pointerSession.current;
+      if (session?.id === id && session.phase === 'armed' && !session.mouseWorld) {
+        session.mouseWorld = world; session.mouseClient = client;
+      }
+    },
+    touchOrigin(id: string, world: Point, client: Point) {
+      const session = pointerSession.current;
+      if (session?.id === id && session.phase === 'armed') {
+        session.pointerWorld = world; session.clientOrigin = client;
+      }
     },
     point(id: string, fallback: Point, world?: Point, touchInput = false) {
       const session = pointerSession.current;
@@ -161,5 +194,6 @@ export function useCanvasMove(
     consumesPosition: () => !!pointerSession.current,
     pointerEnded: (id: string) => pointerSession.current?.id === id && ['cancelled', 'terminal'].includes(pointerSession.current.phase),
     endPointer() { if (pointerSession.current) pointerSession.current.phase = 'terminal'; },
+    endArmedPointer() { if (pointerSession.current?.phase === 'armed') pointerSession.current.phase = 'terminal'; },
   };
 }
