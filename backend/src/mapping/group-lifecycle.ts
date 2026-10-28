@@ -91,6 +91,27 @@ export function groupOutcome(change: Partial<Change>) {
   return { changedIds: [...changed], deletedIds: [...deleted] };
 }
 
+export function deleteGroupItems(db: Database.Database, command: Pick<GroupCommand, 'projectId' | 'commandId'>,
+  members: ReturnType<typeof groupItems>, items: Extract<GroupCommand, { type: 'group.delete' }>['expected']['items'],
+  connectorChanges: NonNullable<Change['connectorChanges']>) {
+  const { projectId } = command;
+  const changes = {
+    cardLifecycleChanges: [] as NonNullable<Change['cardLifecycleChanges']>,
+    textChanges: [] as NonNullable<Change['textChanges']>, shapeChanges: [] as NonNullable<Change['shapeChanges']>,
+    imageChanges: [] as NonNullable<Change['imageChanges']>, strokeChanges: [] as NonNullable<Change['strokeChanges']>, connectorChanges,
+  };
+  for (const { value } of members) {
+    const expected = items[value.item.id]!, envelope = { commandId: command.commandId, projectId, payload: { id: value.id } };
+    if (expected.kind === 'card') changes.cardLifecycleChanges.push(deleteCard(db, { ...envelope, type: 'thought.delete', expected }));
+    else if (expected.kind === 'text') changes.textChanges.push(writeText(db, { ...envelope, type: 'text.delete', expected })!);
+    else if (expected.kind === 'shape') changes.shapeChanges.push(deleteShape(db, { ...envelope, type: 'shape.delete', expected }));
+    else if (expected.kind === 'image') changes.imageChanges.push(deleteImage(db, { ...envelope, type: 'image.delete', expected }));
+    else changes.strokeChanges.push(deleteStroke(db, { ...envelope, type: 'stroke.delete', expected }));
+  }
+  applyIncidentConnectorDeletion(db, projectId, connectorChanges);
+  return changes;
+}
+
 export function deleteGroup(db: Database.Database, command: Extract<GroupCommand, { type: 'group.delete' }>) {
   const { projectId, expected } = command, group = readGroupRecords(db, projectId).find(value => value.id === command.payload.id);
   requireThat(group, 'NOT_FOUND', '组合不存在于当前项目', 404);
@@ -100,20 +121,7 @@ export function deleteGroup(db: Database.Database, command: Extract<GroupCommand
   const ids = new Set(membership.map(value => value.id)), members = groupItems(db, projectId).filter(value => ids.has(value.value.item.id));
   requireThat(Object.keys(expected.items).length === members.length && members.every(value => expected.items[value.value.item.id]?.kind === value.kind), 'VERSION_CONFLICT', '删除成员范围已更新，请重新读取', 409);
   const connectorChanges = prepareIncidentConnectorDeletion(db, projectId, [...ids], expected.connectors);
-  const changes = {
-    cardLifecycleChanges: [] as NonNullable<Change['cardLifecycleChanges']>,
-    textChanges: [] as NonNullable<Change['textChanges']>, shapeChanges: [] as NonNullable<Change['shapeChanges']>,
-    imageChanges: [] as NonNullable<Change['imageChanges']>, strokeChanges: [] as NonNullable<Change['strokeChanges']>, connectorChanges,
-  };
-  for (const { value } of members) {
-    const expected = command.expected.items[value.item.id]!, envelope = { commandId: command.commandId, projectId, payload: { id: value.id } };
-    if (expected.kind === 'card') changes.cardLifecycleChanges.push(deleteCard(db, { ...envelope, type: 'thought.delete', expected }));
-    else if (expected.kind === 'text') changes.textChanges.push(writeText(db, { ...envelope, type: 'text.delete', expected })!);
-    else if (expected.kind === 'shape') changes.shapeChanges.push(deleteShape(db, { ...envelope, type: 'shape.delete', expected }));
-    else if (expected.kind === 'image') changes.imageChanges.push(deleteImage(db, { ...envelope, type: 'image.delete', expected }));
-    else changes.strokeChanges.push(deleteStroke(db, { ...envelope, type: 'stroke.delete', expected }));
-  }
-  applyIncidentConnectorDeletion(db, projectId, connectorChanges);
+  const changes = deleteGroupItems(db, command, members, expected.items, connectorChanges);
   const structural = releaseMembers(db, projectId, group.id, [...ids], expected, true);
   const result = { ...changes, ...structural };
   return { ...result, ...groupOutcome(result) };

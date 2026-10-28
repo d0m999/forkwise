@@ -1,4 +1,5 @@
 import { removeMember, ungroup, removeDeletedMember, groupOutcome, deleteGroup } from './group-lifecycle.js';
+import { deleteSelection } from './selection-delete.js';
 import { createGroup, moveGroup, moveSelection, readGroups, readContainment } from './group.js';
 import type { GroupRecord, Containment } from './group-contracts.js';
 import type { CanvasConnector } from './connector-contracts.js';
@@ -317,9 +318,9 @@ export class Mapping {
         let travel: ReturnType<typeof travelHistory> | undefined;
         let revision: number;
         let changedIds: string[];
-        if (command.type === 'group.delete') {
+        if (command.type === 'group.delete' || command.type === 'canvas.delete-selection') {
           const project = this.project(command.projectId);
-          ({ groupChanges, containmentChanges, cardLifecycleChanges, textChanges, shapeChanges, imageChanges, strokeChanges, connectorChanges, changedIds } = deleteGroup(this.db, command));
+          ({ groupChanges, containmentChanges, cardLifecycleChanges, textChanges, shapeChanges, imageChanges, strokeChanges, connectorChanges, changedIds } = command.type === 'canvas.delete-selection' ? deleteSelection(this.db, command) : deleteGroup(this.db, command));
           after = null; revision = project.revision + 1;
           this.db.prepare('UPDATE mapping_projects SET revision=? WHERE id=?').run(revision, project.id);
         } else if (command.type === 'group.create' || command.type === 'group.remove-member' || command.type === 'group.ungroup') {
@@ -735,7 +736,7 @@ export class Mapping {
         }
         if (after && 'body' in after) retainCardVersions(this.db, command.projectId, after);
         for (const c of cardChanges ?? []) retainCardVersions(this.db, command.projectId, c.after);
-        const structuralOutcome = groupChanges || containmentChanges ? groupOutcome({ before, after, groupChanges: groupChanges ?? [], containmentChanges: containmentChanges ?? [], cardLifecycleChanges: cardLifecycleChanges ?? [], textChange, shapeChange, imageChange, strokeChange, textChanges, shapeChanges, imageChanges, strokeChanges, connectorChanges, changedIds } as Partial<Change>) : null;
+        const structuralOutcome = command.type === 'canvas.delete-selection' || groupChanges || containmentChanges ? groupOutcome({ before, after, groupChanges: groupChanges ?? [], containmentChanges: containmentChanges ?? [], cardLifecycleChanges: cardLifecycleChanges ?? [], textChange, shapeChange, imageChange, strokeChange, textChanges, shapeChanges, imageChanges, strokeChanges, connectorChanges, changedIds } as Partial<Change>) : null;
         if (structuralOutcome) changedIds = structuralOutcome.changedIds;
         const receipt = {
           commandId: command.commandId,

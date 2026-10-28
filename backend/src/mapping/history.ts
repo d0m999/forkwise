@@ -84,13 +84,20 @@ export function recordAction(
 ) {
   if (command.type === 'project.create') return;
   const stack = load(db, command.projectId);
-  if ((change.groupChanges || change.containmentChanges) && !change.textChange) {
+  if (command.type === 'canvas.delete-selection' || (change.groupChanges || change.containmentChanges) && !change.textChange) {
     const value = change.groupChanges?.find(value => value.after)?.after ?? change.groupChanges?.[0]?.before;
-    const selected = change.before && 'body' in change.before ? { id: change.before.id, title: change.before.title }
+    let selected = change.before && 'body' in change.before ? { id: change.before.id, title: change.before.title }
       : change.shapeChange?.before ? { id: change.shapeChange.before.id, title: change.shapeChange.before.content.shortText }
       : change.imageChange?.before ? { id: change.imageChange.before.id, title: '图片' }
       : change.strokeChange?.before ? { id: change.strokeChange.before.id, title: change.strokeChange.before.content.penKind === 'highlighter' ? '荧光笔' : '笔迹' }
       : { id: value?.id ?? command.commandId, title: '组合' };
+    if (command.type === 'canvas.delete-selection') {
+      const groupId = command.payload.groupIds[0], deleted = (change.cardLifecycleChanges?.[0]?.before ?? change.textChanges?.[0]?.before ??
+        change.shapeChanges?.[0]?.before ?? change.imageChanges?.[0]?.before ?? change.strokeChanges?.[0]?.before)!;
+      selected = groupId ? { id: groupId, title: '组合' } : { id: deleted.id, title: 'body' in deleted ? deleted.title
+        : deleted.kind === 'text' ? '独立文字' : deleted.kind === 'shape' ? deleted.content.shortText || '形状'
+        : deleted.kind === 'stroke' ? deleted.content.penKind === 'highlighter' ? '荧光笔' : '笔迹' : '图片' };
+    }
     stack.undo.push({ ...change, session, lastRevision: change.revision, id: command.commandId, label: command.type, target: selected });
     stack.undo = stack.undo.slice(-40); stack.redo = []; save(db, command.projectId, stack); return;
   }
@@ -251,7 +258,7 @@ export function travelHistory(
   requireThat(!actionId || from.at(-1)?.id === actionId, 'HISTORY_TARGET_CHANGED', '历史目标已变化，不能撤销其他操作', 409);
   const action = from.pop();
   requireThat(action, 'HISTORY_EMPTY', '没有可撤销或重做的操作', 409);
-  if (action.groupChanges || action.containmentChanges) {
+  if (action.label === 'canvas.delete-selection' || action.groupChanges || action.containmentChanges) {
     const restored = restoreGroupAction(db, project.id, action, type);
     (type === 'history.undo' ? stack.redo : stack.undo).push(action); save(db, project.id, stack);
     return { ...restored, target: { ...action.target, label: action.label } };
