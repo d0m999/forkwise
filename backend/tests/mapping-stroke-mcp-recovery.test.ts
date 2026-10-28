@@ -153,6 +153,8 @@ it('真实 MCP 固定混合地图变化终点，预算错误与过旧游标仅�
       const strokes = await pages(snapshot, revision, 'stroke-index') as StrokeIndex[];
       const images = await pages(snapshot, revision, 'image-index') as ImageIndex[];
       const connectorIndex = await pages(snapshot, revision, 'connector-index') as ConnectorIndex[];
+      const groups = await pages(snapshot, revision, 'group-index');
+      const containment = await pages(snapshot, revision, 'containment');
       const connectors = await Promise.all(connectorIndex.map(async value => {
         const full = await detail(snapshot, revision, 'connector-detail', { connectorId: value.id });
         expect(full).toEqual({ id: value.id, kind: 'connector', versionId: value.versionId, path: value.path, start: value.start, end: value.end,
@@ -172,7 +174,7 @@ it('真实 MCP 固定混合地图变化终点，预算错误与过旧游标仅�
         if (kind === 'stroke') expect(full.content.path).toHaveLength((value as StrokeIndex).content.pointCount);
         return { kind, ...full, item: value.item };
       }));
-      return { project: base.project, cards, tags, connectors, texts: await expand(texts, 'text'), shapes: await expand(shapes, 'shape'), strokes: await expand(strokes, 'stroke'), images: await expand(images, 'image') };
+      return { project: base.project, cards, tags, connectors, groups, containment, texts: await expand(texts, 'text'), shapes: await expand(shapes, 'shape'), strokes: await expand(strokes, 'stroke'), images: await expand(images, 'image') };
     };
     expect(await rebuild(first.snapshot, r2.project.revision)).toEqual(r2);
     expect(await rebuild(recoveryR3, r3.project.revision)).toEqual(r3);
