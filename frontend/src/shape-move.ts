@@ -12,6 +12,7 @@ export function useShapeMove(
   authority: () => ProjectState | null,
   publish: (value: ProjectState) => void,
   before: () => Promise<boolean>,
+  acknowledged?: (command: Geometry, receipt: Awaited<ReturnType<typeof api.execute>>) => void,
 ) {
   const gesture = useRef<Target | null>(null), pending = useRef<{ target: Target; command: Geometry } | null>(null);
   const running = useRef<Promise<boolean> | null>(null);
@@ -89,6 +90,7 @@ export function useShapeMove(
         const poseVersion = receipt.shapeVersions?.pose ?? (receipt.changedIds.length === 0 ? command.expected : undefined);
         if (receipt.commandId !== command.commandId || receipt.projectId !== command.projectId || !poseVersion)
           throw new Error("形状位置回执不完整，原请求仍保留");
+        acknowledged?.(command, receipt);
         const pose = command.type === "shape.transform" ? command.payload.pose
           : { ...target.value.item.pose, x: command.payload.x, y: command.payload.y };
         lastAck.current = { commandId: command.commandId, target: { ...target, transform: true,

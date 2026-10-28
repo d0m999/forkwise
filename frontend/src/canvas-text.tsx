@@ -20,6 +20,8 @@ export type TextData = {
   finish: () => void;
   edit: () => void;
   copy: () => void;
+  remove?: (() => void) | undefined;
+  removeFromGroup?: (() => void) | undefined;
   transform: (next: CanvasText, origin: CanvasText) => void;
   compose: (active: boolean, content?: TextContent) => void;
   moveDisabled: boolean;
@@ -112,6 +114,8 @@ export function CanvasTextNode({ data, selected }: NodeProps<Node<TextData>>) {
           format={data.format}
           edit={data.edit}
           copy={data.copy}
+          remove={data.remove}
+          removeFromGroup={data.removeFromGroup}
         />
       )}
       {selected &&

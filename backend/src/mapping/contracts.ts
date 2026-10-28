@@ -246,6 +246,7 @@ export interface ProjectState {
   strokes?: CanvasStroke[];
 }
 export interface Receipt {
+  itemPoseVersions?: Record<string, string>;
   cardPoseVersions?: Record<string, string>;
   connectorVersions?: Record<string, string>;
   imageVersions?: { image: string; pose: string };

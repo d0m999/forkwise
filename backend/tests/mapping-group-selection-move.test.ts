@@ -115,3 +115,37 @@ it('空选择在schema边界拒绝，未知itemId不会写入其它选择', () =
   expect(() => f.execute(command)).toThrowError(expect.objectContaining({ code: 'NOT_FOUND', status: 404 }));
   expect(f.state()).toEqual(before); expect(f.history()).toEqual(history);
 });
+
+it.each(['canvas.move-selection', 'group.move', 'canvas.move'] as const)('%s回执仅返回本次五类实际Pose版本，零移动省略且重开重放保持原receipt', type => {
+  const f = groupFixture(), members = [f.card(), f.text(), f.shape(), f.image(), f.stroke()];
+  f.group(members.map(value => value.item.id)); const excluded = f.shape('unmoved');
+  function command(dx: number, dy: number) {
+    const selected = items(f).filter(value => value.id !== excluded.id);
+    return type === 'canvas.move-selection' ? capture(f, ['g'], [], dx, dy)
+      : type === 'group.move' ? { commandId: randomUUID(), type, expected: { ...f.structure(), poses: Object.fromEntries(selected.map(value => [value.item.id, value.item.versionId])) }, payload: { id: 'g', dx, dy } }
+        : { commandId: randomUUID(), type, expected: Object.fromEntries(selected.map(value => [value.item.id, value.item.versionId])), payload: {
+          targets: selected.map(value => ({ kind: value.id === 'card' ? 'card' : value.id === 'text' ? 'text' : value.id === 'shape' ? 'shape' : value.id === 'image' ? 'image' : 'stroke',
+            id: value.id, itemId: value.item.id, x: value.item.pose.x + dx, y: value.item.pose.y + dy })) } };
+  }
+  const request = command(40, 20), before = f.state(), receipt = f.execute(request);
+  const moved = items(f).filter(value => value.id !== excluded.id);
+  expect(receipt.itemPoseVersions).toEqual(Object.fromEntries(moved.map(value => [value.item.id, value.item.versionId])));
+  expect(Object.keys(receipt.itemPoseVersions!)).toHaveLength(5);
+  expect(receipt.itemPoseVersions).not.toHaveProperty(excluded.item.id);
+  expect(f.state().shapes!.find(value => value.id === excluded.id)).toEqual(excluded);
+  for (const value of moved) expect(receipt.itemPoseVersions![value.item.id]).not.toBe(members.find(old => old.id === value.id)!.item.versionId);
+  expect(receipt.changedIds).toEqual(moved.map(value => value.item.id));
+  f.reopen(); expect(f.execute(request)).toEqual(receipt);
+  const saved = f.state(), history = f.history(), noOp = f.execute(command(0, 0));
+  expect(noOp.itemPoseVersions).toBeUndefined(); expect(noOp.changedIds).toEqual([]);
+  expect(f.state()).toEqual(saved); expect(f.history()).toEqual(history);
+  expect(saved.project.revision).toBe(before.project.revision + 1);
+});
+
+it('旧pose.batch保留cardPoseVersions合同且不冒充新canvas移动回执', () => {
+  const f = groupFixture(), first = f.card('first'), second = f.card('second');
+  const receipt = f.execute({ type: 'pose.batch', expected: { [first.id]: first.item.versionId, [second.id]: second.item.versionId },
+    payload: { poses: [first, second].map(value => ({ ...value.item.pose, id: value.id, x: value.item.pose.x + 20, y: value.item.pose.y + 10 })) } });
+  expect(receipt.itemPoseVersions).toBeUndefined();
+  expect(receipt.cardPoseVersions).toEqual(Object.fromEntries(f.state().cards.map(value => [value.item.id, value.item.versionId])));
+});

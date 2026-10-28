@@ -1,7 +1,7 @@
 import { useViewport, type Node, type NodeProps } from "@xyflow/react";
 import type { CanvasStroke } from "../../backend/src/mapping/stroke-contracts";
 
-type StrokeData = { value: CanvasStroke; blocked: boolean; single: boolean; choose: (extend: boolean) => void; remove: () => void };
+type StrokeData = { value: CanvasStroke; blocked: boolean; single: boolean; choose: (extend: boolean) => void; remove: () => void; removeFromGroup?: (() => void) | undefined };
 
 export function CanvasStrokeNode({ data, selected }: NodeProps<Node<StrokeData>>) {
   const { content, item } = data.value, { zoom } = useViewport();
@@ -42,16 +42,20 @@ export function CanvasStrokeNode({ data, selected }: NodeProps<Node<StrokeData>>
       style={{ position: "absolute", left: 0, top: "calc(100% + 8px)", whiteSpace: "nowrap", pointerEvents: "auto" }}
       onMouseDown={event => event.stopPropagation()} onKeyDown={event => event.stopPropagation()}
       onClick={event => { event.stopPropagation(); data.remove(); }}>删除笔迹</button>}
+    {selected && data.single && !data.blocked && data.removeFromGroup && <button className="nodrag nopan" aria-label="移出组合"
+      style={{ position: "absolute", left: 90, top: "calc(100% + 8px)", whiteSpace: "nowrap", pointerEvents: "auto" }}
+      onMouseDown={event => event.stopPropagation()} onKeyDown={event => event.stopPropagation()}
+      onClick={event => { event.stopPropagation(); data.removeFromGroup!(); }}>移出组合</button>}
   </div>;
 }
 
 export function strokeNodes(strokes: CanvasStroke[], selection: string[], choose: (id: string, extend: boolean) => void,
-  remove: (value: CanvasStroke) => void, blocked: boolean, singleItemId: string | null): Node<StrokeData>[] {
+  remove: (value: CanvasStroke) => void, blocked: boolean, singleItemId: string | null, memberAction: (itemId: string) => (() => void) | undefined): Node<StrokeData>[] {
   return strokes.map(value => ({
     id: value.item.id, type: "canvasStroke", position: { x: value.item.pose.x, y: value.item.pose.y },
     initialWidth: value.item.pose.width, initialHeight: value.item.pose.height,
     style: { width: value.item.pose.width, height: value.item.pose.height, pointerEvents: "none" },
     draggable: !blocked, selectable: !blocked, selected: selection.includes(value.item.id), connectable: false, focusable: false,
-    data: { value, blocked, single: singleItemId === value.item.id, choose: extend => choose(value.item.id, extend), remove: () => remove(value) },
+    data: { value, blocked, single: singleItemId === value.item.id, choose: extend => choose(value.item.id, extend), remove: () => remove(value), removeFromGroup: memberAction(value.item.id) },
   }));
 }

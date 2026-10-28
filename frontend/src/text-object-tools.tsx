@@ -9,12 +9,16 @@ export function TextObjectTools({
   format,
   edit,
   copy,
+  remove,
+  removeFromGroup,
 }: {
   anchor: RefObject<HTMLElement | null>;
   content: TextContent;
   format: (patch: Partial<TextContent>) => void;
   edit: () => void;
   copy: () => void;
+  remove?: (() => void) | undefined;
+  removeFromGroup?: (() => void) | undefined;
 }) {
   const [colors, setColors] = useState(false);
   useEffect(() => {
@@ -31,6 +35,8 @@ export function TextObjectTools({
     <TextToolbar anchor={anchor}>
       <button onClick={edit}>编辑文字</button>
       <button onClick={copy}>生成文字副本</button>
+      {remove && <button onClick={event => { event.stopPropagation(); remove(); }}>删除文字</button>}
+      {removeFromGroup && <button onClick={event => { event.stopPropagation(); removeFromGroup(); }}>移出组合</button>}
       <button
         aria-label="加粗文字"
         aria-pressed={bold}

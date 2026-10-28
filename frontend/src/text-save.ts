@@ -6,7 +6,7 @@ import type {
   TextContent,
 } from "../../backend/src/mapping/text-contracts";
 import { TextRecovery } from "./text-recovery";
-import { incidentConnectorVersions } from "./connector-deletion";
+import { captureMemberDeletion } from "./canvas-group-commands";
 export type TextSession = {
   projectId: string;
   value: CanvasText;
@@ -20,11 +20,12 @@ export function useTextSave(
   publish: (state: ProjectState) => void,
   conflict: (session: TextSession, command: TextCommand) => Promise<void>,
   project: () => ProjectState | null,
+  acknowledged?: (command: TextCommand, receipt: Awaited<ReturnType<typeof api.execute>>) => void,
 ) {
   const [session, setSession] = useState<TextSession | null>(null);
   const current = useRef<TextSession | null>(null),
     pending = useRef<TextSubmitted | null>(null);
-  const deleteIntent = useRef<{ session: TextSession; connectors: Record<string, string> } | null>(null);
+  const deleteIntent = useRef<({ session: TextSession } & NonNullable<ReturnType<typeof captureMemberDeletion>>) | null>(null);
   const closeAttempt = useRef<TextSession | null>(null);
   const [journal] = useState(() => new TextRecovery());
   const [recoveries, setRecoveries] = useState(() => journal.list());
@@ -76,13 +77,11 @@ export function useTextSave(
     if (pending.current?.command.type === 'text.delete' || value.content.runs.some(run => run.text.trim())) {
       closeAttempt.current = value; return true;
     }
-    const snapshot = project(), target = snapshot?.texts?.find(text => text.id === value.value.id);
-    const connectors = snapshot && incidentConnectorVersions(snapshot, value.value.item.id);
-    if (!snapshot || snapshot.project.id !== value.projectId || !target || target.item.id !== value.value.item.id ||
-      target.versionId !== value.value.versionId || target.item.versionId !== value.value.item.versionId || !connectors) {
+    const snapshot = project(), facts = snapshot && captureMemberDeletion(snapshot, value.value, value.projectId);
+    if (!facts) {
       setError('请先确认原文字和完整连线投影，再明确结束编辑'); return false;
     }
-    deleteIntent.current = { session: structuredClone(value), connectors }; closeAttempt.current = value; return true;
+    deleteIntent.current = { session: structuredClone(value), ...facts }; closeAttempt.current = value; return true;
   }
   async function flush(close = false, closing: TextSession | null = null): Promise<boolean> {
     clearTimers();
@@ -131,6 +130,7 @@ export function useTextSave(
               text: captured.value.versionId,
               pose: captured.value.item.versionId,
               connectors: deleteIntent.current!.connectors,
+              membership: deleteIntent.current!.membership,
             },
             editGroup: captured.group,
             payload: { id: captured.value.id },
@@ -150,6 +150,7 @@ export function useTextSave(
     saving.current = (async () => {
       try {
         const receipt = await api.execute(submitted.command);
+        acknowledged?.(submitted.command, receipt);
         const intent = deleteIntent.current;
         // Only this original save may advance the captured text version. The
         // incident set stays fixed even if the following read includes peers.

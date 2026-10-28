@@ -1,16 +1,20 @@
 import { useRef, useState } from "react";
 import { api, MappingError, type Command, type ProjectState } from "./api";
 import type { CanvasText, TextContent } from "../../backend/src/mapping/text-contracts";
+import type { CanvasMoveIntent } from './canvas-move-conflict';
 export type TextOperationTarget = {
   projectId: string;
   id: string;
   discard?: () => void;
+  moveIntent?: CanvasMoveIntent;
 };
 type Operation = {
   sequence: number;
   target?: TextOperationTarget;
   prepare: () => Promise<Command | null>;
   command?: Command;
+  receipt?: Awaited<ReturnType<typeof api.execute>>;
+  rejection?: { command: Command; failure: unknown; preparation?: TextPrepareConflict };
   done?: (state: ProjectState, receipt: Awaited<ReturnType<typeof api.execute>>) => void;
 };
 type ConfirmedContent = { version: string; content: string; pose?: { version: string; value: CanvasText["item"]["pose"] } };
@@ -29,7 +33,8 @@ export class TextPrepareConflict extends Error {
 // a lost response unchanged; later gestures cannot overtake its confirmation.
 export function useTextOperations(
   publish: (state: ProjectState) => void,
-  conflict: (command: Command, preparation?: TextPrepareConflict) => Promise<boolean | { through: number }>,
+  conflict: (command: Command, preparation?: TextPrepareConflict, intent?: CanvasMoveIntent) => Promise<boolean | { through: number }>,
+  acknowledged?: (command: Command, receipt: Awaited<ReturnType<typeof api.execute>>) => void,
 ) {
   const queue = useRef<Operation[]>([]),
     saving = useRef<Promise<boolean> | null>(null);
@@ -65,11 +70,16 @@ export function useTextOperations(
       try {
         while (queue.current.length) {
           const operation = queue.current[0]!;
+          if (operation.rejection) throw operation.rejection.failure;
           const command = operation.command ?? (await operation.prepare());
           if (command) {
             operation.command = command;
-            setScope(command.type === 'canvas.move' ? '画布' : '文字');
-            const receipt = await api.execute(command);
+            setScope(command.type === 'canvas.move' || command.type === 'canvas.move-selection' ? '画布' : '文字');
+            if (!operation.receipt) {
+              operation.receipt = await api.execute(command);
+              acknowledged?.(command, operation.receipt);
+            }
+            const receipt = operation.receipt;
             const value = await api.project(command.projectId);
             if (command.type === "text.layout" && receipt.textVersions?.pose) {
               layoutVersions.current.set(
@@ -96,14 +106,15 @@ export function useTextOperations(
       } catch (failure) {
         const operation = queue.current[0];
         const preparation = failure instanceof TextPrepareConflict ? failure : undefined;
-        const rejected = preparation?.command ?? (
-          failure instanceof MappingError &&
+        const rejected = operation?.rejection?.command ?? preparation?.command ?? (
+          !operation?.receipt && failure instanceof MappingError &&
           (failure.code === "VERSION_CONFLICT" || failure.code === "NOT_FOUND")
             ? operation?.command : undefined
         );
         if (rejected && operation) {
+          operation.rejection ??= { command: rejected, failure, ...(preparation ? { preparation } : {}) };
           try {
-            const adoption = await conflict(rejected, preparation);
+            const adoption = await conflict(rejected, operation.rejection.preparation, operation.target?.moveIntent);
             if (adoption) {
               const target = operation.target;
               const retired = target

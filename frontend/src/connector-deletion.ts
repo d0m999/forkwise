@@ -1,5 +1,6 @@
 import type { ProjectState } from './api';
 import type { Command, Receipt } from '../../backend/src/mapping/contracts';
+import { captureMemberDeletion } from './canvas-group-commands';
 
 export function incidentConnectorVersions(state: ProjectState, itemId: string): Record<string, string> | null {
   if (!Array.isArray(state.connectors)) return null;
@@ -13,12 +14,12 @@ type CardDeleteCommand = Extract<Command, { type: 'thought.delete' }>;
 export function captureCardDeletion(state: ProjectState, cardId: string) {
   const card = state.cards.find(value => value.id === cardId);
   if (!card) return null;
-  const connectors = incidentConnectorVersions(state, card.item.id);
-  if (!connectors) return null;
+  const facts = captureMemberDeletion(state, card);
+  if (!facts) return null;
   const projectId = state.project.id, itemId = card.item.id;
   const expected: CardDeleteCommand['expected'] = { thought: card.versionId, body: card.body.versionId,
     pose: card.item.versionId, appearance: card.appearance?.versionId ?? null,
-    cardTags: card.cardTags?.versionId ?? null, connectors };
+    cardTags: card.cardTags?.versionId ?? null, ...facts };
   let request: CardDeleteCommand | null = null;
   let sealed = false, valid = true;
   const acknowledged = new Set<string>();
@@ -31,6 +32,18 @@ export function captureCardDeletion(state: ProjectState, cardId: string) {
     projectId, cardId, itemId,
     acknowledge(command: Command, receipt: Receipt) {
       if (sealed || acknowledged.has(command.commandId) || command.projectId !== projectId) return;
+      if (command.type === 'canvas.move' || command.type === 'group.move' || command.type === 'canvas.move-selection') {
+        const poses = command.type === 'canvas.move' ? command.expected : command.expected.poses;
+        if (!Object.hasOwn(poses, itemId)) return;
+        if (receipt.projectId !== projectId || receipt.commandId !== command.commandId) { valid = false; return; }
+        acknowledged.add(command.commandId);
+        if (!receipt.changedIds.includes(itemId)) { if (poses[itemId] !== expected.pose) valid = false; return; }
+        const version = receipt.itemPoseVersions?.[itemId];
+        if (!version || version === poses[itemId]) { valid = false; return; }
+        if (expected.pose === version) return;
+        if (poses[itemId] !== expected.pose) { valid = false; return; }
+        expected.pose = version; return;
+      }
       if (command.type === 'pose.batch') {
         const members = command.payload.poses.filter(value => value.id === cardId);
         if (!members.length) return;

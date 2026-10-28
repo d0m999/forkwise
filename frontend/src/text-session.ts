@@ -1,5 +1,5 @@
 import { useTextConflicts } from "./text-conflict";
-import { useCanvasMoveConflict } from "./canvas-move-conflict";
+import { useCanvasMoveConflict, type CanvasMoveIntent } from "./canvas-move-conflict";
 import { useTextCreate } from "./text-create";
 import { useTextFormats } from "./text-format-save";
 import { useEffect, useRef, useState } from "react";
@@ -18,6 +18,7 @@ export function useCanvasTexts(
   select: (ids: string[]) => void,
   publish: (value: ProjectState) => void,
   before: () => Promise<boolean>,
+  acknowledged?: (command: Command, receipt: Awaited<ReturnType<typeof api.execute>>) => void,
 ) {
   const [placing, setPlacing] = useState(false);
   const stateRef = useRef(state);
@@ -32,9 +33,9 @@ export function useCanvasTexts(
     (value) => {
       if (stateRef.current?.project.id === value.project.id) publish(value);
     },
-    async (command, preparation) => {
-      if (command.type === "canvas.move") {
-        await mixedConflict.open(command);
+    async (command, preparation, intent) => {
+      if (command.type === "canvas.move" || command.type === 'canvas.move-selection') {
+        await mixedConflict.open(command, intent);
         return true;
       }
       if (command.type === "text.layout") return true;
@@ -82,6 +83,7 @@ export function useCanvasTexts(
       await conflicts.open(command.projectId, local, command, authority, followup, command.type === "text.move" && !!later);
       return { through };
     },
+    acknowledged,
   );
   const save = useTextSave(
     (value) => {
@@ -94,6 +96,7 @@ export function useCanvasTexts(
         command,
       ),
     () => stateRef.current,
+    acknowledged,
   );
   const { session, current } = save;
   const creation = useTextCreate((latest, command) => {
@@ -119,13 +122,13 @@ export function useCanvasTexts(
     Record<string, { x: number; y: number }>
   >({});
   const moving = useRef<CanvasText | null>(null);
-  function enqueueGeometry(prepare: () => Promise<Command>, done: () => void) {
+  function enqueueGeometry(prepare: () => Promise<Command>, done: () => void, intent: CanvasMoveIntent, discard: () => void) {
     operations.enqueue(async () => {
       if (mixedConflict.hasPending()) throw new Error("请先处理混合移动冲突");
       if (!(await before()) || !(await save.flush(true)))
         throw new Error("请先确认文字或正文保存");
       return prepare();
-    }, done, { projectId: state!.project.id, id: crypto.randomUUID(), discard: done });
+    }, done, { projectId: state!.project.id, id: crypto.randomUUID(), moveIntent: intent, discard });
   }
   function transform(value: CanvasText, next: CanvasText) {
     const projectId = state!.project.id;
@@ -461,8 +464,7 @@ export function useCanvasTexts(
       (record) => record.projectId === state?.project.id,
     ),
     recoverFormat: formats.recover,
-    retry: async () =>
-      !mixedConflict.hasPending() &&
+    retry: async () => mixedConflict.hasPending() ? mixedConflict.retry() :
       (await conflicts.flush()) &&
       (await creation.flush()) &&
       (await operations.flush()) &&

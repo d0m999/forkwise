@@ -738,11 +738,16 @@ export class Mapping {
         for (const c of cardChanges ?? []) retainCardVersions(this.db, command.projectId, c.after);
         const structuralOutcome = command.type === 'canvas.delete-selection' || groupChanges || containmentChanges ? groupOutcome({ before, after, groupChanges: groupChanges ?? [], containmentChanges: containmentChanges ?? [], cardLifecycleChanges: cardLifecycleChanges ?? [], textChange, shapeChange, imageChange, strokeChange, textChanges, shapeChanges, imageChanges, strokeChanges, connectorChanges, changedIds } as Partial<Change>) : null;
         if (structuralOutcome) changedIds = structuralOutcome.changedIds;
+        const movedPoses = command.type === 'canvas.move' || command.type === 'group.move' || command.type === 'canvas.move-selection'
+          ? [...(cardChanges ?? []), ...(textChanges ?? []), ...(shapeChanges ?? []), ...(imageChanges ?? []), ...(strokeChanges ?? [])]
+            .flatMap(({ before, after }) => before && after && before.item.versionId !== after.item.versionId
+              ? [[after.item.id, after.item.versionId]] : []) : [];
         const receipt = {
           commandId: command.commandId,
           projectId: command.projectId,
           revision,
           changedIds,
+          ...(movedPoses.length ? { itemPoseVersions: Object.fromEntries(movedPoses) } : {}),
           ...(command.type === 'pose.batch' && cardChanges ? { cardPoseVersions: Object.fromEntries(cardChanges.map(({ after }) => [after.item.id, after.item.versionId])) } : {}),
           ...(groupChanges?.some(change => !change.after) ? { deletedIds: groupChanges.filter(change => !change.after).flatMap(change => [change.before!.id, change.before!.itemId]) } : {}),
           ...(connectorChanges?.some(change => !change.after) ? { deletedIds: connectorChanges.filter(change => !change.after).map(change => change.before!.id) } : {}),

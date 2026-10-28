@@ -24,6 +24,7 @@ export function CardMenu({
   onEdit,
   onBody,
   onDelete,
+  onRemoveFromGroup,
   onAppearance,
 }: {
   anchor: RefObject<HTMLElement | null>;
@@ -33,6 +34,7 @@ export function CardMenu({
   onEdit: () => void;
   onBody: () => void;
   onDelete: () => void;
+  onRemoveFromGroup?: (() => void) | undefined;
   onAppearance: (value: Appearance) => void;
 }) {
   const [open, setOpen] = useState<"外观" | "AI" | "更多" | null>(null);
@@ -272,6 +274,7 @@ export function CardMenu({
                 打开写字板
               </button>
               <button disabled={blocked} onClick={() => { close(false); onDelete(); }}>删除卡片</button>
+              {onRemoveFromGroup && <button disabled={blocked} onClick={event => { event.stopPropagation(); close(false); onRemoveFromGroup(); }}>移出组合</button>}
             </>
           )}
         </div>

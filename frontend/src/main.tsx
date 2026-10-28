@@ -14,8 +14,9 @@ import { CanvasMoveConflictPanel } from "./canvas-move-conflict";
 import { orderCanvas } from './canvas-order';
 import { useCanvasMove } from './canvas-move';
 import { useCanvasSelection } from './canvas-selection';
+import { captureSelectionDeletion } from './canvas-selection-delete';
 import { useCanvasMarquee } from './canvas-selection-boundary';
-import { createGroupCommand } from './canvas-group-commands';
+import { captureMemberDeletion, createGroupCommand, removeMemberCommand, ungroupCommand } from './canvas-group-commands';
 import { CanvasGroups } from './canvas-groups';
 import { CanvasTextNode } from './canvas-text';
 import { CanvasShapeNode, shapeNodes } from './canvas-shape';
@@ -25,7 +26,7 @@ import { StrokePreview, useStrokeDraw } from './stroke-draw';
 import { StrokeCreateRecovery } from './stroke-create-recovery';
 import { useConnectorCreate } from './connector-create';
 import { useConnectorEdit } from './connector-edit';
-import { captureCardDeletion, incidentConnectorVersions } from './connector-deletion';
+import { captureCardDeletion } from './connector-deletion';
 import { ConnectorCreateControls, ConnectorEndpointControls, ConnectorHandles, ConnectorPathControls } from './connector-controls';
 import { useConnectorTargets } from './connector-targets';
 import { CanvasConnector, ConnectorPreview, ConnectorEntries } from './canvas-connector';
@@ -43,7 +44,7 @@ import { DEFAULT_APPEARANCE } from "../../backend/src/mapping/presentation-value
 import { bodyText } from "../../backend/src/mapping/body-text";
 import { WritingBoard } from "./writing-board";
 import { ParagraphEditor, type TextCursor } from "./paragraph-editor";
-import type { Block } from "../../backend/src/mapping/contracts";
+import type { Block, HistoryAction } from "../../backend/src/mapping/contracts";
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { createRoot } from "react-dom/client";
 import {
@@ -101,6 +102,7 @@ type CardData = {
   onBody: () => void;
   onCanvasChoice: () => void;
   onDelete: () => void;
+  onRemoveFromGroup?: (() => void) | undefined;
   onAppearance: (value: AppearanceInput) => void;
   appearanceValue: AppearanceInput;
   onMeasure: (card: Card, height: number) => void;
@@ -146,6 +148,7 @@ function ThoughtCard({ data, selected }: NodeProps<Node<CardData>>) {
           onEdit={data.onEdit}
           onBody={data.onBody}
           onDelete={data.onDelete}
+          onRemoveFromGroup={data.onRemoveFromGroup}
           onAppearance={data.onAppearance}
         />
       )}
@@ -233,6 +236,10 @@ function ThoughtCard({ data, selected }: NodeProps<Node<CardData>>) {
   );
 }
 const nodeTypes = { thought: ThoughtCard, canvasText: CanvasTextNode, canvasShape: CanvasShapeNode, canvasStroke: CanvasStrokeNode, canvasImage: CanvasImageNode };
+type SelectionIntent = { projectId: string; generation: number };
+function deletesCard(action: HistoryAction, cardId: string) {
+  return action.deletedCardIds?.includes(cardId) || action.label === 'thought.delete' && action.target.id === cardId;
+}
 function draftKey(projectId: string, cardId: string, field: Draft["field"]) {
   return JSON.stringify([projectId, cardId, field]);
 }
@@ -385,13 +392,14 @@ function Workspace() {
       if (!card) {
         const timeline = await api.history(saved.projectId);
         if (!stillCurrent()) return;
-        const deletion = [...timeline.undo].reverse().find(a => a.target.id === saved.cardId && a.label === "thought.delete");
+        const deletion = [...timeline.undo].reverse().find(a => deletesCard(a, saved.cardId));
         const target = deletion ?? timeline.redo.at(-1);
+        const eligible = timeline.revision === latest.project.revision && target &&
+          (deletion ? timeline.undo.at(-1)?.id === target.id : target.target.id === saved.cardId && ["thought.create", "thought.delete"].includes(target.label));
         setDeletedRecovery({
           projectId: saved.projectId,
           cardId: saved.cardId,
-          ...(target?.target.id === saved.cardId &&
-          ["thought.create", "thought.delete"].includes(target.label)
+          ...(eligible
             ? { actionId: target.id, direction: deletion ? "undo" as const : "redo" as const }
             : {}),
         });
@@ -484,8 +492,12 @@ function Workspace() {
   const pendingAction = useRef<{
     command: Command;
     onDone?: () => void;
+    selectionIntent?: SelectionIntent;
+    receipt?: Awaited<ReturnType<typeof api.execute>>;
+    rejected?: string;
   } | null>(null);
   const cardDeletion = useRef<ReturnType<typeof captureCardDeletion>>(null);
+  const selectionDeletion = useRef<ReturnType<typeof captureSelectionDeletion>>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const maxTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const composition = useRef(false),
@@ -712,13 +724,12 @@ function Workspace() {
         // cleanup, not an explicit selection of the surviving single card.
         if (!binding.wasDeleted) awaitBodySelection.current = true;
         binding.wasDeleted = true;
-        const deletion = timeline && [...timeline.undo].reverse().find(a => a.target.id === binding.card.id && a.label === "thought.delete");
+        const deletion = timeline && [...timeline.undo].reverse().find(a => deletesCard(a, binding.card.id));
         const removed = deletion ?? timeline?.redo.at(-1);
         if (
           !binding.removalActionId &&
           timeline?.revision === value.project.revision &&
-          removed && ["thought.create", "thought.delete"].includes(removed.label) &&
-          removed.target.id === binding.card.id
+          removed && (deletion || ["thought.create", "thought.delete"].includes(removed.label) && removed.target.id === binding.card.id)
         )
           { binding.removalActionId = removed.id; binding.restoreDirection = deletion ? "undo" : "redo"; }
         if (composition.current) compose(false);
@@ -731,6 +742,7 @@ function Workspace() {
             : {}),
           canRestore:
             !!binding.removalActionId &&
+            timeline?.revision === value.project.revision &&
             (binding.restoreDirection === "undo" ? timeline?.undo : timeline?.redo)?.at(-1)?.id === binding.removalActionId,
           direction: binding.restoreDirection ?? "redo",
         });
@@ -738,7 +750,10 @@ function Workspace() {
     }
     authority.current = value;
     setSelectedConnectors(previous => current?.project.id === value.project.id ? previous.filter(id => value.connectors?.some(line => line.id === id)) : []);
+    const intent = pendingAction.current?.selectionIntent;
+    const ownsSelection = intent?.projectId === value.project.id && intent.generation === canvasSelection.generation();
     canvasSelection.reconcile(value, current?.project.id === value.project.id);
+    if (ownsSelection) intent.generation = canvasSelection.generation();
     setState(value);
   };
   const [strokeJournal] = useState(() => new StrokeCreateRecovery());
@@ -875,12 +890,14 @@ function Workspace() {
       setShapeTextRecoveryError(shapeText.journal.damaged ? "部分形状文字恢复记录损坏，原件已保留" : "");
     } catch { setShapeTextRecoveryError("形状文字恢复区无法读取，原始草稿已保留"); }
   }, [state?.project.id, shapeText.session?.value.id]);
-  const refresh = async (id: string) => {
+  const refresh = async (id: string, selectionIntent?: SelectionIntent) => {
     const capturedProject = authority.current?.project.id;
     const value = await api.project(id);
     const timeline = await api.history(id);
     if (capturedProject === id && authority.current?.project.id === id) {
+      const ownsSelection = selectionIntent?.projectId === id && selectionIntent.generation === canvasSelection.generation();
       updateState(value, timeline);
+      if (ownsSelection) selectionIntent.generation = canvasSelection.generation();
       const all = await api.projects();
       if (authority.current?.project.id === id) setProjects(all);
     }
@@ -950,9 +967,9 @@ function Workspace() {
     };
   }, [state?.project.id]);
   const pose = usePoseSave(refresh,
-    (command, receipt) => cardDeletion.current?.acknowledge(command, receipt));
+    (command, receipt) => { cardDeletion.current?.acknowledge(command, receipt); selectionDeletion.current?.acknowledge(command, receipt); });
   const cardLayout = useCardLayoutSave(refresh, () => authority.current,
-    (command, receipt) => cardDeletion.current?.acknowledge(command, receipt));
+    (command, receipt) => { cardDeletion.current?.acknowledge(command, receipt); selectionDeletion.current?.acknowledge(command, receipt); });
   const appearance = useAppearanceSave(
     () => authority.current,
     refresh,
@@ -960,14 +977,15 @@ function Workspace() {
       breakBodyGroup();
       return await connectorLabel.finish() && await shapeText.finish() && await flush();
     },
-    (command, receipt) => cardDeletion.current?.acknowledge(command, receipt),
+    (command, receipt) => { cardDeletion.current?.acknowledge(command, receipt); selectionDeletion.current?.acknowledge(command, receipt); },
   );
   const imageGeometry = useImageGeometry(() => authority.current, action, refresh,
     () => historyLock.current || !!historyCommand.current);
   const shapeMove = useShapeMove(() => authority.current, value => {
     if (authority.current?.project.id === value.project.id) updateState(value);
   }, async () => await connectorLabel.finish() && await shapeText.finish() && await texts.finish() && await appearance.flush() &&
-    await cardLayout.flush() && await pose.flush() && await flush());
+    await cardLayout.flush() && await pose.flush() && await flush(),
+    (command, receipt) => selectionDeletion.current?.acknowledge(command, receipt));
   const strokeDraw = useStrokeDraw({
     projectId: () => authority.current?.project.id,
     blocked: () => busy || historyBlocked || composition.current || !!pendingAction.current ||
@@ -1323,6 +1341,7 @@ function Workspace() {
       try {
         const receipt = await api.execute(command);
         cardDeletion.current?.acknowledge(command, receipt);
+        selectionDeletion.current?.acknowledge(command, receipt);
         await refresh(current.projectId);
         for (const newer of [
           ...closedDrafts.current,
@@ -1608,42 +1627,63 @@ function Workspace() {
       fail(new Error("请先重试未完成的保存"));
       return;
     }
-    editorEpoch.current++;
-    breakBodyGroup();
-    if (
-      !(await shapeMove.flush()) || !(await connectorLabel.finish()) || !(await shapeText.finish()) || !(await texts.finish()) ||
-      !(await appearance.flush()) ||
-      !(await cardLayout.flush()) ||
-      !(await pose.flush()) ||
-      !(await flush())
-    )
-      return;
-    if (imageCommand) return finishImage();
-    if (command.type === "stroke.create" && command.projectId !== authority.current?.project.id) {
-      fail(new Error("笔迹所属项目已变化，请在原项目明确恢复")); return false;
+    const structural = command.type.startsWith('group.') || command.type === 'canvas.delete-selection' || command.type === 'text.delete';
+    const resumingStructure = structural && !!pendingAction.current;
+    if (!resumingStructure) {
+      editorEpoch.current++;
+      breakBodyGroup();
+      if (
+        !(await shapeMove.flush()) || !(await connectorLabel.finish()) || !(await shapeText.finish()) || !(await texts.finish()) ||
+        !(await appearance.flush()) ||
+        !(await cardLayout.flush()) ||
+        !(await pose.flush()) ||
+        !(await flush())
+      )
+        return;
+      if (imageCommand) return finishImage();
+      if (command.type === "stroke.create" && command.projectId !== authority.current?.project.id) {
+        fail(new Error("笔迹所属项目已变化，请在原项目明确恢复")); return false;
+      }
+      if (beforeSubmit && !beforeSubmit()) return false;
     }
-    if (beforeSubmit && !beforeSubmit()) return false;
-    pendingAction.current = { command, ...(onDone ? { onDone } : {}) };
+    const pending: NonNullable<typeof pendingAction.current> = pendingAction.current ?? { command, ...(onDone ? { onDone } : {}),
+      ...(structural
+        ? { selectionIntent: { projectId: command.projectId, generation: canvasSelection.generation() } } : {}) };
+    pendingAction.current = pending;
     setBusy(true);
     setStatus("正在保存…");
-    let executed = false;
+    let executed = !!pending.receipt;
     try {
+      if (pending.rejected) {
+        await refresh(command.projectId);
+        fail(new Error(pending.rejected));
+        return false;
+      }
       if (command.type === "stroke.create") { strokeJournal.write(command); scanStrokeRecoveries(); }
-      await api.execute(command);
-      executed = true;
+      if (!executed) {
+        const receipt = await api.execute(command);
+        if (structural) pending.receipt = receipt;
+        executed = true;
+      }
       if (command.projectId !== authority.current?.project.id) {
         if (!(await handoff(command.projectId))) return;
       } else {
-        await refresh(command.projectId);
+        await refresh(command.projectId, pending.selectionIntent);
         if (!(await flush())) return;
       }
       if (command.type === "stroke.create") { strokeJournal.confirm(command); scanStrokeRecoveries(); }
       setStatus("已保存到本机");
       setError("");
       pendingAction.current = null;
-      onDone?.();
+      if (!pending.selectionIntent || authority.current?.project.id === pending.selectionIntent.projectId &&
+        canvasSelection.generation() === pending.selectionIntent.generation) pending.onDone?.();
       return true;
     } catch (e) {
+      if (structural && !executed && !pending.rejected && e instanceof MappingError &&
+        ['VERSION_CONFLICT', 'NOT_FOUND', 'UNAUTHORIZED', 'PROJECT_FORBIDDEN', 'UNTRUSTED_PRINCIPAL'].includes(e.code)) {
+        pending.rejected = e.message;
+        try { await refresh(command.projectId); } catch { /* Comparison retries retain the definite rejection and original request. */ }
+      }
       if (!executed && e instanceof MappingError &&
         ((['connector.reconnect', 'connector.path', 'connector.move', 'connector.delete', 'connector.style', 'connector.reverse', 'connector.label'].includes(command.type) && ['VERSION_CONFLICT', 'NOT_FOUND'].includes(e.code)) ||
           (command.type === 'connector.reconnect' && e.code === 'INVALID_ENDPOINT'))) {
@@ -1660,6 +1700,20 @@ function Workspace() {
     } finally {
       setBusy(false);
     }
+  }
+  async function abandonStructure() {
+    const pending = pendingAction.current;
+    if (!pending?.rejected || busy) return;
+    setBusy(true);
+    try {
+      await refresh(pending.command.projectId);
+      if (pendingAction.current !== pending) return;
+      pendingAction.current = null;
+      setError('');
+      setStatus(pending.command.type === 'text.delete'
+        ? '已保留当前保存状态，请重新明确删除' : '已保留当前保存状态，请重新明确组合操作');
+    } catch (failure) { fail(failure); }
+    finally { setBusy(false); }
   }
   async function createProject() {
     const id = crypto.randomUUID();
@@ -1766,8 +1820,6 @@ function Workspace() {
   }
   async function removeCard(id: string) {
     if (composition.current || busy || historyBlocked || strokeSelected || cardDeletion.current || pendingAction.current) return;
-    const ownerProject = authority.current?.project.id;
-    if (!(await connectorLabel.finish()) || authority.current?.project.id !== ownerProject) return;
     const snapshot = authority.current, visible = snapshot?.cards.find(card => card.id === id);
     if (!snapshot || !visible) return;
     const intent = captureCardDeletion(snapshot, id);
@@ -1775,7 +1827,8 @@ function Workspace() {
     cardDeletion.current = intent;
     try {
       breakBodyGroup();
-      if (!(await appearance.flush()) || !(await cardLayout.flush()) || !(await pose.flush()) || !(await flush())) return;
+      if (!(await connectorLabel.finish()) || authority.current?.project.id !== intent.projectId ||
+        !(await appearance.flush()) || !(await cardLayout.flush()) || !(await pose.flush()) || !(await flush())) return;
       if (cardDeletion.current !== intent || authority.current?.project.id !== intent.projectId ||
         !authority.current.cards.some(card => card.id === id && card.item.id === intent.itemId)) return;
       await action(intent.command(), undefined, () => {
@@ -1802,9 +1855,8 @@ function Workspace() {
       ![...(authority.current.shapes ?? []), ...(authority.current.images ?? [])].some(item => item.item.id === itemId)) return;
     clearConnectorSelection();
     setEditing(null); titleGroup.current = null; awaitBodySelection.current = false;
-    if (authority.current.groups?.some(group => group.memberItemIds.includes(itemId))) canvasSelection.choose(itemId, extend);
-    else setSelection(previous => extend ? [...new Set([...previous, itemId])]
-      : previous.includes(itemId) && previous.length > 1 ? previous : [itemId]);
+    if (extend || authority.current.groups?.some(group => group.memberItemIds.includes(itemId))) canvasSelection.choose(itemId, extend);
+    else setSelection(previous => previous.includes(itemId) && previous.length > 1 ? previous : [itemId]);
   }
   async function recoverStrokeCreate(key: string) {
     if (busy || historyBlocked || composition.current || pendingAction.current || strokeDraw.hasPending() || strokeRecoveryRunning.current) return;
@@ -1838,9 +1890,11 @@ function Workspace() {
   const strokeDeleteRunning = useRef(false);
   async function removeStroke(value: CanvasStroke) {
     if (busy || historyBlocked || composition.current || pendingAction.current || strokeDeleteRunning.current ||
-      strokeDraw.hasPending() || selection.length !== 1 || selection[0] !== value.item.id) return;
+      strokeDraw.hasPending() || !isDirectItem(value.item.id)) return;
     const projectId = authority.current?.project.id, captured = structuredClone(value), epoch = ++editorEpoch.current;
     if (!projectId) return;
+    const facts = authority.current && captureMemberDeletion(authority.current, captured, projectId);
+    if (!facts) return;
     strokeDeleteRunning.current = true;
     try {
       if (!(await shapeMove.flush()) || !(await connectorLabel.finish()) || !(await shapeText.finish()) || !(await texts.finish()) || !(await appearance.flush()) ||
@@ -1848,19 +1902,17 @@ function Workspace() {
       if (editorEpoch.current !== epoch || authority.current?.project.id !== projectId ||
         !authority.current.strokes?.some(stroke => stroke.id === captured.id && stroke.item.id === captured.item.id)) return;
       await action({ commandId: crypto.randomUUID(), projectId, type: "stroke.delete",
-        expected: { stroke: captured.versionId, pose: captured.item.versionId }, payload: { id: captured.id } });
+        expected: { stroke: captured.versionId, pose: captured.item.versionId, membership: facts.membership }, payload: { id: captured.id } });
     } finally { strokeDeleteRunning.current = false; }
   }
   const shapeDeleteRunning = useRef(false);
   async function removeShape(value: CanvasShape) {
     if (busy || historyBlocked || composition.current || pendingAction.current || shapeRecoveryRunning.current ||
-      shapeDeleteRunning.current || selection.length !== 1 || selection[0] !== value.item.id) return;
-    const ownerProject = authority.current?.project.id;
-    if (!(await connectorLabel.finish()) || authority.current?.project.id !== ownerProject) return;
+      shapeDeleteRunning.current || !isDirectItem(value.item.id)) return;
     const snapshot = authority.current, visible = snapshot?.shapes?.find(shape => shape.id === value.id && shape.item.id === value.item.id);
     if (!snapshot || !visible || visible.versionId !== value.versionId || visible.item.versionId !== value.item.versionId) return;
-    const projectId = snapshot.project.id, connectors = incidentConnectorVersions(snapshot, value.item.id);
-    if (!connectors) { fail(new Error('请等待完整连线投影后重试删除')); return; }
+    const projectId = snapshot.project.id, facts = captureMemberDeletion(snapshot, value);
+    if (!facts) { fail(new Error('请等待完整对象和连线投影后重试删除')); return; }
     const captured = structuredClone(value), epoch = ++editorEpoch.current;
     const ownText = shapeText.currentSession()?.projectId === projectId && shapeText.currentSession()?.value.id === value.id;
     const ownGeometry = shapeMove.hasPending();
@@ -1876,7 +1928,7 @@ function Workspace() {
       // Waiting may reveal peer changes. Only this visible snapshot and our
       // own intervening ACKs authorize deletion; a fresh read never does.
       await action({ commandId: crypto.randomUUID(), projectId, type: "shape.delete",
-        expected: { shape: textAck?.value.versionId ?? captured.versionId, pose: poseAck?.value.item.versionId ?? captured.item.versionId, connectors },
+        expected: { shape: textAck?.value.versionId ?? captured.versionId, pose: poseAck?.value.item.versionId ?? captured.item.versionId, ...facts },
         payload: { id: captured.id } });
     } finally { shapeDeleteRunning.current = false; }
   }
@@ -2116,11 +2168,46 @@ function Workspace() {
       window.removeEventListener("beforeunload", beforeUnload);
     };
   }, []);
-  const texts = useCanvasTexts(state, selection, ids => { void shapeMove.flush().then(ok => ok && connectorLabel.finish()).then(ok => ok && shapeText.finish()).then(ok => { if (ok) { clearConnectorSelection(); setSelection(ids); } }); }, updateState, async () => await connectorLabel.finish() && await shapeText.finish() && await flush());
-  const canvasMove = useCanvasMove(state, canvasSelection.value, (prepare, done) => texts.enqueueGeometry(async () => {
+  const texts = useCanvasTexts(state, selection, ids => { void shapeMove.flush().then(ok => ok && connectorLabel.finish()).then(ok => ok && shapeText.finish()).then(ok => { if (ok) { clearConnectorSelection(); setSelection(ids); } }); }, updateState, async () => await connectorLabel.finish() && await shapeText.finish() && await flush(),
+    (command, receipt) => {
+      cardDeletion.current?.acknowledge(command, receipt);
+      selectionDeletion.current?.acknowledge(command, receipt);
+    });
+  useEffect(() => {
+    const remove = (event: KeyboardEvent) => {
+      if (event.key !== 'Delete' || event.defaultPrevented || event.isComposing || event.keyCode === 229 || composition.current ||
+        busy || historyBlocked || pendingAction.current || shapeText.session || connectorLabel.session ||
+        texts.nodes.some(node => node.data.editing) || imageGeometry.cropping ||
+        !(event.target instanceof Element) || !event.target.closest('.canvas') ||
+        event.target.closest('input, textarea, [contenteditable=true], dialog, [role=dialog], [role=menu]')) return;
+      // Explicit line selection owns Delete even while an old member retains focus.
+      // Multiple lines have no batch-delete owner; do not fall back to canvas items.
+      if (selectedConnectors.length) {
+        event.preventDefault(); event.stopPropagation();
+        const value = selectedConnectors.length === 1 ? authority.current?.connectors?.find(line => line.id === selectedConnectors[0]) : undefined;
+        if (value) void afterConnectorLabel(value, connectorEdit.remove);
+        return;
+      }
+      const selected = canvasSelection.current();
+      if (!selected.targets.length) return;
+      const target = selected.targets[0];
+      if (selected.targets.length === 1 && target?.kind === 'item') {
+        const card = authority.current?.cards.find(value => value.item.id === target.itemId);
+        const text = authority.current?.texts?.find(value => value.item.id === target.itemId);
+        if (!card && !text) return;
+        event.preventDefault(); event.stopPropagation();
+        if (card) void removeCard(card.id); else if (text) void removeText(text.id);
+        return;
+      }
+      event.preventDefault(); event.stopPropagation(); void deleteSelectedCanvas();
+    };
+    window.addEventListener('keydown', remove, true);
+    return () => window.removeEventListener('keydown', remove, true);
+  });
+  const canvasMove = useCanvasMove(state, canvasSelection.value, (prepare, done, intent, discard) => texts.enqueueGeometry(async () => {
     if (!(await shapeMove.flush())) throw new Error("请先确认形状布局保存，整组移动意图仍保留");
     return prepare();
-  }, done));
+  }, done, intent, discard));
   function canvasDragPoint(event: MouseEvent | TouchEvent) {
     const pointer = 'touches' in event ? event.touches[0] ?? event.changedTouches[0] : event;
     return pointer ? flow.screenToFlowPosition({ x: pointer.clientX, y: pointer.clientY }, { snapToGrid: false }) : undefined;
@@ -2130,16 +2217,75 @@ function Workspace() {
     if (!snapshot || busy || historyBlocked || composition.current || pendingAction.current) return;
     const intent = createGroupCommand(snapshot, canvasSelection.current());
     const generation = canvasSelection.generation();
-    await action(intent, () => {
-      if (authority.current?.project.id === intent.projectId && canvasSelection.generation() === generation)
-        canvasSelection.set({ targets: [{ kind: 'group', id: intent.payload.id }], enteredGroupId: null });
-    });
+    await action(intent, () => canvasSelection.set({ targets: [{ kind: 'group', id: intent.payload.id }], enteredGroupId: null }),
+      () => authority.current?.project.id === intent.projectId && canvasSelection.generation() === generation);
+  }
+  async function deleteSelectedCanvas(groupId?: string) {
+    const snapshot = authority.current;
+    if (!snapshot || busy || historyBlocked || composition.current || pendingAction.current || selectionDeletion.current) return;
+    const selected = canvasSelection.current(), target = selected.targets[0];
+    if (groupId && (selected.targets.length !== 1 || target?.kind !== 'group' || target.id !== groupId)) return;
+    const intent = captureSelectionDeletion(snapshot, selected), generation = canvasSelection.generation();
+    if (!intent) { fail(new Error('请等待完整对象与归属投影，再明确删除选区')); return; }
+    selectionDeletion.current = intent;
+    const command: Command = groupId ? { commandId: intent.command.commandId, projectId: intent.command.projectId, type: 'group.delete', payload: { id: groupId },
+      expected: { group: intent.command.expected.groups[groupId]!, containment: Object.fromEntries(Object.entries(intent.command.expected.containment).map(([id, version]) => [id, version!])),
+        items: intent.command.expected.items, connectors: intent.command.expected.connectors } } : intent.command;
+    try {
+      await action(command, undefined, () => {
+        if (selectionDeletion.current !== intent || authority.current?.project.id !== intent.command.projectId || canvasSelection.generation() !== generation) return false;
+        if (!intent.seal()) { fail(new Error('删除依据缺少确切保存确认，请重新明确删除选区')); return false; }
+        return true;
+      });
+    } finally { if (selectionDeletion.current === intent) selectionDeletion.current = null; }
+  }
+  function isDirectItem(itemId: string) {
+    const selected = canvasSelection.current(), target = selected.targets[0];
+    return selected.targets.length === 1 && target?.kind === 'item' && target.itemId === itemId;
+  }
+  async function removeText(id: string) {
+    const snapshot = authority.current, text = snapshot?.texts?.find(value => value.id === id);
+    if (!snapshot || !text || !isDirectItem(text.item.id) || busy || historyBlocked || composition.current || pendingAction.current || selectionDeletion.current) return;
+    const facts = captureMemberDeletion(snapshot, text), intent = captureSelectionDeletion(snapshot, { targets: [{ kind: 'item', itemId: text.item.id }], enteredGroupId: null });
+    if (!facts || !intent) return;
+    const generation = canvasSelection.generation();
+    const command: Extract<Command, { type: 'text.delete' }> = { commandId: intent.command.commandId, projectId: snapshot.project.id, type: 'text.delete',
+      expected: { text: text.versionId, pose: text.item.versionId, ...facts }, payload: { id } };
+    selectionDeletion.current = intent;
+    try {
+      await action(command, undefined, () => {
+        if (selectionDeletion.current !== intent || authority.current?.project.id !== command.projectId || canvasSelection.generation() !== generation || !intent.seal()) return false;
+        const expected = intent.command.expected.items[text.item.id]!;
+        if (expected.kind !== 'text') return false;
+        command.expected.text = expected.text; command.expected.pose = expected.pose; return true;
+      });
+    } finally { if (selectionDeletion.current === intent) selectionDeletion.current = null; }
+  }
+  function memberAction(itemId: string) {
+    return singleItemId === itemId && state?.containment?.some(value => value.id === itemId && value.parent?.kind === 'group')
+      ? () => { void releaseSelectedMember(itemId); } : undefined;
+  }
+  async function releaseSelectedMember(itemId: string) {
+    const snapshot = authority.current, selected = canvasSelection.current(), target = selected.targets[0];
+    if (!snapshot || selected.targets.length !== 1 || target?.kind !== 'item' || target.itemId !== itemId) return;
+    const command = removeMemberCommand(snapshot, itemId), generation = canvasSelection.generation();
+    if (command) await action(command, undefined, () => authority.current?.project.id === command.projectId && canvasSelection.generation() === generation);
+  }
+  async function ungroupSelected(id: string) {
+    const snapshot = authority.current, selected = canvasSelection.current(), target = selected.targets[0];
+    if (!snapshot || selected.targets.length !== 1 || target?.kind !== 'group' || target.id !== id) return;
+    const command = ungroupCommand(snapshot, id), members = snapshot.groups!.find(group => group.id === id)!.memberItemIds;
+    const generation = canvasSelection.generation();
+    if (command) await action(command, () => canvasSelection.set({ targets: members.map(itemId => ({ kind: 'item', itemId })), enteredGroupId: null }),
+      () => authority.current?.project.id === command.projectId && canvasSelection.generation() === generation);
   }
   const textNodes = texts.nodes.map((node) => ({
     ...node,
     data: {
       ...node.data,
       singleSelection: node.data.singleSelection && singleItemId === node.id,
+      removeFromGroup: memberAction(node.id),
+      remove: singleItemId === node.id ? () => { void removeText(node.data.value.id); } : undefined,
       edit: () => {
         const projectId = authority.current?.project.id, epoch = ++editorEpoch.current;
         const stillCurrent = () => authority.current?.project.id === projectId && editorEpoch.current === epoch;
@@ -2204,6 +2350,7 @@ function Workspace() {
       onBody: () => void editCard(card.id, "body"),
       onCanvasChoice: () => { editorEpoch.current++; },
       onDelete: () => void removeCard(card.id),
+      onRemoveFromGroup: memberAction(card.item.id),
       onMeasure: cardLayout.measure,
       measurable: !busy && !historyBlocked && !pose.pending && !pose.dragging && !shapeMove.hasPending(),
       onAppearance: (value) => {
@@ -2470,7 +2617,7 @@ function Workspace() {
               "controls.zoomOut.ariaLabel": "缩小",
               "controls.fitView.ariaLabel": "适应画布",
             }}
-            nodes={orderCanvas([...nodes, ...textNodes, ...imageNodes(state.images ?? [], state.project.id, selection, (id, extend) => void chooseCanvasItem(id, extend), busy || historyBlocked || composition.current || !!pendingAction.current || placing || !!shapePreset || texts.placing || panTool || !!strokeDraw.mode || !!shapeText.session || texts.geometryBlocked, imageGeometry, (value, dx, dy) => { if (canvasMove.start(value.item.id)) canvasMove.finish({ x: value.item.pose.x + dx, y: value.item.pose.y + dy }); }, singleItemId), ...shapeNodes(state.shapes ?? [], selection, (id, extend) => void chooseCanvasItem(id, extend), busy || historyBlocked || placing || !!shapePreset || texts.placing || panTool, id => void beginShapeText(id), !!shapeText.session, (id, trigger) => void beginShapeAppearance(id, trigger), value => void removeShape(value), shapeMove.positions, shapeMove, composition.current || !!pendingAction.current || pose.pending || pose.dragging || canvasMove.dragging || texts.hasPending() || appearance.pending || cardLayout.pending, singleItemId), ...strokeNodes(state.strokes ?? [], selection, (id, extend) => void chooseStrokeItem(id, extend), value => void removeStroke(value), busy || historyBlocked || !!pendingAction.current || placing || !!shapePreset || texts.placing || panTool || !!strokeDraw.mode, singleItemId)].map(node => ({ ...node, selected: flowSelection.includes(node.id), position: canvasMove.positions[node.id] ?? shapeMove.positions[node.id] ?? node.position, draggable: node.draggable !== false && !strokeDraw.mode && !busy && !historyBlocked && !panTool && !placing && !shapePreset && !texts.placing && !texts.geometryBlocked && !shapeText.session && !connectorLabel.session && !shapeMove.pending })), state, selection)}
+            nodes={orderCanvas([...nodes, ...textNodes, ...imageNodes(state.images ?? [], state.project.id, selection, (id, extend) => void chooseCanvasItem(id, extend), busy || historyBlocked || composition.current || !!pendingAction.current || placing || !!shapePreset || texts.placing || panTool || !!strokeDraw.mode || !!shapeText.session || texts.geometryBlocked, imageGeometry, (value, dx, dy) => { if (canvasMove.start(value.item.id)) canvasMove.finish({ x: value.item.pose.x + dx, y: value.item.pose.y + dy }); }, singleItemId, memberAction), ...shapeNodes(state.shapes ?? [], selection, (id, extend) => void chooseCanvasItem(id, extend), busy || historyBlocked || placing || !!shapePreset || texts.placing || panTool, id => void beginShapeText(id), !!shapeText.session, (id, trigger) => void beginShapeAppearance(id, trigger), value => void removeShape(value), shapeMove.positions, shapeMove, composition.current || !!pendingAction.current || pose.pending || pose.dragging || canvasMove.dragging || texts.hasPending() || appearance.pending || cardLayout.pending, singleItemId, memberAction), ...strokeNodes(state.strokes ?? [], selection, (id, extend) => void chooseStrokeItem(id, extend), value => void removeStroke(value), busy || historyBlocked || !!pendingAction.current || placing || !!shapePreset || texts.placing || panTool || !!strokeDraw.mode, singleItemId, memberAction)].map(node => ({ ...node, selected: flowSelection.includes(node.id), position: canvasMove.positions[node.id] ?? shapeMove.positions[node.id] ?? node.position, draggable: node.draggable !== false && !strokeDraw.mode && !busy && !historyBlocked && !panTool && !placing && !shapePreset && !texts.placing && !texts.geometryBlocked && !shapeText.session && !connectorLabel.session && !shapeMove.pending })), state, selection)}
             onNodeClick={(event, node) => {
               awaitBodySelection.current = false;
               clearConnectorSelection();
@@ -2565,6 +2712,8 @@ function Workspace() {
               <CanvasGroups state={state} selection={canvasSelection.value} positions={canvasMove.positions}
                 blocked={busy || historyBlocked || !!pendingAction.current || texts.hasPending()}
                 create={() => void createSelectedGroup()}
+                ungroup={id => void ungroupSelected(id)}
+                remove={id => void deleteSelectedCanvas(id)}
                 enter={id => canvasSelection.set({ targets: [], enteredGroupId: id })} />
               {(state.connectors ?? []).map(value => <CanvasConnector key={value.id} value={value} selected={selectedConnectors.includes(value.id)} resolve={connectorTargets.resolve}
                 labelEditor={{ ...connectorLabel, begin: origin => void beginConnectorLabel(value.id, origin), finish: () => void finishConnectorLabel(),
@@ -3010,6 +3159,9 @@ function Workspace() {
                   : "重试重做"
                 : "重试保存"}
             </button>
+            {pendingAction.current?.rejected && <button disabled={busy} onClick={() => void abandonStructure()}>
+              {pendingAction.current.command.type === 'text.delete' ? '放弃本次删除' : '放弃本次组合操作'}
+            </button>}
           </>
         )}
       </div>

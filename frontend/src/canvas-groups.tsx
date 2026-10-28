@@ -1,9 +1,10 @@
 import type { ProjectState } from './api';
 import { canvasItems, selectedItemIds, type CanvasSelection } from './canvas-selection';
 
-export function CanvasGroups({ state, selection, positions, blocked, create, enter }: {
+export function CanvasGroups({ state, selection, positions, blocked, create, enter, ungroup, remove }: {
   state: ProjectState; selection: CanvasSelection; positions: Record<string, { x: number; y: number }>;
-  blocked: boolean; create: () => void; enter: (id: string) => void;
+  blocked: boolean; create: () => void; enter: (id: string) => void; ungroup: (id: string) => void;
+  remove: (id: string) => void;
 }) {
   const items = canvasItems(state), ids = selectedItemIds(state, selection);
   const selected = items.filter(v => ids.includes(v.item.id));
@@ -23,6 +24,8 @@ export function CanvasGroups({ state, selection, positions, blocked, create, ent
       className="canvas-group-tools nodrag nopan" style={{ left, top: top - 48 }} onPointerDown={e => e.stopPropagation()}>
       {selection.targets.length > 1 && <button disabled={blocked} onClick={create}>组合所选对象</button>}
       {groupId && <button disabled={blocked} onClick={() => enter(groupId)}>进入组合</button>}
+      {groupId && <button disabled={blocked} onClick={() => ungroup(groupId)}>取消组合</button>}
+      {groupId && <button disabled={blocked} onClick={() => remove(groupId)}>删除组合</button>}
     </div>}
   </>;
 }

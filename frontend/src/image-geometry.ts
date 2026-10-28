@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { CanvasImage } from '../../backend/src/mapping/image-contracts';
 import type { Command, ProjectState } from './api';
-import { incidentConnectorVersions } from './connector-deletion';
+import { captureMemberDeletion } from './canvas-group-commands';
 export type ImagePose = CanvasImage['item']['pose'];
 // Only the execute boundary may classify a write as rejected. A failed read
 // after an acknowledged write still requires confirmation of that request.
@@ -82,13 +82,12 @@ export function useImageGeometry(authority: () => ProjectState | null, commit: (
     const current = authority();
     if (!current || historyBlocked() || gesture.current || request.current) return;
     if (direction === 'delete') {
-      const visible = current.images?.find(image => image.id === value.id && image.item.id === value.item.id);
-      const connectors = incidentConnectorVersions(current, value.item.id);
-      if (!visible || visible.versionId !== value.versionId || visible.item.versionId !== value.item.versionId || !connectors) {
+      const facts = captureMemberDeletion(current, value);
+      if (!facts) {
         setError('请先确认原图片和完整连线投影，再明确删除'); return;
       }
       send({ commandId: crypto.randomUUID(), projectId: current.project.id, type: 'image.delete',
-        expected: { image: value.versionId, pose: value.item.versionId, connectors }, payload: { id: value.id } });
+        expected: { image: value.versionId, pose: value.item.versionId, ...facts }, payload: { id: value.id } });
       return;
     }
     const command: Command = { commandId: crypto.randomUUID(), projectId: current.project.id,

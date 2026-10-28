@@ -1,13 +1,14 @@
 import { useRef, useState } from "react";
 import type { Command, ProjectState } from "./api";
 import { canvasItems, selectedItemIds, type CanvasSelection } from './canvas-selection';
+import type { CanvasMoveIntent } from './canvas-move-conflict';
 type Point = { x: number; y: number };
 type Target = {
   kind: "card" | "text" | "shape" | "image" | "stroke";
   id: string;
-  item: { id: string; versionId: string; pose: Point };
+  item: { id: string; versionId: string; pose: Point & { width: number; height: number; rotation?: number } };
 };
-type Enqueue = (prepare: () => Promise<Command>, done: () => void) => void;
+type Enqueue = (prepare: () => Promise<Command>, done: () => void, intent: CanvasMoveIntent, discard: () => void) => void;
 export function useCanvasMove(
   state: ProjectState | null,
   selection: CanvasSelection,
@@ -125,6 +126,9 @@ export function useCanvasMove(
           })),
         },
       }),
+      () => setPositions({}),
+      { targets: current.targets.map(value => ({ kind: value.kind, id: value.id, itemId: value.item.id,
+        poseVersionId: value.item.versionId, pose: structuredClone(value.item.pose), x: value.item.pose.x + dx, y: value.item.pose.y + dy })) },
       () => setPositions({}),
     );
     return true;

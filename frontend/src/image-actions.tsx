@@ -2,8 +2,9 @@ import { useLayoutEffect, useRef, useState, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
 import { useViewport } from '@xyflow/react';
 import type { ImagePose } from './image-geometry';
-export function ImageActions({ anchor, pose, blocked, rotate, remove, view, crop, restore }: {
+export function ImageActions({ anchor, pose, blocked, rotate, remove, view, crop, restore, removeFromGroup }: {
   anchor: RefObject<HTMLElement | null>; pose: ImagePose; blocked: boolean; rotate: (direction: 'left' | 'right') => void; remove: () => void; view: () => void; crop: () => void; restore?: (() => void) | undefined;
+  removeFromGroup?: (() => void) | undefined;
 }) {
   const toolbar = useRef<HTMLDivElement>(null), viewport = useViewport();
   const [point, setPoint] = useState({ left: 0, top: 0 });
@@ -28,5 +29,6 @@ export function ImageActions({ anchor, pose, blocked, rotate, remove, view, crop
     <button disabled={blocked} onClick={() => rotate('left')}>向左旋转90°</button>
     <button disabled={blocked} onClick={() => rotate('right')}>向右旋转90°</button>
     <button disabled={blocked} onClick={remove}>删除图片</button>
+    {removeFromGroup && <button disabled={blocked} onClick={event => { event.stopPropagation(); removeFromGroup(); }}>移出组合</button>}
   </div>, document.body);
 }

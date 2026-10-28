@@ -11,7 +11,8 @@ import { CanvasImageViewer } from './canvas-image-viewer';
 import type { MediaAsset } from '../../backend/src/mapping/media';
 import { GifToggle } from './gif-toggle';
 
-type ImageData = { value: CanvasImage; projectId: string; choose: (extend: boolean) => void; move: (dx: number, dy: number) => void; blocked: boolean; resizable: boolean; geometry: ImageGeometry };
+type ImageData = { value: CanvasImage; projectId: string; choose: (extend: boolean) => void; move: (dx: number, dy: number) => void; blocked: boolean; resizable: boolean; geometry: ImageGeometry;
+  removeFromGroup?: (() => void) | undefined };
 export function CanvasImageNode({ data, selected }: NodeProps<Node<ImageData>>) {
   const anchor = useRef<HTMLDivElement>(null);
   const resize = useImageResize(data.value, anchor, data.geometry, data.blocked || data.geometry.pending);
@@ -58,13 +59,13 @@ export function CanvasImageNode({ data, selected }: NodeProps<Node<ImageData>>) 
       cursor: handle.length === 1 ? handle === 'n' || handle === 's' ? 'ns-resize' : 'ew-resize' : handle === 'nw' || handle === 'se' ? 'nwse-resize' : 'nesw-resize' }} />)}
     {selected && data.resizable && !cropping && <ImageActions anchor={anchor} pose={data.value.item.pose} blocked={data.blocked || data.geometry.pending || !!viewer} view={view} crop={() => { if (asset) data.geometry.beginCrop(data.value); }}
       restore={data.value.content.crop.x !== 0 || data.value.content.crop.y !== 0 || data.value.content.crop.width !== 1 || data.value.content.crop.height !== 1 ? () => data.geometry.operate(data.value, 'restore') : undefined}
-      rotate={direction => data.geometry.operate(data.value, direction)} remove={() => data.geometry.operate(data.value, 'delete')} />}
+      rotate={direction => data.geometry.operate(data.value, direction)} remove={() => data.geometry.operate(data.value, 'delete')} removeFromGroup={data.removeFromGroup} />}
     {cropping && asset && <ImageCrop key={cropping.value.versionId} projectId={cropping.projectId} value={cropping.value} asset={asset} playbackPreferences={playbackPreferences} blocked={data.geometry.pending} complete={data.geometry.finishCrop} cancel={data.geometry.cancel} />}
     {viewer && asset && <CanvasImageViewer projectId={data.projectId} value={viewer} asset={asset} playbackPreferences={playbackPreferences} onClose={() => setViewer(null)} />}</>;
 }
-export function imageNodes(images: CanvasImage[], projectId: string, selection: string[], choose: (id: string, extend: boolean) => void, blocked: boolean, geometry: ImageGeometry, move: (value: CanvasImage, dx: number, dy: number) => void, singleItemId: string | null): Node<ImageData>[] {
+export function imageNodes(images: CanvasImage[], projectId: string, selection: string[], choose: (id: string, extend: boolean) => void, blocked: boolean, geometry: ImageGeometry, move: (value: CanvasImage, dx: number, dy: number) => void, singleItemId: string | null, memberAction: (itemId: string) => (() => void) | undefined): Node<ImageData>[] {
   return images.map(saved => { const original = geometry.cropping?.projectId === projectId && geometry.cropping.value.id === saved.id ? geometry.cropping.value : saved; const value = { ...original, item: { ...original.item, pose: geometry.poses[original.item.id] ?? original.item.pose } }; return ({ id: value.item.id, type: 'canvasImage', position: value.item.pose,
     initialWidth: value.item.pose.width, initialHeight: value.item.pose.height,
     style: { width: value.item.pose.width, height: value.item.pose.height }, draggable: !blocked && !geometry.pending && !geometry.cropping,
-    selected: selection.includes(value.item.id), data: { value, projectId, choose: extend => choose(value.item.id, extend), move: (dx, dy) => move(value, dx, dy), blocked, resizable: singleItemId === value.item.id, geometry } }); });
+    selected: selection.includes(value.item.id), data: { value, projectId, choose: extend => choose(value.item.id, extend), move: (dx, dy) => move(value, dx, dy), blocked, resizable: singleItemId === value.item.id, geometry, removeFromGroup: memberAction(value.item.id) } }); });
 }
