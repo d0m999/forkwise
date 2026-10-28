@@ -73,6 +73,15 @@ export function TextEditor({
     document.addEventListener("selectionchange", sync);
     return () => document.removeEventListener("selectionchange", sync);
   }, []);
+  useEffect(() => {
+    if (!colors) return;
+    const escape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || event.defaultPrevented || composing.current || event.isComposing || event.keyCode === 229) return;
+      event.preventDefault(); event.stopImmediatePropagation(); setColors(false);
+    };
+    window.addEventListener("keydown", escape, true);
+    return () => window.removeEventListener("keydown", escape, true);
+  }, [colors]);
   function restore() {
     editor.current!.focus();
     if (range.current) {

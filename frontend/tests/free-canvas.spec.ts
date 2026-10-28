@@ -1,13 +1,17 @@
 import { expectTextValue } from "./text-editor-assertions";
 import { test, expect, type Page } from "@playwright/test";
 import { spawn, type ChildProcess } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync, appendFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createServer } from "node:net";
 import type { ProjectState } from "../src/api";
 
 let directory: string, server: ChildProcess, origin: string;
+function record(event: Record<string, unknown>) {
+  const evidence = process.env.FORKWISE_ISSUE10_RESOURCE_LOG;
+  if (evidence) appendFileSync(evidence, JSON.stringify({ at: new Date().toISOString(), fixturePID: process.pid, fixturePPID: process.ppid, directory, ...event }) + "\n");
+}
 async function start() {
   server = spawn(process.execPath, ["dist/src/workspace-server.js"], {
     cwd: resolve("../backend"),
@@ -18,6 +22,9 @@ async function start() {
     },
     stdio: ["ignore", "pipe", "pipe"],
   });
+  const child = server, ownedDirectory = directory;
+  record({ event: "server-spawn", pid: child.pid, executable: process.execPath, port: Number(new URL(origin).port) });
+  child.once("exit", (code, signal) => record({ event: "server-closed", directory: ownedDirectory, pid: child.pid, exitCode: code, signal }));
   await new Promise<void>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error("服务启动超时")), 10000);
     server.once("exit", (code) => {
@@ -100,6 +107,7 @@ async function manualHeight(page: Page, height: number) {
 }
 test.beforeEach(async ({ page }) => {
   directory = mkdtempSync(join(tmpdir(), "forkwise-free-canvas-"));
+  record({ event: "allocate-directory", method: "mkdtemp-direct" });
   const port = await new Promise<number>((resolve) => {
     const s = createServer();
     s.listen(0, "127.0.0.1", () => {
@@ -117,6 +125,7 @@ test.afterEach(async ({ page }) => {
   await page.context().close();
   await stop();
   rmSync(directory, { recursive: true, force: true });
+  record({ event: "directory-reclaimed", method: "rmSync-returned" });
 });
 
 test("F8-01 放置后标题与创建一步，单击只选择，菜单和双击标题同入口", async ({

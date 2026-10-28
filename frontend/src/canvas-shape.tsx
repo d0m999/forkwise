@@ -25,6 +25,10 @@ export function CanvasShapeNode({ data, selected }: NodeProps<Node<ShapeData>>) 
         event.stopPropagation();
         if (!data.blocked) { event.currentTarget.focus({ preventScroll: true }); data.choose(event.shiftKey); }
       }}
+      onDoubleClick={event => {
+        event.preventDefault(); event.stopPropagation();
+        if (!data.blocked) data.edit();
+      }}
       onKeyDown={event => {
         if (data.blocked || event.nativeEvent.isComposing || event.keyCode === 229 || event.metaKey || event.ctrlKey || event.altKey) return;
         if (event.key === " " || event.key === "Enter") {
@@ -70,7 +74,7 @@ export function shapeNodes(
   shapes: CanvasShape[], selection: string[], choose: (id: string, extend: boolean) => void, blocked: boolean,
   edit: (id: string) => void, editing: boolean, appearance: (id: string, trigger: HTMLButtonElement) => void,
   remove: (value: CanvasShape) => void,
-  poses: Record<string, CanvasShape["item"]["pose"]>, geometry: ShapeResizeAPI, resizeBlocked: boolean,
+  poses: Record<string, CanvasShape["item"]["pose"]>, geometry: ShapeResizeAPI, resizeBlocked: boolean, singleItemId: string | null,
 ): Node<ShapeData>[] {
   return shapes.map(value => {
     const pose = poses[value.item.id] ?? value.item.pose, disabled = blocked || geometry.pending;
@@ -87,6 +91,6 @@ export function shapeNodes(
     connectable: false,
     data: { value: { ...value, item: { ...value.item, pose } }, blocked: disabled, choose: extend => choose(value.item.id, extend),
       edit: () => edit(value.id), appearance: trigger => appearance(value.id, trigger), remove: () => remove(value),
-      editable: selection.length === 1 && !disabled && !editing, resizable: selection.length === 1 && !editing, resizeBlocked: blocked || editing || resizeBlocked, geometry },
+      editable: singleItemId === value.item.id && !disabled && !editing, resizable: singleItemId === value.item.id && !editing, resizeBlocked: blocked || editing || resizeBlocked, geometry },
   }; });
 }

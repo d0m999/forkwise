@@ -10,8 +10,7 @@ export function CanvasStrokeNode({ data, selected }: NodeProps<Node<StrokeData>>
   // Keep a six-CSS-pixel hit radius around thin paths at every canvas zoom.
   const hitWidth = Math.max(content.width, 12 / zoom);
   return <div role="button" aria-label={"选择" + label} aria-pressed={!!selected} aria-disabled={data.blocked}
-    className="nodrag nopan" tabIndex={data.blocked ? -1 : 0}
-    onMouseDown={event => event.stopPropagation()}
+    className="nopan" tabIndex={data.blocked ? -1 : 0}
     onClick={event => {
       event.stopPropagation();
       if (!data.blocked) { event.currentTarget.focus({ preventScroll: true }); data.choose(event.shiftKey); }
@@ -47,12 +46,12 @@ export function CanvasStrokeNode({ data, selected }: NodeProps<Node<StrokeData>>
 }
 
 export function strokeNodes(strokes: CanvasStroke[], selection: string[], choose: (id: string, extend: boolean) => void,
-  remove: (value: CanvasStroke) => void, blocked: boolean): Node<StrokeData>[] {
+  remove: (value: CanvasStroke) => void, blocked: boolean, singleItemId: string | null): Node<StrokeData>[] {
   return strokes.map(value => ({
     id: value.item.id, type: "canvasStroke", position: { x: value.item.pose.x, y: value.item.pose.y },
     initialWidth: value.item.pose.width, initialHeight: value.item.pose.height,
     style: { width: value.item.pose.width, height: value.item.pose.height, pointerEvents: "none" },
-    draggable: false, selectable: !blocked, selected: selection.includes(value.item.id), connectable: false, focusable: false,
-    data: { value, blocked, single: selection.length === 1, choose: extend => choose(value.item.id, extend), remove: () => remove(value) },
+    draggable: !blocked, selectable: !blocked, selected: selection.includes(value.item.id), connectable: false, focusable: false,
+    data: { value, blocked, single: singleItemId === value.item.id, choose: extend => choose(value.item.id, extend), remove: () => remove(value) },
   }));
 }

@@ -1,5 +1,5 @@
 import { textColors, textAlignments } from "./text-options";
-import { useState, type RefObject } from "react";
+import { useEffect, useState, type RefObject } from "react";
 import { TextToolbar } from "./text-toolbar";
 import type { TextContent } from "../../backend/src/mapping/text-contracts";
 import { hexColor } from "./text-runs";
@@ -17,6 +17,15 @@ export function TextObjectTools({
   copy: () => void;
 }) {
   const [colors, setColors] = useState(false);
+  useEffect(() => {
+    if (!colors) return;
+    const escape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || event.defaultPrevented || event.isComposing || event.keyCode === 229) return;
+      event.preventDefault(); event.stopImmediatePropagation(); setColors(false);
+    };
+    window.addEventListener("keydown", escape, true);
+    return () => window.removeEventListener("keydown", escape, true);
+  }, [colors]);
   const bold = content.runs.filter((run) => run.text).every((run) => run.bold);
   return (
     <TextToolbar anchor={anchor}>

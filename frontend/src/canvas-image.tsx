@@ -62,9 +62,9 @@ export function CanvasImageNode({ data, selected }: NodeProps<Node<ImageData>>) 
     {cropping && asset && <ImageCrop key={cropping.value.versionId} projectId={cropping.projectId} value={cropping.value} asset={asset} playbackPreferences={playbackPreferences} blocked={data.geometry.pending} complete={data.geometry.finishCrop} cancel={data.geometry.cancel} />}
     {viewer && asset && <CanvasImageViewer projectId={data.projectId} value={viewer} asset={asset} playbackPreferences={playbackPreferences} onClose={() => setViewer(null)} />}</>;
 }
-export function imageNodes(images: CanvasImage[], projectId: string, selection: string[], choose: (id: string, extend: boolean) => void, blocked: boolean, geometry: ImageGeometry, move: (value: CanvasImage, dx: number, dy: number) => void): Node<ImageData>[] {
+export function imageNodes(images: CanvasImage[], projectId: string, selection: string[], choose: (id: string, extend: boolean) => void, blocked: boolean, geometry: ImageGeometry, move: (value: CanvasImage, dx: number, dy: number) => void, singleItemId: string | null): Node<ImageData>[] {
   return images.map(saved => { const original = geometry.cropping?.projectId === projectId && geometry.cropping.value.id === saved.id ? geometry.cropping.value : saved; const value = { ...original, item: { ...original.item, pose: geometry.poses[original.item.id] ?? original.item.pose } }; return ({ id: value.item.id, type: 'canvasImage', position: value.item.pose,
     initialWidth: value.item.pose.width, initialHeight: value.item.pose.height,
     style: { width: value.item.pose.width, height: value.item.pose.height }, draggable: !blocked && !geometry.pending && !geometry.cropping,
-    selected: selection.includes(value.item.id), data: { value, projectId, choose: extend => choose(value.item.id, extend), move: (dx, dy) => move(value, dx, dy), blocked, resizable: selection.length === 1, geometry } }); });
+    selected: selection.includes(value.item.id), data: { value, projectId, choose: extend => choose(value.item.id, extend), move: (dx, dy) => move(value, dx, dy), blocked, resizable: singleItemId === value.item.id, geometry } }); });
 }

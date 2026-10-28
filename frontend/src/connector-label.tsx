@@ -22,10 +22,13 @@ export function ConnectorLabel({ value, path, origin, geometry, editor, choose }
   }
   useEffect(() => {
     const hidden = () => { if (document.visibilityState === 'hidden') cancel(); };
-    const escape = (event: KeyboardEvent) => { if (event.key === 'Escape' && !event.isComposing && event.keyCode !== 229) cancel(); };
-    window.addEventListener('blur', cancel); window.addEventListener('pagehide', cancel); window.addEventListener('keydown', escape);
+    const escape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || !drag.current || event.defaultPrevented || event.isComposing || event.keyCode === 229) return;
+      event.preventDefault(); event.stopImmediatePropagation(); cancel();
+    };
+    window.addEventListener('blur', cancel); window.addEventListener('pagehide', cancel); window.addEventListener('keydown', escape, true);
     document.addEventListener('visibilitychange', hidden);
-    return () => { cancel(); window.removeEventListener('blur', cancel); window.removeEventListener('pagehide', cancel); window.removeEventListener('keydown', escape); document.removeEventListener('visibilitychange', hidden); };
+    return () => { cancel(); window.removeEventListener('blur', cancel); window.removeEventListener('pagehide', cancel); window.removeEventListener('keydown', escape, true); document.removeEventListener('visibilitychange', hidden); };
   }, []);
   useLayoutEffect(() => { setPreview(null); }, [value.versionId]);
   useLayoutEffect(() => {

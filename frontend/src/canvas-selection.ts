@@ -3,6 +3,7 @@ import type { ProjectState } from './api';
 
 export type SelectionTarget = { kind: 'group'; id: string } | { kind: 'item'; itemId: string };
 export type CanvasSelection = { targets: SelectionTarget[]; enteredGroupId: string | null };
+type SelectionChangeSource = 'intent' | 'projection';
 const empty: CanvasSelection = { targets: [], enteredGroupId: null };
 export function canvasItems(state: ProjectState) {
   return [...state.cards, ...(state.texts ?? []), ...(state.shapes ?? []), ...(state.images ?? []), ...(state.strokes ?? [])]
@@ -24,15 +25,26 @@ function normalize(state: ProjectState, value: CanvasSelection): CanvasSelection
       seen.add(key); return true;
     }) };
 }
+function sameSelection(left: CanvasSelection, right: CanvasSelection) {
+  return left.enteredGroupId === right.enteredGroupId && left.targets.length === right.targets.length &&
+    left.targets.every((target, index) => {
+      const other = right.targets[index]!;
+      return target.kind === 'group' ? other.kind === 'group' && target.id === other.id
+        : other.kind === 'item' && target.itemId === other.itemId;
+    });
+}
 export function useCanvasSelection(state: ProjectState | null) {
   const [value, setValue] = useState<CanvasSelection>(empty), current = useRef(value), project = useRef(state?.project.id);
   const pointer = useRef<{ id: string; state: ProjectState; before: CanvasSelection; drag: CanvasSelection; dragged: boolean; finished: boolean } | null>(null);
   const generation = useRef(0);
-  function set(next: CanvasSelection) { generation.current++; current.current = next; setValue(next); }
+  const changeSource = useRef<SelectionChangeSource>('intent');
+  function set(next: CanvasSelection, source: SelectionChangeSource = 'intent') {
+    generation.current++; changeSource.current = source; current.current = next; setValue(next);
+  }
   useEffect(() => {
     const next = project.current !== state?.project.id ? empty : state ? normalize(state, current.current) : empty;
     project.current = state?.project.id;
-    if (JSON.stringify(next) !== JSON.stringify(current.current)) set(next);
+    if (!sameSelection(next, current.current)) set(next, 'projection');
   }, [state]);
   const directItemIds = useMemo(() => value.targets.flatMap(t => t.kind === 'item' ? [t.itemId] : []), [value]);
   const flowSelectedItemIds = useMemo(() => state ? selectedItemIds(state, value) : [], [state, value]);
@@ -49,11 +61,14 @@ export function useCanvasSelection(state: ProjectState | null) {
     set(normalize(state, { targets: extend ? [...old.targets, target] : [target], enteredGroupId: old.enteredGroupId }));
   }
   return { value, directItemIds, flowSelectedItemIds, set, choose, current: () => current.current,
+    hasDirectStroke: () => current.current.targets.some(target => target.kind === 'item' &&
+      state?.strokes?.some(stroke => stroke.item.id === target.itemId)),
     generation: () => generation.current,
+    changeSource: () => changeSource.current,
     reconcile(next: ProjectState, sameProject: boolean) {
       const normalized = sameProject ? normalize(next, current.current) : empty;
       project.current = next.project.id;
-      if (JSON.stringify(normalized) !== JSON.stringify(current.current)) set(normalized);
+      if (!sameSelection(normalized, current.current)) set(normalized, 'projection');
     },
     setItems(next: string[] | ((previous: string[]) => string[])) {
       const previous = current.current.targets.flatMap(t => t.kind === 'item' ? [t.itemId] : []);
@@ -63,7 +78,9 @@ export function useCanvasSelection(state: ProjectState | null) {
     capture(id: string, extend: boolean) {
       if (!state) return null;
       const before = structuredClone(current.current), selected = selectedItemIds(state, before).includes(id);
-      const drag = selected ? before : normalize(state, { targets: extend ? [...before.targets, hit(id)] : [hit(id)], enteredGroupId: before.enteredGroupId });
+      const parent = state.groups?.find(group => group.memberItemIds.includes(id));
+      const target: SelectionTarget = parent ? { kind: 'group', id: parent.id } : { kind: 'item', itemId: id };
+      const drag = selected ? before : normalize(state, { targets: extend ? [...before.targets, target] : [target], enteredGroupId: before.enteredGroupId });
       pointer.current = { id, state, before, drag, dragged: false, finished: false };
       return { state, selection: drag };
     },
@@ -71,9 +88,9 @@ export function useCanvasSelection(state: ProjectState | null) {
     finishDrag() { if (pointer.current) pointer.current.finished = true; },
     cancelDrag() { const p = pointer.current; if (p?.dragged && !p.finished) { set(p.before); p.finished = true; } },
     retirePointer() { pointer.current = null; },
-    consumeClick(id: string, extend: boolean) {
+    consumeClick(id: string, extend: boolean, select = choose) {
       if (pointer.current?.dragged && pointer.current.id === id) { pointer.current = null; return true; }
-      if (state?.groups?.some(g => g.memberItemIds.includes(id))) { choose(id, extend); return true; }
+      if (state?.groups?.some(g => g.memberItemIds.includes(id))) { select(id, extend); return true; }
       return false;
     },
     marquee(ids: string[], previous: CanvasSelection, extend: boolean) {
