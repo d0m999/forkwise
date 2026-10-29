@@ -30,7 +30,7 @@ export function CanvasGroups({ state, selection, positions, geometry, blocked, c
       onPointerDown={event => geometry.start(event, corner)} />)}
     {selected.length > 0 && (selection.targets.length > 1 || groupId) && <div role="toolbar" aria-label="组合操作"
       className="canvas-group-tools nodrag nopan" style={{ left, top: top - 48 }} onPointerDown={e => e.stopPropagation()}>
-      {selection.targets.length > 1 && <button disabled={blocked} onClick={create}>组合所选对象</button>}
+      {selection.targets.length > 1 && <><button disabled={blocked} onClick={create}>组合所选对象</button><span>不含连线</span></>}
       {groupId && <button disabled={blocked} onClick={() => enter(groupId)}>进入组合</button>}
       {groupId && <button disabled={blocked} onClick={() => ungroup(groupId)}>取消组合</button>}
       {groupId && <button disabled={blocked} onClick={() => remove(groupId)}>删除组合</button>}

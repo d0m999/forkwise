@@ -2241,7 +2241,10 @@ function Workspace() {
     if (!snapshot || busy || historyBlocked || composition.current || pendingAction.current) return;
     const intent = createGroupCommand(snapshot, canvasSelection.current());
     const generation = canvasSelection.generation();
-    await action(intent, () => canvasSelection.set({ targets: [{ kind: 'group', id: intent.payload.id }], enteredGroupId: null }),
+    await action(intent, () => {
+      canvasSelection.set({ targets: [{ kind: 'group', id: intent.payload.id }], enteredGroupId: null });
+      clearConnectorSelection();
+    },
       () => authority.current?.project.id === intent.projectId && canvasSelection.generation() === generation);
   }
   async function deleteSelectedCanvas(groupId?: string) {

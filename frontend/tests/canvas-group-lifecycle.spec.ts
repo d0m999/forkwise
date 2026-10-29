@@ -1,6 +1,50 @@
 import { test, expect } from './writing-board-fixture';
 import { fiveMembers } from './group-selection-fixture';
 
+test('普通线与五类对象混选后建组只选择新组合，连线与成员内容保持', async ({ page, workspace }) => {
+  const f = await fiveMembers(page, workspace), projectId = f.before.project.id;
+  await workspace.execute(page, { commandId: crypto.randomUUID(), projectId, type: 'connector.create', expected: null,
+    payload: { id: 'mixed-group-line', start: { kind: 'bound', itemId: f.items.card.item.id, side: 'right' },
+      end: { kind: 'bound', itemId: f.items.shape.item.id, side: 'left' } } });
+  await page.reload(); await expect(page.getByRole('status')).toHaveText('已保存到本机');
+  await f.visuals.shape.click(); await page.getByRole('button', { name: '取消组合', exact: true }).click();
+  await expect.poll(async () => (await workspace.state()).groups!.length).toBe(0);
+  const line = page.getByRole('button', { name: '普通连线', exact: true });
+  await line.click(); await expect(line).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByRole('group', { name: '连线路径', exact: true })).toBeVisible();
+  const boxes = await Promise.all(Object.values(f.items).map(value =>
+    page.locator('.react-flow__node[data-id="' + value.item.id + '"]').boundingBox()));
+  expect(boxes.every(box => box !== null)).toBe(true);
+  const from = { x: Math.min(...boxes.map(box => box!.x)) - 20,
+    y: Math.max(...boxes.map(box => box!.y + box!.height)) + 20 };
+  const to = { x: Math.max(...boxes.map(box => box!.x + box!.width)) + 20,
+    y: Math.min(...boxes.map(box => box!.y)) - 20 };
+  expect(await page.evaluate(point => document.elementFromPoint(point.x, point.y)?.classList.contains('react-flow__pane'), from)).toBe(true);
+  await page.mouse.move(from.x, from.y); await page.mouse.down();
+  try { await page.mouse.move(to.x, to.y, { steps: 5 }); }
+  finally { await page.mouse.up(); }
+  await expect(page.locator('.react-flow__node.selected')).toHaveCount(5);
+  await expect(line).toHaveAttribute('aria-pressed', 'true');
+  const before = await workspace.state(), historyUrl = workspace.origin + '/api/mapping/projects/' + projectId + '/history';
+  const timeline = await (await page.request.get(historyUrl)).json(), requests: any[] = [];
+  page.on('request', request => { if (request.url().endsWith('/api/mapping/execute') && request.method() === 'POST') requests.push(request.postDataJSON()); });
+  await page.getByRole('button', { name: '组合所选对象', exact: true }).click();
+  await expect.poll(async () => (await workspace.state()).groups!.length).toBe(1);
+  await expect(page.getByRole('status')).toHaveText('已保存到本机');
+  const after = await workspace.state(), group = after.groups![0]!;
+  expect(group.memberItemIds).toEqual(Object.values(f.items).map(value => value.item.id));
+  for (const key of ['cards', 'texts', 'shapes', 'images', 'strokes', 'connectors', 'tags'] as const) expect(after[key]).toEqual(before[key]);
+  expect(after.project.revision).toBe(before.project.revision + 1);
+  expect(requests.map(value => value.type)).toEqual(['group.create']);
+  expect((await (await page.request.get(historyUrl)).json()).undo).toHaveLength(timeline.undo.length + 1);
+  await expect(line).toHaveAttribute('aria-pressed', 'false');
+  await expect(page.getByRole('group', { name: '连线路径', exact: true })).toHaveCount(0);
+  await expect(page.locator('.react-flow__node.selected')).toHaveCount(5);
+  await expect(page.locator('.canvas-group-outline[data-group-id="' + group.id + '"]')).toHaveAttribute('data-selected', 'true');
+  await expect(page.getByRole('button', { name: '进入组合', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '组合所选对象', exact: true })).toHaveCount(0);
+});
+
 for (const kind of ['card', 'text', 'shape', 'image', 'stroke'] as const) {
   test(`成员菜单${kind}移出组合只释放归属，保原几何内容和直选且一步撤销`, async ({ page, workspace }) => {
     const f = await fiveMembers(page, workspace), itemId = f.items[kind].item.id;
