@@ -2303,6 +2303,27 @@ function Workspace() {
     if (command) await action(command, () => canvasSelection.set({ targets: members.map(itemId => ({ kind: 'item', itemId })), enteredGroupId: null }),
       () => authority.current?.project.id === command.projectId && canvasSelection.generation() === generation);
   }
+  useEffect(() => {
+    const groupShortcut = (event: KeyboardEvent) => {
+      if ((!event.metaKey && !event.ctrlKey) || event.altKey || event.key.toLowerCase() !== 'g' ||
+        event.defaultPrevented || event.isComposing || event.keyCode === 229 || composition.current ||
+        busy || historyBlocked || pendingAction.current || texts.hasPending() || shapeText.session || connectorLabel.session ||
+        texts.nodes.some(node => node.data.editing) || imageGeometry.cropping ||
+        !(event.target instanceof Element) || !event.target.closest('.canvas') ||
+        event.target.closest('input, textarea, [contenteditable=true], dialog, [role=dialog], [role=menu]')) return;
+      if (!authority.current) return;
+      const selected = canvasSelection.current(), target = selected.targets[0];
+      if (event.shiftKey) {
+        if (selected.targets.length !== 1 || target?.kind !== 'group') return;
+        event.preventDefault(); event.stopPropagation(); void ungroupSelected(target.id);
+      } else {
+        if (selected.targets.length < 2) return;
+        event.preventDefault(); event.stopPropagation(); void createSelectedGroup();
+      }
+    };
+    window.addEventListener('keydown', groupShortcut, true);
+    return () => window.removeEventListener('keydown', groupShortcut, true);
+  });
   const textNodes = texts.nodes.map((node) => ({
     ...node,
     data: {
