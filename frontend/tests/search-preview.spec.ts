@@ -288,12 +288,23 @@ test("明确打开保持缩放几何并临时置前，外点关闭不穿透，�
     });
   await page.reload();
   await expect(page.getByRole("status")).toHaveText("已保存到本机");
+  const viewport = page.locator(".react-flow__viewport");
+  const oldZoom = await viewport.evaluate(
+    (e) => new DOMMatrixReadOnly(getComputedStyle(e).transform).a,
+  );
   await page.getByRole("button", { name: "缩小", exact: true }).click();
-  await page.waitForTimeout(300);
+  await expect
+    .poll(async () => {
+      const currentZoom = await viewport.evaluate(
+        (e) => new DOMMatrixReadOnly(getComputedStyle(e).transform).a,
+      );
+      return Math.abs(currentZoom - Math.max(0.5, oldZoom / 1.2));
+    })
+    .toBeLessThan(1e-6);
   const before = await workspace.state();
-  const zoom = await page
-    .locator(".react-flow__viewport")
-    .evaluate((e) => new DOMMatrixReadOnly(getComputedStyle(e).transform).a);
+  const zoom = await viewport.evaluate(
+    (e) => new DOMMatrixReadOnly(getComputedStyle(e).transform).a,
+  );
   const trigger = page.getByRole("button", {
     name: "搜索当前项目卡片",
     exact: true,
