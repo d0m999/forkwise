@@ -1175,17 +1175,6 @@ body:has(.workspace[data-board-full="true"]) .card-tooltip { display: none; }
   opacity: 0.5;
 }
 .canvas-group-outline[data-selected="true"] { border-width: 2px; opacity: 1; }
-.canvas-snapshot-tools {
-  position: absolute;
-  top: 8px;
-  left: 8px;
-  z-index: 6;
-  display: flex;
-  padding: 4px;
-  background: var(--card-color-ffffff);
-  border: 1px solid var(--canvas-selection-color);
-  border-radius: 8px;
-}
 .canvas-group-tools {
   position: absolute;
   display: flex;

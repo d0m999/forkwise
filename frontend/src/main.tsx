@@ -3016,11 +3016,6 @@ function Workspace() {
             <p>新建研究，在画布上记下第一张卡片。</p>
           </div>
         )}
-        {state && <div className="canvas-snapshot-tools" role="toolbar" aria-label="复制">
-          <SnapshotMenu canCopy={canCopySelection(state, canvasSelection.value, selectedConnectors)}
-            blocked={busy || historyBlocked || composition.current || !!pendingAction.current}
-            copy={() => void copySelection()} paste={() => void pasteSelection()} duplicate={() => void duplicateSelection()} />
-        </div>}
         {state && connectorCreate.mode && <ConnectorCreateControls active={connectorCreate.keyboardActive} focusFree={connectorCreate.draft?.startEndpoint.kind === 'free'}
           blocked={connectorCreate.keyboardBlocked()} composing={() => composition.current} start={connectorCreate.startBlank}
           preview={connectorCreate.previewFree} choose={connectorCreate.chooseFree} cancel={connectorCreate.cancelDraft} />}
@@ -3044,6 +3039,9 @@ function Workspace() {
         </div>}
         {state && (
           <div className="creation-tools" aria-label="创作工具">
+            <SnapshotMenu canCopy={canCopySelection(state, canvasSelection.value, selectedConnectors)}
+              blocked={busy || historyBlocked || composition.current || !!pendingAction.current}
+              copy={() => void copySelection()} paste={() => void pasteSelection()} duplicate={() => void duplicateSelection()} />
             <button
               aria-pressed={!placing && !shapePreset && !strokeDraw.mode && !connectorCreate.mode && !panTool && !texts.placing}
               onClick={() => {
