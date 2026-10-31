@@ -681,6 +681,25 @@ body:has(.workspace[data-board-full="true"]) .card-tooltip { display: none; }
   box-shadow: 0 5px 18px var(--card-menu-shadow);
   font-size: 13px;
 }
+.layer-menu-popup {
+  z-index: 1000;
+  display: grid;
+  min-width: 132px;
+  padding: 4px;
+  border: 1px solid var(--card-menu-border);
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 5px 18px var(--card-menu-shadow);
+  font-size: 13px;
+}
+.layer-menu-popup button {
+  min-height: 32px;
+  padding: 4px 10px;
+  text-align: left;
+}
+.layer-menu-popup button:disabled {
+  opacity: 0.45;
+}
 .card-popup-heading {
   display: flex;
   align-items: center;

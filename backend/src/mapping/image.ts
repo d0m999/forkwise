@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { requireThat } from '../domain/errors.js';
 import { readAsset } from './media.js';
 import type { CanvasImage, ImageCommand, ImageChange } from './image-contracts.js';
+import { nextCreatedOrder } from './created-order.js';
 
 export function initializeImages(db: Database.Database) {
   db.exec(`CREATE TABLE IF NOT EXISTS mapping_images(id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES mapping_projects(id), value TEXT NOT NULL);
@@ -18,7 +19,7 @@ export function createImage(db: Database.Database, command: Extract<ImageCommand
   readAsset(db, projectId, payload.content.assetId);
   const project = db.prepare('SELECT revision FROM mapping_projects WHERE id=?').get(projectId) as { revision: number };
   const value: CanvasImage = { id: payload.id, kind: 'image', versionId: randomUUID(), content: payload.content,
-    item: { id: randomUUID(), versionId: randomUUID(), createdOrder: project.revision + 1, pose: payload.pose } };
+    item: { id: randomUUID(), versionId: randomUUID(), createdOrder: nextCreatedOrder(db, projectId, project.revision), pose: payload.pose } };
   db.prepare('INSERT INTO mapping_image_ids VALUES(?,?)').run(value.id, projectId);
   db.prepare('INSERT INTO mapping_images VALUES(?,?,?)').run(value.id, projectId, JSON.stringify(value));
   retainImageVersions(db, projectId, value);

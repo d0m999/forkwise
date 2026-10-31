@@ -1,6 +1,7 @@
 import { MembershipExpected } from './containment-contracts.js';
 import { GroupGeometryCommands } from './group-geometry-contracts.js';
 import { GroupCommands, type CanvasGroup, type Containment, type GroupChange, type ContainmentChange } from './group-contracts.js';
+import { LayerOrderCommand } from './layer-contracts.js';
 import { ConnectorCommands, type CanvasConnector, type ConnectorChange } from './connector-contracts.js';
 import { ImageCommands, type CanvasImage, type ImageChange } from './image-contracts.js';
 import { TagCommandSchema } from './tag-contracts.js';
@@ -40,6 +41,7 @@ export const MappingCommand = z.discriminatedUnion('type', [
   ShapeDeleteCommand,
   ShapeTransformCommand,
   ...TextCommands.options,
+  LayerOrderCommand,
   z.object({ ...Envelope, type: z.literal('search.delete'), expected: Id.nullable(), payload: z.object({ query: SearchConditionsSchema, id: Id }).strict() }).strict(),
   z.object({ ...Envelope, type: z.literal('search.clear'), expected: Id.nullable(), payload: z.object({ query: SearchConditionsSchema }).strict() }).strict(),
   z.object({ ...Envelope, type: z.literal('search.restore'), expected: Id.nullable(), payload: z.object({ undoId: Id }).strict() }).strict(),

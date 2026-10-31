@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import type { z } from 'zod';
 import { requireThat } from '../domain/errors.js';
 import type { CanvasStroke, StrokeChange, StrokeCreateCommand, StrokeDeleteCommand } from './stroke-contracts.js';
+import { nextCreatedOrder } from './created-order.js';
 
 export function initializeStrokes(db: Database.Database) {
   db.exec(`CREATE TABLE IF NOT EXISTS mapping_strokes(id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES mapping_projects(id), value TEXT NOT NULL);
@@ -23,7 +24,7 @@ export function createStroke(db: Database.Database, command: z.infer<typeof Stro
   const project = db.prepare('SELECT revision FROM mapping_projects WHERE id=?').get(projectId) as { revision: number };
   const value: CanvasStroke = {
     id: payload.id, kind: 'stroke', versionId: randomUUID(), content: payload.content,
-    item: { id: randomUUID(), versionId: randomUUID(), createdOrder: project.revision + 1, pose: payload.pose },
+    item: { id: randomUUID(), versionId: randomUUID(), createdOrder: nextCreatedOrder(db, projectId, project.revision), pose: payload.pose },
   };
   db.prepare('INSERT INTO mapping_stroke_ids VALUES(?,?)').run(value.id, projectId);
   db.prepare('INSERT INTO mapping_strokes VALUES(?,?,?)').run(value.id, projectId, JSON.stringify(value));

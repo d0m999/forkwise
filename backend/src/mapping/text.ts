@@ -2,6 +2,7 @@ import type Database from 'better-sqlite3';
 import { randomUUID } from 'node:crypto';
 import { requireThat } from '../domain/errors.js';
 import type { CanvasText, TextChange, TextCommand } from './text-contracts.js';
+import { nextCreatedOrder } from './created-order.js';
 export function initializeText(db: Database.Database) {
   db.exec(`CREATE TABLE IF NOT EXISTS mapping_texts(id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES mapping_projects(id), value TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS mapping_text_ids(id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES mapping_projects(id));`);
@@ -30,11 +31,15 @@ function persist(db: Database.Database, projectId: string, value: CanvasText) {
 export function writeText(db: Database.Database, command: TextCommand): TextChange | null {
   const { projectId } = command;
   const createdOrder = () =>
-    (
-      db.prepare('SELECT revision FROM mapping_projects WHERE id=?').get(projectId) as {
-        revision: number;
-      }
-    ).revision + 1;
+    nextCreatedOrder(
+      db,
+      projectId,
+      (
+        db.prepare('SELECT revision FROM mapping_projects WHERE id=?').get(projectId) as {
+          revision: number;
+        }
+      ).revision,
+    );
   if (command.type === 'text.create') {
     const { payload } = command;
     requireThat(

@@ -9,6 +9,7 @@ import { createPortal } from "react-dom";
 import { useViewport } from "@xyflow/react";
 import { CardIcon } from "./card-icons";
 import type { Card } from "./api";
+import { LayerMenu, type LayerMenuProps } from "./layer-menu";
 
 import { TITLE_COLORS } from "../../backend/src/mapping/presentation-values";
 export const cardColors = Object.entries(TITLE_COLORS);
@@ -26,6 +27,7 @@ export function CardMenu({
   onDelete,
   onRemoveFromGroup,
   onAppearance,
+  layer,
 }: {
   anchor: RefObject<HTMLElement | null>;
   card: Card;
@@ -36,6 +38,7 @@ export function CardMenu({
   onDelete: () => void;
   onRemoveFromGroup?: (() => void) | undefined;
   onAppearance: (value: Appearance) => void;
+  layer?: LayerMenuProps | undefined;
 }) {
   const [open, setOpen] = useState<"外观" | "AI" | "更多" | null>(null);
   const [hint, setHint] = useState<string | null>(null);
@@ -166,6 +169,7 @@ export function CardMenu({
         <button disabled={blocked} onClick={onEdit}>
           编辑标题
         </button>
+        {layer && <LayerMenu {...layer} />}
         {(["写字板", "外观", "AI", "更多"] as const).map((name) => (
           <span className="card-icon-wrap" key={name}>
             <button

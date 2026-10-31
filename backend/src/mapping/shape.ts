@@ -2,6 +2,7 @@ import type Database from 'better-sqlite3';
 import { randomUUID } from 'node:crypto';
 import { requireThat } from '../domain/errors.js';
 import type { CanvasShape, ShapeChange, ShapeCommand } from './shape-contracts.js';
+import { nextCreatedOrder } from './created-order.js';
 
 export function initializeShapes(db: Database.Database) {
   db.exec(`CREATE TABLE IF NOT EXISTS mapping_shapes(id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES mapping_projects(id), value TEXT NOT NULL);
@@ -25,7 +26,7 @@ export function createShape(db: Database.Database, command: Extract<ShapeCommand
     kind: 'shape',
     versionId: randomUUID(),
     content: payload.content,
-    item: { id: randomUUID(), versionId: randomUUID(), createdOrder: project.revision + 1, pose: payload.pose },
+    item: { id: randomUUID(), versionId: randomUUID(), createdOrder: nextCreatedOrder(db, projectId, project.revision), pose: payload.pose },
   };
   db.prepare('INSERT INTO mapping_shape_ids VALUES(?,?)').run(value.id, projectId);
   db.prepare('INSERT INTO mapping_shapes VALUES(?,?,?)').run(value.id, projectId, JSON.stringify(value));

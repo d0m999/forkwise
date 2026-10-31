@@ -1,12 +1,13 @@
 import type { ProjectState } from './api';
 import { canvasItems, selectedItemIds, type CanvasSelection } from './canvas-selection';
 import type { useGroupGeometry } from './group-geometry';
+import { LayerMenu, type LayerMenuProps } from './layer-menu';
 
-export function CanvasGroups({ state, selection, positions, geometry, blocked, create, enter, ungroup, remove }: {
+export function CanvasGroups({ state, selection, positions, geometry, blocked, create, enter, ungroup, remove, layer }: {
   state: ProjectState; selection: CanvasSelection; positions: Record<string, { x: number; y: number; width?: number; height?: number }>;
   geometry: ReturnType<typeof useGroupGeometry>;
   blocked: boolean; create: () => void; enter: (id: string) => void; ungroup: (id: string) => void;
-  remove: (id: string) => void;
+  remove: (id: string) => void; layer?: LayerMenuProps | undefined;
 }) {
   const items = canvasItems(state), ids = selectedItemIds(state, selection);
   const selected = items.filter(v => ids.includes(v.item.id));
@@ -37,6 +38,7 @@ export function CanvasGroups({ state, selection, positions, geometry, blocked, c
       {geometry.rotatable && <><button disabled={blocked || geometry.blocked} onClick={() => void geometry.rotate('left')}>组合左转90°</button>
         <button disabled={blocked || geometry.blocked} onClick={() => void geometry.rotate('right')}>组合右转90°</button></>}
       {selection.targets.some(t => t.kind === 'group') && !geometry.scalable && <span>含笔迹，暂仅支持整体移动</span>}
+      {layer && <LayerMenu {...layer} />}
     </div>}
   </>;
 }

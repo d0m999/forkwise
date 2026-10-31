@@ -2,10 +2,11 @@ import { useLayoutEffect, useRef, useState, type RefObject } from "react";
 import { createPortal } from "react-dom";
 import { useViewport } from "@xyflow/react";
 import type { ShapeTextConflict, ShapeTextSession } from "./shape-text-save";
+import { LayerMenu, type LayerMenuProps } from "./layer-menu";
 
-export function ShapeTextAction({ anchor, edit, appearance, remove, removeFromGroup }: {
+export function ShapeTextAction({ anchor, edit, appearance, remove, removeFromGroup, layer }: {
   anchor: RefObject<HTMLDivElement | null>; edit: () => void; appearance: (trigger: HTMLButtonElement) => void; remove: () => void;
-  removeFromGroup?: (() => void) | undefined;
+  removeFromGroup?: (() => void) | undefined; layer?: LayerMenuProps | undefined;
 }) {
   const element = useRef<HTMLDivElement>(null), viewport = useViewport();
   const [point, setPoint] = useState({ left: 8, top: 8 });
@@ -28,6 +29,7 @@ export function ShapeTextAction({ anchor, edit, appearance, remove, removeFromGr
     <button onClick={event => { event.stopPropagation(); edit(); }}>编辑形状文字</button>
     <button aria-haspopup="dialog" onClick={event => appearance(event.currentTarget)}>形状外观</button>
     <button onClick={remove}>删除形状</button>
+    {layer && <LayerMenu {...layer} />}
     {removeFromGroup && <button onClick={event => { event.stopPropagation(); removeFromGroup(); }}>移出组合</button>}
   </div>, document.body);
 }

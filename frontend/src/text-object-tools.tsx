@@ -3,6 +3,7 @@ import { useEffect, useState, type RefObject } from "react";
 import { TextToolbar } from "./text-toolbar";
 import type { TextContent } from "../../backend/src/mapping/text-contracts";
 import { hexColor } from "./text-runs";
+import { LayerMenu, type LayerMenuProps } from "./layer-menu";
 export function TextObjectTools({
   anchor,
   content,
@@ -11,6 +12,7 @@ export function TextObjectTools({
   copy,
   remove,
   removeFromGroup,
+  layer,
 }: {
   anchor: RefObject<HTMLElement | null>;
   content: TextContent;
@@ -19,6 +21,7 @@ export function TextObjectTools({
   copy: () => void;
   remove?: (() => void) | undefined;
   removeFromGroup?: (() => void) | undefined;
+  layer?: LayerMenuProps | undefined;
 }) {
   const [colors, setColors] = useState(false);
   useEffect(() => {
@@ -35,6 +38,7 @@ export function TextObjectTools({
     <TextToolbar anchor={anchor}>
       <button onClick={edit}>编辑文字</button>
       <button onClick={copy}>生成文字副本</button>
+      {layer && <LayerMenu {...layer} />}
       {remove && <button onClick={event => { event.stopPropagation(); remove(); }}>删除文字</button>}
       {removeFromGroup && <button onClick={event => { event.stopPropagation(); removeFromGroup(); }}>移出组合</button>}
       <button

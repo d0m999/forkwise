@@ -138,8 +138,11 @@ export function recordAction(
     save(db, command.projectId, stack);
     return;
   }
-  if (command.type === 'group.scale' || command.type === 'group.rotate90' || command.type === 'canvas.move' || command.type === 'group.move' || command.type === 'canvas.move-selection') {
-    const target = change.cardChanges?.[0]?.after ?? change.textChanges?.[0]?.after ?? change.shapeChanges?.[0]?.after ?? change.imageChanges?.[0]?.after ?? change.strokeChanges?.[0]?.after;
+  if (command.type === 'group.scale' || command.type === 'group.rotate90' || command.type === 'canvas.move' || command.type === 'group.move' || command.type === 'canvas.move-selection' || command.type === 'canvas.layer') {
+    const changed = [...(change.cardChanges ?? []), ...(change.textChanges ?? []), ...(change.shapeChanges ?? []), ...(change.imageChanges ?? []), ...(change.strokeChanges ?? [])];
+    const target = command.type === 'canvas.layer'
+      ? command.payload.itemIds.map(id => changed.find(value => value.after?.item.id === id)?.after).find(Boolean) ?? changed[0]?.after
+      : change.cardChanges?.[0]?.after ?? change.textChanges?.[0]?.after ?? change.shapeChanges?.[0]?.after ?? change.imageChanges?.[0]?.after ?? change.strokeChanges?.[0]?.after;
     if (!target) return;
     stack.undo.push({ session, lastRevision: change.revision, id: command.commandId, label: command.type, target: { id: target.id, title: 'title' in target ? target.title : 'shortText' in target.content ? target.content.shortText : 'runs' in target.content ? target.content.runs.map(run => run.text).join('') : 'penKind' in target.content ? target.content.penKind === 'highlighter' ? '荧光笔' : '笔迹' : '图片' }, actor: change.actor, before: null, after: null, cardChanges: change.cardChanges ?? [], textChanges: change.textChanges ?? [], shapeChanges: change.shapeChanges ?? [], imageChanges: change.imageChanges ?? [], strokeChanges: change.strokeChanges ?? [], changedIds: change.changedIds });
     stack.undo = stack.undo.slice(-40); stack.redo = []; save(db, command.projectId, stack); return;

@@ -13,7 +13,9 @@ import { TextConflictPanel } from "./text-conflict";
 import { CanvasMoveConflictPanel } from "./canvas-move-conflict";
 import { orderCanvas } from './canvas-order';
 import { useCanvasMove } from './canvas-move';
-import { useCanvasSelection } from './canvas-selection';
+import { selectedItemIds, useCanvasSelection } from './canvas-selection';
+import { layerAvailability, layerItemIds, layerItems, type LayerOperation } from './layer-order';
+import type { LayerMenuProps } from './layer-menu';
 import { captureSelectionDeletion } from './canvas-selection-delete';
 import { useCanvasMarquee } from './canvas-selection-boundary';
 import { captureMemberDeletion, createGroupCommand, removeMemberCommand, ungroupCommand } from './canvas-group-commands';
@@ -105,6 +107,7 @@ type CardData = {
   onDelete: () => void;
   onRemoveFromGroup?: (() => void) | undefined;
   onAppearance: (value: AppearanceInput) => void;
+  layer?: LayerMenuProps | undefined;
   appearanceValue: AppearanceInput;
   onMeasure: (card: Card, height: number) => void;
   measurable: boolean;
@@ -151,6 +154,7 @@ function ThoughtCard({ data, selected }: NodeProps<Node<CardData>>) {
           onDelete={data.onDelete}
           onRemoveFromGroup={data.onRemoveFromGroup}
           onAppearance={data.onAppearance}
+          layer={data.layer}
         />
       )}
       <button
@@ -272,6 +276,8 @@ function Workspace() {
   const selectedConnector = selectedConnectors.length === 1 ? selectedConnectors[0]! : null;
   function setSelectedConnector(id: string | null) { setSelectedConnectors(id ? [id] : []); }
   const strokeSelected = selection.some(id => state?.strokes?.some(stroke => stroke.item.id === id));
+  const [layerHold, setLayerHold] = useState<{ projectId: string; generation: number } | null>(null);
+  const layerHoldActive = !!state && layerHold?.projectId === state.project.id && layerHold.generation === canvasSelection.generation();
   const [syncNotice, setSyncNotice] = useState("");
   const [nav, setNav] = useState(false),
     [pinned, setPinned] = useState(false);
@@ -2266,6 +2272,31 @@ function Workspace() {
       });
     } finally { if (selectionDeletion.current === intent) selectionDeletion.current = null; }
   }
+  async function applyLayer(operation: LayerOperation) {
+    const snapshot = authority.current;
+    if (!snapshot || busy || historyBlocked || composition.current || pendingAction.current || selectionDeletion.current ||
+      shapeText.session || connectorLabel.session || texts.hasPending() || imageGeometry.cropping) return;
+    const ids = layerItemIds(snapshot, selectedItemIds(snapshot, canvasSelection.current()));
+    if (!ids.length) return;
+    const items = layerItems(snapshot);
+    if (ids.some(id => !items.some(value => value.itemId === id))) return;
+    const beforeOrders = new Map(items.map(value => [value.itemId, value.item.createdOrder ?? 0]));
+    const command: Command = {
+      commandId: crypto.randomUUID(),
+      projectId: snapshot.project.id,
+      type: 'canvas.layer',
+      expected: Object.fromEntries(items.map(value => [value.itemId, value.item.versionId])),
+      payload: { itemIds: ids, operation },
+    };
+    const generation = canvasSelection.generation(), hold = { projectId: command.projectId, generation };
+    setLayerHold(hold);
+    const applied = await action(command, undefined, () =>
+      authority.current?.project.id === command.projectId && canvasSelection.generation() === generation);
+    const current = authority.current;
+    const unchanged = !applied || !current || ids.every(id =>
+      (layerItems(current).find(value => value.itemId === id)?.item.createdOrder ?? 0) === beforeOrders.get(id));
+    if (unchanged) setLayerHold(current => current === hold ? null : current);
+  }
   function isDirectItem(itemId: string) {
     const selected = canvasSelection.current(), target = selected.targets[0];
     return selected.targets.length === 1 && target?.kind === 'item' && target.itemId === itemId;
@@ -2327,6 +2358,15 @@ function Workspace() {
     window.addEventListener('keydown', groupShortcut, true);
     return () => window.removeEventListener('keydown', groupShortcut, true);
   });
+  const layerSelection = state ? layerItemIds(state, flowSelection) : [];
+  const pureCardSelection = canvasSelection.value.targets.length > 0 && canvasSelection.value.targets.every(target =>
+    target.kind === 'item' && !!state?.cards.some(card => card.item.id === target.itemId));
+  const layerProps: LayerMenuProps | undefined = state && layerSelection.length ? {
+    availability: layerAvailability(state, layerSelection),
+    blocked: busy || historyBlocked || !!pendingAction.current || composition.current || !!shapeText.session ||
+      !!connectorLabel.session || !!imageGeometry.cropping || texts.hasPending(),
+    apply: (operation: LayerOperation) => { void applyLayer(operation); },
+  } : undefined;
   const textNodes = texts.nodes.map((node) => ({
     ...node,
     data: {
@@ -2334,6 +2374,7 @@ function Workspace() {
       singleSelection: node.data.singleSelection && singleItemId === node.id,
       removeFromGroup: memberAction(node.id),
       remove: singleItemId === node.id ? () => { void removeText(node.data.value.id); } : undefined,
+      layer: layerProps,
       edit: () => {
         const projectId = authority.current?.project.id, epoch = ++editorEpoch.current;
         const stillCurrent = () => authority.current?.project.id === projectId && editorEpoch.current === epoch;
@@ -2375,6 +2416,7 @@ function Workspace() {
       !busy && !historyBlocked && !pose.pending && !placing && !panTool,
     data: {
       cardOnlySelection: cardOnlySelection && selection.includes(card.item.id),
+      layer: cardOnlySelection ? layerProps : undefined,
       card,
       previewBody: (() => {
         const draft = draftView[draftKey(state!.project.id, card.id, "body")];
@@ -2677,7 +2719,7 @@ function Workspace() {
               "controls.zoomOut.ariaLabel": "缩小",
               "controls.fitView.ariaLabel": "适应画布",
             }}
-            nodes={orderCanvas([...nodes, ...textNodes, ...imageNodes(state.images ?? [], state.project.id, selection, (id, extend) => void chooseCanvasItem(id, extend), busy || historyBlocked || composition.current || !!pendingAction.current || placing || !!shapePreset || texts.placing || panTool || !!strokeDraw.mode || !!shapeText.session || texts.geometryBlocked, imageGeometry, (value, dx, dy) => { if (canvasMove.start(value.item.id)) canvasMove.finish({ x: value.item.pose.x + dx, y: value.item.pose.y + dy }); }, singleItemId, memberAction), ...shapeNodes(state.shapes ?? [], selection, (id, extend) => void chooseCanvasItem(id, extend), busy || historyBlocked || placing || !!shapePreset || texts.placing || panTool, id => void beginShapeText(id), !!shapeText.session, (id, trigger) => void beginShapeAppearance(id, trigger), value => void removeShape(value), shapeMove.positions, shapeMove, composition.current || !!pendingAction.current || pose.pending || pose.dragging || canvasMove.dragging || texts.hasPending() || appearance.pending || cardLayout.pending, singleItemId, memberAction), ...strokeNodes(state.strokes ?? [], selection, (id, extend) => void chooseStrokeItem(id, extend), value => void removeStroke(value), busy || historyBlocked || !!pendingAction.current || placing || !!shapePreset || texts.placing || panTool || !!strokeDraw.mode, singleItemId, memberAction, itemId => !!state.groups?.some(group => group.memberItemIds.includes(itemId)) || (flowSelection.includes(itemId) && flowSelection.length > 1))].map(node => groupGeometry.project({ ...node, selected: flowSelection.includes(node.id), position: canvasMove.positions[node.id] ?? shapeMove.positions[node.id] ?? node.position, draggable: node.draggable !== false && !groupGeometry.active && !strokeDraw.mode && !busy && !historyBlocked && !panTool && !placing && !shapePreset && !texts.placing && !texts.geometryBlocked && !shapeText.session && !connectorLabel.session && !shapeMove.pending })), state, selection)}
+            nodes={orderCanvas([...nodes, ...textNodes, ...imageNodes(state.images ?? [], state.project.id, selection, (id, extend) => void chooseCanvasItem(id, extend), busy || historyBlocked || composition.current || !!pendingAction.current || placing || !!shapePreset || texts.placing || panTool || !!strokeDraw.mode || !!shapeText.session || texts.geometryBlocked, imageGeometry, (value, dx, dy) => { if (canvasMove.start(value.item.id)) canvasMove.finish({ x: value.item.pose.x + dx, y: value.item.pose.y + dy }); }, singleItemId, memberAction, layerProps), ...shapeNodes(state.shapes ?? [], selection, (id, extend) => void chooseCanvasItem(id, extend), busy || historyBlocked || placing || !!shapePreset || texts.placing || panTool, id => void beginShapeText(id), !!shapeText.session, (id, trigger) => void beginShapeAppearance(id, trigger), value => void removeShape(value), shapeMove.positions, shapeMove, composition.current || !!pendingAction.current || pose.pending || pose.dragging || canvasMove.dragging || texts.hasPending() || appearance.pending || cardLayout.pending, singleItemId, memberAction, layerProps), ...strokeNodes(state.strokes ?? [], selection, (id, extend) => void chooseStrokeItem(id, extend), value => void removeStroke(value), busy || historyBlocked || !!pendingAction.current || placing || !!shapePreset || texts.placing || panTool || !!strokeDraw.mode, singleItemId, memberAction, itemId => !!state.groups?.some(group => group.memberItemIds.includes(itemId)) || (flowSelection.includes(itemId) && flowSelection.length > 1))].map(node => groupGeometry.project({ ...node, selected: flowSelection.includes(node.id), position: canvasMove.positions[node.id] ?? shapeMove.positions[node.id] ?? node.position, draggable: node.draggable !== false && !groupGeometry.active && !strokeDraw.mode && !busy && !historyBlocked && !panTool && !placing && !shapePreset && !texts.placing && !texts.geometryBlocked && !shapeText.session && !connectorLabel.session && !shapeMove.pending })), state, selection, { temporaryRaise: pureCardSelection && !layerHoldActive })}
             onNodeClick={(event, node) => {
               awaitBodySelection.current = false;
               clearConnectorSelection();
@@ -2770,7 +2812,8 @@ function Workspace() {
                 create={() => void createSelectedGroup()}
                 ungroup={id => void ungroupSelected(id)}
                 remove={id => void deleteSelectedCanvas(id)}
-                enter={id => canvasSelection.set({ targets: [], enteredGroupId: id })} />
+                enter={id => canvasSelection.set({ targets: [], enteredGroupId: id })}
+                layer={layerProps} />
               {(state.connectors ?? []).map(value => <CanvasConnector key={value.id} value={value} selected={selectedConnectors.includes(value.id)} resolve={connectorTargets.resolve}
                 labelEditor={{ ...connectorLabel, begin: origin => void beginConnectorLabel(value.id, origin), finish: () => void finishConnectorLabel(),
                   history: travelConnectorLabel, locked: connectorLabelHistoryBusy,

@@ -4,10 +4,8 @@ import { TextObjectTools } from "./text-object-tools";
 import { TextEditor } from "./text-editor";
 import { textHandles, textMinimumWidth, useTextGeometry } from "./text-geometry";
 import type { Node, NodeProps } from "@xyflow/react";
-import type {
-  CanvasText,
-  TextContent,
-} from "../../backend/src/mapping/text-contracts";
+import type { CanvasText, TextContent } from "../../backend/src/mapping/text-contracts";
+import type { LayerMenuProps } from "./layer-menu";
 export type TextData = {
   value: CanvasText;
   editing: boolean;
@@ -23,6 +21,7 @@ export type TextData = {
   copy: () => void;
   remove?: (() => void) | undefined;
   removeFromGroup?: (() => void) | undefined;
+  layer?: LayerMenuProps | undefined;
   transform: (next: CanvasText, origin: CanvasText) => void;
   compose: (active: boolean, content?: TextContent) => void;
   moveDisabled: boolean;
@@ -118,6 +117,7 @@ export function CanvasTextNode({ data, selected }: NodeProps<Node<TextData>>) {
           copy={data.copy}
           remove={data.remove}
           removeFromGroup={data.removeFromGroup}
+          layer={data.layer}
         />
       )}
       {selected &&

@@ -8,6 +8,8 @@ import { createConnector, reconnectConnector, changeConnectorPath, moveConnector
 import { cropImage, createImage, readImages, transformImage, rotateImage, deleteImage } from './image.js';
 import type { ImageVersion } from './image-contracts.js';
 import { moveCanvas } from './canvas-move.js';
+import { layerCanvas } from './layer-order.js';
+import { nextCreatedOrder } from './created-order.js';
 import { createStroke, deleteStroke, readStrokes } from './stroke.js';
 import { createShape, deleteShape, editShape, moveShape, readShapes, transformShape } from './shape.js';
 import type { ShapeVersion } from './shape-contracts.js';
@@ -378,6 +380,12 @@ export class Mapping {
           if (!changedIds.length) return unchanged(project.revision);
           after = null; revision = project.revision + 1;
           this.db.prepare('UPDATE mapping_projects SET revision=? WHERE id=?').run(revision, project.id);
+        } else if (command.type === 'canvas.layer') {
+          const project = this.project(command.projectId);
+          ({ cardChanges, textChanges, shapeChanges, imageChanges, changedIds } = layerCanvas(this.db, command));
+          if (!changedIds.length) return unchanged(project.revision);
+          after = null; revision = project.revision + 1;
+          this.db.prepare('UPDATE mapping_projects SET revision=? WHERE id=?').run(revision, project.id);
         } else if (command.type === 'shape.create' || command.type === 'shape.edit' || command.type === 'shape.move' || command.type === 'shape.delete' || command.type === 'shape.transform') {
           const project = this.project(command.projectId);
           let incident: NonNullable<Change['connectorChanges']> = [];
@@ -552,7 +560,7 @@ export class Mapping {
               blocks: [{ id: randomUUID(), type: 'text', text: p.text }],
             },
             item: {
-              createdOrder: project.revision + 1,
+              createdOrder: nextCreatedOrder(this.db, project.id, project.revision),
               id: randomUUID(),
               versionId: randomUUID(),
               pose: { x: p.x, y: p.y, width: 280, height: 160 },
@@ -746,7 +754,7 @@ export class Mapping {
         for (const c of cardChanges ?? []) retainCardVersions(this.db, command.projectId, c.after);
         const structuralOutcome = command.type === 'canvas.delete-selection' || groupChanges || containmentChanges ? groupOutcome({ before, after, groupChanges: groupChanges ?? [], containmentChanges: containmentChanges ?? [], cardLifecycleChanges: cardLifecycleChanges ?? [], textChange, shapeChange, imageChange, strokeChange, textChanges, shapeChanges, imageChanges, strokeChanges, connectorChanges, changedIds } as Partial<Change>) : null;
         if (structuralOutcome) changedIds = structuralOutcome.changedIds;
-        const movedPoses = command.type === 'canvas.move' || command.type === 'group.move' || command.type === 'canvas.move-selection'
+        const movedPoses = command.type === 'canvas.move' || command.type === 'group.move' || command.type === 'canvas.move-selection' || command.type === 'canvas.layer'
           ? [...(cardChanges ?? []), ...(textChanges ?? []), ...(shapeChanges ?? []), ...(imageChanges ?? []), ...(strokeChanges ?? [])]
             .flatMap(({ before, after }) => before && after && before.item.versionId !== after.item.versionId
               ? [[after.item.id, after.item.versionId]] : []) : [];

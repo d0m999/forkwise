@@ -4,10 +4,11 @@ import type { Node, NodeProps } from "@xyflow/react";
 import { shapeLabels } from "./shape-tools";
 import type { CanvasShape } from "../../backend/src/mapping/shape-contracts";
 import { shapeHandles, useShapeResize, type ShapeResizeAPI } from "./shape-resize";
+import type { LayerMenuProps } from "./layer-menu";
 
 type ShapeData = { value: CanvasShape; blocked: boolean; choose: (extend: boolean) => void; edit: () => void; remove: () => void;
   appearance: (trigger: HTMLButtonElement) => void; editable: boolean; resizable: boolean; resizeBlocked: boolean; geometry: ShapeResizeAPI;
-  removeFromGroup?: (() => void) | undefined };
+  removeFromGroup?: (() => void) | undefined; layer?: LayerMenuProps | undefined };
 
 export function CanvasShapeNode({ data, selected }: NodeProps<Node<ShapeData>>) {
   const anchor = useRef<HTMLDivElement>(null);
@@ -66,7 +67,7 @@ export function CanvasShapeNode({ data, selected }: NodeProps<Node<ShapeData>>) 
       style={{ position: "absolute", left: handle.includes("w") ? 0 : "100%", top: handle.includes("n") ? 0 : "100%",
         transform: "translate(-50%, -50%)", width: 10, height: 10, padding: 0, border: "1px solid var(--canvas-selection-color)", background: "var(--card-color-ffffff)",
         cursor: handle === "nw" || handle === "se" ? "nwse-resize" : "nesw-resize", zIndex: 10 }} />)}
-    {selected && data.editable && <ShapeTextAction anchor={anchor} edit={data.edit} appearance={data.appearance} remove={data.remove} removeFromGroup={data.removeFromGroup} />}
+    {selected && data.editable && <ShapeTextAction anchor={anchor} edit={data.edit} appearance={data.appearance} remove={data.remove} removeFromGroup={data.removeFromGroup} layer={data.layer} />}
     </>
   );
 }
@@ -76,7 +77,7 @@ export function shapeNodes(
   edit: (id: string) => void, editing: boolean, appearance: (id: string, trigger: HTMLButtonElement) => void,
   remove: (value: CanvasShape) => void,
   poses: Record<string, CanvasShape["item"]["pose"]>, geometry: ShapeResizeAPI, resizeBlocked: boolean, singleItemId: string | null,
-  memberAction: (itemId: string) => (() => void) | undefined,
+  memberAction: (itemId: string) => (() => void) | undefined, layer?: LayerMenuProps | undefined,
 ): Node<ShapeData>[] {
   return shapes.map(value => {
     const pose = poses[value.item.id] ?? value.item.pose, disabled = blocked || geometry.pending;
@@ -94,6 +95,6 @@ export function shapeNodes(
     data: { value: { ...value, item: { ...value.item, pose } }, blocked: disabled, choose: extend => choose(value.item.id, extend),
       edit: () => edit(value.id), appearance: trigger => appearance(value.id, trigger), remove: () => remove(value),
       removeFromGroup: memberAction(value.item.id),
-      editable: singleItemId === value.item.id && !disabled && !editing, resizable: singleItemId === value.item.id && !editing, resizeBlocked: blocked || editing || resizeBlocked, geometry },
+      editable: singleItemId === value.item.id && !disabled && !editing, resizable: singleItemId === value.item.id && !editing, resizeBlocked: blocked || editing || resizeBlocked, geometry, layer },
   }; });
 }
