@@ -9,6 +9,7 @@ import { cropImage, createImage, readImages, transformImage, rotateImage, delete
 import type { ImageVersion } from './image-contracts.js';
 import { moveCanvas } from './canvas-move.js';
 import { layerCanvas } from './layer-order.js';
+import { duplicateCanvas, pasteCanvas } from './snapshot.js';
 import { nextCreatedOrder } from './created-order.js';
 import { createStroke, deleteStroke, readStrokes } from './stroke.js';
 import { createShape, deleteShape, editShape, moveShape, readShapes, transformShape } from './shape.js';
@@ -384,6 +385,11 @@ export class Mapping {
           const project = this.project(command.projectId);
           ({ cardChanges, textChanges, shapeChanges, imageChanges, changedIds } = layerCanvas(this.db, command));
           if (!changedIds.length) return unchanged(project.revision);
+          after = null; revision = project.revision + 1;
+          this.db.prepare('UPDATE mapping_projects SET revision=? WHERE id=?').run(revision, project.id);
+        } else if (command.type === 'canvas.duplicate' || command.type === 'canvas.paste') {
+          const project = this.project(command.projectId);
+          ({ cardLifecycleChanges, textChanges, shapeChanges, imageChanges, strokeChanges, connectorChanges, changedIds } = command.type === 'canvas.duplicate' ? duplicateCanvas(this.db, command) : pasteCanvas(this.db, command));
           after = null; revision = project.revision + 1;
           this.db.prepare('UPDATE mapping_projects SET revision=? WHERE id=?').run(revision, project.id);
         } else if (command.type === 'shape.create' || command.type === 'shape.edit' || command.type === 'shape.move' || command.type === 'shape.delete' || command.type === 'shape.transform') {

@@ -2,14 +2,14 @@ import { MembershipExpected } from './containment-contracts.js';
 import { z } from 'zod';
 
 const Id = z.string().min(1).max(160);
-const StrokeContent = z.object({
+export const StrokeContentSchema = z.object({
   penKind: z.enum(['pen', 'highlighter']),
   path: z.array(z.object({ x: z.number().finite(), y: z.number().finite() }).strict()).min(1),
   color: z.string().regex(/^#[0-9a-fA-F]{6}$/),
   width: z.number().finite().positive(),
   opacity: z.number().finite().min(0).max(1),
 }).strict();
-const StrokePose = z.object({
+export const StrokePoseSchema = z.object({
   x: z.number().finite(),
   y: z.number().finite(),
   width: z.number().finite().positive(),
@@ -20,7 +20,7 @@ export const StrokeCreateCommand = z.object({
   projectId: Id,
   type: z.literal('stroke.create'),
   expected: z.null(),
-  payload: z.object({ id: Id, content: StrokeContent, pose: StrokePose }).strict(),
+  payload: z.object({ id: Id, content: StrokeContentSchema, pose: StrokePoseSchema }).strict(),
 }).strict();
 export const StrokeDeleteCommand = z.object({
   commandId: Id,
@@ -33,12 +33,12 @@ export interface CanvasStroke {
   id: string;
   kind: 'stroke';
   versionId: string;
-  content: z.infer<typeof StrokeContent>;
+  content: z.infer<typeof StrokeContentSchema>;
   item: {
     id: string;
     versionId: string;
     createdOrder: number;
-    pose: z.infer<typeof StrokePose>;
+    pose: z.infer<typeof StrokePoseSchema>;
   };
 }
 export type StrokeChange = { before: CanvasStroke | null; after: CanvasStroke | null };

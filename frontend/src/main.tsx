@@ -1,4 +1,7 @@
 import { canvasPlainText } from "./canvas-paste";
+import { CANVAS_CLIPBOARD_TYPE, canCopySelection, captureClipboard, clipboardCenter, copiedItemIds, duplicatePlan, parseClipboard, pastePlan } from "./canvas-snapshot";
+import { nextPaste, pasteTranslation, type PasteSequence } from "./canvas-snapshot-geometry";
+import { SnapshotMenu } from "./snapshot-menu";
 import { useCanvasImageInput } from "./canvas-image-input";
 import { ImageWriteRejected, useImageGeometry } from "./image-geometry";
 import { CanvasImageNode, imageNodes } from "./canvas-image";
@@ -1697,7 +1700,7 @@ function Workspace() {
         try { await refresh(command.projectId); } catch { /* Comparison retries retain the definite rejection and original request. */ }
       }
       if (!executed && e instanceof MappingError &&
-        ((['connector.reconnect', 'connector.path', 'connector.move', 'connector.delete', 'connector.style', 'connector.reverse', 'connector.label', 'canvas.layer'].includes(command.type) && ['VERSION_CONFLICT', 'NOT_FOUND'].includes(e.code)) ||
+        ((['connector.reconnect', 'connector.path', 'connector.move', 'connector.delete', 'connector.style', 'connector.reverse', 'connector.label', 'canvas.layer', 'canvas.duplicate', 'canvas.paste'].includes(command.type) && ['VERSION_CONFLICT', 'NOT_FOUND'].includes(e.code)) ||
           (command.type === 'connector.reconnect' && e.code === 'INVALID_ENDPOINT'))) {
         pendingAction.current = null;
         onDone?.();
@@ -2113,8 +2116,10 @@ function Workspace() {
     return true;
   }
   const following = useRef<{ projectId: string; generation: number; itemId: string } | null>(null);
+  const keepBoard = useRef<number | null>(null);
   useEffect(() => {
     const selected = canvasSelection.current(), target = selected.targets[0], projectId = authority.current?.project.id;
+    if (keepBoard.current === canvasSelection.generation()) return;
     if (!bodyCard || awaitBodySelection.current || canvasSelection.changeSource() === 'projection' ||
       selected.targets.length !== 1 || target?.kind !== 'item' || !projectId || composition.current || historyBlocked) return;
     const card = authority.current?.cards.find((c) => c.item.id === target.itemId);
@@ -2216,6 +2221,137 @@ function Workspace() {
     };
     window.addEventListener('keydown', remove, true);
     return () => window.removeEventListener('keydown', remove, true);
+  });
+  const pastePointer = useRef<{ inside: boolean; world: { x: number; y: number } }>({ inside: false, world: { x: 0, y: 0 } });
+  const pasteSequence = useRef<PasteSequence | null>(null);
+  useEffect(() => {
+    const move = (event: PointerEvent) => {
+      const canvas = document.querySelector(".canvas .react-flow");
+      if (!(canvas instanceof HTMLElement)) return;
+      const box = canvas.getBoundingClientRect();
+      const inside = event.clientX >= box.left && event.clientX <= box.right && event.clientY >= box.top && event.clientY <= box.bottom;
+      pastePointer.current = { inside, world: flow.screenToFlowPosition({ x: event.clientX, y: event.clientY }) };
+    };
+    window.addEventListener("pointermove", move);
+    return () => window.removeEventListener("pointermove", move);
+  }, [flow]);
+  async function prepareSnapshot() {
+    return await shapeMove.flush() && await connectorLabel.finish() && await shapeText.finish() && await texts.finish() &&
+      await appearance.flush() && await cardLayout.flush() && await pose.flush() && await flush();
+  }
+  function selectCopies(projectId: string, objectCopyIds: { kind: "card" | "text" | "shape" | "image" | "stroke"; copyId: string }[], connectorCopyIds: string[]) {
+    const latest = authority.current;
+    if (!latest || latest.project.id !== projectId) return;
+    canvasSelection.set({ targets: copiedItemIds(latest, objectCopyIds).map(itemId => ({ kind: "item", itemId })), enteredGroupId: null });
+    keepBoard.current = canvasSelection.generation();
+    setSelectedConnectors(connectorCopyIds);
+  }
+  async function copySelection() {
+    if (!(await prepareSnapshot())) return;
+    const current = authority.current;
+    if (!current) return;
+    const captured = captureClipboard(current, canvasSelection.current(), selectedConnectors);
+    if (!captured) return;
+    try {
+      await navigator.clipboard.write([new ClipboardItem({
+        "text/plain": new Blob([captured.text], { type: "text/plain" }),
+        [CANVAS_CLIPBOARD_TYPE]: new Blob([JSON.stringify(captured.document)], { type: CANVAS_CLIPBOARD_TYPE }),
+      })]);
+    } catch {
+      fail(new Error("无法写入剪贴板，原对象未改变"));
+    }
+  }
+  async function duplicateSelection() {
+    if (!(await prepareSnapshot())) return;
+    const current = authority.current;
+    if (!current) return;
+    const plan = duplicatePlan(current, canvasSelection.current(), selectedConnectors);
+    if (!plan) return;
+    await action(plan.command, () => selectCopies(current.project.id, plan.objectCopyIds, plan.connectorCopyIds));
+  }
+  function pasteDrop() {
+    const canvas = document.querySelector(".canvas .react-flow");
+    const box = canvas instanceof HTMLElement ? canvas.getBoundingClientRect() : null;
+    const viewport = flow.getViewport();
+    const drop = pastePointer.current.inside || !box
+      ? pastePointer.current.world
+      : flow.screenToFlowPosition({ x: box.left + box.width / 2, y: box.top + box.height / 2 });
+    return { drop, dropKey: pastePointer.current.inside ? `${drop.x}:${drop.y}` : "outside", viewportKey: `${viewport.x}:${viewport.y}:${viewport.zoom}` };
+  }
+  async function pasteSnapshot(raw: string) {
+    if (!(await prepareSnapshot())) return;
+    const current = authority.current;
+    if (!current) return;
+    let document: ReturnType<typeof parseClipboard>;
+    try { document = parseClipboard(raw); }
+    catch (error) { fail(error instanceof Error ? error : new Error("无法读取这份画布剪贴板，原内容未改变")); return; }
+    const target = pasteDrop();
+    const step = nextPaste(pasteSequence.current, { clipboard: raw, drop: target.dropKey, viewport: target.viewportKey });
+    pasteSequence.current = step.sequence;
+    const plan = pastePlan(current.project.id, document, pasteTranslation(clipboardCenter(document), target.drop, step.index));
+    await action(plan.command, () => selectCopies(current.project.id, plan.objectCopyIds, plan.connectorCopyIds));
+  }
+  async function pastePlainText(text: string) {
+    const current = authority.current;
+    if (!current || !text) return;
+    const canvas = document.querySelector(".canvas .react-flow");
+    const box = canvas instanceof HTMLElement ? canvas.getBoundingClientRect() : null;
+    const point = box ? flow.screenToFlowPosition({ x: box.left + box.width / 2, y: box.top + box.height / 2 }) : { x: 0, y: 0 };
+    await action({ commandId: crypto.randomUUID(), projectId: current.project.id, type: "thought.create", expected: null,
+      payload: { id: crypto.randomUUID(), title: "", text, x: point.x - 140, y: point.y - 80 } });
+  }
+  async function pasteSelection() {
+    try {
+      const items = await navigator.clipboard.read();
+      const item = items.find(value => value.types.includes(CANVAS_CLIPBOARD_TYPE));
+      if (!item) { fail(new Error("剪贴板里没有画布副本")); return; }
+      await pasteSnapshot(await (await item.getType(CANVAS_CLIPBOARD_TYPE)).text());
+    } catch (error) {
+      fail(error instanceof Error ? error : new Error("无法读取这份画布剪贴板，原内容未改变"));
+    }
+  }
+  useEffect(() => {
+    const editing = (target: EventTarget | null) => target instanceof Element &&
+      !!target.closest("input, textarea, [contenteditable=true], dialog, [role=dialog], [role=menu]");
+    const keydown = (event: KeyboardEvent) => {
+      if (!(event.metaKey || event.ctrlKey) || event.altKey || event.repeat || event.isComposing || event.keyCode === 229) return;
+      const key = event.key.toLowerCase();
+      if (key !== "c" && key !== "d") return;
+      if (editing(event.target) || busy || historyBlocked || composition.current || pendingAction.current) return;
+      const current = authority.current;
+      if (!current || !canCopySelection(current, canvasSelection.current(), selectedConnectors)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      if (key === "c") void copySelection(); else void duplicateSelection();
+    };
+    const paste = (event: ClipboardEvent) => {
+      if (editing(event.target) || busy || historyBlocked || composition.current || pendingAction.current) return;
+      const data = event.clipboardData;
+      const raw = data?.getData(CANVAS_CLIPBOARD_TYPE) || data?.getData("application/x-forkwise-canvas");
+      if (raw) { event.preventDefault(); event.stopPropagation(); void pasteSnapshot(raw); return; }
+      if (!data || data.files.length || data.types.includes("text/html")) return;
+      const text = data.getData("text/plain");
+      if (!text) return;
+      event.preventDefault();
+      event.stopPropagation();
+      void (async () => {
+        try {
+          const items = await navigator.clipboard.read();
+          const item = items.find(value => value.types.includes(CANVAS_CLIPBOARD_TYPE));
+          if (item && await navigator.clipboard.readText() === text) {
+            await pasteSnapshot(await (await item.getType(CANVAS_CLIPBOARD_TYPE)).text());
+            return;
+          }
+        } catch { /* The event text remains the plain-text card. */ }
+        await pastePlainText(text);
+      })();
+    };
+    window.addEventListener("keydown", keydown, true);
+    window.addEventListener("paste", paste, true);
+    return () => {
+      window.removeEventListener("keydown", keydown, true);
+      window.removeEventListener("paste", paste, true);
+    };
   });
   const canvasMove = useCanvasMove(state, canvasSelection.value, (prepare, done, intent, discard) => texts.enqueueGeometry(async () => {
     if (!(await shapeMove.flush())) throw new Error("请先确认形状布局保存，整组移动意图仍保留");
@@ -2880,6 +3016,11 @@ function Workspace() {
             <p>新建研究，在画布上记下第一张卡片。</p>
           </div>
         )}
+        {state && <div className="canvas-snapshot-tools" role="toolbar" aria-label="复制">
+          <SnapshotMenu canCopy={canCopySelection(state, canvasSelection.value, selectedConnectors)}
+            blocked={busy || historyBlocked || composition.current || !!pendingAction.current}
+            copy={() => void copySelection()} paste={() => void pasteSelection()} duplicate={() => void duplicateSelection()} />
+        </div>}
         {state && connectorCreate.mode && <ConnectorCreateControls active={connectorCreate.keyboardActive} focusFree={connectorCreate.draft?.startEndpoint.kind === 'free'}
           blocked={connectorCreate.keyboardBlocked()} composing={() => composition.current} start={connectorCreate.startBlank}
           preview={connectorCreate.previewFree} choose={connectorCreate.chooseFree} cancel={connectorCreate.cancelDraft} />}

@@ -2,14 +2,14 @@ import { MembershipExpected } from './containment-contracts.js';
 import { z } from 'zod';
 
 const Id = z.string().min(1).max(160);
-const ShapeContentSchema = z.object({
+export const ShapeContentSchema = z.object({
   shapeType: z.enum(['rectangle', 'roundedRectangle', 'ellipse', 'diamond', 'triangle']),
   shortText: z.string(),
   fill: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional(),
   stroke: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional(),
   strokeWidth: z.number().finite().positive().optional(),
 }).strict();
-const ShapePoseSchema = z.object({
+export const ShapePoseSchema = z.object({
   x: z.number().finite(),
   y: z.number().finite(),
   width: z.number().finite().positive(),

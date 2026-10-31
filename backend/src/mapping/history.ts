@@ -84,6 +84,12 @@ export function recordAction(
 ) {
   if (command.type === 'project.create') return;
   const stack = load(db, command.projectId);
+  if (command.type === 'canvas.duplicate' || command.type === 'canvas.paste') {
+    const created = change.cardLifecycleChanges?.[0]?.after ?? change.textChanges?.[0]?.after ?? change.shapeChanges?.[0]?.after ?? change.imageChanges?.[0]?.after ?? change.strokeChanges?.[0]?.after ?? change.connectorChanges?.[0]?.after;
+    const title = !created ? '副本' : 'title' in created ? created.title : created.kind === 'text' ? created.content.runs.map(run => run.text).join('') : created.kind === 'shape' ? created.content.shortText || '形状' : created.kind === 'stroke' ? created.content.penKind === 'highlighter' ? '荧光笔' : '笔迹' : created.kind === 'image' ? '图片' : '连线';
+    stack.undo.push({ session, lastRevision: change.revision, id: command.commandId, label: command.type, target: { id: created?.id ?? command.commandId, title }, actor: change.actor, before: null, after: null, cardLifecycleChanges: change.cardLifecycleChanges, textChanges: change.textChanges, shapeChanges: change.shapeChanges, imageChanges: change.imageChanges, strokeChanges: change.strokeChanges, connectorChanges: change.connectorChanges, changedIds: change.changedIds });
+    stack.undo = stack.undo.slice(-40); stack.redo = []; save(db, command.projectId, stack); return;
+  }
   if (command.type === 'canvas.delete-selection' || (change.groupChanges || change.containmentChanges) && !change.textChange) {
     const value = change.groupChanges?.find(value => value.after)?.after ?? change.groupChanges?.[0]?.before;
     let selected = change.before && 'body' in change.before ? { id: change.before.id, title: change.before.title }
@@ -261,6 +267,11 @@ export function travelHistory(
   requireThat(!actionId || from.at(-1)?.id === actionId, 'HISTORY_TARGET_CHANGED', '历史目标已变化，不能撤销其他操作', 409);
   const action = from.pop();
   requireThat(action, 'HISTORY_EMPTY', '没有可撤销或重做的操作', 409);
+  if (action.label === 'canvas.duplicate' || action.label === 'canvas.paste') {
+    const restored = restoreGroupAction(db, project.id, action, type);
+    (type === 'history.undo' ? stack.redo : stack.undo).push(action); save(db, project.id, stack);
+    return { ...restored, target: { ...action.target, label: action.label } };
+  }
   if (action.label === 'canvas.delete-selection' || action.groupChanges || action.containmentChanges) {
     const restored = restoreGroupAction(db, project.id, action, type);
     (type === 'history.undo' ? stack.redo : stack.undo).push(action); save(db, project.id, stack);

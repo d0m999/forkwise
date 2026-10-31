@@ -1,17 +1,17 @@
 import { z } from 'zod';
 
 const Id = z.string().min(1).max(160);
-const PathMode = z.enum(['straight', 'elbow', 'curve']);
+export const ConnectorPathSchema = z.enum(['straight', 'elbow', 'curve']);
 const Marker = z.enum(['none', 'open-arrow', 'triangle', 'dot', 'diamond']);
-const Style = z.object({ startMarker: Marker, endMarker: Marker,
+export const ConnectorStyleSchema = z.object({ startMarker: Marker, endMarker: Marker,
   color: z.string().regex(/^#[0-9a-fA-F]{6}$/), width: z.number().finite().positive(),
   dash: z.enum(['solid', 'dashed']),
 }).strict();
-export type ConnectorStyle = z.infer<typeof Style>;
-const Label = z.object({ text: z.string(), position: z.number().finite().min(0).max(1),
+export type ConnectorStyle = z.infer<typeof ConnectorStyleSchema>;
+export const ConnectorLabelSchema = z.object({ text: z.string(), position: z.number().finite().min(0).max(1),
   fontSize: z.number().finite().positive(), color: z.string().regex(/^#[0-9a-fA-F]{6}$/), bold: z.boolean(),
 }).strict();
-export type ConnectorLabel = z.infer<typeof Label>;
+export type ConnectorLabel = z.infer<typeof ConnectorLabelSchema>;
 export const DEFAULT_CONNECTOR_STYLE: Readonly<ConnectorStyle> = Object.freeze({
   startMarker: 'none', endMarker: 'open-arrow', color: '#626e81', width: 4, dash: 'solid',
 });
@@ -35,7 +35,7 @@ export const ConnectorCreateCommand = z.object({
     id: Id,
     start: Endpoint,
     end: Endpoint,
-    path: PathMode.default('straight'),
+    path: ConnectorPathSchema.default('straight'),
   }).strict(),
 }).strict();
 export const ConnectorReconnectCommand = z.object({
@@ -50,7 +50,7 @@ export const ConnectorPathCommand = z.object({
   projectId: Id,
   type: z.literal('connector.path'),
   expected: Id,
-  payload: z.object({ id: Id, path: PathMode }).strict(),
+  payload: z.object({ id: Id, path: ConnectorPathSchema }).strict(),
 }).strict();
 export const ConnectorMoveCommand = z.object({
   commandId: Id,
@@ -61,7 +61,7 @@ export const ConnectorMoveCommand = z.object({
 }).strict();
 export const ConnectorStyleCommand = z.object({
   commandId: Id, projectId: Id, type: z.literal('connector.style'), expected: Id,
-  payload: z.object({ id: Id, style: Style.partial() }).strict(),
+  payload: z.object({ id: Id, style: ConnectorStyleSchema.partial() }).strict(),
 }).strict();
 export const ConnectorReverseCommand = z.object({
   commandId: Id, projectId: Id, type: z.literal('connector.reverse'), expected: z.record(Id, Id),
@@ -70,7 +70,7 @@ export const ConnectorReverseCommand = z.object({
 export const ConnectorLabelCommand = z.object({
   commandId: Id, projectId: Id, type: z.literal('connector.label'), expected: Id,
   editGroup: Id.optional(),
-  payload: z.object({ id: Id, label: Label.nullable() }).strict(),
+  payload: z.object({ id: Id, label: ConnectorLabelSchema.nullable() }).strict(),
 }).strict();
 export const ConnectorDeleteCommand = z.object({
   commandId: Id,
@@ -94,7 +94,7 @@ export interface CanvasConnector {
   id: string;
   kind: 'connector';
   versionId: string;
-  path: z.infer<typeof PathMode>;
+  path: z.infer<typeof ConnectorPathSchema>;
   start: ConnectorEndpoint;
   end: ConnectorEndpoint;
   style?: ConnectorStyle;

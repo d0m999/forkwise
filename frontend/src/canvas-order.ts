@@ -7,7 +7,7 @@ export function orderCanvas(
   selection: string[],
   options: { temporaryRaise?: boolean } = {},
 ): Node[] {
-  const items = [...state.cards, ...(state.texts ?? []), ...(state.shapes ?? []), ...(state.images ?? [])].map(
+  const items = [...state.cards, ...(state.texts ?? []), ...(state.shapes ?? []), ...(state.images ?? []), ...(state.strokes ?? [])].map(
     (value) => value.item,
   );
   items.sort((a, b) => (a.createdOrder ?? 0) - (b.createdOrder ?? 0));

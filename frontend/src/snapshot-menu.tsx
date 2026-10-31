@@ -1,0 +1,85 @@
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import { useViewport } from "@xyflow/react";
+
+export function SnapshotMenu({ canCopy, blocked, copy, paste, duplicate }: {
+  canCopy: boolean;
+  blocked: boolean;
+  copy: () => void;
+  paste: () => void;
+  duplicate: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const trigger = useRef<HTMLButtonElement>(null), menu = useRef<HTMLDivElement>(null), focused = useRef(false);
+  const [point, setPoint] = useState<{ left: number; top: number } | null>(null);
+  useViewport();
+  const items: [string, () => void][] = [
+    ...(canCopy ? [["复制到剪贴板", copy] as [string, () => void], ["复制副本", duplicate] as [string, () => void]] : []),
+    ["粘贴", paste],
+  ];
+  function measure() {
+    const box = trigger.current?.getBoundingClientRect(), size = menu.current?.getBoundingClientRect();
+    if (!box || !size) return;
+    const left = Math.max(8, Math.min(box.left, innerWidth - size.width - 8));
+    const top = box.bottom + 4 + size.height <= innerHeight - 8 ? box.bottom + 4 : Math.max(8, box.top - size.height - 4);
+    setPoint(current => current?.left === left && current.top === top ? current : { left, top });
+  }
+  function close(restore = true) {
+    setOpen(false);
+    if (restore && trigger.current?.isConnected) trigger.current.focus();
+  }
+  useEffect(() => {
+    if (!open) return;
+    const escape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || event.isComposing || event.keyCode === 229) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      close();
+    };
+    const outside = (event: PointerEvent) => {
+      if (menu.current?.contains(event.target as Node) || trigger.current?.contains(event.target as Node)) return;
+      close(false);
+    };
+    window.addEventListener("keydown", escape, true);
+    document.addEventListener("pointerdown", outside, true);
+    return () => {
+      window.removeEventListener("keydown", escape, true);
+      document.removeEventListener("pointerdown", outside, true);
+    };
+  }, [open]);
+  useLayoutEffect(() => { if (open) measure(); else setPoint(null); });
+  useEffect(() => {
+    if (!open) { focused.current = false; return; }
+    if (!point || focused.current) return;
+    focused.current = true;
+    menu.current?.querySelector<HTMLButtonElement>("button:not(:disabled)")?.focus();
+  }, [open, point]);
+  return <>
+    <button ref={trigger} type="button" aria-haspopup="menu" aria-expanded={open} aria-disabled={blocked}
+      onPointerDown={event => event.stopPropagation()}
+      onClick={event => { event.stopPropagation(); if (!blocked) setOpen(value => !value); }}>
+      复制
+    </button>
+    {open && createPortal(<div ref={menu} role="menu" aria-label="复制操作" className="layer-menu-popup"
+      style={{ position: "fixed", left: point?.left ?? 0, top: point?.top ?? 0, visibility: point ? "visible" : "hidden" }}
+      onPointerDown={event => event.stopPropagation()} onClick={event => event.stopPropagation()}
+      onBlur={event => {
+        const next = event.relatedTarget as Node | null;
+        if (next && (menu.current?.contains(next) || trigger.current?.contains(next))) return;
+        close(false);
+      }}
+      onKeyDown={event => {
+        const buttons = [...(menu.current?.querySelectorAll<HTMLButtonElement>("button:not(:disabled)") ?? [])];
+        const current = buttons.indexOf(document.activeElement as HTMLButtonElement);
+        if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+          event.preventDefault();
+          buttons[(current + (event.key === "ArrowDown" ? 1 : -1) + buttons.length) % buttons.length]?.focus();
+        } else if (event.key === "Home" || event.key === "End") {
+          event.preventDefault();
+          buttons[event.key === "Home" ? 0 : buttons.length - 1]?.focus();
+        }
+      }}>
+      {items.map(([label, run]) => <button key={label} type="button" role="menuitem" disabled={blocked} onClick={() => { run(); close(true); }}>{label}</button>)}
+    </div>, document.body)}
+  </>;
+}
