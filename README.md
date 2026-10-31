@@ -4,7 +4,7 @@
 [![English](https://img.shields.io/badge/lang-English-blue.svg)](README.md)
 [![简体中文](https://img.shields.io/badge/lang-简体中文-green.svg)](README.zh-CN.md)
 
-**Forkwise** (见岔) is a personal reasoning workbench whose first domain is **investment research**. It helps you map the reasoning chain behind a point of view, verify it against public sources within the current research task, and then let you research and edit premises, inferences, and conclusions directly on a single canvas.
+**Forkwise** (见岔) is a personal reasoning workbench whose first domain is **investment research**. Its current product direction is an open canvas: users organize cards, text, images, shapes, and ordinary connectors freely, with AI organization and public-source verification available on demand. Author statements, AI inferences, and personal content remain distinct. Design decisions, current implementation, and user acceptance are recorded separately.
 
 - **Understand an author's argument**: reconstruct a source's claims, premises, and inference relations into a traceable structure, where every claim links back to concrete material and precise source anchors.
 - **Organize your own reasoning**: build your own research items on top of candidate references, keeping the author's argument, AI inferences, and your personal argument clearly separated, each with its own versions and rationale.
@@ -35,7 +35,7 @@ Requires Node.js >= 22.22.2 (the first implementation actually used 24.4.1). Rea
 | `backend/` | Local HTTP API, SQLite persistence, persistent research tasks, local MCP, and a research workbench that embeds Excalidraw components |
 | `public-data-core/` | Fetch adapters and validation rules for public data sources (e.g., SEC EDGAR) |
 | `prototype/` | Research and interaction prototypes, including Excalidraw canvas experiments and step-by-step archives |
-| `docs/` | Requirements (PRD), domain model, design interview, ADRs, and open-source research |
+| `docs/` | Current product scope and acceptance baseline, archived PRD, domain model, design interview, ADRs, and research |
 | `docs/adr/` | Architecture Decision Records (ADRs) |
 | `docs/research/` | Research findings on open-source libraries and reference products |
 
@@ -57,7 +57,7 @@ Terminology and domain concepts use [CONTEXT.md](CONTEXT.md) as the single sourc
 - Architecture decisions: [docs/adr/](docs/adr/)
 - Architecture mapping contract v0.1 (proposal and reference scope): [documentation index](docs/architecture/mapping-contract-v0.1/README.md)
 
-> Requirements (PRD) and open-source/reference research notes are internal documents and are not distributed with this public repository.
+> The local product baseline is `docs/prd/current-product-baseline.md`. It, the archived PRD, and product research remain private and are not distributed with this public repository. The public design interview records decisions and detailed interactions; the mapping contract records target data/operation constraints and validation boundaries.
 
 ## Brand assets
 

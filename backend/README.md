@@ -1,6 +1,6 @@
 # 见岔（Forkwise）本机后端
 
-此目录包含 SQLite 持久化、业务 API、持久化研究任务、本机 MCP 与接入原 Excalidraw 组件的研究工作台。它能运行和接受协议测试，但尚不等于完整首版验收。旧 `prototype/forkwise-step-prototype.html` 的浏览器存档保持独立；当前没有自动迁移用户存档。
+此目录包含 SQLite 持久化、业务 API、持久化研究任务、本机 MCP 与接入原 Excalidraw 组件的研究工作台。它能运行和接受协议测试，但尚不等于完整首版验收。旧原型 UI 已删除，仍被此入口使用的画布源码迁入 `canvas/`；旧浏览器存档保持独立，当前没有自动迁移用户存档。迁移测试与 smoke 使用 `scripts/fixtures/open-research-model.js` 中独立保留的历史模型。
 
 开放工作台的 UI 与 Agent 可按[紧凑读取合同](../docs/adr/0022-compact-map-read-contract.md)核对同一 snapshot：`GET /api/mapping/projects/{projectId}/map?view=index&budget=131072`，再携带原 snapshot、cardId 读取 body/detail。MCP 只读工具 `forkwise_read_map` 连接开放工作台的实际回环端口；沿用明确签发的项目 Agent 凭据，不因工具存在而新增授权。预算为完整 Mapping JSON 的 UTF-8 字节，分页和正文分片必须固定 snapshot；当前仅覆盖已有普通卡片，未来类型由拥有者票扩展。
 
