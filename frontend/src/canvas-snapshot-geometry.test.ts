@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import { boundsCenter, nextPaste, pasteTranslation } from '../../frontend/src/canvas-snapshot-geometry.ts';
+import { boundsCenter, nextPaste, pasteTranslation } from './canvas-snapshot-geometry';
 
 it('粘贴中心对准落点，连续同一落点逐次加 24，落点或视口变化从当前落点重计', () => {
   expect(boundsCenter([{ x: 10, y: 20, width: 100, height: 80 }], [])).toEqual({ x: 60, y: 60 });

@@ -2327,7 +2327,7 @@ function Workspace() {
     const paste = (event: ClipboardEvent) => {
       if (editing(event.target) || busy || historyBlocked || composition.current || pendingAction.current) return;
       const data = event.clipboardData;
-      const raw = data?.getData(CANVAS_CLIPBOARD_TYPE) || data?.getData("application/x-forkwise-canvas");
+      const raw = data?.getData(CANVAS_CLIPBOARD_TYPE);
       if (raw) { event.preventDefault(); event.stopPropagation(); void pasteSnapshot(raw); return; }
       if (!data || data.files.length || data.types.includes("text/html")) return;
       const text = data.getData("text/plain");
