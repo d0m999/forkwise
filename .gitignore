@@ -1,6 +1,8 @@
 # 本机运行数据、凭据和可重建产物
 .DS_Store
+# 本机工具状态，不进仓库
 .workbuddy/
+.qoder/
 **/node_modules/
 backend/dist/
 backend/web/canvas/
@@ -17,7 +19,7 @@ backend/artifacts/
 **/local-access.json
 **/__pycache__/
 
-# 私有归档：PRD、计划与产品调研文档不纳入版本控制；交接（handoff）文档只放 TMPDIR，不进仓库
+# 私有归档：产品范围与验收基线、旧 PRD、计划及产品调研不纳入版本控制；交接（handoff）文档只放 TMPDIR，不进仓库
 docs/prd/
 docs/plans/
 docs/research/
