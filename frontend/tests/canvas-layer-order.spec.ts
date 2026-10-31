@@ -282,3 +282,127 @@ test("组合与直选卡片形成混合选区时保持实际遮挡，不单独�
   await expect(page.locator(".react-flow__node.selected")).toHaveCount(3);
   await expect.poll(async () => hitAt(page, overlap)).toBe(b);
 });
+
+test("卡片布局等待保存时调整层级使用刷新后的版本，不把本机写入当成冲突", async ({ page, workspace }) => {
+  await seed(page, workspace, [
+    { kind: "card", id: "a", x: 100, y: 80, width: 280, height: 160 },
+    { kind: "image", id: "b", x: 120, y: 100, width: 200, height: 150 },
+    { kind: "image", id: "c", x: 140, y: 120, width: 200, height: 150 },
+  ]);
+  const state = await workspace.state(), [a, b, c] = itemIds(state, ["a", "b", "c"]);
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  let held = false;
+  await page.route("**/api/mapping/execute", async route => {
+    if (route.request().postDataJSON()?.type !== "pose.move") { await route.continue(); return; }
+    const response = await route.fetch();
+    expect(response.status()).toBe(200);
+    held = true;
+    await gate;
+    await route.fulfill({ response });
+  });
+  try {
+    const box = await nodeBox(page, a);
+    await page.mouse.move(box.x + 8, box.y + 8);
+    await page.mouse.down();
+    await page.mouse.move(box.x + 58, box.y + 48, { steps: 6 });
+    await page.mouse.up();
+    await expect.poll(() => held).toBe(true);
+    await expect(page.getByRole("status")).toHaveText("布局等待保存…");
+    await openLayer(page, "卡片操作");
+    await page.getByRole("menuitem", { name: "置顶", exact: true }).click();
+    release();
+    await expect.poll(async () => order(await workspace.state())).toEqual([b, c, a]);
+    await expect(page.getByRole("status")).toHaveText("已保存到本机");
+    await expect(page.getByRole("alert")).toHaveCount(0);
+  } finally {
+    release();
+    await page.unrouteAll({ behavior: "wait" });
+  }
+  const history = await (await page.request.get(`${workspace.origin}/api/mapping/projects/${state.project.id}/history`)).json();
+  expect(history.undo.at(-1).label).toBe("canvas.layer");
+});
+
+test("纯卡前移一层后即使 createdOrder 数值未变也保持实际遮挡", async ({ page, workspace }) => {
+  await seed(page, workspace, [
+    { kind: "card", id: "a", x: 100, y: 100, width: 280, height: 160 },
+    { kind: "image", id: "b", x: 120, y: 110, width: 200, height: 150 },
+    { kind: "image", id: "c", x: 140, y: 120, width: 200, height: 150 },
+  ]);
+  const state = await workspace.state(), [a, b, c] = itemIds(state, ["a", "b", "c"]);
+  expect(order(state)).toEqual([a, b, c]);
+  const overlap = await overlapPoint(page, [a, b, c]);
+  await expect.poll(async () => hitAt(page, overlap)).toBe(c);
+
+  await clickObject(page, a);
+  await expect.poll(async () => hitAt(page, overlap)).toBe(a);
+  await openLayer(page, "卡片操作");
+  await chooseLayer(page, "前移一层");
+  await expect.poll(async () => order(await workspace.state())).toEqual([b, a, c]);
+  const saved = await workspace.state();
+  // 项目首个内容序号为 2，前移后 a 仍是 2，但实际已越过 b。
+  expect(saved.cards[0]!.item.createdOrder).toBe(2);
+  await expect.poll(async () => hitAt(page, overlap)).toBe(c);
+  await deselect(page);
+  await expect.poll(async () => hitAt(page, overlap)).toBe(c);
+});
+
+test("层级菜单随画布缩放跟随触发按钮", async ({ page, workspace }) => {
+  await seed(page, workspace, [{ kind: "card", id: "a", x: 300, y: 200, width: 280, height: 160 }]);
+  const state = await workspace.state(), [a] = itemIds(state, ["a"]);
+  await clickObject(page, a);
+  const trigger = page.getByRole("toolbar", { name: "卡片操作", exact: true }).getByRole("button", { name: "层级", exact: true });
+  await trigger.click();
+  const menu = page.getByRole("menu", { name: "层级操作", exact: true });
+  await expect(menu).toBeVisible();
+  const triggerBefore = (await trigger.boundingBox())!;
+  const pane = (await page.locator(".react-flow__pane").boundingBox())!;
+  await page.mouse.move(pane.x + pane.width * 0.75, pane.y + pane.height * 0.35);
+  await page.mouse.wheel(0, -100);
+  await expect.poll(async () => {
+    const box = await trigger.boundingBox();
+    return box ? Math.abs(box.x - triggerBefore.x) + Math.abs(box.y - triggerBefore.y) : 0;
+  }).toBeGreaterThan(5);
+  await expect.poll(async () => {
+    const box = await menu.boundingBox(), anchor = await trigger.boundingBox();
+    if (!box || !anchor) return false;
+    if (Math.abs(box.x - anchor.x) > 1.5) return false;
+    return Math.abs(box.y - (anchor.y + anchor.height + 4)) <= 1.5 || Math.abs(box.y + box.height + 4 - anchor.y) <= 1.5;
+  }).toBe(true);
+  await expect(menu).toBeVisible();
+});
+
+test("层级保存真实冲突后丢弃过期命令，可按刷新后的版本重新操作", async ({ page, workspace }) => {
+  await seed(page, workspace, [
+    { kind: "card", id: "a", x: 100, y: 100, width: 280, height: 160 },
+    { kind: "image", id: "b", x: 120, y: 110, width: 200, height: 150 },
+  ]);
+  const state = await workspace.state(), [a, b] = itemIds(state, ["a", "b"]);
+  let attempts = 0;
+  await page.route("**/api/mapping/execute", async route => {
+    const command = route.request().postDataJSON();
+    if (command?.type !== "canvas.layer") { await route.continue(); return; }
+    if (attempts++ === 0) {
+      const current = await workspace.state(), card = current.cards.find(value => value.id === "a")!;
+      await workspace.execute(page, { commandId: crypto.randomUUID(), projectId: current.project.id, type: "canvas.move",
+        expected: { [card.item.id]: card.item.versionId },
+        payload: { targets: [{ kind: "card", id: card.id, itemId: card.item.id, x: card.item.pose.x + 10, y: card.item.pose.y }] } });
+    }
+    await route.continue();
+  });
+  try {
+    await clickObject(page, a);
+    await openLayer(page, "卡片操作");
+    await page.getByRole("menuitem", { name: "置顶", exact: true }).click();
+    await expect(page.getByRole("alert").filter({ hasText: "层级已更新，请重新读取" })).toBeVisible();
+    expect(attempts).toBe(1);
+    await expect.poll(async () => order(await workspace.state())).toEqual([a, b]);
+    await openLayer(page, "卡片操作");
+    await chooseLayer(page, "置顶");
+    await expect.poll(async () => order(await workspace.state())).toEqual([b, a]);
+    const history = await (await page.request.get(`${workspace.origin}/api/mapping/projects/${state.project.id}/history`)).json();
+    expect(history.undo.filter((action: any) => action.label === "canvas.layer")).toHaveLength(1);
+  } finally {
+    await page.unrouteAll({ behavior: "wait" });
+  }
+});

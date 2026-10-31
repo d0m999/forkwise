@@ -1697,7 +1697,7 @@ function Workspace() {
         try { await refresh(command.projectId); } catch { /* Comparison retries retain the definite rejection and original request. */ }
       }
       if (!executed && e instanceof MappingError &&
-        ((['connector.reconnect', 'connector.path', 'connector.move', 'connector.delete', 'connector.style', 'connector.reverse', 'connector.label'].includes(command.type) && ['VERSION_CONFLICT', 'NOT_FOUND'].includes(e.code)) ||
+        ((['connector.reconnect', 'connector.path', 'connector.move', 'connector.delete', 'connector.style', 'connector.reverse', 'connector.label', 'canvas.layer'].includes(command.type) && ['VERSION_CONFLICT', 'NOT_FOUND'].includes(e.code)) ||
           (command.type === 'connector.reconnect' && e.code === 'INVALID_ENDPOINT'))) {
         pendingAction.current = null;
         onDone?.();
@@ -2280,8 +2280,7 @@ function Workspace() {
     if (!ids.length) return;
     const items = layerItems(snapshot);
     if (ids.some(id => !items.some(value => value.itemId === id))) return;
-    const beforeOrders = new Map(items.map(value => [value.itemId, value.item.createdOrder ?? 0]));
-    const command: Command = {
+    const command: Extract<Command, { type: 'canvas.layer' }> = {
       commandId: crypto.randomUUID(),
       projectId: snapshot.project.id,
       type: 'canvas.layer',
@@ -2289,13 +2288,25 @@ function Workspace() {
       payload: { itemIds: ids, operation },
     };
     const generation = canvasSelection.generation(), hold = { projectId: command.projectId, generation };
+    // 属性容器：闭包写入须在 await 之后仍按声明类型读取。
+    const before = { ids: undefined as string[] | undefined };
     setLayerHold(hold);
-    const applied = await action(command, undefined, () =>
-      authority.current?.project.id === command.projectId && canvasSelection.generation() === generation);
-    const current = authority.current;
-    const unchanged = !applied || !current || ids.every(id =>
-      (layerItems(current).find(value => value.itemId === id)?.item.createdOrder ?? 0) === beforeOrders.get(id));
-    if (unchanged) setLayerHold(current => current === hold ? null : current);
+    const applied = await action(command, undefined, () => {
+      const current = authority.current;
+      if (!current || current.project.id !== command.projectId || canvasSelection.generation() !== generation) return false;
+      const fresh = layerItems(current),
+        freshIds = layerItemIds(current, selectedItemIds(current, canvasSelection.current()));
+      if (freshIds.length !== ids.length || freshIds.some((id, index) => id !== ids[index])) return false;
+      command.expected = Object.fromEntries(fresh.map(value => [value.itemId, value.item.versionId]));
+      before.ids = fresh.map(value => value.itemId);
+      return true;
+    });
+    const current = authority.current,
+      after = applied && current ? layerItems(current).map(value => value.itemId) : null,
+      beforeIds = before.ids;
+    const reordered = !!beforeIds && !!after &&
+      (after.length !== beforeIds.length || after.some((id, index) => id !== beforeIds[index]));
+    if (!reordered) setLayerHold(value => value === hold ? null : value);
   }
   function isDirectItem(itemId: string) {
     const selected = canvasSelection.current(), target = selected.targets[0];
