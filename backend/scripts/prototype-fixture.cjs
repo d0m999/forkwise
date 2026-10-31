@@ -4,11 +4,7 @@ const { readFileSync } = require('node:fs');
 const { join } = require('node:path');
 const vm = require('node:vm');
 exports.fixture = function fixture(enrich) {
-  const html = readFileSync(
-    join(__dirname, '../../prototype/forkwise-step-prototype.html'),
-    'utf8',
-  );
-  const body = html.match(/<script id="open-research-model">([\s\S]*?)<\/script>/)[1];
+  const body = readFileSync(join(__dirname, 'fixtures/open-research-model.js'), 'utf8');
   const context = vm.createContext({ URL });
   vm.runInContext(body + '\nthis.model=OpenStudy;', context);
   const m = context.model,
