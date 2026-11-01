@@ -645,3 +645,87 @@ test('删框释放 Group 后多选删除捕获 null 父归属，不依赖已删 
   const redone = await workspace.state(); await workspace.restart(); await page.reload();
   await expect(page.getByRole('status')).toHaveText('已保存到本机'); expect(await workspace.state()).toEqual(redone);
 });
+
+
+test('正文冲突使 Frame 移动提交前停止时清预览，保留两份正文且解除冲突后可继续', async ({ page, workspace }) => {
+  const f = await frameWithGroup(page, workspace), frameWrites: any[] = [];
+  let release!: () => void; const gate = new Promise<void>(resolve => { release = resolve; });
+  let captured: any, status: number | undefined;
+  await page.route('**/api/mapping/execute', async route => {
+    const command = route.request().postDataJSON();
+    if (command.type !== 'body.edit' || captured) { await route.continue(); return; }
+    captured = command; await gate;
+    const response = await route.fetch(); status = response.status(); await route.fulfill({ response });
+  });
+  page.on('request', request => {
+    if (request.url().endsWith('/api/mapping/execute') && request.method() === 'POST' && request.postDataJSON().type === 'frame.move') frameWrites.push(request.postDataJSON());
+  });
+  try {
+    await page.getByRole('button', { name: '移动普通成员', exact: true }).click();
+    await page.getByRole('button', { name: '编辑正文', exact: true }).click();
+    const editor = page.getByRole('textbox', { name: '卡片正文', exact: true });
+    await editor.press('End'); await editor.press('Enter'); await page.keyboard.insertText('本地未确认正文');
+    await expect.poll(() => !!captured).toBe(true);
+    await workspace.execute(page, { commandId: crypto.randomUUID(), projectId: f.before.project.id, type: 'body.edit', expected: f.card.body.versionId,
+      payload: { id: f.card.id, blocks: [{ id: f.card.body.blocks[0]!.id, type: 'text', text: '对方已保存的正文' }] } });
+    release(); await expect.poll(() => status).toBe(409);
+    const conflict = page.getByRole('region', { name: '保存冲突', exact: true }); await expect(conflict).toBeVisible();
+    const peer = await workspace.state(), historyUrl = workspace.origin + '/api/mapping/projects/' + f.before.project.id + '/history';
+    const history = await (await page.request.get(historyUrl)).json();
+    const name = page.getByRole('button', { name: '分区1', exact: true }), box = (await name.boundingBox())!;
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2); await page.mouse.down();
+    await page.mouse.move(box.x + box.width / 2 + 100, box.y + box.height / 2 + 60, { steps: 5 }); await page.mouse.up();
+    const frame = page.locator('[data-frame-id="' + f.frame.id + '"]');
+    await expect(frame).toHaveCSS('left', `${f.frame.pose.x}px`); await expect(frame).toHaveCSS('top', `${f.frame.pose.y}px`);
+    expect(frameWrites).toEqual([]); expect(await workspace.state()).toEqual(peer);
+    expect(await (await page.request.get(historyUrl)).json()).toEqual(history);
+    await expect(editor).toContainText('本地未确认正文');
+    await expect(conflict.getByRole('textbox', { name: '我的正文', exact: true })).toHaveValue(/本地未确认正文/);
+    await expect(conflict.getByRole('textbox', { name: '已保存的正文', exact: true })).toHaveValue('对方已保存的正文');
+    await conflict.getByRole('button', { name: '确认保留已保存的正文', exact: true }).click();
+    await expect(conflict).toHaveCount(0);
+    const next = (await name.boundingBox())!;
+    await page.mouse.move(next.x + next.width / 2, next.y + next.height / 2); await page.mouse.down();
+    await page.mouse.move(next.x + next.width / 2 + 40, next.y + next.height / 2 + 20, { steps: 5 }); await page.mouse.up();
+    await expect.poll(async () => (await workspace.state()).frames![0]!.pose.x).toBe(f.frame.pose.x + 40);
+    expect(frameWrites).toHaveLength(1);
+  } finally { release(); await page.unrouteAll({ behavior: 'wait' }); }
+});
+
+
+test('分区编辑固定进入时版本，外部同步后旧草稿409保留，明确放弃后可重新编辑', async ({ page, workspace }) => {
+  const f = await frameWithGroup(page, workspace);
+  await page.getByRole('button', { name: '分区1', exact: true }).dblclick();
+  const name = page.getByRole('textbox', { name: '分区名称', exact: true }), background = page.getByRole('textbox', { name: '分区背景', exact: true });
+  await name.fill('本地未确认名称'); await background.fill('#ffeecc');
+  await workspace.execute(page, { commandId: crypto.randomUUID(), projectId: f.before.project.id, type: 'frame.edit', expected: f.frame.versionId,
+    payload: { id: f.frame.id, name: '对方更新名称', background: '#ddeeff' } });
+  const peer = await workspace.state(), historyUrl = workspace.origin + '/api/mapping/projects/' + f.before.project.id + '/history';
+  const history = await (await page.request.get(historyUrl)).json();
+  await expect(page.locator('.workspace')).toHaveAttribute('data-revision', String(peer.project.revision));
+  await expect(page.getByRole('group', { name: '分区：对方更新名称', exact: true })).toHaveCSS('background-color', 'rgb(221, 238, 255)');
+  await expect(name).toHaveValue('本地未确认名称'); await expect(background).toHaveValue('#ffeecc');
+  const response = page.waitForResponse(value => value.url().endsWith('/api/mapping/execute') && value.request().postDataJSON().type === 'frame.edit');
+  await name.press('Enter'); const rejected = await response;
+  expect(rejected.status()).toBe(409);
+  expect(rejected.request().postDataJSON().expected).toBe(f.frame.versionId);
+  await expect(name).toHaveValue('本地未确认名称'); await expect(background).toHaveValue('#ffeecc');
+  expect(await workspace.state()).toEqual(peer); expect(await (await page.request.get(historyUrl)).json()).toEqual(history);
+  await page.getByRole('button', { name: '放弃本次分区操作', exact: true }).click();
+  await expect(name).toHaveCount(0);
+  const current = page.getByRole('button', { name: '对方更新名称', exact: true }); await expect(current).toBeFocused();
+  await current.dblclick(); await expect(background).toHaveValue('#ddeeff');
+  await name.fill('重新确认的新名称');
+  const accepted = page.waitForResponse(value => value.url().endsWith('/api/mapping/execute') && value.request().postDataJSON().type === 'frame.edit');
+  await name.press('Enter'); const saved = await accepted;
+  expect(saved.status()).toBe(200); expect(saved.request().postDataJSON().expected).toBe(peer.frames![0]!.versionId);
+  await expect(page.getByRole('button', { name: '重新确认的新名称', exact: true })).toBeFocused();
+  expect((await workspace.state()).frames![0]).toMatchObject({ name: '重新确认的新名称', background: '#ddeeff' });
+  await page.getByRole('button', { name: '撤销', exact: true }).click();
+  await expect.poll(async () => (await workspace.state()).frames![0]!.name).toBe('对方更新名称');
+  await page.getByRole('button', { name: '重做', exact: true }).click();
+  await expect.poll(async () => (await workspace.state()).frames![0]!.name).toBe('重新确认的新名称');
+  await workspace.restart(); await page.reload();
+  await expect(page.getByRole('status')).toHaveText('已保存到本机');
+  expect((await workspace.state()).frames![0]).toMatchObject({ name: '重新确认的新名称', background: '#ddeeff' });
+});

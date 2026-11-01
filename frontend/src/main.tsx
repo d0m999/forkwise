@@ -263,6 +263,8 @@ function Workspace() {
   const [panTool, setPanTool] = useState(false);
   const [frameTool, setFrameTool] = useState(false);
   const [frameSelection, setFrameSelection] = useState<{ projectId: string; id: string; generation: number } | null>(null);
+  const [frameEditorEpoch, setFrameEditorEpoch] = useState(0);
+  const frameEditorFocus = useRef<{ projectId: string; id: string } | null>(null);
   const [framePreview, setFramePreview] = useState<FrameRect | null>(null);
   const frameDrag = useRef<{ projectId: string; start: { x: number; y: number } } | null>(null);
   const [shapePreset, setShapePreset] = useState<ShapeType | null>(null);
@@ -1778,6 +1780,10 @@ function Workspace() {
       if (pendingAction.current !== pending) return;
       pendingAction.current = null;
       pending.onSettled?.();
+      if (pending.command.type === 'frame.edit' && authority.current?.project.id === pending.command.projectId) {
+        frameEditorFocus.current = { projectId: pending.command.projectId, id: pending.command.payload.id };
+        setFrameEditorEpoch(value => value + 1);
+      }
       if (pending.command.type === 'group.scale' || pending.command.type === 'group.rotate90') groupGeometry.discard();
       setError('');
       setStatus(pending.command.type === 'text.delete'
@@ -2420,7 +2426,10 @@ function Workspace() {
   }, done, intent, discard));
   const frameMove = useFrameMove({ state, blocked: busy || historyBlocked || composition.current || !!pendingAction.current,
     point: client => flow.screenToFlowPosition(client, { snapToGrid: false }),
-    execute: (command, done) => void action(command, undefined, undefined, done) });
+    execute: async (command, done) => {
+      const confirmed = await action(command, undefined, undefined, done);
+      if (!confirmed && pendingAction.current?.command.commandId !== command.commandId) done();
+    } });
   const groupGeometry = useGroupGeometry({ state, selection: canvasSelection.value, current: () => authority.current,
     generation: canvasSelection.generation, zoom: () => flow.getZoom(), lock: setGroupGeometryLocked, fail,
     blocked: busy || historyBlocked || composition.current || !!pendingAction.current || canvasMove.dragging || pose.dragging ||
@@ -3036,7 +3045,10 @@ function Workspace() {
             <Background gap={24} color="#dce0e7" />
             <Controls showInteractive={false} />
             <ViewportPortal>
-              <CanvasFrames state={state} preview={framePreview} selectedId={selectedFrameId} choose={chooseFrame} blocked={busy || historyBlocked || !!pendingAction.current}
+              <CanvasFrames key={`${state.project.id}:${frameEditorEpoch}`} state={state} preview={framePreview} selectedId={selectedFrameId} choose={chooseFrame}
+                focusId={frameEditorFocus.current?.projectId === state.project.id ? frameEditorFocus.current.id : null}
+                onFocusRestored={id => { if (frameEditorFocus.current?.projectId === state.project.id && frameEditorFocus.current.id === id) frameEditorFocus.current = null; }}
+                blocked={busy || historyBlocked || !!pendingAction.current}
                 execute={(command, done) => void action(command, done)} move={frameMove} />
               <CanvasGroups state={state} selection={canvasSelection.value} positions={{ ...canvasMove.positions, ...frameMove.positions, ...groupGeometry.poses }} geometry={groupGeometry}
                 blocked={busy || historyBlocked || !!pendingAction.current || texts.hasPending()}

@@ -60,26 +60,32 @@ export function useFrameMove({ state, blocked, point, execute }: {
   };
 }
 
-export function CanvasFrames({ state, preview, selectedId, choose, blocked, execute, move }: {
+export function CanvasFrames({ state, preview, selectedId, choose, focusId, onFocusRestored, blocked, execute, move }: {
   state: ProjectState; preview: FrameRect | null; selectedId: string | null; choose: (id: string | null) => void; blocked: boolean; execute: Execute;
-  move: ReturnType<typeof useFrameMove>;
+  move: ReturnType<typeof useFrameMove>; focusId: string | null; onFocusRestored: (id: string) => void;
 }) {
-  const [editing, setEditing] = useState<string | null>(null);
+  const [editing, setEditing] = useState<{ projectId: string; id: string; versionId: string } | null>(null);
   const [name, setName] = useState('');
   const [background, setBackground] = useState('');
   const [composing, setComposing] = useState(false);
   const triggers = useRef<Record<string, HTMLButtonElement | null>>({});
-  const edited = state.frames?.find(frame => frame.id === editing);
+  const edited = state.frames?.find(frame => frame.id === editing?.id);
+  useEffect(() => {
+    if (!focusId) return;
+    triggers.current[focusId]?.focus({ preventScroll: true });
+    onFocusRestored(focusId);
+  }, [focusId, onFocusRestored]);
   function begin(frame: CanvasFrame) {
     choose(frame.id);
-    setEditing(frame.id); setName(frame.name); setBackground(frame.background ?? '');
+    setEditing({ projectId: state.project.id, id: frame.id, versionId: frame.versionId }); setName(frame.name); setBackground(frame.background ?? '');
   }
-  function save(frame: CanvasFrame) {
-    if (blocked || composing || !name.trim() || background && !/^#[0-9a-f]{6}$/i.test(background)) return;
-    execute({ commandId: crypto.randomUUID(), projectId: state.project.id, type: 'frame.edit', expected: frame.versionId,
-      payload: { id: frame.id, name, background: background || null } }, () => {
+  function save() {
+    const session = editing;
+    if (!session || blocked || composing || !name.trim() || background && !/^#[0-9a-f]{6}$/i.test(background)) return;
+    execute({ commandId: crypto.randomUUID(), projectId: session.projectId, type: 'frame.edit', expected: session.versionId,
+      payload: { id: session.id, name, background: background || null } }, () => {
         setEditing(null);
-        requestAnimationFrame(() => triggers.current[frame.id]?.focus({ preventScroll: true }));
+        requestAnimationFrame(() => triggers.current[session.id]?.focus({ preventScroll: true }));
       });
   }
   return <>
@@ -88,14 +94,14 @@ export function CanvasFrames({ state, preview, selectedId, choose, blocked, exec
       return <div key={frame.id} role="group" aria-label={`分区：${frame.name}`}
         className="canvas-frame" data-frame-id={frame.id} data-selected={selectedId === frame.id} style={{ left: position.x, top: position.y,
           width: frame.pose.width, height: frame.pose.height, background: frame.background ?? 'transparent' }}>
-        {edited?.id === frame.id ? <form className="canvas-frame-editor nodrag nopan" onSubmit={event => { event.preventDefault(); save(frame); }}>
+        {edited?.id === frame.id ? <form className="canvas-frame-editor nodrag nopan" onSubmit={event => { event.preventDefault(); save(); }}>
           <textarea aria-label="分区名称" rows={1} maxLength={240} autoFocus value={name} readOnly={blocked}
             onChange={event => setName(event.target.value)}
             onCompositionStart={() => setComposing(true)} onCompositionEnd={() => setComposing(false)}
             onKeyDown={event => {
               event.stopPropagation();
               if (event.nativeEvent.isComposing || event.keyCode === 229) return;
-              if (event.key === 'Enter' && !event.shiftKey || event.key === 'Escape') { event.preventDefault(); save(frame); }
+              if (event.key === 'Enter' && !event.shiftKey || event.key === 'Escape') { event.preventDefault(); save(); }
             }} />
           <input aria-label="分区背景" type="text" placeholder="透明" value={background} readOnly={blocked}
             onChange={event => setBackground(event.target.value)} onKeyDown={event => event.stopPropagation()} />
