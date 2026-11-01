@@ -1,3 +1,4 @@
+import { FrameCommands, type CanvasFrame, type FrameChange } from './frame-contracts.js';
 import { MembershipExpected } from './containment-contracts.js';
 import { GroupGeometryCommands } from './group-geometry-contracts.js';
 import { GroupCommands, type CanvasGroup, type Containment, type GroupChange, type ContainmentChange } from './group-contracts.js';
@@ -30,6 +31,7 @@ const BodyInput = {
 };
 export { TagCommandSchema } from './tag-contracts.js';
 export const MappingCommand = z.discriminatedUnion('type', [
+  ...FrameCommands.options,
   ...GroupGeometryCommands.options,
   ...GroupCommands.options,
   ...ConnectorCommands.options,
@@ -241,6 +243,7 @@ export interface Card {
 }
 export interface Tag { id: string; versionId: string; name: string; color: string; deleted: boolean }
 export interface ProjectState {
+  frames?: CanvasFrame[];
   groups?: CanvasGroup[];
   containment?: Containment[];
   connectors?: CanvasConnector[];
@@ -271,6 +274,7 @@ export interface Receipt {
 }
 export type { VersionQuery, CardIdentity, IdentityQuery, AssetQuery, ReadQuery } from './read-contracts.js';
 export interface Change extends Receipt {
+  frameChanges?: FrameChange[];
   cardLifecycleChanges?: { before: Card | null; after: Card | null }[];
   groupChanges?: GroupChange[];
   containmentChanges?: ContainmentChange[];

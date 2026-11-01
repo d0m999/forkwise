@@ -1,4 +1,6 @@
 import { readGroups, readContainment } from './group.js';
+import { readFrames } from './frame.js';
+import type { CanvasFrame } from './frame-contracts.js';
 import type { CanvasGroup, Containment } from './group-contracts.js';
 import { connectorIndex, connectorDetail } from './connector-projection.js';
 import type { ConnectorIndex } from './compact-contracts.js';
@@ -35,6 +37,7 @@ type PinnedCard = Omit<Card, 'body'> & {
   body: { id: string; versionId: string; blockCount: number };
 };
 type Snapshot = {
+  frames: CanvasFrame[];
   groups: CanvasGroup[];
   containment: Containment[];
   connectors: ConnectorIndex[];
@@ -121,8 +124,9 @@ export class CompactMaps {
         const { items: strokes, knownIds: strokeIds } = strokeIndex(this.db, query.projectId);
         const { items: images, knownIds: imageIds } = imageIndex(this.db, query.projectId);
         const { items: connectors, knownIds: connectorIds } = connectorIndex(this.db, query.projectId);
+        const frames = readFrames(this.db, query.projectId);
         const groups = readGroups(this.db, query.projectId), containment = readContainment(this.db, query.projectId);
-        const bytes = Buffer.byteLength(JSON.stringify({ groups, containment, project, cards, identities, tags, texts, textIds, shapes, shapeIds, strokes, strokeIds, images, imageIds, connectors, connectorIds }), 'utf8');
+        const bytes = Buffer.byteLength(JSON.stringify({ frames, groups, containment, project, cards, identities, tags, texts, textIds, shapes, shapeIds, strokes, strokeIds, images, imageIds, connectors, connectorIds }), 'utf8');
         const retainedBytes = [...this.snapshots.values()].reduce(
           (sum, value) => sum + value.bytes,
           0,
@@ -134,7 +138,7 @@ export class CompactMaps {
           503,
         );
         state = {
-          groups, containment,
+          frames, groups, containment,
           connectors, knownConnectorIds: new Set(connectorIds),
           images, knownImageIds: new Set(imageIds),
           strokes, knownStrokeIds: new Set(strokeIds),
@@ -173,7 +177,8 @@ export class CompactMaps {
     let availability: CompactPage['availability'] = 'available';
     let target: CompactPage['target'];
     const view = JSON.stringify([query.view, query.view === 'connector-detail' ? query.connectorId : query.view === 'image-detail' ? query.imageId : query.view === 'stroke-detail' ? query.strokeId : query.view === 'shape-detail' ? query.shapeId : query.view === 'text-detail' ? query.textId : query.view === 'body' || query.view === 'detail' ? query.cardId : null]);
-    if (query.view === 'group-index') { items = state.groups.map(({ kind: _, memberItemIds, ...value }) => ({ ...value, type: 'group', memberCount: memberItemIds.length })); fidelity = 'group-index'; }
+    if (query.view === 'frame-index') { items = state.frames.map(({ kind: _, memberItemIds, ...value }) => ({ ...value, type: 'frame', memberCount: memberItemIds.length })); fidelity = 'frame-index'; }
+    else if (query.view === 'group-index') { items = state.groups.map(({ kind: _, memberItemIds, ...value }) => ({ ...value, type: 'group', memberCount: memberItemIds.length })); fidelity = 'group-index'; }
     else if (query.view === 'containment') { items = state.containment; fidelity = 'containment'; }
     else if (query.view === 'connector-index') { items = state.connectors; fidelity = 'connector-index'; }
     else if (query.view === 'connector-detail') {
@@ -271,7 +276,7 @@ export class CompactMaps {
     const start = this.pages.offset(query.cursor, token, view);
     return this.pages.page(
       {
-        scope: { types: query.view === 'group-index' || query.view === 'containment' ? ['group'] : query.view === 'connector-index' || query.view === 'connector-detail' ? ['connector'] : query.view === 'image-index' || query.view === 'image-detail' ? ['image'] : query.view === 'stroke-index' || query.view === 'stroke-detail' ? ['stroke'] : query.view === 'shape-index' || query.view === 'shape-detail' ? ['shape'] : query.view === 'text-index' || query.view === 'text-detail' ? ['text'] : ['thought'], relations: query.view === 'group-index' || query.view === 'containment' ? 'containment' : query.view === 'connector-index' || query.view === 'connector-detail' ? 'connectors' : 'not_implemented', order: 'creation_ordinal' },
+        scope: { types: query.view === 'frame-index' ? ['frame'] : query.view === 'group-index' || query.view === 'containment' ? ['group'] : query.view === 'connector-index' || query.view === 'connector-detail' ? ['connector'] : query.view === 'image-index' || query.view === 'image-detail' ? ['image'] : query.view === 'stroke-index' || query.view === 'stroke-detail' ? ['stroke'] : query.view === 'shape-index' || query.view === 'shape-detail' ? ['shape'] : query.view === 'text-index' || query.view === 'text-detail' ? ['text'] : ['thought'], relations: query.view === 'frame-index' || query.view === 'group-index' || query.view === 'containment' ? 'containment' : query.view === 'connector-index' || query.view === 'connector-detail' ? 'connectors' : 'not_implemented', order: 'creation_ordinal' },
         project: state.project,
         snapshot: token,
         revision: state.project.revision,

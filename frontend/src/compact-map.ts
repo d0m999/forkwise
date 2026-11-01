@@ -1,6 +1,7 @@
 import type { CanvasConnector } from '../../backend/src/mapping/connector-contracts';
 import { groupProjection, type Containment, type GroupIndex } from './canvas-group-projection';
-import type { ConnectorIndex } from '../../backend/src/mapping/compact-contracts';
+import { frameProjection } from './canvas-frame-projection';
+import type { ConnectorIndex, FrameIndex } from '../../backend/src/mapping/compact-contracts';
 import type { CanvasImage, ImageVersion } from '../../backend/src/mapping/image-contracts';
 import type { ImageIndex } from '../../backend/src/mapping/compact-contracts';
 import type { CanvasText } from '../../backend/src/mapping/text-contracts';
@@ -212,8 +213,12 @@ export async function readCompactMap(
   }
   const groupPage = await collect<GroupIndex>({ view: 'group-index', snapshot: index.first.snapshot });
   const containmentPage = await collect<Containment>({ view: 'containment', snapshot: index.first.snapshot });
-  const grouping = groupProjection(index.first, groupPage, containmentPage,
-    [...cards, ...texts, ...shapes, ...images, ...strokes]);
+  const items = [...cards, ...texts, ...shapes, ...images, ...strokes];
+  const grouping = groupProjection(index.first, groupPage, containmentPage, items);
+  const framePage = await collect<FrameIndex>({ view: 'frame-index', snapshot: index.first.snapshot });
+  const framing = frameProjection(index.first, framePage, containmentPage, new Set([
+    ...items.map(value => value.item.id), ...grouping.groups.map(group => group.itemId),
+  ]));
   return {
     project: index.first.project,
     cards,
@@ -224,6 +229,7 @@ export async function readCompactMap(
     images,
     connectors,
     ...grouping,
+    ...framing,
     snapshot: index.first.snapshot,
   };
 }

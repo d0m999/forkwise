@@ -21,7 +21,7 @@ export function captureMemberDeletion(state: ProjectState, value: ReturnType<typ
 
 export function removeMemberCommand(state: ProjectState, itemId: string): Extract<Command, { type: 'group.remove-member' }> | null {
   const membership = membershipExpected(state, itemId);
-  return membership ? { commandId: crypto.randomUUID(), projectId: state.project.id, type: 'group.remove-member',
+  return membership && 'group' in membership ? { commandId: crypto.randomUUID(), projectId: state.project.id, type: 'group.remove-member',
     expected: { group: membership.group.versionId, containment: membership.containment }, payload: { id: membership.group.id, itemId } } : null;
 }
 

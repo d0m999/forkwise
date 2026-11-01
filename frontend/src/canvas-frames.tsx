@@ -1,0 +1,112 @@
+import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
+import type { Command, ProjectState } from './api';
+import { deleteFrameCommand, frameMovingItemIds, moveFrameCommand, type FrameRect } from './canvas-frame-commands';
+import type { CanvasFrame } from '../../backend/src/mapping/frame-contracts';
+
+type Point = { x: number; y: number };
+type FrameCommand = Extract<Command, { type: 'frame.edit' | 'frame.move' | 'frame.delete' }>;
+type Execute = (command: FrameCommand, onDone: () => void) => void;
+
+export function useFrameMove({ state, blocked, point, execute }: {
+  state: ProjectState | null; blocked: boolean; point: (client: Point) => Point; execute: Execute;
+}) {
+  const latest = useRef({ state, blocked, point, execute });
+  latest.current = { state, blocked, point, execute };
+  const [positions, setPositions] = useState<Record<string, Point>>({});
+  const session = useRef<{ state: ProjectState; frame: CanvasFrame; start: Point; dx: number; dy: number } | null>(null);
+  const moved = useRef(new Set<string>());
+  useEffect(() => {
+    function project(event: PointerEvent) {
+      const current = session.current;
+      if (!current) return null;
+      const next = latest.current.point({ x: event.clientX, y: event.clientY });
+      current.dx = next.x - current.start.x; current.dy = next.y - current.start.y;
+      if (current.dx || current.dy) moved.current.add(current.frame.id);
+      const members = frameMovingItemIds(current.state, current.frame).flatMap(id => {
+        const item = [...current.state.cards, ...(current.state.texts ?? []), ...(current.state.shapes ?? []),
+          ...(current.state.images ?? []), ...(current.state.strokes ?? [])].find(value => value.item.id === id);
+        return item ? [[id, { x: item.item.pose.x + current.dx, y: item.item.pose.y + current.dy }] as const] : [];
+      });
+      setPositions(Object.fromEntries([[current.frame.id, { x: current.frame.pose.x + current.dx, y: current.frame.pose.y + current.dy }], ...members]));
+      return current;
+    }
+    const move = (event: PointerEvent) => { project(event); };
+    const up = (event: PointerEvent) => {
+      const current = project(event);
+      session.current = null;
+      if (!current) return;
+      if (!current.dx && !current.dy) { setPositions({}); return; }
+      latest.current.execute(moveFrameCommand(current.state, current.frame, current.dx, current.dy), () => setPositions({}));
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+    return () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); };
+  }, []);
+  return {
+    positions,
+    start(event: ReactPointerEvent<HTMLElement>, frame: CanvasFrame) {
+      if (event.button !== 0 || latest.current.blocked || !latest.current.state || session.current) return;
+      event.preventDefault(); event.stopPropagation();
+      moved.current.delete(frame.id);
+      session.current = { state: latest.current.state, frame,
+        start: latest.current.point({ x: event.clientX, y: event.clientY }), dx: 0, dy: 0 };
+    },
+    consumeClick(id: string) {
+      if (!moved.current.has(id)) return false;
+      moved.current.delete(id); return true;
+    },
+    hasGesture: () => !!session.current,
+    cancel() { session.current = null; setPositions({}); },
+  };
+}
+
+export function CanvasFrames({ state, preview, blocked, execute, move }: {
+  state: ProjectState; preview: FrameRect | null; blocked: boolean; execute: Execute;
+  move: ReturnType<typeof useFrameMove>;
+}) {
+  const [editing, setEditing] = useState<string | null>(null);
+  const [name, setName] = useState('');
+  const [background, setBackground] = useState('');
+  const [composing, setComposing] = useState(false);
+  const triggers = useRef<Record<string, HTMLButtonElement | null>>({});
+  const edited = state.frames?.find(frame => frame.id === editing);
+  function begin(frame: CanvasFrame) {
+    setEditing(frame.id); setName(frame.name); setBackground(frame.background ?? '');
+  }
+  function save(frame: CanvasFrame) {
+    if (blocked || composing || !name.trim() || background && !/^#[0-9a-f]{6}$/i.test(background)) return;
+    execute({ commandId: crypto.randomUUID(), projectId: state.project.id, type: 'frame.edit', expected: frame.versionId,
+      payload: { id: frame.id, name, background: background || null } }, () => {
+        setEditing(null);
+        requestAnimationFrame(() => triggers.current[frame.id]?.focus({ preventScroll: true }));
+      });
+  }
+  return <>
+    {(state.frames ?? []).map(frame => {
+      const position = move.positions[frame.id] ?? frame.pose;
+      return <div key={frame.id} role="group" aria-label={`分区：${frame.name}`}
+        className="canvas-frame" data-frame-id={frame.id} style={{ left: position.x, top: position.y,
+          width: frame.pose.width, height: frame.pose.height, background: frame.background ?? 'transparent' }}>
+        {edited?.id === frame.id ? <form className="canvas-frame-editor nodrag nopan" onSubmit={event => { event.preventDefault(); save(frame); }}>
+          <textarea aria-label="分区名称" rows={1} maxLength={240} autoFocus value={name} readOnly={blocked}
+            onChange={event => setName(event.target.value)}
+            onCompositionStart={() => setComposing(true)} onCompositionEnd={() => setComposing(false)}
+            onKeyDown={event => {
+              event.stopPropagation();
+              if (event.nativeEvent.isComposing || event.keyCode === 229) return;
+              if (event.key === 'Enter' && !event.shiftKey || event.key === 'Escape') { event.preventDefault(); save(frame); }
+            }} />
+          <input aria-label="分区背景" type="text" placeholder="透明" value={background} readOnly={blocked}
+            onChange={event => setBackground(event.target.value)} onKeyDown={event => event.stopPropagation()} />
+          <button type="button" disabled={blocked}
+            onClick={() => execute(deleteFrameCommand(state, frame), () => setEditing(null))}>删除分区</button>
+          <button type="submit" disabled={blocked || !name.trim() || !!background && !/^#[0-9a-f]{6}$/i.test(background)}>保存分区</button>
+        </form> : <button ref={element => { triggers.current[frame.id] = element; }} type="button"
+          className="canvas-frame-name nodrag nopan" disabled={blocked} onPointerDown={event => move.start(event, frame)}
+          onClick={() => { if (!move.consumeClick(frame.id)) begin(frame); }}>{frame.name}</button>}
+      </div>;
+    })}
+    {preview && <div aria-hidden="true" className="canvas-frame-preview" style={{ left: preview.x, top: preview.y,
+      width: preview.width, height: preview.height }} />}
+  </>;
+}

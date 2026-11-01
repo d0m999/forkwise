@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { requireThat } from '../domain/errors.js';
 import type { GroupCommand, GroupChange, ContainmentChange } from './group-contracts.js';
 import { readGroupRecords, readContainment, writeGroup, writeContainment, groupItems } from './group.js';
+import { readFrames } from './frame.js';
 import type { MembershipDependency } from './containment-contracts.js';
 import type { Card, Change } from './contracts.js';
 import { deleteCard } from './lifecycle.js';
@@ -55,7 +56,15 @@ export function removeDeletedMember(db: Database.Database, projectId: string, it
     db.prepare('DELETE FROM mapping_containment WHERE project_id=? AND item_id=?').run(projectId, itemId);
     return { groupChanges: [] as GroupChange[], containmentChanges: [{ before, after: null }] as ContainmentChange[], changedIds: [itemId] };
   }
-  requireThat(expected && before.parent.kind === 'group' && readGroupRecords(db, projectId).some(value => value.id === expected.group.id && value.itemId === before.parent!.id),
+  if (before.parent.kind === 'frame') {
+    requireThat(expected && 'frame' in expected && before.parent.id === expected.frame.id &&
+      readFrames(db, projectId).some(frame => frame.id === expected.frame.id && frame.versionId === expected.frame.versionId) &&
+      before.versionId === expected.containment,
+      'VERSION_CONFLICT', '删除前须确认当前分区及成员归属', 409);
+    db.prepare('DELETE FROM mapping_containment WHERE project_id=? AND item_id=?').run(projectId, itemId);
+    return { containmentChanges: [{ before, after: null }], changedIds: [itemId] };
+  }
+  requireThat(expected && 'group' in expected && readGroupRecords(db, projectId).some(value => value.id === expected.group.id && value.itemId === before.parent!.id),
     'VERSION_CONFLICT', '删除前须确认当前组合及成员归属', 409);
   return releaseMembers(db, projectId, expected.group.id, [itemId], { group: expected.group.versionId, containment: { [itemId]: expected.containment } }, true);
 }

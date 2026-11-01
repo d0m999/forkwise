@@ -1,3 +1,5 @@
+import { createFrame, deleteFrame, editFrame, moveFrame, readFrames } from './frame.js';
+import type { FrameRecord } from './frame-contracts.js';
 import { removeMember, ungroup, removeDeletedMember, groupOutcome, deleteGroup } from './group-lifecycle.js';
 import { deleteSelection } from './selection-delete.js';
 import { createGroup, moveGroup, moveSelection, readGroups, readContainment } from './group.js';
@@ -108,7 +110,8 @@ export class Mapping {
   read(query: VersionQuery & { domain: 'connector' }, actor: Principal): CanvasConnector;
   read(query: VersionQuery & { domain: 'group' }, actor: Principal): GroupRecord;
   read(query: VersionQuery & { domain: 'containment' }, actor: Principal): Containment;
-  read(query: VersionQuery, actor: Principal): Card['body'] | Card['item'] | Card['appearance'] | Tag | NonNullable<Card['cardTags']> | ShapeVersion | StrokeVersion | ImageVersion | CanvasConnector | GroupRecord | Containment;
+  read(query: VersionQuery & { domain: 'frame' }, actor: Principal): FrameRecord;
+  read(query: VersionQuery, actor: Principal): Card['body'] | Card['item'] | Card['appearance'] | Tag | NonNullable<Card['cardTags']> | ShapeVersion | StrokeVersion | ImageVersion | CanvasConnector | GroupRecord | Containment | FrameRecord;
   read(
     query: ReadQuery,
     actor: Principal,
@@ -129,6 +132,7 @@ export class Mapping {
     | CanvasConnector
     | GroupRecord
     | Containment
+    | FrameRecord
     | MediaAsset
     | SearchStateView
     | Promise<SearchResult> {
@@ -177,7 +181,7 @@ export class Mapping {
           | { value: string }
           | undefined;
         requireThat(row, 'NOT_FOUND', '版本不存在于当前项目', 404);
-        return JSON.parse(row.value) as Card['body'] | Card['item'] | ShapeVersion | StrokeVersion | ImageVersion | CanvasConnector | GroupRecord | Containment;
+        return JSON.parse(row.value) as Card['body'] | Card['item'] | ShapeVersion | StrokeVersion | ImageVersion | CanvasConnector | GroupRecord | Containment | FrameRecord;
       }
       const project = this.project(query.projectId);
       if (query.type === 'history') return readHistory(this.db, project);
@@ -188,7 +192,7 @@ export class Mapping {
           )
           .all(query.projectId) as { value: string }[]
       ).map((row) => JSON.parse(row.value) as Card);
-      return { project, cards, groups: readGroups(this.db, project.id), containment: readContainment(this.db, project.id), connectors: readConnectors(this.db, project.id), images: readImages(this.db, project.id), tags: readTags(this.db, project.id), texts: readTexts(this.db, project.id), shapes: readShapes(this.db, project.id), strokes: readStrokes(this.db, project.id) };
+      return { project, cards, frames: readFrames(this.db, project.id), groups: readGroups(this.db, project.id), containment: readContainment(this.db, project.id), connectors: readConnectors(this.db, project.id), images: readImages(this.db, project.id), tags: readTags(this.db, project.id), texts: readTexts(this.db, project.id), shapes: readShapes(this.db, project.id), strokes: readStrokes(this.db, project.id) };
     })();
   }
 
@@ -305,6 +309,7 @@ export class Mapping {
         };
         let before: Card | Project | null = null;
         let after: Card | Project | null;
+        let frameChanges: Change['frameChanges'];
         let groupChanges: Change['groupChanges'];
         let containmentChanges: Change['containmentChanges'];
         let connectorChanges: Change['connectorChanges'];
@@ -322,7 +327,34 @@ export class Mapping {
         let travel: ReturnType<typeof travelHistory> | undefined;
         let revision: number;
         let changedIds: string[];
-        if (command.type === 'group.delete' || command.type === 'canvas.delete-selection') {
+        if (command.type === 'frame.create' || command.type === 'frame.edit' || command.type === 'frame.move' || command.type === 'frame.delete') {
+          const project = this.project(command.projectId);
+          if (command.type === 'frame.create') {
+            const created = createFrame(this.db, command);
+            frameChanges = [{ before: null, after: created.frame }];
+            if (created.containmentChanges.length) containmentChanges = created.containmentChanges;
+            changedIds = created.changedIds;
+          } else if (command.type === 'frame.delete') {
+            const result = deleteFrame(this.db, command);
+            frameChanges = [result.frameChange];
+            if (result.containmentChanges.length) containmentChanges = result.containmentChanges;
+            changedIds = result.changedIds;
+          } else if (command.type === 'frame.move') {
+            const result = moveFrame(this.db, command);
+            if (!result) return unchanged(project.revision);
+            frameChanges = [result.frameChange];
+            cardChanges = result.cardChanges; textChanges = result.textChanges; shapeChanges = result.shapeChanges;
+            imageChanges = result.imageChanges; strokeChanges = result.strokeChanges;
+            changedIds = result.changedIds;
+          } else {
+            const result = editFrame(this.db, command);
+            if (!result) return unchanged(project.revision);
+            frameChanges = [result];
+            changedIds = [(result.after ?? result.before!).id];
+          }
+          after = null; revision = project.revision + 1;
+          this.db.prepare('UPDATE mapping_projects SET revision=? WHERE id=?').run(revision, project.id);
+        } else if (command.type === 'group.delete' || command.type === 'canvas.delete-selection') {
           const project = this.project(command.projectId);
           ({ groupChanges, containmentChanges, cardLifecycleChanges, textChanges, shapeChanges, imageChanges, strokeChanges, connectorChanges, changedIds } = command.type === 'canvas.delete-selection' ? deleteSelection(this.db, command) : deleteGroup(this.db, command));
           after = null; revision = project.revision + 1;
@@ -445,6 +477,7 @@ export class Mapping {
           );
           travel = travelHistory(this.db, project, command.type, command.payload.actionId);
           ({ before, after, changedIds } = travel);
+          frameChanges = travel.frameChanges;
           groupChanges = travel.groupChanges;
           containmentChanges = travel.containmentChanges;
           connectorChanges = travel.connectorChanges;
@@ -758,12 +791,18 @@ export class Mapping {
         }
         if (after && 'body' in after) retainCardVersions(this.db, command.projectId, after);
         for (const c of cardChanges ?? []) retainCardVersions(this.db, command.projectId, c.after);
-        const structuralOutcome = command.type === 'canvas.delete-selection' || groupChanges || containmentChanges ? groupOutcome({ before, after, groupChanges: groupChanges ?? [], containmentChanges: containmentChanges ?? [], cardLifecycleChanges: cardLifecycleChanges ?? [], textChange, shapeChange, imageChange, strokeChange, textChanges, shapeChanges, imageChanges, strokeChanges, connectorChanges, changedIds } as Partial<Change>) : null;
+        const structuralOutcome = !frameChanges && (command.type === 'canvas.delete-selection' || groupChanges || containmentChanges) ? groupOutcome({ before, after, groupChanges: groupChanges ?? [], containmentChanges: containmentChanges ?? [], cardLifecycleChanges: cardLifecycleChanges ?? [], textChange, shapeChange, imageChange, strokeChange, textChanges, shapeChanges, imageChanges, strokeChanges, connectorChanges, changedIds } as Partial<Change>) : null;
         if (structuralOutcome) changedIds = structuralOutcome.changedIds;
-        const movedPoses = command.type === 'canvas.move' || command.type === 'group.move' || command.type === 'canvas.move-selection' || command.type === 'canvas.layer'
-          ? [...(cardChanges ?? []), ...(textChanges ?? []), ...(shapeChanges ?? []), ...(imageChanges ?? []), ...(strokeChanges ?? [])]
-            .flatMap(({ before, after }) => before && after && before.item.versionId !== after.item.versionId
-              ? [[after.item.id, after.item.versionId]] : []) : [];
+        const movedPoses = command.type === 'frame.move'
+          ? [
+              ...(frameChanges ?? []).flatMap(({ before, after }) => before && after && before.versionId !== after.versionId ? [[after.id, after.versionId]] : []),
+              ...[...(cardChanges ?? []), ...(textChanges ?? []), ...(shapeChanges ?? []), ...(imageChanges ?? []), ...(strokeChanges ?? [])]
+                .flatMap(({ before, after }) => before && after && before.item.versionId !== after.item.versionId ? [[after.item.id, after.item.versionId]] : []),
+            ]
+          : command.type === 'canvas.move' || command.type === 'group.move' || command.type === 'canvas.move-selection' || command.type === 'canvas.layer'
+            ? [...(cardChanges ?? []), ...(textChanges ?? []), ...(shapeChanges ?? []), ...(imageChanges ?? []), ...(strokeChanges ?? [])]
+              .flatMap(({ before, after }) => before && after && before.item.versionId !== after.item.versionId
+                ? [[after.item.id, after.item.versionId]] : []) : [];
         const receipt = {
           commandId: command.commandId,
           projectId: command.projectId,
@@ -771,6 +810,7 @@ export class Mapping {
           changedIds,
           ...(movedPoses.length ? { itemPoseVersions: Object.fromEntries(movedPoses) } : {}),
           ...(command.type === 'pose.batch' && cardChanges ? { cardPoseVersions: Object.fromEntries(cardChanges.map(({ after }) => [after.item.id, after.item.versionId])) } : {}),
+          ...(frameChanges?.some(change => !change.after) ? { deletedIds: frameChanges.filter(change => !change.after).map(change => change.before!.id) } : {}),
           ...(groupChanges?.some(change => !change.after) ? { deletedIds: groupChanges.filter(change => !change.after).flatMap(change => [change.before!.id, change.before!.itemId]) } : {}),
           ...(connectorChanges?.some(change => !change.after) ? { deletedIds: connectorChanges.filter(change => !change.after).map(change => change.before!.id) } : {}),
           ...(connectorChanges ? { connectorVersions: Object.fromEntries(connectorChanges.filter(change => change.after).map(change => [change.after!.id, change.after!.versionId])) } : {}),
@@ -801,6 +841,7 @@ export class Mapping {
           ...receipt,
           before,
           after,
+          ...(frameChanges ? { frameChanges } : {}),
           ...(groupChanges ? { groupChanges } : {}),
           ...(containmentChanges ? { containmentChanges } : {}),
           ...(connectorChanges ? { connectorChanges } : {}),

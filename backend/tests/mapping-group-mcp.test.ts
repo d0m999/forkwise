@@ -7,7 +7,7 @@ import { groupHttp, protocolResource } from './group-protocol-fixture.js';
 import type { CompactPage } from '../src/mapping/compact-contracts.js';
 afterEach(closeGroupFixtures);
 
-it('MCP SDK内存传输经真实本机HTTP读取Group归属固定快照，明确九视图和项目权限', async () => {
+it('MCP SDK内存传输经真实本机HTTP读取Group归属固定快照，明确十视图和项目权限', async () => {
   const f = groupFixture(), a = f.card(), b = f.shape(), group = f.group([a.item.id, b.item.id]);
   expect(f.state().groups![0]!.memberItemIds).toEqual([a.item.id, b.item.id]);
   const http = groupHttp(f); let server: ReturnType<typeof createMcpServer> | undefined, client: Client | undefined;
@@ -31,7 +31,7 @@ it('MCP SDK内存传输经真实本机HTTP读取Group归属固定快照，明确
     const tools = (await client.listTools()).tools;
     for (const name of ['forkwise_read_map', 'forkwise_observe_map']) {
       const tool = tools.find(t => t.name === name)!;
-      expect(tool.description).toContain('九个视图'); expect(tool.description).toContain('group-index'); expect(tool.description).toContain('containment');
+      expect(tool.description).toContain('十个视图'); expect(tool.description).toContain('group-index'); expect(tool.description).toContain('frame-index'); expect(tool.description).toContain('containment');
     }
     const forbidden = await client.callTool({ name: 'forkwise_read_map', arguments: { projectId: 'q', view: 'containment' } });
     expect(forbidden.isError).toBe(true); expect(JSON.stringify(forbidden)).toContain('PROJECT_FORBIDDEN');

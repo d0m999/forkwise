@@ -5,7 +5,7 @@ import type { SearchQuery, SearchStateQuery } from './search-contracts.js';
 export type VersionQuery = {
   type: 'version';
   projectId: string;
-  domain: 'body' | 'pose' | 'appearance' | 'tag' | 'cardTags' | 'shape' | 'stroke' | 'image' | 'connector' | 'group' | 'containment';
+  domain: 'body' | 'pose' | 'appearance' | 'tag' | 'cardTags' | 'shape' | 'stroke' | 'image' | 'connector' | 'group' | 'containment' | 'frame';
   id: string;
   versionId: string;
 };

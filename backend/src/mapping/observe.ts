@@ -19,6 +19,7 @@ function delta(change: Change): Delta {
     const key = domain + ':' + id;
     if (!seen.has(key)) { seen.add(key); domains.push({ domain, id }); }
   };
+  for (const c of change.frameChanges ?? []) add('frame', (c.after ?? c.before!).id);
   for (const c of change.groupChanges ?? []) add('group', (c.after ?? c.before!).id);
   for (const c of change.containmentChanges ?? []) add('containment', (c.after ?? c.before!).id);
   const objects = [

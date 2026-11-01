@@ -23,6 +23,8 @@ import { captureSelectionDeletion } from './canvas-selection-delete';
 import { useCanvasMarquee } from './canvas-selection-boundary';
 import { captureMemberDeletion, createGroupCommand, removeMemberCommand, ungroupCommand } from './canvas-group-commands';
 import { CanvasGroups } from './canvas-groups';
+import { CanvasFrames, useFrameMove } from './canvas-frames';
+import { createFrameCommand, createFrameSelectionCommand, frameItemsInRect, type FrameRect } from './canvas-frame-commands';
 import { useGroupGeometry } from './group-geometry';
 import { CanvasTextNode } from './canvas-text';
 import { CanvasShapeNode, shapeNodes } from './canvas-shape';
@@ -259,6 +261,9 @@ function Workspace() {
   const singleTarget = canvasSelection.value.targets.length === 1 ? canvasSelection.value.targets[0] : undefined;
   const singleItemId = singleTarget?.kind === "item" ? singleTarget.itemId : null;
   const [panTool, setPanTool] = useState(false);
+  const [frameTool, setFrameTool] = useState(false);
+  const [framePreview, setFramePreview] = useState<FrameRect | null>(null);
+  const frameDrag = useRef<{ projectId: string; start: { x: number; y: number } } | null>(null);
   const [shapePreset, setShapePreset] = useState<ShapeType | null>(null);
   const shapeCreating = useRef(false);
   const [snap, setSnap] = useState(true);
@@ -1017,7 +1022,7 @@ function Workspace() {
       if (!(await shapeMove.flush()) || !(await connectorLabel.finish()) || !(await shapeText.finish()) || !(await texts.finish()) || !(await appearance.flush()) ||
         !(await cardLayout.flush()) || !(await pose.flush()) || !(await flush())) return false;
       if (authority.current?.project.id !== projectId || editorEpoch.current !== epoch) return false;
-      strokeDraw.setMode(null); setSelection([]); setSelectedConnector(null); setPlacing(false); setShapePreset(null); texts.setPlacing(false); setPanTool(false);
+      strokeDraw.setMode(null); setSelection([]); setSelectedConnector(null); setPlacing(false); setShapePreset(null); texts.setPlacing(false); setPanTool(false); setFrameTool(false);
       return true;
     },
     point: client => flow.screenToFlowPosition(client, { snapToGrid: false }),
@@ -1068,6 +1073,9 @@ function Workspace() {
     const epoch = ++editorEpoch.current;
     connectorEdit.cancel();
     connectorCreate.deactivate();
+    setFrameTool(false);
+    frameDrag.current = null;
+    setFramePreview(null);
     return epoch;
   }
   async function chooseStroke(kind: PenKind) {
@@ -1079,7 +1087,7 @@ function Workspace() {
       !(await appearance.flush()) || !(await cardLayout.flush()) || !(await pose.flush()) || !(await flush())) return;
     if (authority.current?.project.id !== projectId || editorEpoch.current !== epoch || historyLock.current || historyCommand.current ||
       composition.current || pendingAction.current) return;
-    setSelection([]); setPlacing(false); setShapePreset(null); texts.setPlacing(false); setPanTool(false);
+    setSelection([]); setPlacing(false); setShapePreset(null); texts.setPlacing(false); setPanTool(false); setFrameTool(false);
     strokeDraw.setMode(kind);
   }
   function startMove(projectId: string, card: Card, resizing = false) {
@@ -1138,6 +1146,7 @@ function Workspace() {
     pose.cancel();
     texts.cancelMove();
     canvasMove.cancel();
+    frameMove.cancel();
     canvasSelection.cancelDrag();
     shapeMove.cancel();
     imageGeometry.cancel();
@@ -1146,7 +1155,32 @@ function Workspace() {
     bypass.current = false;
     setGuides([]);
     marqueeSelection.cancel();
+    frameDrag.current = null;
+    setFramePreview(null);
   }
+  useEffect(() => {
+    const move = (event: PointerEvent) => {
+      const current = frameDrag.current;
+      if (!current || authority.current?.project.id !== current.projectId) return;
+      const point = flow.screenToFlowPosition({ x: event.clientX, y: event.clientY }, { snapToGrid: false });
+      setFramePreview({ x: Math.min(current.start.x, point.x), y: Math.min(current.start.y, point.y),
+        width: Math.abs(point.x - current.start.x), height: Math.abs(point.y - current.start.y) });
+    };
+    const up = (event: PointerEvent) => {
+      const current = frameDrag.current;
+      frameDrag.current = null;
+      setFramePreview(null);
+      const snapshot = authority.current;
+      if (!current || !snapshot || snapshot.project.id !== current.projectId) return;
+      const point = flow.screenToFlowPosition({ x: event.clientX, y: event.clientY }, { snapToGrid: false });
+      const pose = { x: Math.min(current.start.x, point.x), y: Math.min(current.start.y, point.y),
+        width: Math.abs(point.x - current.start.x), height: Math.abs(point.y - current.start.y) };
+      if (pose.width > 0 && pose.height > 0) void action(createFrameCommand(snapshot, frameItemsInRect(snapshot, pose), pose));
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+    return () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); };
+  });
   useEffect(() => {
     const cancel = () => cancelGesture();
     const released = () => canvasMove.endArmedPointer();
@@ -1170,7 +1204,7 @@ function Workspace() {
       )
         return;
       setShapePreset(null);
-      if (groupGeometry.hasGesture() || connectorEdit.hasGesture() || connectorCreate.hasGesture() || strokeDraw.hasGesture() || pose.dragging || texts.hasMove() || canvasMove.dragging || canvasMove.hasPointerGesture() || shapeMove.dragging || imageGeometry.dragging || marqueeSelection.hasGesture()) {
+      if (groupGeometry.hasGesture() || connectorEdit.hasGesture() || connectorCreate.hasGesture() || strokeDraw.hasGesture() || pose.dragging || texts.hasMove() || canvasMove.dragging || canvasMove.hasPointerGesture() || frameMove.hasGesture() || shapeMove.dragging || imageGeometry.dragging || marqueeSelection.hasGesture()) {
         event.preventDefault();
         cancel();
         return;
@@ -2104,7 +2138,7 @@ function Workspace() {
     awaitBodySelection.current = true;
     clearConnectorSelection();
     setSelection([card.item.id]);
-    setPlacing(false); setPanTool(false);
+    setPlacing(false); setPanTool(false); setFrameTool(false);
     requestAnimationFrame(() => {
       const pose = card.item.pose;
       void flow.setCenter(pose.x + pose.width / 2, pose.y + pose.height / 2, { zoom: flow.getZoom(), duration: matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 180 });
@@ -2357,6 +2391,9 @@ function Workspace() {
     if (!(await shapeMove.flush())) throw new Error("请先确认形状布局保存，整组移动意图仍保留");
     return prepare();
   }, done, intent, discard));
+  const frameMove = useFrameMove({ state, blocked: busy || historyBlocked || composition.current || !!pendingAction.current,
+    point: client => flow.screenToFlowPosition(client, { snapToGrid: false }),
+    execute: (command, done) => void action(command, done) });
   const groupGeometry = useGroupGeometry({ state, selection: canvasSelection.value, current: () => authority.current,
     generation: canvasSelection.generation, zoom: () => flow.getZoom(), lock: setGroupGeometryLocked, fail,
     blocked: busy || historyBlocked || composition.current || !!pendingAction.current || canvasMove.dragging || pose.dragging ||
@@ -2388,6 +2425,14 @@ function Workspace() {
       clearConnectorSelection();
     },
       () => authority.current?.project.id === intent.projectId && canvasSelection.generation() === generation);
+  }
+  async function createSelectedFrame() {
+    const snapshot = authority.current;
+    if (!snapshot || busy || historyBlocked || composition.current || pendingAction.current) return;
+    const command = createFrameSelectionCommand(snapshot, canvasSelection.current());
+    if (!command) return;
+    const generation = canvasSelection.generation();
+    await action(command, undefined, () => authority.current?.project.id === command.projectId && canvasSelection.generation() === generation);
   }
   async function deleteSelectedCanvas(groupId?: string) {
     const snapshot = authority.current;
@@ -2822,6 +2867,13 @@ function Workspace() {
               { x: touch.clientX, y: touch.clientY });
         }}
         onPointerDownCapture={(event) => {
+          if (frameTool && event.button === 0 && (event.target as Element).classList.contains('react-flow__pane') && state) {
+            event.preventDefault(); event.stopPropagation();
+            frameDrag.current = { projectId: state.project.id,
+              start: flow.screenToFlowPosition({ x: event.clientX, y: event.clientY }, { snapToGrid: false }) };
+            setFramePreview({ ...frameDrag.current.start, width: 0, height: 0 });
+            return;
+          }
           if (imageGeometry.cropping?.projectId === state?.project.id && state && event.button === 0 && !(event.target as Element).closest('.image-crop')) {
             event.preventDefault(); event.stopPropagation(); return;
           }
@@ -2866,7 +2918,7 @@ function Workspace() {
               "controls.zoomOut.ariaLabel": "缩小",
               "controls.fitView.ariaLabel": "适应画布",
             }}
-            nodes={orderCanvas([...nodes, ...textNodes, ...imageNodes(state.images ?? [], state.project.id, selection, (id, extend) => void chooseCanvasItem(id, extend), busy || historyBlocked || composition.current || !!pendingAction.current || placing || !!shapePreset || texts.placing || panTool || !!strokeDraw.mode || !!shapeText.session || texts.geometryBlocked, imageGeometry, (value, dx, dy) => { if (canvasMove.start(value.item.id)) canvasMove.finish({ x: value.item.pose.x + dx, y: value.item.pose.y + dy }); }, singleItemId, memberAction, layerProps), ...shapeNodes(state.shapes ?? [], selection, (id, extend) => void chooseCanvasItem(id, extend), busy || historyBlocked || placing || !!shapePreset || texts.placing || panTool, id => void beginShapeText(id), !!shapeText.session, (id, trigger) => void beginShapeAppearance(id, trigger), value => void removeShape(value), shapeMove.positions, shapeMove, composition.current || !!pendingAction.current || pose.pending || pose.dragging || canvasMove.dragging || texts.hasPending() || appearance.pending || cardLayout.pending, singleItemId, memberAction, layerProps), ...strokeNodes(state.strokes ?? [], selection, (id, extend) => void chooseStrokeItem(id, extend), value => void removeStroke(value), busy || historyBlocked || !!pendingAction.current || placing || !!shapePreset || texts.placing || panTool || !!strokeDraw.mode, singleItemId, memberAction, itemId => !!state.groups?.some(group => group.memberItemIds.includes(itemId)) || (flowSelection.includes(itemId) && flowSelection.length > 1))].map(node => groupGeometry.project({ ...node, selected: flowSelection.includes(node.id), position: canvasMove.positions[node.id] ?? shapeMove.positions[node.id] ?? node.position, draggable: node.draggable !== false && !groupGeometry.active && !strokeDraw.mode && !busy && !historyBlocked && !panTool && !placing && !shapePreset && !texts.placing && !texts.geometryBlocked && !shapeText.session && !connectorLabel.session && !shapeMove.pending })), state, selection, { temporaryRaise: pureCardSelection && !layerHoldActive })}
+            nodes={orderCanvas([...nodes, ...textNodes, ...imageNodes(state.images ?? [], state.project.id, selection, (id, extend) => void chooseCanvasItem(id, extend), busy || historyBlocked || composition.current || !!pendingAction.current || placing || !!shapePreset || texts.placing || panTool || !!strokeDraw.mode || !!shapeText.session || texts.geometryBlocked, imageGeometry, (value, dx, dy) => { if (canvasMove.start(value.item.id)) canvasMove.finish({ x: value.item.pose.x + dx, y: value.item.pose.y + dy }); }, singleItemId, memberAction, layerProps), ...shapeNodes(state.shapes ?? [], selection, (id, extend) => void chooseCanvasItem(id, extend), busy || historyBlocked || placing || !!shapePreset || texts.placing || panTool, id => void beginShapeText(id), !!shapeText.session, (id, trigger) => void beginShapeAppearance(id, trigger), value => void removeShape(value), shapeMove.positions, shapeMove, composition.current || !!pendingAction.current || pose.pending || pose.dragging || canvasMove.dragging || texts.hasPending() || appearance.pending || cardLayout.pending, singleItemId, memberAction, layerProps), ...strokeNodes(state.strokes ?? [], selection, (id, extend) => void chooseStrokeItem(id, extend), value => void removeStroke(value), busy || historyBlocked || !!pendingAction.current || placing || !!shapePreset || texts.placing || panTool || !!strokeDraw.mode, singleItemId, memberAction, itemId => !!state.groups?.some(group => group.memberItemIds.includes(itemId)) || (flowSelection.includes(itemId) && flowSelection.length > 1))].map(node => groupGeometry.project({ ...node, selected: flowSelection.includes(node.id), position: frameMove.positions[node.id] ?? canvasMove.positions[node.id] ?? shapeMove.positions[node.id] ?? node.position, draggable: node.draggable !== false && !groupGeometry.active && !strokeDraw.mode && !busy && !historyBlocked && !panTool && !placing && !shapePreset && !texts.placing && !texts.geometryBlocked && !shapeText.session && !connectorLabel.session && !shapeMove.pending })), state, selection, { temporaryRaise: pureCardSelection && !layerHoldActive })}
             onNodeClick={(event, node) => {
               awaitBodySelection.current = false;
               clearConnectorSelection();
@@ -2954,9 +3006,12 @@ function Workspace() {
             <Background gap={24} color="#dce0e7" />
             <Controls showInteractive={false} />
             <ViewportPortal>
-              <CanvasGroups state={state} selection={canvasSelection.value} positions={{ ...canvasMove.positions, ...groupGeometry.poses }} geometry={groupGeometry}
+              <CanvasFrames state={state} preview={framePreview} blocked={busy || historyBlocked || !!pendingAction.current}
+                execute={(command, done) => void action(command, done)} move={frameMove} />
+              <CanvasGroups state={state} selection={canvasSelection.value} positions={{ ...canvasMove.positions, ...frameMove.positions, ...groupGeometry.poses }} geometry={groupGeometry}
                 blocked={busy || historyBlocked || !!pendingAction.current || texts.hasPending()}
                 create={() => void createSelectedGroup()}
+                createFrame={() => void createSelectedFrame()}
                 ungroup={id => void ungroupSelected(id)}
                 remove={id => void deleteSelectedCanvas(id)}
                 enter={id => canvasSelection.set({ targets: [], enteredGroupId: id })}
@@ -3043,7 +3098,7 @@ function Workspace() {
               blocked={busy || historyBlocked || composition.current || !!pendingAction.current}
               copy={() => void copySelection()} paste={() => void pasteSelection()} duplicate={() => void duplicateSelection()} />
             <button
-              aria-pressed={!placing && !shapePreset && !strokeDraw.mode && !connectorCreate.mode && !panTool && !texts.placing}
+              aria-pressed={!placing && !shapePreset && !strokeDraw.mode && !connectorCreate.mode && !panTool && !texts.placing && !frameTool}
               onClick={() => {
                 if (strokeDraw.hasPending() || connectorCreate.hasPending()) return;
                 connectorEdit.cancel();
@@ -3052,7 +3107,7 @@ function Workspace() {
                 setPlacing(false);
                 setShapePreset(null);
                 texts.setPlacing(false);
-                setPanTool(false);
+                setPanTool(false); setFrameTool(false);
               }}
             >
               选择
@@ -3081,6 +3136,12 @@ function Workspace() {
             >
               对齐吸附：{snap ? "开" : "关"}
             </button>
+            <button aria-pressed={frameTool} disabled={busy || historyBlocked || strokeDraw.drawing}
+              onClick={() => {
+                beginCreationToolChoice();
+                strokeDraw.setMode(null); setPlacing(false); setShapePreset(null); texts.setPlacing(false); setPanTool(false); setFrameTool(false);
+                setFrameTool(true);
+              }}>分区</button>
             <button
               aria-pressed={placing}
               disabled={busy || historyBlocked}
@@ -3088,7 +3149,7 @@ function Workspace() {
                 if (strokeDraw.hasPending()) return;
                 beginCreationToolChoice();
                 strokeDraw.setMode(null);
-                setPanTool(false);
+                setPanTool(false); setFrameTool(false);
                 setShapePreset(null);
                 texts.setPlacing(false);
                 setPlacing(true);
@@ -3102,10 +3163,10 @@ function Workspace() {
                 connectorEdit.cancel();
                 void connectorCreate.activate();
               }}>连线</button>
-            <button aria-pressed={texts.placing} disabled={busy || historyBlocked || strokeDraw.drawing} onClick={() => { beginCreationToolChoice(); strokeDraw.setMode(null); setPlacing(false); setShapePreset(null); setPanTool(false); texts.setPlacing(true); }}>文字</button>
+            <button aria-pressed={texts.placing} disabled={busy || historyBlocked || strokeDraw.drawing} onClick={() => { beginCreationToolChoice(); strokeDraw.setMode(null); setPlacing(false); setShapePreset(null); setPanTool(false); setFrameTool(false); texts.setPlacing(true); }}>文字</button>
             <ShapeTools placing={shapePreset} disabled={busy || historyBlocked || strokeDraw.drawing} choose={type => {
               beginCreationToolChoice();
-              strokeDraw.setMode(null); setPlacing(false); texts.setPlacing(false); setPanTool(false); setShapePreset(type);
+              strokeDraw.setMode(null); setPlacing(false); texts.setPlacing(false); setPanTool(false); setFrameTool(false); setShapePreset(type);
             }} />
             <StrokeTools active={strokeDraw.mode} disabled={busy || historyBlocked || strokeDraw.drawing} choose={chooseStroke} />
             <button disabled={busy || historyBlocked || imageInput.pending || strokeDraw.drawing} onClick={() => imageFile.current?.click()}>图片</button>

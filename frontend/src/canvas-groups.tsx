@@ -3,10 +3,10 @@ import { canvasItems, selectedItemIds, type CanvasSelection } from './canvas-sel
 import type { useGroupGeometry } from './group-geometry';
 import { LayerMenu, type LayerMenuProps } from './layer-menu';
 
-export function CanvasGroups({ state, selection, positions, geometry, blocked, create, enter, ungroup, remove, layer }: {
+export function CanvasGroups({ state, selection, positions, geometry, blocked, create, createFrame, enter, ungroup, remove, layer }: {
   state: ProjectState; selection: CanvasSelection; positions: Record<string, { x: number; y: number; width?: number; height?: number }>;
   geometry: ReturnType<typeof useGroupGeometry>;
-  blocked: boolean; create: () => void; enter: (id: string) => void; ungroup: (id: string) => void;
+  blocked: boolean; create: () => void; createFrame: () => void; enter: (id: string) => void; ungroup: (id: string) => void;
   remove: (id: string) => void; layer?: LayerMenuProps | undefined;
 }) {
   const items = canvasItems(state), ids = selectedItemIds(state, selection);
@@ -30,8 +30,14 @@ export function CanvasGroups({ state, selection, positions, geometry, blocked, c
         top: (corner.startsWith('n') ? top : bottom) - 5, zIndex: 1001, pointerEvents: 'auto', cursor: corner === 'nw' || corner === 'se' ? 'nwse-resize' : 'nesw-resize' }}
       onPointerDown={event => geometry.start(event, corner)} />)}
     {selected.length > 0 && (selection.targets.length > 1 || groupId) && <div role="toolbar" aria-label="组合操作"
-      className="canvas-group-tools nodrag nopan" style={{ left, top: top - 48 }} onPointerDown={e => e.stopPropagation()}>
+      className="canvas-group-tools nodrag nopan" style={{ left,
+        top: selection.targets.length > 1 && selected.every(value => 'body' in value) ? bottom + 12 : top - 48 }}
+      onPointerDown={e => e.stopPropagation()}>
       {selection.targets.length > 1 && <><button disabled={blocked} onClick={create}>组合所选对象</button><span>不含连线</span></>}
+      {selection.targets.every(target => {
+        const itemId = target.kind === 'item' ? target.itemId : state.groups?.find(group => group.id === target.id)?.itemId;
+        return itemId && !state.containment?.some(value => value.id === itemId && value.parent);
+      }) && <button disabled={blocked} onClick={createFrame}>创建分区</button>}
       {groupId && <button disabled={blocked} onClick={() => enter(groupId)}>进入组合</button>}
       {groupId && <button disabled={blocked} onClick={() => ungroup(groupId)}>取消组合</button>}
       {groupId && <button disabled={blocked} onClick={() => remove(groupId)}>删除组合</button>}
