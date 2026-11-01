@@ -3049,7 +3049,9 @@ function Workspace() {
                 focusId={frameEditorFocus.current?.projectId === state.project.id ? frameEditorFocus.current.id : null}
                 onFocusRestored={id => { if (frameEditorFocus.current?.projectId === state.project.id && frameEditorFocus.current.id === id) frameEditorFocus.current = null; }}
                 blocked={busy || historyBlocked || !!pendingAction.current}
-                execute={(command, done) => void action(command, done)} move={frameMove} />
+                execute={(command, done, endEditing) => void action(command, done, undefined, () => {
+                  if (!pendingAction.current && authority.current?.project.id === command.projectId) endEditing?.();
+                })} move={frameMove} />
               <CanvasGroups state={state} selection={canvasSelection.value} positions={{ ...canvasMove.positions, ...frameMove.positions, ...groupGeometry.poses }} geometry={groupGeometry}
                 blocked={busy || historyBlocked || !!pendingAction.current || texts.hasPending()}
                 create={() => void createSelectedGroup()}

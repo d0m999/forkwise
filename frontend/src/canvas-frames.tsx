@@ -5,7 +5,7 @@ import type { CanvasFrame } from '../../backend/src/mapping/frame-contracts';
 
 type Point = { x: number; y: number };
 type FrameCommand = Extract<Command, { type: 'frame.edit' | 'frame.move' | 'frame.delete' }>;
-type Execute = (command: FrameCommand, onDone: () => void) => void;
+type Execute = (command: FrameCommand, onDone: () => void, endEditing?: () => void) => void;
 
 export function useFrameMove({ state, blocked, point, execute }: {
   state: ProjectState | null; blocked: boolean; point: (client: Point) => Point; execute: Execute;
@@ -84,9 +84,8 @@ export function CanvasFrames({ state, preview, selectedId, choose, focusId, onFo
     if (!session || blocked || composing || !name.trim() || background && !/^#[0-9a-f]{6}$/i.test(background)) return;
     execute({ commandId: crypto.randomUUID(), projectId: session.projectId, type: 'frame.edit', expected: session.versionId,
       payload: { id: session.id, name, background: background || null } }, () => {
-        setEditing(null);
         requestAnimationFrame(() => triggers.current[session.id]?.focus({ preventScroll: true }));
-      });
+      }, () => setEditing(current => current === session ? null : current));
   }
   return <>
     {(state.frames ?? []).map(frame => {
@@ -106,7 +105,11 @@ export function CanvasFrames({ state, preview, selectedId, choose, focusId, onFo
           <input aria-label="分区背景" type="text" placeholder="透明" value={background} readOnly={blocked}
             onChange={event => setBackground(event.target.value)} onKeyDown={event => event.stopPropagation()} />
           <button type="button" disabled={blocked}
-            onClick={() => execute(deleteFrameCommand(state, frame), () => { setEditing(null); choose(null); })}>删除分区</button>
+            onClick={() => {
+              const session = editing;
+              execute(deleteFrameCommand(state, frame), () => choose(null),
+                () => setEditing(current => current === session ? null : current));
+            }}>删除分区</button>
           <button type="submit" disabled={blocked || !name.trim() || !!background && !/^#[0-9a-f]{6}$/i.test(background)}>保存分区</button>
         </form> : <>
           <button ref={element => { triggers.current[frame.id] = element; }} type="button"

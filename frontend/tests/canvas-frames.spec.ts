@@ -729,3 +729,91 @@ test('分区编辑固定进入时版本，外部同步后旧草稿409保留，�
   await expect(page.getByRole('status')).toHaveText('已保存到本机');
   expect((await workspace.state()).frames![0]).toMatchObject({ name: '重新确认的新名称', background: '#ddeeff' });
 });
+
+
+test('分区编辑成功 ACK 在途改选空白后结束原会话，不抢回焦点或选择', async ({ page, workspace }) => {
+  const f = await frameWithGroup(page, workspace);
+  let release!: () => void; const gate = new Promise<void>(resolve => { release = resolve; });
+  const attempts: any[] = [];
+  await page.route('**/api/mapping/execute', async route => {
+    const command = route.request().postDataJSON();
+    if (command.type !== 'frame.edit') { await route.continue(); return; }
+    const response = await route.fetch(); attempts.push({ command, status: response.status() });
+    await gate; await route.fulfill({ response });
+  });
+  try {
+    await page.getByRole('button', { name: '分区1', exact: true }).dblclick();
+    const name = page.getByRole('textbox', { name: '分区名称', exact: true }); await name.fill('已确认的分区名称'); await name.press('Enter');
+    await expect.poll(() => attempts.length).toBe(1); expect(attempts[0].status).toBe(200);
+    const pane = (await page.locator('.react-flow__pane').boundingBox())!;
+    await page.mouse.click(pane.x + pane.width - 30, pane.y + pane.height - 60);
+    await expect(page.locator('[data-frame-id="' + f.frame.id + '"]')).toHaveAttribute('data-selected', 'false');
+    release(); await expect(page.getByRole('status')).toHaveText('已保存到本机');
+    await expect(name).toHaveCount(0);
+    const trigger = page.getByRole('button', { name: '已确认的分区名称', exact: true });
+    await expect(trigger).toBeVisible(); await expect(trigger).not.toBeFocused();
+    await expect(page.locator('.react-flow__node.selected')).toHaveCount(0);
+    expect(attempts).toHaveLength(1); expect((await workspace.state()).frames![0]!.name).toBe('已确认的分区名称');
+  } finally { release(); await page.unrouteAll({ behavior: 'wait' }); }
+});
+
+
+for (const mode of ['unknown-ack', 'confirmed-read-failure'] as const) {
+  test(`分区编辑 ${mode} 后改选再重试仍结束原会话，保原请求且不重复写`, async ({ page, workspace }) => {
+    const f = await frameWithGroup(page, workspace), attempts: any[] = [];
+    let applied = false, failRead = mode === 'confirmed-read-failure';
+    await page.route('**/api/mapping/execute', async route => {
+      const command = route.request().postDataJSON();
+      if (command.type !== 'frame.edit') { await route.continue(); return; }
+      const response = await route.fetch(); attempts.push({ command, status: response.status() }); applied = true;
+      if (mode === 'unknown-ack' && attempts.length === 1) await route.abort('connectionreset');
+      else await route.fulfill({ response });
+    });
+    await page.route('**/api/mapping/projects/' + f.before.project.id + '/map?**', async route => {
+      if (!applied || !failRead || new URL(route.request().url()).searchParams.get('view') !== 'index') { await route.continue(); return; }
+      const response = await route.fetch(); expect(response.status()).toBe(200); failRead = false; await route.abort('connectionreset');
+    });
+    try {
+      await page.getByRole('button', { name: '分区1', exact: true }).dblclick();
+      const name = page.getByRole('textbox', { name: '分区名称', exact: true }); await name.fill('等待确认的分区'); await name.press('Enter');
+      const retry = page.getByRole('button', { name: '重试保存', exact: true }); await expect(retry).toBeVisible();
+      const committed = await workspace.state(), historyUrl = workspace.origin + '/api/mapping/projects/' + f.before.project.id + '/history';
+      const history = await (await page.request.get(historyUrl)).json();
+      const pane = (await page.locator('.react-flow__pane').boundingBox())!;
+      await page.mouse.click(pane.x + pane.width - 30, pane.y + pane.height - 60);
+      await retry.click(); await expect(retry).toHaveCount(0); await expect(name).toHaveCount(0);
+      await expect(page.getByRole('button', { name: '等待确认的分区', exact: true })).not.toBeFocused();
+      await expect(page.locator('[data-frame-id="' + f.frame.id + '"]')).toHaveAttribute('data-selected', 'false');
+      expect(attempts).toHaveLength(mode === 'unknown-ack' ? 2 : 1);
+      if (mode === 'unknown-ack') expect(attempts[1]).toEqual(attempts[0]);
+      expect(await workspace.state()).toEqual(committed); expect(await (await page.request.get(historyUrl)).json()).toEqual(history);
+    } finally { await page.unrouteAll({ behavior: 'wait' }); }
+  });
+}
+
+test('分区编辑表单删除 ACK 在途改选，成功结束原会话且 undo 不复现旧编辑器', async ({ page, workspace }) => {
+  const f = await frameWithGroup(page, workspace), attempts: any[] = [];
+  let release!: () => void; const gate = new Promise<void>(resolve => { release = resolve; });
+  await page.route('**/api/mapping/execute', async route => {
+    const command = route.request().postDataJSON();
+    if (command.type !== 'frame.delete') { await route.continue(); return; }
+    const response = await route.fetch(); attempts.push({ command, status: response.status() }); await gate; await route.fulfill({ response });
+  });
+  try {
+    await page.getByRole('button', { name: '分区1', exact: true }).dblclick();
+    const name = page.getByRole('textbox', { name: '分区名称', exact: true }); await name.fill('删除前未保存草稿');
+    await page.getByRole('button', { name: '删除分区', exact: true }).click();
+    await expect.poll(() => attempts.length).toBe(1); expect(attempts[0].status).toBe(200);
+    const pane = (await page.locator('.react-flow__pane').boundingBox())!;
+    await page.mouse.click(pane.x + pane.width - 30, pane.y + pane.height - 60);
+    release(); await expect(page.getByRole('status')).toHaveText('已保存到本机');
+    expect((await workspace.state()).frames).toEqual([]);
+    await page.getByRole('button', { name: '撤销', exact: true }).click();
+    await expect.poll(async () => (await workspace.state()).frames!.length).toBe(1);
+    await expect(name).toHaveCount(0); await expect(page.getByRole('button', { name: '分区1', exact: true })).toBeVisible();
+    const restored = await workspace.state();
+    expect(restored.frames![0]!.name).toBe('分区1');
+    for (const key of ['cards', 'texts', 'shapes', 'groups', 'connectors'] as const) expect(restored[key]).toEqual(f.before[key]);
+    await expect(page.locator('.react-flow__node.selected')).toHaveCount(0); expect(attempts).toHaveLength(1);
+  } finally { release(); await page.unrouteAll({ behavior: 'wait' }); }
+});
