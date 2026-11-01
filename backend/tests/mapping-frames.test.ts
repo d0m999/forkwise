@@ -206,3 +206,189 @@ it('Compact frame-index 固定同一快照的名称、外观、姿态和成员�
   expect(f.mapping.read({ type: 'map', projectId: 'p', view: 'frame-index', snapshot: pinned.snapshot }, f.human).items[0])
     .toMatchObject({ name: '分区1', background: null });
 });
+
+
+it('Frame 内取消组合原子释放组与成员归属，undo/redo 生成新版本且重开一致', () => {
+  const f = groupFixture(), text = f.text(), shape = f.shape(), group = f.group([text.item.id, shape.item.id]);
+  f.execute({ type: 'frame.create', expected: { frame: null, groups: { [group.id]: group.versionId }, containment: { [group.itemId]: null },
+    poses: { [text.item.id]: text.item.versionId, [shape.item.id]: shape.item.versionId } },
+    payload: { id: 'frame', itemIds: [group.itemId], pose: { x: 0, y: 0, width: 800, height: 400 } } });
+  const before = f.state(), history = f.history();
+  f.execute({ type: 'group.ungroup', expected: f.structure(), payload: { id: group.id } });
+  const released = f.state();
+  expect(released.groups).toEqual([]);
+  expect(released.frames![0]!.memberItemIds).toEqual([]);
+  expect(released.containment!.find(value => value.id === group.itemId)).toBeUndefined();
+  expect(released.containment!.map(value => value.parent)).toEqual([null, null]);
+  expect(released.texts).toEqual(before.texts);
+  expect(released.shapes).toEqual(before.shapes);
+  expect(f.history().undo).toHaveLength(history.undo.length + 1);
+  expect(f.mapping.observe({ projectId: 'p', afterRevision: before.project.revision }, f.human).changes).toHaveLength(1);
+  f.travel('history.undo');
+  const undone = f.state();
+  expect(undone.groups![0]).toMatchObject({ id: group.id, itemId: group.itemId, memberItemIds: group.memberItemIds });
+  expect(undone.groups![0]!.versionId).not.toBe(group.versionId);
+  expect(undone.containment!.find(value => value.id === group.itemId)).toMatchObject({ parent: { kind: 'frame', id: 'frame' } });
+  expect(undone.containment!.find(value => value.id === group.itemId)!.versionId).not.toBe(before.containment!.find(value => value.id === group.itemId)!.versionId);
+  f.travel('history.redo');
+  const redone = f.state();
+  expect(redone.groups).toEqual([]);
+  expect(redone.frames![0]!.memberItemIds).toEqual([]);
+  expect(redone.texts).toEqual(before.texts);
+  expect(redone.shapes).toEqual(before.shapes);
+  f.reopen();
+  expect(f.state()).toEqual(redone);
+});
+
+
+it.each(['group.delete', 'group.remove-member', 'text.delete'])('Frame 内 %s 终结组合时清理外层归属，存活组合保留外层且一次撤销恢复', type => {
+  const f = groupFixture(), text = f.text(), shape = f.shape(), group = f.group([text.item.id, shape.item.id]);
+  f.execute({ type: 'frame.create', expected: { frame: null, groups: { [group.id]: group.versionId }, containment: { [group.itemId]: null },
+    poses: { [text.item.id]: text.item.versionId, [shape.item.id]: shape.item.versionId } },
+    payload: { id: 'frame', itemIds: [group.itemId], pose: { x: 0, y: 0, width: 800, height: 400 } } });
+  if (type !== 'group.delete') {
+    const expected = f.structure();
+    f.execute({ type: 'group.remove-member', expected: { group: expected.group, parentContainment: expected.parentContainment, containment: expected.containment[shape.item.id] }, payload: { id: group.id, itemId: shape.item.id } });
+    expect(f.state().frames![0]!.memberItemIds).toEqual([group.itemId]);
+    expect(f.state().groups![0]!.memberItemIds).toEqual([text.item.id]);
+  }
+  const before = f.state(), history = f.history();
+  if (type === 'group.delete') f.execute({ type, expected: groupDeleteExpected(f), payload: { id: group.id } });
+  else if (type === 'group.remove-member') {
+    const expected = f.structure();
+    f.execute({ type, expected: { group: expected.group, parentContainment: expected.parentContainment, containment: expected.containment[text.item.id] }, payload: { id: group.id, itemId: text.item.id } });
+  } else f.execute({ type, expected: { text: text.versionId, pose: text.item.versionId, membership: f.membership(text.item.id) }, payload: { id: text.id } });
+  expect(f.state().frames![0]!.memberItemIds).toEqual([]);
+  expect(f.state().groups).toEqual([]);
+  expect(f.state().containment!.some(value => value.id === group.itemId)).toBe(false);
+  expect(f.history().undo).toHaveLength(history.undo.length + 1);
+  f.travel('history.undo');
+  expect(f.state().frames![0]!.memberItemIds).toEqual([group.itemId]);
+  expect(f.state().groups![0]!.memberItemIds).toEqual(before.groups![0]!.memberItemIds);
+  expect(f.state().groups![0]!.versionId).not.toBe(before.groups![0]!.versionId);
+  f.travel('history.redo');
+  const redone = f.state();
+  expect(redone.frames![0]!.memberItemIds).toEqual([]);
+  expect(redone.groups).toEqual([]);
+  f.reopen();
+  expect(f.state()).toEqual(redone);
+});
+
+it('Frame 内旧组合被重新组合消耗时不留下悬挂归属，一次 undo/redo 与重开完整', () => {
+  const f = groupFixture(), text = f.text(), shape = f.shape(), card = f.card(), group = f.group([text.item.id, shape.item.id]);
+  f.execute({ type: 'frame.create', expected: { frame: null, groups: { [group.id]: group.versionId }, containment: { [group.itemId]: null },
+    poses: { [text.item.id]: text.item.versionId, [shape.item.id]: shape.item.versionId } },
+    payload: { id: 'frame', itemIds: [group.itemId], pose: { x: 0, y: 0, width: 800, height: 400 } } });
+  const before = f.state(), history = f.history();
+  f.execute({ type: 'group.create', expected: { groups: { replacement: null, [group.id]: group.versionId },
+    containment: { ...f.structure().containment, [group.itemId]: f.state().containment!.find(value => value.id === group.itemId)!.versionId, [card.item.id]: null } }, payload: { id: 'replacement', itemIds: [group.itemId, card.item.id] } });
+  const regrouped = f.state();
+  expect(regrouped.groups!.map(value => value.id)).toEqual(['replacement']);
+  expect(regrouped.frames![0]!.memberItemIds).toEqual([]);
+  expect(regrouped.containment!.some(value => value.id === group.itemId)).toBe(false);
+  expect(f.history().undo).toHaveLength(history.undo.length + 1);
+  f.travel('history.undo');
+  expect(f.state().groups![0]).toMatchObject({ id: group.id, itemId: group.itemId, memberItemIds: group.memberItemIds });
+  expect(f.state().frames![0]!.memberItemIds).toEqual([group.itemId]);
+  expect(f.state().containment!.find(value => value.id === group.itemId)!.versionId).not.toBe(before.containment!.find(value => value.id === group.itemId)!.versionId);
+  f.travel('history.redo');
+  const redone = f.state();
+  expect(redone.frames![0]!.memberItemIds).toEqual([]);
+  expect(redone.groups![0]!.id).toBe('replacement');
+  f.reopen();
+  expect(f.state()).toEqual(redone);
+});
+
+
+it('Frame 新增组合外层归属后，旧取消组合依据不得写入新的归属域', () => {
+  const f = groupFixture(), text = f.text(), shape = f.shape(), group = f.group([text.item.id, shape.item.id]);
+  const expected = f.structure();
+  f.execute({ type: 'frame.create', expected: { frame: null, groups: { [group.id]: group.versionId }, containment: { [group.itemId]: null },
+    poses: { [text.item.id]: text.item.versionId, [shape.item.id]: shape.item.versionId } },
+    payload: { id: 'frame', itemIds: [group.itemId], pose: { x: 0, y: 0, width: 800, height: 400 } } });
+  const before = f.state(), history = f.history();
+  expect(() => f.execute({ type: 'group.ungroup', expected, payload: { id: group.id } }))
+    .toThrowError(expect.objectContaining({ code: 'VERSION_CONFLICT', status: 409 }));
+  expect(f.state()).toEqual(before); expect(f.history()).toEqual(history);
+});
+
+
+it.each(['group.delete', 'group.remove-member', 'text.delete', 'group.create'])('Frame 新增外层归属后旧 %s 依据原子拒绝，不碰正文历史', type => {
+  const f = groupFixture(), text = f.text(), shape = f.shape(), card = f.card(), group = f.group([text.item.id, shape.item.id]);
+  if (type === 'group.remove-member' || type === 'text.delete') {
+    const structure = f.structure();
+    f.execute({ type: 'group.remove-member', expected: { group: structure.group, containment: structure.containment[shape.item.id] }, payload: { id: group.id, itemId: shape.item.id } });
+  }
+  const current = f.state().groups![0]!, structure = f.structure();
+  const command = type === 'group.delete' ? { type, expected: groupDeleteExpected(f), payload: { id: group.id } }
+    : type === 'group.remove-member' ? { type, expected: { group: structure.group, containment: structure.containment[text.item.id] }, payload: { id: group.id, itemId: text.item.id } }
+    : type === 'text.delete' ? { type, expected: { text: text.versionId, pose: text.item.versionId, membership: f.membership(text.item.id) }, payload: { id: text.id } }
+    : { type, expected: { groups: { replacement: null, [group.id]: current.versionId }, containment: { ...structure.containment, [card.item.id]: null } }, payload: { id: 'replacement', itemIds: [group.itemId, card.item.id] } };
+  f.execute({ type: 'frame.create', expected: { frame: null, groups: { [group.id]: current.versionId }, containment: { [group.itemId]: null },
+    poses: { [text.item.id]: text.item.versionId, ...(current.memberItemIds.includes(shape.item.id) ? { [shape.item.id]: shape.item.versionId } : {}) } },
+    payload: { id: 'frame', itemIds: [group.itemId], pose: { x: 0, y: 0, width: 800, height: 400 } } });
+  const before = f.state(), history = f.history();
+  expect(() => f.execute(command)).toThrowError(expect.objectContaining({ code: 'VERSION_CONFLICT', status: 409 }));
+  expect(f.state()).toEqual(before); expect(f.history()).toEqual(history);
+});
+
+it('Frame 内局部重组保留存活旧组及另一直接成员，耗尽旧组仅清自身边', () => {
+  const f = groupFixture(), text = f.text(), shape = f.shape(), stroke = f.stroke(), control = f.card();
+  const group = f.group([text.item.id, shape.item.id, stroke.item.id]);
+  f.execute({ type: 'frame.create', expected: { frame: null, groups: { [group.id]: group.versionId }, containment: { [group.itemId]: null, [control.item.id]: null },
+    poses: { [text.item.id]: text.item.versionId, [shape.item.id]: shape.item.versionId, [stroke.item.id]: stroke.item.versionId, [control.item.id]: control.item.versionId } },
+    payload: { id: 'frame', itemIds: [group.itemId, control.item.id], pose: { x: 0, y: 0, width: 800, height: 400 } } });
+  const before = f.state(), own = before.containment!.find(value => value.id === group.itemId)!;
+  f.execute({ type: 'group.create', expected: { groups: { partial: null, [group.id]: group.versionId },
+    containment: Object.fromEntries(before.containment!.filter(value => [text.item.id, shape.item.id].includes(value.id)).map(value => [value.id, value.versionId])) },
+    payload: { id: 'partial', itemIds: [text.item.id, shape.item.id] } });
+  const partial = f.state();
+  expect(partial.groups!.find(value => value.id === group.id)!.memberItemIds).toEqual([stroke.item.id]);
+  expect(partial.containment!.find(value => value.id === group.itemId)).toEqual(own);
+  expect(partial.frames![0]!.memberItemIds).toEqual([group.itemId, control.item.id]);
+  const replacement = partial.groups!.find(value => value.id === 'partial')!;
+  f.execute({ type: 'group.create', expected: { groups: { full: null, [group.id]: partial.groups!.find(value => value.id === group.id)!.versionId, partial: replacement.versionId },
+    containment: Object.fromEntries(partial.containment!.filter(value => [text.item.id, shape.item.id, stroke.item.id, group.itemId].includes(value.id)).map(value => [value.id, value.versionId])) },
+    payload: { id: 'full', itemIds: [group.itemId, replacement.itemId] } });
+  const full = f.state();
+  expect(full.frames![0]!.memberItemIds).toEqual([control.item.id]);
+  expect(full.cards).toEqual(before.cards);
+  expect(full.groups!.map(value => value.id)).toEqual(['full']);
+  f.travel('history.undo'); expect([...f.state().frames![0]!.memberItemIds].sort()).toEqual([group.itemId, control.item.id].sort());
+  f.travel('history.redo'); expect(f.state().frames![0]!.memberItemIds).toEqual([control.item.id]);
+  const redone = f.state();
+  for (const state of [partial, full, redone]) {
+    const values = [...state.cards, ...state.texts!, ...state.shapes!, ...state.strokes!];
+    const originals = [...before.cards, ...before.texts!, ...before.shapes!, ...before.strokes!];
+    for (const value of [...values, ...originals]) expect(value.item.createdOrder).toEqual(expect.any(Number));
+    expect(values.map(value => [value.id, value.item.pose, value.item.createdOrder])).toEqual(originals.map(value => [value.id, value.item.pose, value.item.createdOrder]));
+    expect([...values].sort((a, b) => a.item.createdOrder! - b.item.createdOrder!).map(value => value.id))
+      .toEqual([...originals].sort((a, b) => a.item.createdOrder! - b.item.createdOrder!).map(value => value.id));
+  }
+  f.reopen(); expect(f.state()).toEqual(redone);
+});
+
+
+it('删框后已释放到顶层的 Group 批量删除仍捕获其 null 父归属并能恢复', () => {
+  const f = groupFixture(), text = f.text(), shape = f.shape(), group = f.group([text.item.id, shape.item.id]);
+  f.execute({ type: 'frame.create', expected: { frame: null, groups: { [group.id]: group.versionId }, containment: { [group.itemId]: null },
+    poses: { [text.item.id]: text.item.versionId, [shape.item.id]: shape.item.versionId } },
+    payload: { id: 'frame', itemIds: [group.itemId], pose: { x: 0, y: 0, width: 800, height: 400 } } });
+  const framed = f.state();
+  f.execute({ type: 'frame.delete', expected: { frame: framed.frames![0]!.versionId, containment: { [group.itemId]: framed.containment!.find(value => value.id === group.itemId)!.versionId } }, payload: { id: 'frame' } });
+  const before = f.state(), base = groupDeleteExpected(f);
+  expect(before.containment!.find(value => value.id === group.itemId)!.parent).toBeNull();
+  const command = { type: 'canvas.delete-selection', expected: { groups: { [group.id]: base.group },
+    containment: Object.fromEntries(before.containment!.map(value => [value.id, value.versionId])), items: base.items, connectors: base.connectors },
+    payload: { groupIds: [group.id], directItemIds: [] } };
+  const stale = structuredClone(command); stale.expected.containment[group.itemId] = 'stale-parent-version';
+  const history = f.history();
+  expect(() => f.execute(stale)).toThrowError(expect.objectContaining({ code: 'VERSION_CONFLICT', status: 409 }));
+  expect(f.state()).toEqual(before); expect(f.history()).toEqual(history);
+  f.execute(command);
+  expect(f.state().groups).toEqual([]); expect(f.state().containment).toEqual([]);
+  f.travel('history.undo');
+  expect(f.state().groups![0]!.memberItemIds).toEqual(group.memberItemIds);
+  expect(f.state().containment!.find(value => value.id === group.itemId)!.parent).toBeNull();
+  f.travel('history.redo'); const redone = f.state(); f.reopen(); expect(f.state()).toEqual(redone);
+});

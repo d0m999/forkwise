@@ -1177,6 +1177,16 @@ body:has(.workspace[data-board-full="true"]) .card-tooltip { display: none; }
   pointer-events: none;
   z-index: 0;
 }
+.canvas-frame[data-selected=true] { border-color: var(--canvas-selection-color); box-shadow: 0 0 0 1px var(--canvas-selection-color); }
+.canvas-frame-actions {
+  position: absolute;
+  right: 0;
+  top: 0;
+  transform: translateY(-100%);
+  display: flex;
+  gap: 4px;
+  pointer-events: auto;
+}
 .canvas-frame-name {
   position: absolute;
   left: 0;

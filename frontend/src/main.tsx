@@ -24,7 +24,7 @@ import { useCanvasMarquee } from './canvas-selection-boundary';
 import { captureMemberDeletion, createGroupCommand, removeMemberCommand, ungroupCommand } from './canvas-group-commands';
 import { CanvasGroups } from './canvas-groups';
 import { CanvasFrames, useFrameMove } from './canvas-frames';
-import { createFrameCommand, createFrameSelectionCommand, frameItemsInRect, type FrameRect } from './canvas-frame-commands';
+import { createFrameCommand, createFrameSelectionCommand, deleteFrameCommand, frameItemsInRect, type FrameRect } from './canvas-frame-commands';
 import { useGroupGeometry } from './group-geometry';
 import { CanvasTextNode } from './canvas-text';
 import { CanvasShapeNode, shapeNodes } from './canvas-shape';
@@ -262,6 +262,7 @@ function Workspace() {
   const singleItemId = singleTarget?.kind === "item" ? singleTarget.itemId : null;
   const [panTool, setPanTool] = useState(false);
   const [frameTool, setFrameTool] = useState(false);
+  const [frameSelection, setFrameSelection] = useState<{ projectId: string; id: string; generation: number } | null>(null);
   const [framePreview, setFramePreview] = useState<FrameRect | null>(null);
   const frameDrag = useRef<{ projectId: string; start: { x: number; y: number } } | null>(null);
   const [shapePreset, setShapePreset] = useState<ShapeType | null>(null);
@@ -281,6 +282,8 @@ function Workspace() {
   const [projects, setProjects] = useState<Project[]>([]);
   const authority = useRef<ProjectState | null>(null);
   const [selectedConnectors, setSelectedConnectors] = useState<string[]>([]);
+  const selectedFrameId = frameSelection?.projectId === state?.project.id && frameSelection?.generation === canvasSelection.generation() &&
+    !selectedConnectors.length && state?.frames?.some(frame => frame.id === frameSelection.id) ? frameSelection.id : null;
   const selectedConnector = selectedConnectors.length === 1 ? selectedConnectors[0]! : null;
   function setSelectedConnector(id: string | null) { setSelectedConnectors(id ? [id] : []); }
   const strokeSelected = selection.some(id => state?.strokes?.some(stroke => stroke.item.id === id));
@@ -507,6 +510,7 @@ function Workspace() {
   const pendingAction = useRef<{
     command: Command;
     onDone?: () => void;
+    onSettled?: () => void;
     selectionIntent?: SelectionIntent;
     receipt?: Awaited<ReturnType<typeof api.execute>>;
     rejected?: string;
@@ -1057,6 +1061,14 @@ function Workspace() {
     connectorEdit.cancel({ restoreFocus: false });
     setSelectedConnector(null);
   }
+  function chooseFrame(id: string | null) {
+    if (id === null) { setFrameSelection(null); return; }
+    const projectId = authority.current?.project.id;
+    if (!projectId || selectedFrameId === id) return;
+    canvasSelection.set({ targets: [], enteredGroupId: null });
+    clearConnectorSelection();
+    setFrameSelection({ projectId, id, generation: canvasSelection.generation() });
+  }
   async function reverseConnectors() {
     const current = authority.current;
     if (!current || busy || historyBlocked || composition.current || pendingAction.current || connectorEdit.hasPending()) return;
@@ -1074,6 +1086,7 @@ function Workspace() {
     connectorEdit.cancel();
     connectorCreate.deactivate();
     setFrameTool(false);
+    setFrameSelection(null);
     frameDrag.current = null;
     setFramePreview(null);
     return epoch;
@@ -1175,7 +1188,10 @@ function Workspace() {
       const point = flow.screenToFlowPosition({ x: event.clientX, y: event.clientY }, { snapToGrid: false });
       const pose = { x: Math.min(current.start.x, point.x), y: Math.min(current.start.y, point.y),
         width: Math.abs(point.x - current.start.x), height: Math.abs(point.y - current.start.y) };
-      if (pose.width > 0 && pose.height > 0) void action(createFrameCommand(snapshot, frameItemsInRect(snapshot, pose), pose));
+      if (pose.width > 0 && pose.height > 0) {
+        const command = createFrameCommand(snapshot, frameItemsInRect(snapshot, pose), pose);
+        void action(command, () => { chooseFrame(command.payload.id); setFrameTool(false); });
+      }
     };
     window.addEventListener('pointermove', move);
     window.addEventListener('pointerup', up);
@@ -1204,7 +1220,7 @@ function Workspace() {
       )
         return;
       setShapePreset(null);
-      if (groupGeometry.hasGesture() || connectorEdit.hasGesture() || connectorCreate.hasGesture() || strokeDraw.hasGesture() || pose.dragging || texts.hasMove() || canvasMove.dragging || canvasMove.hasPointerGesture() || frameMove.hasGesture() || shapeMove.dragging || imageGeometry.dragging || marqueeSelection.hasGesture()) {
+      if (frameDrag.current || groupGeometry.hasGesture() || connectorEdit.hasGesture() || connectorCreate.hasGesture() || strokeDraw.hasGesture() || pose.dragging || texts.hasMove() || canvasMove.dragging || canvasMove.hasPointerGesture() || frameMove.hasGesture() || shapeMove.dragging || imageGeometry.dragging || marqueeSelection.hasGesture()) {
         event.preventDefault();
         cancel();
         return;
@@ -1212,6 +1228,7 @@ function Workspace() {
       if (shapeText.session || connectorLabel.session || texts.nodes.some(node => node.data.editing)) return;
       event.preventDefault();
       canvasSelection.set({ targets: [], enteredGroupId: null });
+      setFrameSelection(null);
       clearConnectorSelection();
     };
     window.addEventListener("pointerup", released, true);
@@ -1651,7 +1668,7 @@ function Workspace() {
       resolving.current = false;
     }
   }
-  async function action(command: Command, onDone?: () => void, beforeSubmit?: () => boolean) {
+  async function action(command: Command, onDone?: () => void, beforeSubmit?: () => boolean, onSettled?: () => void) {
     if (connectorCreate.hasPending()) return false;
     const imageCommand = command.type.startsWith('image.');
     const backgroundImage = () => imageCommand && command.projectId !== authority.current?.project.id;
@@ -1676,7 +1693,7 @@ function Workspace() {
       fail(new Error("请先重试未完成的保存"));
       return;
     }
-    const structural = command.type.startsWith('group.') || command.type === 'canvas.delete-selection' || command.type === 'text.delete';
+    const structural = command.type.startsWith('group.') || command.type.startsWith('frame.') || command.type === 'canvas.delete-selection' || command.type === 'text.delete';
     const resumingStructure = structural && !!pendingAction.current;
     if (!resumingStructure) {
       editorEpoch.current++;
@@ -1695,7 +1712,7 @@ function Workspace() {
       }
       if (beforeSubmit && !beforeSubmit()) return false;
     }
-    const pending: NonNullable<typeof pendingAction.current> = pendingAction.current ?? { command, ...(onDone ? { onDone } : {}),
+    const pending: NonNullable<typeof pendingAction.current> = pendingAction.current ?? { command, ...(onDone ? { onDone } : {}), ...(onSettled ? { onSettled } : {}),
       ...(structural
         ? { selectionIntent: { projectId: command.projectId, generation: canvasSelection.generation() } } : {}) };
     pendingAction.current = pending;
@@ -1724,6 +1741,7 @@ function Workspace() {
       setStatus("已保存到本机");
       setError("");
       pendingAction.current = null;
+      pending.onSettled?.();
       if (!pending.selectionIntent || authority.current?.project.id === pending.selectionIntent.projectId &&
         canvasSelection.generation() === pending.selectionIntent.generation) pending.onDone?.();
       return true;
@@ -1732,6 +1750,7 @@ function Workspace() {
         ['VERSION_CONFLICT', 'NOT_FOUND', 'UNAUTHORIZED', 'PROJECT_FORBIDDEN', 'UNTRUSTED_PRINCIPAL'].includes(e.code)) {
         pending.rejected = e.message;
         try { await refresh(command.projectId); } catch { /* Comparison retries retain the definite rejection and original request. */ }
+        pending.onSettled?.();
       }
       if (!executed && e instanceof MappingError &&
         ((['connector.reconnect', 'connector.path', 'connector.move', 'connector.delete', 'connector.style', 'connector.reverse', 'connector.label', 'canvas.layer', 'canvas.duplicate', 'canvas.paste'].includes(command.type) && ['VERSION_CONFLICT', 'NOT_FOUND'].includes(e.code)) ||
@@ -1758,10 +1777,12 @@ function Workspace() {
       await refresh(pending.command.projectId);
       if (pendingAction.current !== pending) return;
       pendingAction.current = null;
+      pending.onSettled?.();
       if (pending.command.type === 'group.scale' || pending.command.type === 'group.rotate90') groupGeometry.discard();
       setError('');
       setStatus(pending.command.type === 'text.delete'
-        ? '已保留当前保存状态，请重新明确删除' : '已保留当前保存状态，请重新明确组合操作');
+        ? '已保留当前保存状态，请重新明确删除' : pending.command.type.startsWith('frame.')
+          ? '已保留当前保存状态，请重新明确分区操作' : '已保留当前保存状态，请重新明确组合操作');
     } catch (failure) { fail(failure); }
     finally { setBusy(false); }
   }
@@ -2232,6 +2253,12 @@ function Workspace() {
         texts.nodes.some(node => node.data.editing) || imageGeometry.cropping ||
         !(event.target instanceof Element) || !event.target.closest('.canvas') ||
         event.target.closest('input, textarea, [contenteditable=true], dialog, [role=dialog], [role=menu]')) return;
+      const snapshot = authority.current, frame = snapshot?.frames?.find(value => value.id === selectedFrameId);
+      if (snapshot && frame) {
+        event.preventDefault(); event.stopPropagation();
+        void action(deleteFrameCommand(snapshot, frame), () => setFrameSelection(null));
+        return;
+      }
       // Explicit line selection owns Delete even while an old member retains focus.
       // Multiple lines have no batch-delete owner; do not fall back to canvas items.
       if (selectedConnectors.length) {
@@ -2393,7 +2420,7 @@ function Workspace() {
   }, done, intent, discard));
   const frameMove = useFrameMove({ state, blocked: busy || historyBlocked || composition.current || !!pendingAction.current,
     point: client => flow.screenToFlowPosition(client, { snapToGrid: false }),
-    execute: (command, done) => void action(command, done) });
+    execute: (command, done) => void action(command, undefined, undefined, done) });
   const groupGeometry = useGroupGeometry({ state, selection: canvasSelection.value, current: () => authority.current,
     generation: canvasSelection.generation, zoom: () => flow.getZoom(), lock: setGroupGeometryLocked, fail,
     blocked: busy || historyBlocked || composition.current || !!pendingAction.current || canvasMove.dragging || pose.dragging ||
@@ -2432,7 +2459,8 @@ function Workspace() {
     const command = createFrameSelectionCommand(snapshot, canvasSelection.current());
     if (!command) return;
     const generation = canvasSelection.generation();
-    await action(command, undefined, () => authority.current?.project.id === command.projectId && canvasSelection.generation() === generation);
+    await action(command, () => { chooseFrame(command.payload.id); setFrameTool(false); },
+      () => authority.current?.project.id === command.projectId && canvasSelection.generation() === generation);
   }
   async function deleteSelectedCanvas(groupId?: string) {
     const snapshot = authority.current;
@@ -2443,7 +2471,8 @@ function Workspace() {
     if (!intent) { fail(new Error('请等待完整对象与归属投影，再明确删除选区')); return; }
     selectionDeletion.current = intent;
     const command: Command = groupId ? { commandId: intent.command.commandId, projectId: intent.command.projectId, type: 'group.delete', payload: { id: groupId },
-      expected: { group: intent.command.expected.groups[groupId]!, containment: Object.fromEntries(Object.entries(intent.command.expected.containment).map(([id, version]) => [id, version!])),
+      expected: { group: intent.command.expected.groups[groupId]!, parentContainment: intent.command.expected.containment[snapshot.groups!.find(group => group.id === groupId)!.itemId],
+        containment: Object.fromEntries(Object.entries(intent.command.expected.containment).filter(([id]) => snapshot.groups!.find(group => group.id === groupId)!.memberItemIds.includes(id)).map(([id, version]) => [id, version!])),
         items: intent.command.expected.items, connectors: intent.command.expected.connectors } } : intent.command;
     try {
       await action(command, undefined, () => {
@@ -2992,6 +3021,7 @@ function Workspace() {
             nodesConnectable={false}
             deleteKeyCode={null}
             onPaneClick={(event) => {
+              setFrameSelection(null);
               if (!event.shiftKey) setSelectedConnector(null);
               if (placing && !busy && !historyBlocked) {
                 const point = flow.screenToFlowPosition({
@@ -3006,7 +3036,7 @@ function Workspace() {
             <Background gap={24} color="#dce0e7" />
             <Controls showInteractive={false} />
             <ViewportPortal>
-              <CanvasFrames state={state} preview={framePreview} blocked={busy || historyBlocked || !!pendingAction.current}
+              <CanvasFrames state={state} preview={framePreview} selectedId={selectedFrameId} choose={chooseFrame} blocked={busy || historyBlocked || !!pendingAction.current}
                 execute={(command, done) => void action(command, done)} move={frameMove} />
               <CanvasGroups state={state} selection={canvasSelection.value} positions={{ ...canvasMove.positions, ...frameMove.positions, ...groupGeometry.poses }} geometry={groupGeometry}
                 blocked={busy || historyBlocked || !!pendingAction.current || texts.hasPending()}
@@ -3470,7 +3500,7 @@ function Workspace() {
                 : "重试保存"}
             </button>
             {pendingAction.current?.rejected && <button disabled={busy} onClick={() => void abandonStructure()}>
-              {pendingAction.current.command.type === 'text.delete' ? '放弃本次删除' : '放弃本次组合操作'}
+              {pendingAction.current.command.type === 'text.delete' ? '放弃本次删除' : pendingAction.current.command.type.startsWith('frame.') ? '放弃本次分区操作' : '放弃本次组合操作'}
             </button>}
           </>
         )}

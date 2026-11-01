@@ -80,8 +80,17 @@ export function createGroup(db: Database.Database, command: Extract<GroupCommand
   }
   requireThat(selected.size >= 2, 'INVALID_GROUP_MEMBER', '新组合至少需要两个普通画布项', 400);
   const affected = groups.filter(group => memberships.some(value => selected.has(value.id) && value.parent?.kind === 'group' && value.parent.id === group.itemId));
+  const expectedMembershipIds = new Set(selected);
+  for (const group of affected) {
+    const remains = memberships.some(value => !selected.has(value.id) && value.parent?.kind === 'group' && value.parent.id === group.itemId);
+    const ownMembership = memberships.find(value => value.id === group.itemId);
+    if (!remains && ownMembership) {
+      requireThat(expected.containment[group.itemId] === ownMembership.versionId, 'VERSION_CONFLICT', '原组合外层归属已更新，请重新读取', 409);
+      expectedMembershipIds.add(group.itemId);
+    }
+  }
   requireThat(Object.keys(expected.groups).length === affected.length + 1 && expected.groups[payload.id] === null && affected.every(group => Object.hasOwn(expected.groups, group.id)) &&
-    Object.keys(expected.containment).length === selected.size && [...selected].every(id => Object.hasOwn(expected.containment, id)),
+    Object.keys(expected.containment).length === expectedMembershipIds.size && [...expectedMembershipIds].every(id => Object.hasOwn(expected.containment, id)),
     'EXPECTED_DOMAINS', '须校验新组合、原组合及全部成员归属', 400);
   const containmentChanges: ContainmentChange[] = [...selected].map(id => {
     const before = memberships.find(value => value.id === id) ?? null;
@@ -104,6 +113,12 @@ export function createGroup(db: Database.Database, command: Extract<GroupCommand
     const after: Containment = { id: ids[index]!, versionId: randomUUID(), parent: { kind: 'group', id: group.itemId } };
     containmentChanges[index]!.after = after;
     writeContainment(db, projectId, after);
+  }
+  for (const change of groupChanges.filter(value => !value.after)) {
+    const before = memberships.find(value => value.id === change.before!.itemId);
+    if (!before) continue;
+    db.prepare('DELETE FROM mapping_containment WHERE project_id=? AND item_id=?').run(projectId, before.id);
+    containmentChanges.push({ before, after: null });
   }
   return { groupChanges, containmentChanges, changedIds: [...new Set([...groupChanges.flatMap(value => [(value.after ?? value.before!).id, (value.after ?? value.before!).itemId]), ...ids])],
     deletedIds: groupChanges.filter(value => !value.after).flatMap(value => [value.before!.id, value.before!.itemId]) };

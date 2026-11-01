@@ -60,8 +60,8 @@ export function useFrameMove({ state, blocked, point, execute }: {
   };
 }
 
-export function CanvasFrames({ state, preview, blocked, execute, move }: {
-  state: ProjectState; preview: FrameRect | null; blocked: boolean; execute: Execute;
+export function CanvasFrames({ state, preview, selectedId, choose, blocked, execute, move }: {
+  state: ProjectState; preview: FrameRect | null; selectedId: string | null; choose: (id: string | null) => void; blocked: boolean; execute: Execute;
   move: ReturnType<typeof useFrameMove>;
 }) {
   const [editing, setEditing] = useState<string | null>(null);
@@ -71,6 +71,7 @@ export function CanvasFrames({ state, preview, blocked, execute, move }: {
   const triggers = useRef<Record<string, HTMLButtonElement | null>>({});
   const edited = state.frames?.find(frame => frame.id === editing);
   function begin(frame: CanvasFrame) {
+    choose(frame.id);
     setEditing(frame.id); setName(frame.name); setBackground(frame.background ?? '');
   }
   function save(frame: CanvasFrame) {
@@ -85,7 +86,7 @@ export function CanvasFrames({ state, preview, blocked, execute, move }: {
     {(state.frames ?? []).map(frame => {
       const position = move.positions[frame.id] ?? frame.pose;
       return <div key={frame.id} role="group" aria-label={`分区：${frame.name}`}
-        className="canvas-frame" data-frame-id={frame.id} style={{ left: position.x, top: position.y,
+        className="canvas-frame" data-frame-id={frame.id} data-selected={selectedId === frame.id} style={{ left: position.x, top: position.y,
           width: frame.pose.width, height: frame.pose.height, background: frame.background ?? 'transparent' }}>
         {edited?.id === frame.id ? <form className="canvas-frame-editor nodrag nopan" onSubmit={event => { event.preventDefault(); save(frame); }}>
           <textarea aria-label="分区名称" rows={1} maxLength={240} autoFocus value={name} readOnly={blocked}
@@ -99,11 +100,19 @@ export function CanvasFrames({ state, preview, blocked, execute, move }: {
           <input aria-label="分区背景" type="text" placeholder="透明" value={background} readOnly={blocked}
             onChange={event => setBackground(event.target.value)} onKeyDown={event => event.stopPropagation()} />
           <button type="button" disabled={blocked}
-            onClick={() => execute(deleteFrameCommand(state, frame), () => setEditing(null))}>删除分区</button>
+            onClick={() => execute(deleteFrameCommand(state, frame), () => { setEditing(null); choose(null); })}>删除分区</button>
           <button type="submit" disabled={blocked || !name.trim() || !!background && !/^#[0-9a-f]{6}$/i.test(background)}>保存分区</button>
-        </form> : <button ref={element => { triggers.current[frame.id] = element; }} type="button"
-          className="canvas-frame-name nodrag nopan" disabled={blocked} onPointerDown={event => move.start(event, frame)}
-          onClick={() => { if (!move.consumeClick(frame.id)) begin(frame); }}>{frame.name}</button>}
+        </form> : <>
+          <button ref={element => { triggers.current[frame.id] = element; }} type="button"
+            className="canvas-frame-name nodrag nopan" aria-pressed={selectedId === frame.id} disabled={blocked}
+            onPointerDown={event => { choose(frame.id); move.start(event, frame); }}
+            onClick={event => { if (!move.consumeClick(frame.id)) { choose(frame.id); event.currentTarget.focus({ preventScroll: true }); } }}
+            onDoubleClick={() => begin(frame)}>{frame.name}</button>
+          {selectedId === frame.id && <div className="canvas-frame-actions nodrag nopan" role="toolbar" aria-label="分区操作">
+            <button type="button" disabled={blocked} onClick={() => begin(frame)}>重命名分区</button>
+            <button type="button" disabled={blocked} onClick={() => execute(deleteFrameCommand(state, frame), () => choose(null))}>删除分区</button>
+          </div>}
+        </>}
       </div>;
     })}
     {preview && <div aria-hidden="true" className="canvas-frame-preview" style={{ left: preview.x, top: preview.y,

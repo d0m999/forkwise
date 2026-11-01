@@ -13,7 +13,7 @@ import { deleteImage } from './image.js';
 import { deleteStroke } from './stroke.js';
 import { prepareIncidentConnectorDeletion, applyIncidentConnectorDeletion } from './connector.js';
 
-export function releaseMembers(db: Database.Database, projectId: string, id: string, itemIds: string[], expected: { group: string; containment: Record<string, string> }, deleted = false) {
+export function releaseMembers(db: Database.Database, projectId: string, id: string, itemIds: string[], expected: Extract<GroupCommand, { type: 'group.ungroup' }>['expected'], deleted = false) {
   const group = readGroupRecords(db, projectId).find(value => value.id === id);
   requireThat(group, 'NOT_FOUND', '组合不存在于当前项目', 404);
   requireThat(group.versionId === expected.group, 'VERSION_CONFLICT', '组合已更新，请重新读取', 409);
@@ -21,6 +21,9 @@ export function releaseMembers(db: Database.Database, projectId: string, id: str
   requireThat(Object.keys(expected.containment).length === itemIds.length && itemIds.every(item => members.some(value => value.id === item && value.versionId === expected.containment[item])),
     'VERSION_CONFLICT', '成员归属已更新，请重新读取', 409);
   const selected = new Set(itemIds), remains = members.some(value => !selected.has(value.id));
+  const ownMembership = readContainment(db, projectId).find(value => value.id === group.itemId);
+  if (!remains) requireThat((expected.parentContainment ?? null) === (ownMembership?.versionId ?? null),
+    'VERSION_CONFLICT', '组合外层归属已更新，请重新读取', 409);
   const after = remains ? { ...group, versionId: randomUUID() } : null;
   if (after) writeGroup(db, projectId, after);
   else db.prepare('DELETE FROM mapping_groups WHERE id=? AND project_id=?').run(id, projectId);
@@ -30,12 +33,16 @@ export function releaseMembers(db: Database.Database, projectId: string, id: str
     else db.prepare('DELETE FROM mapping_containment WHERE project_id=? AND item_id=?').run(projectId, before.id);
     return { before, after };
   });
+  if (!after && ownMembership) {
+    db.prepare('DELETE FROM mapping_containment WHERE project_id=? AND item_id=?').run(projectId, group.itemId);
+    containmentChanges.push({ before: ownMembership, after: null });
+  }
   return { groupChanges: [{ before: group, after }] as GroupChange[], containmentChanges, changedIds: [group.id, group.itemId, ...itemIds] };
 }
 
 export function removeMember(db: Database.Database, command: Extract<GroupCommand, { type: 'group.remove-member' }>) {
   return releaseMembers(db, command.projectId, command.payload.id, [command.payload.itemId], {
-    group: command.expected.group, containment: { [command.payload.itemId]: command.expected.containment },
+    group: command.expected.group, containment: { [command.payload.itemId]: command.expected.containment }, parentContainment: command.expected.parentContainment,
   });
 }
 
@@ -66,7 +73,7 @@ export function removeDeletedMember(db: Database.Database, projectId: string, it
   }
   requireThat(expected && 'group' in expected && readGroupRecords(db, projectId).some(value => value.id === expected.group.id && value.itemId === before.parent!.id),
     'VERSION_CONFLICT', '删除前须确认当前组合及成员归属', 409);
-  return releaseMembers(db, projectId, expected.group.id, [itemId], { group: expected.group.versionId, containment: { [itemId]: expected.containment } }, true);
+  return releaseMembers(db, projectId, expected.group.id, [itemId], { group: expected.group.versionId, containment: { [itemId]: expected.containment }, parentContainment: expected.parentContainment }, true);
 }
 
 // Derive the one receipt's identity closure from every actual structural/content change.

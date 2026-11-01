@@ -29,9 +29,11 @@ export function deleteSelection(db: Database.Database, command: Extract<GroupCom
     for (const member of containment.filter(value => value.parent?.kind === 'group' && value.parent.id === group.itemId)) ids.add(member.id);
   }
   const membershipIds = new Set(ids), affectedFrames = new Set<string>();
-  for (const id of selectedGroups) {
-    const group = groups.find(value => value.id === id)!;
-    if (containment.some(value => value.id === group.itemId && value.parent?.kind === 'frame')) membershipIds.add(group.itemId);
+  for (const group of groups.filter(value => {
+    const members = containment.filter(member => member.parent?.kind === 'group' && member.parent.id === value.itemId);
+    return members.length > 0 && members.every(member => ids.has(member.id));
+  })) {
+    if (containment.some(value => value.id === group.itemId)) membershipIds.add(group.itemId);
   }
   for (const id of membershipIds) {
     const parent = containment.find(value => value.id === id)?.parent;
@@ -56,11 +58,12 @@ export function deleteSelection(db: Database.Database, command: Extract<GroupCom
   for (const group of groups.filter(value => affectedGroups.has(value.id))) {
     const memberIds = containment.filter(value => ids.has(value.id) && value.parent?.kind === 'group' && value.parent.id === group.itemId).map(value => value.id);
     const released = releaseMembers(db, projectId, group.id, memberIds, {
-      group: expected.groups[group.id]!, containment: Object.fromEntries(memberIds.map(id => [id, expected.containment[id]!])),
+      group: expected.groups[group.id]!, parentContainment: expected.containment[group.itemId], containment: Object.fromEntries(memberIds.map(id => [id, expected.containment[id]!])),
     }, true);
     groupChanges.push(...released.groupChanges); containmentChanges.push(...released.containmentChanges);
   }
   for (const before of containment.filter(value => membershipIds.has(value.id) && (value.parent === null || value.parent.kind === 'frame'))) {
+    if (containmentChanges.some(change => change.before?.id === before.id)) continue;
     db.prepare('DELETE FROM mapping_containment WHERE project_id=? AND item_id=?').run(projectId, before.id);
     containmentChanges.push({ before, after: null });
   }

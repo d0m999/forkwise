@@ -34,13 +34,14 @@ export function groupFixture(options: CommitOptions = {}) {
     },
     structure(id = 'g') {
       const s = f.state(), group = s.groups!.find(value => value.id === id)!;
-      return { group: group.versionId, containment: Object.fromEntries(s.containment!.filter(c => c.parent?.id === group.itemId).map(c => [c.id, c.versionId])) };
+      return { group: group.versionId, ...(s.containment!.find(c => c.id === group.itemId) ? { parentContainment: s.containment!.find(c => c.id === group.itemId)!.versionId } : {}), containment: Object.fromEntries(s.containment!.filter(c => c.parent?.id === group.itemId).map(c => [c.id, c.versionId])) };
     },
     membership(itemId: string) {
       const s = f.state(), value = s.containment!.find(c => c.id === itemId);
       if (!value?.parent) return undefined;
       const group = s.groups!.find(g => g.itemId === value.parent!.id)!;
-      return { group: { id: group.id, versionId: group.versionId }, containment: value.versionId };
+      return { group: { id: group.id, versionId: group.versionId }, containment: value.versionId,
+        ...(s.containment!.find(c => c.id === group.itemId) ? { parentContainment: s.containment!.find(c => c.id === group.itemId)!.versionId } : {}) };
     },
     card(id = 'card') { f.execute({ type: 'thought.create', expected: null, payload: { id, title: id, text: '原始正文', x: 10, y: 20 } }); return f.state().cards.find(c => c.id === id)!; },
     text(id = 'text') { f.execute({ type: 'text.create', expected: null, payload: { id, content: { runs: [{ text: '原文' }], fontSize: 18, lineHeight: 1.5, align: 'left', widthMode: 'fixed', width: 100 }, pose: { x: 100, y: 20, width: 100, height: 27 } } }); return f.state().texts!.find(c => c.id === id)!; },

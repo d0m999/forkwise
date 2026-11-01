@@ -41,7 +41,7 @@ test('分区中文名称和背景经 frame.edit 保存，Enter 返回名称焦�
     if (request.url().endsWith('/api/mapping/execute') && request.method() === 'POST') writes.push(request.postDataJSON());
   });
   const trigger = page.getByRole('button', { name: '分区1', exact: true });
-  await trigger.click();
+  await trigger.dblclick();
   const name = page.getByRole('textbox', { name: '分区名称', exact: true });
   await expect(name).toBeFocused();
   await name.fill('行业研究');
@@ -154,7 +154,7 @@ test('分区名称 Shift+Enter 换行，IME Enter/Esc 不抢输入，Esc 完成�
   await page.mouse.up();
   await expect.poll(async () => (await workspace.state()).frames?.length).toBe(1);
 
-  await page.getByRole('button', { name: '分区1', exact: true }).click();
+  await page.getByRole('button', { name: '分区1', exact: true }).dblclick();
   const multiline = page.getByRole('textbox', { name: '分区名称', exact: true });
   await multiline.fill('第一行');
   await multiline.press('Shift+Enter');
@@ -165,7 +165,7 @@ test('分区名称 Shift+Enter 换行，IME Enter/Esc 不抢输入，Esc 完成�
   await expect(multilineTrigger).toBeFocused();
   await expect.poll(async () => (await workspace.state()).frames![0]!.name).toBe('第一行\n第二行');
 
-  await multilineTrigger.click();
+  await multilineTrigger.dblclick();
   const name = page.getByRole('textbox', { name: '分区名称', exact: true });
   await name.fill('中文分区');
   const writes: any[] = [];
@@ -400,4 +400,248 @@ test('frame.move 明确拒绝时普通成员和 Group 均无半写，历史与�
   await page.reload();
   await expect(page.getByRole('status')).toHaveText('已保存到本机');
   expect(await workspace.state()).toEqual(f.before);
+});
+
+
+test('Frame 内单个普通成员 Delete 只删该成员，undo/redo 新版本且重开保持', async ({ page, workspace }) => {
+  const f = await frameWithGroup(page, workspace), historyUrl = workspace.origin + '/api/mapping/projects/' + f.before.project.id + '/history';
+  const beforeHistory = await (await page.request.get(historyUrl)).json();
+  await page.getByRole('button', { name: '移动普通成员', exact: true }).click();
+  await page.keyboard.press('Delete');
+  await expect.poll(async () => (await workspace.state()).cards.length).toBe(0);
+  const deleted = await workspace.state();
+  expect(deleted.frames![0]!.memberItemIds).toEqual([f.group.itemId]);
+  expect(deleted.groups).toEqual(f.before.groups);
+  expect(deleted.texts).toEqual(f.before.texts);
+  expect(deleted.shapes).toEqual(f.before.shapes);
+  expect((await (await page.request.get(historyUrl)).json()).undo).toHaveLength(beforeHistory.undo.length + 1);
+  await page.getByRole('button', { name: '撤销', exact: true }).click();
+  await expect.poll(async () => (await workspace.state()).cards.length).toBe(1);
+  const restored = await workspace.state();
+  expect(restored.cards[0]).toMatchObject({ id: f.card.id, body: { blocks: f.card.body.blocks }, item: { pose: f.card.item.pose } });
+  expect(restored.cards[0]!.versionId).not.toBe(f.card.versionId);
+  expect([...restored.frames![0]!.memberItemIds].sort()).toEqual([...f.frame.memberItemIds].sort());
+  await page.getByRole('button', { name: '重做', exact: true }).click();
+  await expect.poll(async () => (await workspace.state()).cards.length).toBe(0);
+  const redone = await workspace.state();
+  await workspace.restart(); await page.reload();
+  await expect(page.getByRole('status')).toHaveText('已保存到本机');
+  expect(await workspace.state()).toEqual(redone);
+});
+
+
+test('Frame 内普通成员与整组多选 Delete 一次删除且撤销恢复全部归属', async ({ page, workspace }) => {
+  const f = await frameWithGroup(page, workspace), writes: any[] = [];
+  await page.getByRole('button', { name: '移动普通成员', exact: true }).click();
+  await page.getByRole('img', { name: '移动组形状', exact: true }).click({ modifiers: ['Shift'] });
+  await expect(page.locator('.react-flow__node.selected')).toHaveCount(3);
+  page.on('request', request => { if (request.url().endsWith('/api/mapping/execute') && request.method() === 'POST') writes.push(request.postDataJSON()); });
+  await page.keyboard.press('Delete');
+  await expect.poll(async () => (await workspace.state()).cards.length).toBe(0);
+  const deleted = await workspace.state();
+  expect(deleted.frames![0]!.memberItemIds).toEqual([]);
+  expect(deleted.groups).toEqual([]); expect(deleted.texts).toEqual([]);
+  expect(deleted.shapes!.map(value => value.id)).toEqual([f.loose.id]);
+  expect(deleted.containment).toEqual([]);
+  expect(writes.map(command => command.type)).toEqual(['canvas.delete-selection']);
+  expect(writes[0].expected.frames).toEqual({ [f.frame.id]: f.frame.versionId });
+  expect(writes[0].expected.containment[f.group.itemId]).toBe(f.before.containment!.find(value => value.id === f.group.itemId)!.versionId);
+  await page.getByRole('button', { name: '撤销', exact: true }).click();
+  await expect.poll(async () => (await workspace.state()).cards.length).toBe(1);
+  const restored = await workspace.state();
+  expect([...restored.frames![0]!.memberItemIds].sort()).toEqual([...f.frame.memberItemIds].sort());
+  expect(restored.groups![0]!.memberItemIds).toEqual(f.group.memberItemIds);
+  for (const value of restored.containment!) expect(value.versionId).not.toBe(f.before.containment!.find(old => old.id === value.id)!.versionId);
+  await page.getByRole('button', { name: '重做', exact: true }).click();
+  await expect.poll(async () => (await workspace.state()).cards.length).toBe(0);
+  const redone = await workspace.state(); await workspace.restart(); await page.reload();
+  await expect(page.getByRole('status')).toHaveText('已保存到本机');
+  expect(await workspace.state()).toEqual(redone);
+});
+
+
+test('Frame 移动真实409后预览归位，明确放弃后可用新版本继续移动', async ({ page, workspace }) => {
+  const f = await frameWithGroup(page, workspace), attempts: any[] = [];
+  await page.route('**/api/mapping/execute', async route => {
+    const command = route.request().postDataJSON();
+    if (command.type !== 'frame.move') { await route.continue(); return; }
+    if (!attempts.length) await workspace.execute(page, { commandId: crypto.randomUUID(), projectId: f.before.project.id,
+      type: 'frame.edit', expected: f.frame.versionId, payload: { id: f.frame.id, name: '对方分区', background: null } });
+    const response = await route.fetch(); attempts.push({ command, status: response.status() }); await route.fulfill({ response });
+  });
+  try {
+    const name = page.getByRole('button', { name: '分区1', exact: true }), box = (await name.boundingBox())!;
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2); await page.mouse.down();
+    await page.mouse.move(box.x + box.width / 2 + 100, box.y + box.height / 2 + 60, { steps: 5 }); await page.mouse.up();
+    await expect.poll(() => attempts.map(value => value.status)).toEqual([409]);
+    await expect(page.getByRole('alert').filter({ hasText: /分区.*更新/ })).toBeVisible();
+    const frame = page.locator('[data-frame-id="' + f.frame.id + '"]');
+    await expect(frame).toHaveCSS('left', `${f.frame.pose.x}px`); await expect(frame).toHaveCSS('top', `${f.frame.pose.y}px`);
+    for (const value of [f.card, f.text, f.groupShape]) {
+      const node = page.locator('.react-flow__node[data-id="' + value.item.id + '"]');
+      await expect.poll(() => node.evaluate(element => new DOMMatrix(getComputedStyle(element).transform).e)).toBe(value.item.pose.x);
+    }
+    const remote = (await workspace.state()).frames![0]!;
+    await page.getByRole('button', { name: '放弃本次分区操作', exact: true }).click();
+    await expect(page.getByRole('button', { name: '放弃本次分区操作', exact: true })).toHaveCount(0);
+    const current = page.getByRole('button', { name: '对方分区', exact: true }), next = (await current.boundingBox())!;
+    await page.mouse.move(next.x + next.width / 2, next.y + next.height / 2); await page.mouse.down();
+    await page.mouse.move(next.x + next.width / 2 + 40, next.y + next.height / 2 + 20, { steps: 5 }); await page.mouse.up();
+    await expect(page.getByRole('status')).toHaveText('已保存到本机');
+    await expect.poll(() => attempts.map(value => value.status)).toEqual([409, 200]);
+    expect(attempts[1].command.commandId).not.toBe(attempts[0].command.commandId);
+    expect(attempts[1].command.expected.frame).toBe(remote.versionId);
+    expect((await workspace.state()).frames![0]!.pose).toEqual({ ...f.frame.pose, x: f.frame.pose.x + 40, y: f.frame.pose.y + 20 });
+  } finally { await page.unrouteAll({ behavior: 'wait' }); }
+});
+
+
+for (const mode of ['unknown-ack', 'confirmed-read-failure'] as const) {
+  test(`Frame 移动 ${mode} 保留原请求，重试不增加历史且清理预览`, async ({ page, workspace }) => {
+    const f = await frameWithGroup(page, workspace), attempts: any[] = [];
+    let applied = false, failRead = mode === 'confirmed-read-failure';
+    await page.route('**/api/mapping/execute', async route => {
+      const command = route.request().postDataJSON();
+      if (command.type !== 'frame.move') { await route.continue(); return; }
+      const response = await route.fetch(); attempts.push({ command, status: response.status() }); applied = true;
+      if (mode === 'unknown-ack' && attempts.length === 1) await route.abort('connectionreset');
+      else await route.fulfill({ response });
+    });
+    await page.route('**/api/mapping/projects/' + f.before.project.id + '/map?**', async route => {
+      if (!applied || !failRead || new URL(route.request().url()).searchParams.get('view') !== 'index') { await route.continue(); return; }
+      const response = await route.fetch(); expect(response.status()).toBe(200); failRead = false; await route.abort('connectionreset');
+    });
+    try {
+      const name = page.getByRole('button', { name: '分区1', exact: true }), box = (await name.boundingBox())!;
+      await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2); await page.mouse.down();
+      await page.mouse.move(box.x + box.width / 2 + 80, box.y + box.height / 2 + 40, { steps: 5 }); await page.mouse.up();
+      const retry = page.getByRole('button', { name: '重试保存', exact: true }); await expect(retry).toBeVisible();
+      const committed = await workspace.state();
+      expect(committed.frames![0]!.pose).toEqual({ ...f.frame.pose, x: f.frame.pose.x + 80, y: f.frame.pose.y + 40 });
+      const historyUrl = workspace.origin + '/api/mapping/projects/' + f.before.project.id + '/history';
+      const history = await (await page.request.get(historyUrl)).json();
+      await page.keyboard.press('Escape');
+      await retry.click(); await expect(retry).toHaveCount(0);
+      expect(attempts).toHaveLength(mode === 'unknown-ack' ? 2 : 1);
+      if (mode === 'unknown-ack') expect(attempts[1]).toEqual(attempts[0]);
+      expect(await workspace.state()).toEqual(committed);
+      expect(await (await page.request.get(historyUrl)).json()).toEqual(history);
+      const frame = page.locator('[data-frame-id="' + f.frame.id + '"]');
+      await expect(frame).toHaveCSS('left', `${committed.frames![0]!.pose.x}px`);
+      await page.getByRole('button', { name: '撤销', exact: true }).click();
+      await expect.poll(async () => (await workspace.state()).frames![0]!.pose.x).toBe(f.frame.pose.x);
+      await expect(frame).toHaveCSS('left', `${f.frame.pose.x}px`);
+    } finally { await page.unrouteAll({ behavior: 'wait' }); }
+  });
+}
+
+test('拖新分区按 Esc 即取消预览，随后松鼠标不创建对象或历史', async ({ page, workspace }) => {
+  const before = await workspace.state(), historyUrl = workspace.origin + '/api/mapping/projects/' + before.project.id + '/history';
+  const history = await (await page.request.get(historyUrl)).json(), writes: any[] = [];
+  page.on('request', request => { if (request.url().endsWith('/api/mapping/execute') && request.method() === 'POST') writes.push(request.postDataJSON()); });
+  await page.getByRole('button', { name: '分区', exact: true }).click();
+  const bounds = (await page.locator('.react-flow__pane').boundingBox())!;
+  await page.mouse.move(bounds.x + 620, bounds.y + 150); await page.mouse.down();
+  await page.mouse.move(bounds.x + 960, bounds.y + 430, { steps: 6 });
+  await expect(page.locator('.canvas-frame-preview')).toBeVisible();
+  await page.keyboard.press('Escape');
+  try { await expect(page.locator('.canvas-frame-preview')).toHaveCount(0); }
+  finally { await page.mouse.up(); }
+  await page.getByRole('button', { name: '选择', exact: true }).click();
+  expect(await workspace.state()).toEqual(before);
+  expect(await (await page.request.get(historyUrl)).json()).toEqual(history);
+  expect(writes).toEqual([]);
+});
+
+
+test('创建分区回选择工具并选中新框，Frame 选择与普通选区互斥且 Delete 只删框', async ({ page, workspace }) => {
+  const f = await frameWithGroup(page, workspace), frame = page.locator('[data-frame-id="' + f.frame.id + '"]');
+  await expect(page.getByRole('button', { name: '选择', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByRole('button', { name: '分区', exact: true })).toHaveAttribute('aria-pressed', 'false');
+  await expect(frame).toHaveAttribute('data-selected', 'true');
+  await page.getByRole('button', { name: '移动普通成员', exact: true }).click();
+  await expect(page.locator('.react-flow__node.selected')).toHaveCount(1);
+  await expect(frame).toHaveAttribute('data-selected', 'false');
+  const name = page.getByRole('button', { name: '分区1', exact: true });
+  await name.click();
+  await expect(name).toBeFocused();
+  await expect(frame).toHaveAttribute('data-selected', 'true');
+  await expect(page.locator('.react-flow__node.selected')).toHaveCount(0);
+  await expect(page.getByRole('textbox', { name: '分区名称', exact: true })).toHaveCount(0);
+  await page.keyboard.press('Escape'); await expect(frame).toHaveAttribute('data-selected', 'false');
+  await name.click(); await page.getByRole('button', { name: '重命名分区', exact: true }).click();
+  const editor = page.getByRole('textbox', { name: '分区名称', exact: true });
+  await editor.press('ControlOrMeta+A'); await editor.press('Delete');
+  expect((await workspace.state()).frames).toHaveLength(1);
+  await editor.fill('分区1'); await editor.press('Enter');
+  await expect(name).toBeFocused();
+  const before = await workspace.state();
+  await page.getByRole('img', { name: '移动组形状', exact: true }).focus();
+  await page.keyboard.press('Delete');
+  await expect.poll(async () => (await workspace.state()).frames!.length).toBe(0);
+  const deleted = await workspace.state();
+  for (const key of ['cards', 'texts', 'shapes', 'groups', 'connectors'] as const) expect(deleted[key]).toEqual(before[key]);
+  await page.getByRole('button', { name: '撤销', exact: true }).click();
+  await expect.poll(async () => (await workspace.state()).frames!.length).toBe(1);
+  const restored = await workspace.state();
+  expect([...restored.frames![0]!.memberItemIds].sort()).toEqual([...f.frame.memberItemIds].sort());
+  await name.dblclick(); await expect(editor).toBeFocused();
+});
+
+
+for (const operation of ['取消组合', '删除组合'] as const) {
+  test(`Frame 内${operation}经正式 UI 一次完成，undo/redo 与重开不留悬挂归属`, async ({ page, workspace }) => {
+    const f = await frameWithGroup(page, workspace);
+    await page.getByRole('img', { name: '移动组形状', exact: true }).click();
+    await expect(page.locator('.react-flow__node.selected')).toHaveCount(2);
+    await page.getByRole('button', { name: operation, exact: true }).click();
+    await expect.poll(async () => (await workspace.state()).groups!.length).toBe(0);
+    await expect(page.getByRole('status')).toHaveText('已保存到本机');
+    const changed = await workspace.state();
+    expect(changed.frames![0]!.memberItemIds).toEqual([f.card.item.id]);
+    expect(changed.containment!.some(value => value.id === f.group.itemId)).toBe(false);
+    expect(changed.cards).toEqual(f.before.cards);
+    if (operation === '取消组合') { expect(changed.texts).toEqual(f.before.texts); expect(changed.shapes).toEqual(f.before.shapes); }
+    else { expect(changed.texts).toEqual([]); expect(changed.shapes!.map(value => value.id)).toEqual([f.loose.id]); }
+    await page.getByRole('button', { name: '撤销', exact: true }).click();
+    await expect.poll(async () => (await workspace.state()).groups!.length).toBe(1);
+    const restored = await workspace.state();
+    expect([...restored.frames![0]!.memberItemIds].sort()).toEqual([...f.frame.memberItemIds].sort());
+    expect(restored.groups![0]!.memberItemIds).toEqual(f.group.memberItemIds);
+    expect(restored.groups![0]!.versionId).not.toBe(f.group.versionId);
+    await page.getByRole('button', { name: '重做', exact: true }).click();
+    await expect.poll(async () => (await workspace.state()).groups!.length).toBe(0);
+    const redone = await workspace.state(); await workspace.restart(); await page.reload();
+    await expect(page.getByRole('status')).toHaveText('已保存到本机');
+    expect(await workspace.state()).toEqual(redone);
+  });
+}
+
+
+test('删框释放 Group 后多选删除捕获 null 父归属，不依赖已删 Frame 并可恢复', async ({ page, workspace }) => {
+  const f = await frameWithGroup(page, workspace), writes: any[] = [];
+  await page.getByRole('button', { name: '删除分区', exact: true }).click();
+  await expect.poll(async () => (await workspace.state()).frames!.length).toBe(0);
+  const released = await workspace.state(), own = released.containment!.find(value => value.id === f.group.itemId)!;
+  expect(own.parent).toBeNull();
+  await page.getByRole('button', { name: '移动普通成员', exact: true }).click();
+  await page.getByRole('img', { name: '移动组形状', exact: true }).click({ modifiers: ['Shift'] });
+  await expect(page.locator('.react-flow__node.selected')).toHaveCount(3);
+  page.on('request', request => { if (request.url().endsWith('/api/mapping/execute') && request.method() === 'POST') writes.push(request.postDataJSON()); });
+  await page.keyboard.press('Delete');
+  await expect.poll(async () => (await workspace.state()).groups!.length).toBe(0);
+  expect((await workspace.state()).containment).toEqual([]);
+  expect(writes[0].type).toBe('canvas.delete-selection');
+  expect(writes[0].expected.containment[f.group.itemId]).toBe(own.versionId);
+  expect(writes[0].expected.frames ?? {}).toEqual({});
+  await page.getByRole('button', { name: '撤销', exact: true }).click();
+  await expect.poll(async () => (await workspace.state()).groups!.length).toBe(1);
+  const restored = await workspace.state();
+  expect(restored.frames).toEqual([]);
+  expect(restored.containment!.find(value => value.id === f.group.itemId)!.parent).toBeNull();
+  expect(restored.containment!.find(value => value.id === f.group.itemId)!.versionId).not.toBe(own.versionId);
+  await page.getByRole('button', { name: '重做', exact: true }).click();
+  await expect.poll(async () => (await workspace.state()).groups!.length).toBe(0);
+  const redone = await workspace.state(); await workspace.restart(); await page.reload();
+  await expect(page.getByRole('status')).toHaveText('已保存到本机'); expect(await workspace.state()).toEqual(redone);
 });

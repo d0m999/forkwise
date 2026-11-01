@@ -11,13 +11,21 @@ export function captureSelectionDeletion(state: ProjectState, selection: CanvasS
   if (!state.groups || !state.containment || !state.connectors) return null;
   const groupIds = selection.targets.flatMap(target => target.kind === 'group' ? [target.id] : []);
   const directItemIds = selection.targets.flatMap(target => target.kind === 'item' ? [target.itemId] : []);
-  const ids = new Set(selectedItemIds(state, selection)), affected = new Set(groupIds);
+  const ids = new Set(selectedItemIds(state, selection)), affected = new Set(groupIds), frames = new Set<string>();
+  const membershipIds = new Set(ids);
   if (!ids.size) return null;
   for (const membership of state.containment.filter(value => ids.has(value.id) && value.parent)) {
+    if (membership.parent?.kind === 'frame') { frames.add(membership.parent.id); continue; }
     const group = state.groups.find(value => value.itemId === membership.parent!.id);
     if (!group) return null;
     affected.add(group.id);
   }
+  for (const group of state.groups.filter(value => affected.has(value.id) && value.memberItemIds.every(id => ids.has(id)))) {
+    const membership = state.containment.find(value => value.id === group.itemId);
+    if (membership) membershipIds.add(group.itemId);
+    if (membership?.parent?.kind === 'frame') frames.add(membership.parent.id);
+  }
+  if ([...frames].some(id => !state.frames?.some(frame => frame.id === id))) return null;
   const items: DeleteSelection['expected']['items'] = {};
   for (const value of state.cards.filter(value => ids.has(value.item.id))) items[value.item.id] = {
     kind: 'card', thought: value.versionId, body: value.body.versionId, pose: value.item.versionId,
@@ -35,7 +43,8 @@ export function captureSelectionDeletion(state: ProjectState, selection: CanvasS
   const command: DeleteSelection = { commandId: crypto.randomUUID(), projectId: state.project.id, type: 'canvas.delete-selection',
     payload: { groupIds, directItemIds }, expected: {
       groups: Object.fromEntries([...affected].map(id => [id, state.groups!.find(group => group.id === id)!.versionId])),
-      containment: Object.fromEntries([...ids].map(id => [id, state.containment!.find(value => value.id === id)?.versionId ?? null])),
+      ...(frames.size ? { frames: Object.fromEntries([...frames].map(id => [id, state.frames!.find(frame => frame.id === id)!.versionId])) } : {}),
+      containment: Object.fromEntries([...membershipIds].map(id => [id, state.containment!.find(value => value.id === id)?.versionId ?? null])),
       items, connectors: Object.fromEntries(state.connectors.filter(line =>
         line.start.kind === 'bound' && ids.has(line.start.itemId) || line.end.kind === 'bound' && ids.has(line.end.itemId),
       ).map(line => [line.id, line.versionId])),

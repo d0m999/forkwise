@@ -19,13 +19,13 @@ export const GroupCommands = z.discriminatedUnion('type', [
     payload: z.object({ groupIds: z.array(Id), directItemIds: z.array(Id), dx: z.number().finite(), dy: z.number().finite() })
       .strict().refine(value => value.groupIds.length + value.directItemIds.length > 0, '至少选择一个移动目标') }).strict(),
   z.object({ commandId: Id, projectId: Id, type: z.literal('group.delete'),
-    expected: z.object({ group: Id, containment: z.record(Id, Id), items: z.record(Id, DeleteMember), connectors: z.record(Id, Id) }).strict(),
+    expected: z.object({ group: Id, parentContainment: Id.nullable().optional(), containment: z.record(Id, Id), items: z.record(Id, DeleteMember), connectors: z.record(Id, Id) }).strict(),
     payload: z.object({ id: Id }).strict() }).strict(),
   z.object({ commandId: Id, projectId: Id, type: z.literal('group.ungroup'),
-    expected: z.object({ group: Id, containment: z.record(Id, Id) }).strict(),
+    expected: z.object({ group: Id, parentContainment: Id.nullable().optional(), containment: z.record(Id, Id) }).strict(),
     payload: z.object({ id: Id }).strict() }).strict(),
   z.object({ commandId: Id, projectId: Id, type: z.literal('group.remove-member'),
-    expected: z.object({ group: Id, containment: Id }).strict(),
+    expected: z.object({ group: Id, parentContainment: Id.nullable().optional(), containment: Id }).strict(),
     payload: z.object({ id: Id, itemId: Id }).strict() }).strict(),
   z.object({
     commandId: Id, projectId: Id, type: z.literal('group.create'),
