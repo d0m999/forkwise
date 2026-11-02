@@ -1,3 +1,4 @@
+import { ContainerEndpointExpected } from './container-endpoints.js';
 import { z } from 'zod';
 import { ConnectorLabelSchema, ConnectorPathSchema, ConnectorStyleSchema } from './connector-contracts.js';
 import { ImageContentSchema, ImagePoseSchema } from './image-contracts.js';
@@ -79,7 +80,8 @@ export const CanvasDuplicateCommand = z.object({
     images: z.record(Id, Pair),
     strokes: z.record(Id, Pair),
     connectors: z.record(Id, Id),
-    anchors: z.record(Id, Id),
+    anchors: z.record(z.string().min(1).max(166), Id),
+    endpoints: ContainerEndpointExpected.optional(),
   }).strict(),
   payload: z.object({
     objects: z.array(CopyRef).max(200),

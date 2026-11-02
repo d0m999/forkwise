@@ -79,6 +79,9 @@ export function removeDeletedMember(db: Database.Database, projectId: string, it
 // Derive the one receipt's identity closure from every actual structural/content change.
 export function groupOutcome(change: Partial<Change>) {
   const changed = new Set(change.changedIds ?? []), deleted = new Set<string>();
+  for (const c of change.frameChanges ?? []) {
+    const id = (c.after ?? c.before!).id; changed.add(id); if (!c.after) deleted.add(id);
+  }
   for (const c of change.groupChanges ?? []) {
     const value = c.after ?? c.before!; changed.add(value.id); changed.add(value.itemId);
     if (!c.after) { deleted.add(value.id); deleted.add(value.itemId); }
@@ -140,5 +143,5 @@ export function deleteGroup(db: Database.Database, command: Extract<GroupCommand
   const changes = deleteGroupItems(db, command, members, expected.items, connectorChanges);
   const structural = releaseMembers(db, projectId, group.id, [...ids], expected, true);
   const result = { ...changes, ...structural };
-  return { ...result, ...groupOutcome(result) };
+  return { ...result, frameChanges: [], ...groupOutcome(result) };
 }

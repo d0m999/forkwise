@@ -1,3 +1,6 @@
+import { endpointBounds, sidePoint, captureOptionalContainerEndpoints } from "../../backend/src/mapping/container-endpoints";
+import { endpointKey } from "../../backend/src/mapping/connector-contracts";
+export { sidePoint } from "../../backend/src/mapping/container-endpoints";
 import type { ConnectorEndpoint } from "../../backend/src/mapping/connector-contracts";
 import type { Command, ProjectState } from "./api";
 import type { CanvasSelection } from "./canvas-selection";
@@ -53,23 +56,18 @@ function picked(state: ProjectState, selection: CanvasSelection, connectorIds: s
   const itemIds = new Set(objects.map(value => value.value.item.id));
   const chosen = new Set(connectorIds);
   const connectors = (state.connectors ?? []).filter(line => {
-    const inside = (end: ConnectorEndpoint) => end.kind === "bound" && itemIds.has(end.itemId);
+    const inside = (end: ConnectorEndpoint) => end.kind === "bound" && (end.targetKind ?? "item") === "item" && itemIds.has(end.itemId);
     return chosen.has(line.id) || (inside(line.start) && inside(line.end));
   });
   return objects.length || connectors.length ? { objects, connectors, itemIds } : null;
 }
-export function sidePoint(pose: Box, side: Side): Point {
-  if (side === "top") return { x: pose.x + pose.width / 2, y: pose.y };
-  if (side === "right") return { x: pose.x + pose.width, y: pose.y + pose.height / 2 };
-  if (side === "bottom") return { x: pose.x + pose.width / 2, y: pose.y + pose.height };
-  return { x: pose.x, y: pose.y + pose.height / 2 };
-}
-function hostPose(state: ProjectState, itemId: string) {
-  return located(state, itemId)?.value.item.pose ?? null;
-}
 function freezeEnd(state: ProjectState, end: ConnectorEndpoint, itemIds: Set<string>): FrozenEnd {
-  if (end.kind === "bound" && itemIds.has(end.itemId)) return { kind: "bound", itemId: end.itemId, side: end.side };
-  if (end.kind === "bound") return { kind: "free", point: sidePoint(hostPose(state, end.itemId) ?? { x: 0, y: 0, width: 0, height: 0 }, end.side) };
+  if (end.kind === "bound" && (end.targetKind ?? "item") === "item" && itemIds.has(end.itemId)) return { kind: "bound", itemId: end.itemId, side: end.side };
+  if (end.kind === "bound") {
+    const pose = endpointBounds(state, end);
+    if (!pose) throw new Error("连线端点不在完整快照中，请重新读取后复制");
+    return { kind: "free", point: sidePoint(pose, end.side) };
+  }
   return { kind: "free", point: { ...end.point } };
 }
 export function canCopySelection(state: ProjectState | null, selection: CanvasSelection, connectorIds: string[]) {
@@ -80,7 +78,8 @@ export function duplicatePlan(state: ProjectState, selection: CanvasSelection, c
   if (!source) return null;
   const objects = source.objects.map(value => ({ kind: value.kind, id: value.value.id, copyId: crypto.randomUUID() }));
   const connectors = source.connectors.map(line => ({ id: line.id, copyId: crypto.randomUUID() }));
-  const anchorIds = [...new Set(source.connectors.flatMap(line => [line.start, line.end].flatMap(end => end.kind === "bound" && !source.itemIds.has(end.itemId) ? [end.itemId] : [])))];
+  const anchors = [...new Map(source.connectors.flatMap(line => [line.start, line.end].flatMap(end => end.kind === "bound" && !((end.targetKind ?? "item") === "item" && source.itemIds.has(end.itemId)) ? [[endpointKey(end), end] as const] : []))).values()];
+  const containerKeys = anchors.filter(end => (end.targetKind ?? "item") !== "item").map(endpointKey);
   const cardVersion = (value: Extract<Located, { kind: "card" }>) => ({ thought: value.value.versionId, body: value.value.body.versionId, pose: value.value.item.versionId, appearance: value.value.appearance?.versionId ?? null, cardTags: value.value.cardTags?.versionId ?? null });
   const pairVersion = (value: Exclude<Located, { kind: "card" }>) => ({ content: value.value.versionId, pose: value.value.item.versionId });
   const of = (kind: Kind) => source.objects.filter(value => value.kind === kind);
@@ -93,7 +92,8 @@ export function duplicatePlan(state: ProjectState, selection: CanvasSelection, c
       images: Object.fromEntries(of("image").map(value => [value.value.id, pairVersion(value as Exclude<Located, { kind: "card" }> )])),
       strokes: Object.fromEntries(of("stroke").map(value => [value.value.id, pairVersion(value as Exclude<Located, { kind: "card" }> )])),
       connectors: Object.fromEntries(connectors.map(line => [line.id, source.connectors.find(value => value.id === line.id)!.versionId])),
-      anchors: Object.fromEntries(anchorIds.map(itemId => [itemId, located(state, itemId)!.value.item.versionId])),
+      anchors: Object.fromEntries(anchors.map(end => [endpointKey(end), end.targetKind === "group" ? state.groups!.find(group => group.itemId === end.itemId)!.versionId : end.targetKind === "frame" ? state.frames!.find(frame => frame.id === end.itemId)!.versionId : located(state, end.itemId)!.value.item.versionId])),
+      ...(containerKeys.length ? { endpoints: captureOptionalContainerEndpoints({ ...state, connectors: source.connectors }, containerKeys) } : {}),
     },
     payload: { objects, connectors },
   } as Command;

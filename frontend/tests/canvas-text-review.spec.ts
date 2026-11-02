@@ -590,6 +590,7 @@ test("单文字移动真实409选择保留已保存位置后清理本地预览�
   page,
   workspace,
 }) => {
+  page.on('console', message => { if (message.text().startsWith('ISSUE30_TEXT_MOVE_DOWN')) console.log(message.text()); });
   await page.getByRole("button", { name: "文字", exact: true }).click();
   await page
     .locator(".react-flow__pane")
@@ -604,6 +605,7 @@ test("单文字移动真实409选择保留已保存位置后清理本地预览�
   await page.route("**/api/mapping/execute", async (route) => {
     const value = route.request().postDataJSON();
     if (value.type !== "text.move") return route.continue();
+    console.log('ISSUE30_TEXT_MOVE_SEND', JSON.stringify(value));
     command = value;
     await workspace.execute(page, {
       commandId: crypto.randomUUID(),
@@ -613,9 +615,16 @@ test("单文字移动真实409选择保留已保存位置后清理本地预览�
       payload: { id: initial.id, x: 700, y: 500 },
     });
     const response = await route.fetch();
+    console.log('ISSUE30_TEXT_MOVE_RESPONSE', response.status());
     expect(response.status()).toBe(409);
     return route.fulfill({ response });
   });
+  await page.evaluate(() => window.addEventListener('pointerdown', event => {
+    const target = event.target as Element;
+    console.log('ISSUE30_TEXT_MOVE_DOWN', JSON.stringify({ at: Date.now(), trusted: event.isTrusted,
+      status: document.querySelector('[role=status]')?.textContent, nodeClass: target.closest('.react-flow__node')?.className,
+      target: target.tagName, label: target.getAttribute('aria-label'), editors: document.querySelectorAll('[role=textbox][aria-label="独立文字"]').length }));
+  }, { once: true, capture: true }));
   await page.mouse.move(before.x + 10, before.y + 10);
   await page.mouse.down();
   await page.mouse.move(before.x + 50, before.y + 40, { steps: 5 });

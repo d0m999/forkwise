@@ -8,9 +8,9 @@ import { ConnectorLabel, type LabelEditor } from './connector-label';
 export function ConnectorEntries({ values, choose, preview }: { values: ConnectorTarget[];
   choose: (value: ConnectorTarget, element: HTMLElement) => void; preview: (value: ConnectorTarget) => void }) {
   const names = { top: '上', right: '右', bottom: '下', left: '左' };
-  return <>{values.map(value => <button key={JSON.stringify([value.itemId, value.side])} type="button"
+  return <>{values.map(value => <button key={JSON.stringify([value.targetKind ?? 'item', value.itemId, value.side])} type="button"
     className="connector-entry nodrag nopan" aria-label={value.label + ' 连线起点：' + names[value.side]}
-    data-connector-item={value.itemId} data-connector-side={value.side}
+    data-connector-kind={value.targetKind ?? 'item'} data-connector-item={value.itemId} data-connector-side={value.side}
     onFocus={() => preview(value)} onClick={event => { if (event.detail === 0) choose(value, event.currentTarget); }}
     onKeyDown={event => { if (event.nativeEvent.isComposing || event.keyCode === 229) { event.preventDefault(); event.stopPropagation(); } }}
     style={{ left: value.point.x, top: value.point.y }} />)}</>;

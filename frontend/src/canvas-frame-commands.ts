@@ -1,3 +1,4 @@
+import { captureOptionalContainerEndpoints } from '../../backend/src/mapping/container-endpoints';
 import type { Command, ProjectState } from './api';
 import type { CanvasFrame } from '../../backend/src/mapping/frame-contracts';
 import { canvasItems, selectedItemIds, type CanvasSelection } from './canvas-selection';
@@ -79,6 +80,7 @@ export function deleteFrameCommand(state: ProjectState, frame: CanvasFrame): Ext
     commandId: crypto.randomUUID(), projectId: state.project.id, type: 'frame.delete',
     expected: {
       frame: frame.versionId,
+      endpoints: captureOptionalContainerEndpoints(state, [`frame:${frame.id}`]),
       containment: Object.fromEntries(state.containment?.filter(value => value.parent?.kind === 'frame' && value.parent.id === frame.id)
         .map(value => [value.id, value.versionId]) ?? []),
     },

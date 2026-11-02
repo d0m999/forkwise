@@ -220,11 +220,11 @@ test('有序条目连续编号，待办切换与分隔线插入各自保存并�
   await page.getByRole('menuitem', { name: '转为待办列表', exact: true }).click();
   await page.getByRole('button', { name: '标为完成', exact: true }).click();
   await expect
-    .poll(async () => (await workspace.state()).cards[0]!.body.blocks[1]!.checked)
+    .poll(async () => (await workspace.state()).cards[0]!.body.blocks.find(block => block.id === secondItemId)?.checked)
     .toBe(true);
   await editor.press('Meta+z');
   await expect
-    .poll(async () => (await workspace.state()).cards[0]!.body.blocks[1]!.checked)
+    .poll(async () => (await workspace.state()).cards[0]!.body.blocks.find(block => block.id === secondItemId)?.checked)
     .toBe(false);
   await expect(editor).toHaveAttribute('aria-readonly', 'false');
   await expect(editor).toBeFocused();

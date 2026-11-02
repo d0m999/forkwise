@@ -1,3 +1,7 @@
+import { endpointBounds, sidePoint, captureContainerEndpoints } from './container-endpoints.js';
+import { readGroups, readContainment } from './group.js';
+import { readFrames } from './frame.js';
+import { endpointKey } from './connector-contracts.js';
 import type Database from 'better-sqlite3';
 import { randomUUID } from 'node:crypto';
 import { requireThat } from '../domain/errors.js';
@@ -58,12 +62,6 @@ function version(db: Database.Database, projectId: string, domain: string, id: s
   db.prepare('INSERT OR IGNORE INTO mapping_versions(project_id,domain,id,version_id,value) VALUES(?,?,?,?,?)')
     .run(projectId, domain, id, versionId, JSON.stringify(value));
 }
-function sidePoint(pose: Pose, side: Side) {
-  if (side === 'top') return { x: pose.x + pose.width / 2, y: pose.y };
-  if (side === 'right') return { x: pose.x + pose.width, y: pose.y + pose.height / 2 };
-  if (side === 'bottom') return { x: pose.x + pose.width / 2, y: pose.y + pose.height };
-  return { x: pose.x, y: pose.y + pose.height / 2 };
-}
 function shift<T extends { x: number; y: number }>(point: T, dx: number, dy: number): T {
   return { ...point, x: point.x + dx, y: point.y + dy };
 }
@@ -94,18 +92,19 @@ function imageAssetIds(blocks: Block[]) {
   return blocks.flatMap(block => block.type === 'image' && typeof block.assetId === 'string' ? [block.assetId] : []);
 }
 function hosts(db: Database.Database, projectId: string) {
-  return [
-    ...cards(db, projectId).map(value => ({ pose: value.item.pose, versionId: value.item.versionId, itemId: value.item.id })),
-    ...readTexts(db, projectId).map(value => ({ pose: value.item.pose, versionId: value.item.versionId, itemId: value.item.id })),
-    ...readShapes(db, projectId).map(value => ({ pose: value.item.pose, versionId: value.item.versionId, itemId: value.item.id })),
-    ...readImages(db, projectId).map(value => ({ pose: value.item.pose, versionId: value.item.versionId, itemId: value.item.id })),
-  ];
+  const state = { cards: cards(db, projectId), texts: readTexts(db, projectId), shapes: readShapes(db, projectId), images: readImages(db, projectId),
+    strokes: readStrokes(db, projectId), groups: readGroups(db, projectId), frames: readFrames(db, projectId), containment: readContainment(db, projectId) };
+  return { state, values: [
+    ...[...state.cards, ...state.texts, ...state.shapes, ...state.images].map(value => ({ pose: value.item.pose, versionId: value.item.versionId, key: `item:${value.item.id}` })),
+    ...state.groups.map(group => ({ pose: endpointBounds(state, { kind: 'bound', targetKind: 'group', itemId: group.itemId, side: 'top' })!, versionId: group.versionId, key: `group:${group.itemId}` })),
+    ...state.frames.map(frame => ({ pose: frame.pose, versionId: frame.versionId, key: `frame:${frame.id}` })),
+  ] };
 }
 function finish(changes: Omit<SnapshotWrite, 'changedIds'>): SnapshotWrite {
   return { ...changes, changedIds: groupOutcome(changes).changedIds };
 }
 function distinctEnds(start: ConnectorEndpoint, end: ConnectorEndpoint) {
-  requireThat(start.kind !== 'bound' || end.kind !== 'bound' || start.itemId !== end.itemId,
+  requireThat(start.kind !== 'bound' || end.kind !== 'bound' || endpointKey(start) !== endpointKey(end),
     'INVALID_ENDPOINT', '普通连线不能将两端绑定到同一个对象', 400);
   requireThat(start.kind !== 'free' || end.kind !== 'free' || start.point.x !== end.point.x || start.point.y !== end.point.y,
     'INVALID_ENDPOINT', '普通连线不能创建零长度连线', 400);
@@ -194,7 +193,7 @@ export function duplicateCanvas(db: Database.Database, command: Duplicate): Snap
   const selectedItems = new Set(selected.map(value => value.source.item.id));
   const lines = readConnectors(db, projectId);
   const included = lines.filter(line => {
-    const inside = (end: ConnectorEndpoint) => end.kind === 'bound' && selectedItems.has(end.itemId);
+    const inside = (end: ConnectorEndpoint) => end.kind === 'bound' && (end.targetKind ?? 'item') === 'item' && selectedItems.has(end.itemId);
     return payload.connectors.some(value => value.id === line.id) || (inside(line.start) && inside(line.end));
   });
   exact(selected.filter(value => value.kind === 'card').map(value => value.id), expected.cards);
@@ -218,14 +217,22 @@ export function duplicateCanvas(db: Database.Database, command: Duplicate): Snap
     }
   }
   for (const line of included) requireThat(expected.connectors[line.id] === line.versionId, 'VERSION_CONFLICT', '复制依据已更新，请重新读取', 409);
-  const poses = hosts(db, projectId);
-  const anchorIds = [...new Set(included.flatMap(line => [line.start, line.end].flatMap(end =>
-    end.kind === 'bound' && !selectedItems.has(end.itemId) ? [end.itemId] : [])))];
-  exact(anchorIds, expected.anchors);
-  for (const itemId of anchorIds) {
-    const host = poses.find(value => value.itemId === itemId);
+  const { state: anchorState, values: poses } = hosts(db, projectId);
+  const anchors = [...new Map(included.flatMap(line => [line.start, line.end].flatMap(end =>
+    end.kind === 'bound' && !((end.targetKind ?? 'item') === 'item' && selectedItems.has(end.itemId)) ? [[endpointKey(end), end] as const] : []))).values()];
+  const legacy = anchors.every(end => (end.targetKind ?? 'item') === 'item') && Object.keys(expected.anchors).every(key => anchors.some(end => end.itemId === key));
+  exact(anchors.map(end => legacy ? end.itemId : endpointKey(end)), expected.anchors);
+  for (const end of anchors) {
+    const host = poses.find(value => value.key === endpointKey(end));
     requireThat(host, 'NOT_FOUND', '连线端点不存在于当前项目', 404);
-    requireThat(expected.anchors[itemId] === host!.versionId, 'VERSION_CONFLICT', '复制依据已更新，请重新读取', 409);
+    requireThat(expected.anchors[legacy ? end.itemId : endpointKey(end)] === host.versionId, 'VERSION_CONFLICT', '复制依据已更新，请重新读取', 409);
+  }
+  const containerKeys = anchors.filter(end => (end.targetKind ?? 'item') !== 'item').map(endpointKey);
+  if (containerKeys.length) {
+    const actual = captureContainerEndpoints({ ...anchorState, connectors: included }, containerKeys);
+    requireThat(expected.endpoints && (['connectors', 'groups', 'frames', 'containment', 'poses'] as const).every(domain =>
+      Object.keys(actual[domain]).length === Object.keys(expected.endpoints![domain]).length && Object.entries(actual[domain]).every(([id, version]) => expected.endpoints![domain][id] === version)),
+    'VERSION_CONFLICT', '容器复制边界或成员已更新，请重新读取', 409);
   }
   for (const id of copyIds) claim(db, id);
   const tagIds = selected.flatMap(value => value.kind === 'card' ? ((value.source as Card).cardTags?.tagIds ?? []) : []);
@@ -260,9 +267,9 @@ export function duplicateCanvas(db: Database.Database, command: Duplicate): Snap
     }
   });
   const mapEnd = (end: ConnectorEndpoint): ConnectorEndpoint => {
-    if (end.kind === 'bound' && copies.has(end.itemId)) return { kind: 'bound', itemId: copies.get(end.itemId)!.item.id, side: end.side };
+    if (end.kind === 'bound' && (end.targetKind ?? 'item') === 'item' && copies.has(end.itemId)) return { kind: 'bound', itemId: copies.get(end.itemId)!.item.id, side: end.side };
     if (end.kind === 'bound') {
-      const host = poses.find(value => value.itemId === end.itemId)!;
+      const host = poses.find(value => value.key === endpointKey(end))!;
       return { kind: 'free', point: shift(sidePoint(host.pose, end.side), OFFSET, OFFSET) };
     }
     return { kind: 'free', point: shift(end.point, OFFSET, OFFSET) };

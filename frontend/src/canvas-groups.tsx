@@ -1,13 +1,14 @@
+import { groupOutlineBounds } from '../../backend/src/mapping/container-endpoints';
 import type { ProjectState } from './api';
 import { canvasItems, selectedItemIds, type CanvasSelection } from './canvas-selection';
 import type { useGroupGeometry } from './group-geometry';
 import { LayerMenu, type LayerMenuProps } from './layer-menu';
 
-export function CanvasGroups({ state, selection, positions, geometry, blocked, create, createFrame, enter, ungroup, remove, layer }: {
+export function CanvasGroups({ state, selection, positions, geometry, blocked, create, createFrame, enter, ungroup, ungroupSelected, remove, layer }: {
   state: ProjectState; selection: CanvasSelection; positions: Record<string, { x: number; y: number; width?: number; height?: number }>;
   geometry: ReturnType<typeof useGroupGeometry>;
   blocked: boolean; create: () => void; createFrame: () => void; enter: (id: string) => void; ungroup: (id: string) => void;
-  remove: (id: string) => void; layer?: LayerMenuProps | undefined;
+  ungroupSelected: () => void; remove: (id: string) => void; layer?: LayerMenuProps | undefined;
 }) {
   const items = canvasItems(state), ids = selectedItemIds(state, selection);
   const selected = items.filter(v => ids.includes(v.item.id));
@@ -18,11 +19,10 @@ export function CanvasGroups({ state, selection, positions, geometry, blocked, c
   return <>
     {(state.groups ?? []).map(group => {
       const members = items.filter(v => group.memberItemIds.includes(v.item.id)).map(v => ({ ...v.item.pose, ...positions[v.item.id] }));
-      const x = Math.min(...members.map(p => p.x)), y = Math.min(...members.map(p => p.y));
-      const right = Math.max(...members.map(p => p.x + p.width)), bottom = Math.max(...members.map(p => p.y + p.height));
+      const { x, y, width, height } = groupOutlineBounds(members);
       return <div key={group.id} role="group" aria-label="组合" className="canvas-group-outline" data-group-id={group.id}
         data-selected={selection.targets.some(t => t.kind === 'group' && t.id === group.id)}
-        style={{ left: x - 10, top: y - 10, width: right - x + 20, height: bottom - y + 20 }} />;
+        style={{ left: x, top: y, width, height }} />;
     })}
     {geometry.scalable && (['nw', 'ne', 'sw', 'se'] as const).map(corner => <button key={corner}
       className="card-resize nodrag nopan" aria-label={`调整组合尺寸：${({ nw: '左上', ne: '右上', sw: '左下', se: '右下' })[corner]}`}
@@ -38,6 +38,7 @@ export function CanvasGroups({ state, selection, positions, geometry, blocked, c
         const itemId = target.kind === 'item' ? target.itemId : state.groups?.find(group => group.id === target.id)?.itemId;
         return itemId && !state.containment?.some(value => value.id === itemId && value.parent);
       }) && <button disabled={blocked} onClick={createFrame}>创建分区</button>}
+      {selection.targets.length > 1 && selection.targets.every(target => target.kind === 'group') && <button disabled={blocked} onClick={ungroupSelected}>取消所选组合</button>}
       {groupId && <button disabled={blocked} onClick={() => enter(groupId)}>进入组合</button>}
       {groupId && <button disabled={blocked} onClick={() => ungroup(groupId)}>取消组合</button>}
       {groupId && <button disabled={blocked} onClick={() => remove(groupId)}>删除组合</button>}

@@ -1,3 +1,4 @@
+import { captureOptionalContainerEndpoints } from '../../backend/src/mapping/container-endpoints';
 import type { Command, ProjectState } from './api';
 import { selectedItemIds, type CanvasSelection } from './canvas-selection';
 import { captureCardDeletion } from './connector-deletion';
@@ -45,8 +46,9 @@ export function captureSelectionDeletion(state: ProjectState, selection: CanvasS
       groups: Object.fromEntries([...affected].map(id => [id, state.groups!.find(group => group.id === id)!.versionId])),
       ...(frames.size ? { frames: Object.fromEntries([...frames].map(id => [id, state.frames!.find(frame => frame.id === id)!.versionId])) } : {}),
       containment: Object.fromEntries([...membershipIds].map(id => [id, state.containment!.find(value => value.id === id)?.versionId ?? null])),
+      endpoints: captureOptionalContainerEndpoints(state, state.groups.filter(group => affected.has(group.id) && group.memberItemIds.every(id => ids.has(id))).map(group => `group:${group.itemId}`)),
       items, connectors: Object.fromEntries(state.connectors.filter(line =>
-        line.start.kind === 'bound' && ids.has(line.start.itemId) || line.end.kind === 'bound' && ids.has(line.end.itemId),
+        line.start.kind === 'bound' && (line.start.targetKind ?? 'item') === 'item' && ids.has(line.start.itemId) || line.end.kind === 'bound' && (line.end.targetKind ?? 'item') === 'item' && ids.has(line.end.itemId),
       ).map(line => [line.id, line.versionId])),
     } };
   const cards = state.cards.filter(value => ids.has(value.item.id)).map(value => ({ value, intent: captureCardDeletion(state, value.id)! }));

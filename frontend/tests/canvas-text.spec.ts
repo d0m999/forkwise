@@ -861,6 +861,10 @@ test("左侧与四角调节保持对边锚点，缩小至9px仍按1.5行高并�
   page,
   workspace,
 }) => {
+  page.on('request', request => {
+    if (request.url().endsWith('/api/mapping/execute') && request.postDataJSON()?.type === 'text.transform')
+      console.log('ISSUE30_CORNER_TRANSFORM', JSON.stringify(request.postDataJSON()));
+  });
   const projectId = (await workspace.state()).project.id;
   await workspace.execute(page, {
     commandId: "geometry-text",
@@ -908,12 +912,24 @@ test("左侧与四角调节保持对边锚点，缩小至9px仍按1.5行高并�
       ["左下", 200, -13.5, 500, 300],
       ["右下", -200, -13.5, 300, 300],
     ] as const) {
-      const corner = (await page
-        .getByRole("button", { name: `调整文字尺寸：${label}`, exact: true })
-        .boundingBox())!;
+      await expect(page.getByRole('status')).toHaveText('已保存到本机');
+      await expect.poll(() => text.boundingBox()).toEqual(origin);
+      const handle = page.getByRole('button', { name: `调整文字尺寸：${label}`, exact: true });
+      await expect(handle).toBeEnabled();
+      await expect.poll(() => handle.evaluate(element => {
+        const box = element.getBoundingClientRect();
+        return element.contains(document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2));
+      })).toBe(true);
+      const corner = (await handle.boundingBox())!;
+      console.log('ISSUE30_CORNER_BEFORE', JSON.stringify({ label, status: await page.getByRole('status').textContent(),
+        corner, textBox: await text.boundingBox(), hit: await page.evaluate(point => {
+          const element = document.elementFromPoint(point.x, point.y);
+          return { tag: element?.tagName, label: element?.getAttribute('aria-label'), node: element?.closest('.react-flow__node')?.getAttribute('data-id') };
+        }, { x: corner.x + 4, y: corner.y + 4 }) }));
       await page.mouse.move(corner.x + 4, corner.y + 4);
       await page.mouse.down();
       await page.mouse.move(corner.x + 4 + dx, corner.y + 4 + dy, { steps: 5 });
+      console.log('ISSUE30_CORNER_PREVIEW', JSON.stringify({ label, box: await text.boundingBox() }));
       await page.mouse.up();
       await expect
         .poll(

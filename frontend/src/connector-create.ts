@@ -1,3 +1,4 @@
+import { endpointKey } from '../../backend/src/mapping/connector-contracts';
 import { useRef, useState, type PointerEvent } from 'react';
 import type { Command, Receipt } from '../../backend/src/mapping/contracts';
 import { MappingError, type ProjectState } from './api';
@@ -143,20 +144,20 @@ export function useConnectorCreate(adapters: Adapters) {
   function previewAnchor(target: ConnectorTarget) {
     const captured = keyboard.current;
     if (!captured || captured.value.projectId !== latest.current.current()?.project.id) return;
-    captured.value = { ...captured.value, end: target.point, endEndpoint: { kind: 'bound', itemId: target.itemId, side: target.side } };
+    captured.value = { ...captured.value, end: target.point, endEndpoint: { kind: 'bound', itemId: target.itemId, ...(target.targetKind ? { targetKind: target.targetKind } : {}), side: target.side } };
     setDraft(captured.value);
   }
   function chooseAnchor(target: ConnectorTarget, origin: HTMLElement) {
     const projectId = latest.current.current()?.project.id;
     if (!mode || !projectId || latest.current.blocked() || pending.current || active.current) return;
-    const endpoint: ConnectorEndpoint = { kind: 'bound', itemId: target.itemId, side: target.side };
+    const endpoint: ConnectorEndpoint = { kind: 'bound', itemId: target.itemId, ...(target.targetKind ? { targetKind: target.targetKind } : {}), side: target.side };
     const captured = keyboard.current;
     if (!captured) {
       const value = { projectId, start: target.point, end: target.point, startEndpoint: endpoint, endEndpoint: endpoint };
       keyboard.current = { value, origin }; setDraft(value); return;
     }
     if (captured.value.projectId !== projectId) { cancelDraft(); return; }
-    if (captured.value.startEndpoint.kind === 'bound' && captured.value.startEndpoint.itemId === target.itemId) {
+    if (captured.value.startEndpoint.kind === 'bound' && endpointKey(captured.value.startEndpoint) === endpointKey({ kind: 'bound', ...target })) {
       setError('普通连线不能连接同一个对象'); return;
     }
     keyboard.current = null; submit({ ...captured.value, end: target.point, endEndpoint: endpoint }, true);
@@ -187,7 +188,7 @@ export function useConnectorCreate(adapters: Adapters) {
     if (Math.hypot(client.x - captured.startClient.x, client.y - captured.startClient.y) < MIN_DRAG_PX) {
       click.current = client; cancelDraft(); return true;
     }
-    if (value.startEndpoint.kind === 'bound' && value.endEndpoint.kind === 'bound' && value.startEndpoint.itemId === value.endEndpoint.itemId) {
+    if (value.startEndpoint.kind === 'bound' && value.endEndpoint.kind === 'bound' && endpointKey(value.startEndpoint) === endpointKey(value.endEndpoint)) {
       click.current = client; cancelDraft(); setError('普通连线不能连接同一个对象'); return true;
     }
     active.current = null; click.current = { x: event.clientX, y: event.clientY };

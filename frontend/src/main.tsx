@@ -21,7 +21,7 @@ import { layerAvailability, layerItemIds, layerItems, type LayerOperation } from
 import type { LayerMenuProps } from './layer-menu';
 import { captureSelectionDeletion } from './canvas-selection-delete';
 import { useCanvasMarquee } from './canvas-selection-boundary';
-import { captureMemberDeletion, createGroupCommand, removeMemberCommand, ungroupCommand } from './canvas-group-commands';
+import { captureMemberDeletion, ungroupSelectionCommand, createGroupCommand, removeMemberCommand, ungroupCommand } from './canvas-group-commands';
 import { CanvasGroups } from './canvas-groups';
 import { CanvasFrames, useFrameMove } from './canvas-frames';
 import { createFrameCommand, createFrameSelectionCommand, deleteFrameCommand, frameItemsInRect, type FrameRect } from './canvas-frame-commands';
@@ -896,10 +896,12 @@ function Workspace() {
     if (!(await connectorLabel.finish()) || authority.current?.project.id !== projectId || epoch !== editorEpoch.current ||
       canvasSelection.generation() !== generation) return;
     if (lineId && authority.current?.connectors?.some(line => line.id === lineId)) {
-      setSelection([]); setSelectedConnectors(previous => extend ? previous.includes(lineId) ? previous.filter(id => id !== lineId) : [...previous, lineId] : [lineId]); return;
+      setFrameSelection(null);
+      if (!extend) setSelection([]);
+      setSelectedConnectors(previous => extend ? previous.includes(lineId) ? previous.filter(id => id !== lineId) : [...previous, lineId] : [lineId]); return;
     }
     if (!itemId) { marqueeSelection.retire(); if (extend) return; }
-    clearConnectorSelection(); setEditing(null); titleGroup.current = null; awaitBodySelection.current = false;
+    clearConnectorSelection(extend); setEditing(null); titleGroup.current = null; awaitBodySelection.current = false;
     if (itemId && authority.current?.groups?.some(group => group.memberItemIds.includes(itemId))) canvasSelection.choose(itemId, extend);
     else setSelection(previous => itemId ? extend ? [...new Set([...previous, itemId])] : [itemId] : extend ? previous : []);
   }
@@ -1059,9 +1061,9 @@ function Workspace() {
       return { submitted, confirmed };
     },
   });
-  function clearConnectorSelection() {
+  function clearConnectorSelection(keepSelected = false) {
     connectorEdit.cancel({ restoreFocus: false });
-    setSelectedConnector(null);
+    if (!keepSelected) setSelectedConnector(null);
   }
   function chooseFrame(id: string | null) {
     if (id === null) { setFrameSelection(null); return; }
@@ -1930,7 +1932,7 @@ function Workspace() {
     if (!(await shapeMove.flush()) || !(await connectorLabel.finish()) || !(await shapeText.finish()) || !(await texts.finish()) || !(await appearance.flush()) || !(await cardLayout.flush()) || !(await pose.flush()) || !(await flush())) return;
     if (epoch !== editorEpoch.current || canvasSelection.generation() !== generation || authority.current?.project.id !== projectId ||
       ![...(authority.current.shapes ?? []), ...(authority.current.images ?? [])].some(item => item.item.id === itemId)) return;
-    clearConnectorSelection();
+    clearConnectorSelection(extend);
     setEditing(null); titleGroup.current = null; awaitBodySelection.current = false;
     if (extend || authority.current.groups?.some(group => group.memberItemIds.includes(itemId))) canvasSelection.choose(itemId, extend);
     else setSelection(previous => previous.includes(itemId) && previous.length > 1 ? previous : [itemId]);
@@ -1959,7 +1961,7 @@ function Workspace() {
       !(await cardLayout.flush()) || !(await pose.flush()) || !(await flush())) return;
     if (!projectId || editorEpoch.current !== epoch || canvasSelection.generation() !== generation || authority.current?.project.id !== projectId ||
       !authority.current.strokes?.some(stroke => stroke.item.id === itemId)) return;
-    clearConnectorSelection();
+    clearConnectorSelection(extend);
     setEditing(null); titleGroup.current = null; awaitBodySelection.current = false;
     canvasSelection.choose(itemId, extend);
     focus?.focus({ preventScroll: true });
@@ -2462,6 +2464,15 @@ function Workspace() {
     },
       () => authority.current?.project.id === intent.projectId && canvasSelection.generation() === generation);
   }
+  async function ungroupSelectedGroups() {
+    const snapshot = authority.current;
+    if (!snapshot || busy || historyBlocked || composition.current || pendingAction.current) return;
+    const selected = canvasSelection.current(), members = selectedItemIds(snapshot, selected);
+    const command = ungroupSelectionCommand(snapshot, selected), generation = canvasSelection.generation();
+    if (!command) return;
+    await action(command, () => canvasSelection.set({ targets: members.map(itemId => ({ kind: 'item', itemId })), enteredGroupId: null }),
+      () => authority.current?.project.id === command.projectId && canvasSelection.generation() === generation);
+  }
   async function createSelectedFrame() {
     const snapshot = authority.current;
     if (!snapshot || busy || historyBlocked || composition.current || pendingAction.current) return;
@@ -2482,7 +2493,7 @@ function Workspace() {
     const command: Command = groupId ? { commandId: intent.command.commandId, projectId: intent.command.projectId, type: 'group.delete', payload: { id: groupId },
       expected: { group: intent.command.expected.groups[groupId]!, parentContainment: intent.command.expected.containment[snapshot.groups!.find(group => group.id === groupId)!.itemId],
         containment: Object.fromEntries(Object.entries(intent.command.expected.containment).filter(([id]) => snapshot.groups!.find(group => group.id === groupId)!.memberItemIds.includes(id)).map(([id, version]) => [id, version!])),
-        items: intent.command.expected.items, connectors: intent.command.expected.connectors } } : intent.command;
+        endpoints: intent.command.expected.endpoints, items: intent.command.expected.items, connectors: intent.command.expected.connectors } } : intent.command;
     try {
       await action(command, undefined, () => {
         if (selectionDeletion.current !== intent || authority.current?.project.id !== intent.command.projectId || canvasSelection.generation() !== generation) return false;
@@ -2887,7 +2898,7 @@ function Workspace() {
           const itemId = (event.target as Element).closest<HTMLElement>('.react-flow__node')?.dataset.id;
           if (itemId && !(event.target as Element).closest('.nodrag, input, textarea, [contenteditable=true]') && canvasSelection.consumeClick(itemId, event.shiftKey, (id, extend) => {
             if (state?.strokes?.some(stroke => stroke.item.id === id)) void chooseStrokeItem(id, extend, (event.target as Element).closest<HTMLElement>('[tabindex]') ?? undefined);
-            else { awaitBodySelection.current = false; canvasSelection.choose(id, extend); }
+            else { awaitBodySelection.current = false; clearConnectorSelection(true); canvasSelection.choose(id, extend); }
           })) { event.preventDefault(); event.stopPropagation(); }
         }}
         onPointerMoveCapture={event => { if (!connectorEdit.input(event) && !connectorCreate.input(event)) strokeDraw.move(event); }}
@@ -2959,7 +2970,7 @@ function Workspace() {
             nodes={orderCanvas([...nodes, ...textNodes, ...imageNodes(state.images ?? [], state.project.id, selection, (id, extend) => void chooseCanvasItem(id, extend), busy || historyBlocked || composition.current || !!pendingAction.current || placing || !!shapePreset || texts.placing || panTool || !!strokeDraw.mode || !!shapeText.session || texts.geometryBlocked, imageGeometry, (value, dx, dy) => { if (canvasMove.start(value.item.id)) canvasMove.finish({ x: value.item.pose.x + dx, y: value.item.pose.y + dy }); }, singleItemId, memberAction, layerProps), ...shapeNodes(state.shapes ?? [], selection, (id, extend) => void chooseCanvasItem(id, extend), busy || historyBlocked || placing || !!shapePreset || texts.placing || panTool, id => void beginShapeText(id), !!shapeText.session, (id, trigger) => void beginShapeAppearance(id, trigger), value => void removeShape(value), shapeMove.positions, shapeMove, composition.current || !!pendingAction.current || pose.pending || pose.dragging || canvasMove.dragging || texts.hasPending() || appearance.pending || cardLayout.pending, singleItemId, memberAction, layerProps), ...strokeNodes(state.strokes ?? [], selection, (id, extend) => void chooseStrokeItem(id, extend), value => void removeStroke(value), busy || historyBlocked || !!pendingAction.current || placing || !!shapePreset || texts.placing || panTool || !!strokeDraw.mode, singleItemId, memberAction, itemId => !!state.groups?.some(group => group.memberItemIds.includes(itemId)) || (flowSelection.includes(itemId) && flowSelection.length > 1))].map(node => groupGeometry.project({ ...node, selected: flowSelection.includes(node.id), position: frameMove.positions[node.id] ?? canvasMove.positions[node.id] ?? shapeMove.positions[node.id] ?? node.position, draggable: node.draggable !== false && !groupGeometry.active && !strokeDraw.mode && !busy && !historyBlocked && !panTool && !placing && !shapePreset && !texts.placing && !texts.geometryBlocked && !shapeText.session && !connectorLabel.session && !shapeMove.pending })), state, selection, { temporaryRaise: pureCardSelection && !layerHoldActive })}
             onNodeClick={(event, node) => {
               awaitBodySelection.current = false;
-              clearConnectorSelection();
+              clearConnectorSelection(event.shiftKey);
               canvasSelection.choose(node.id, event.shiftKey);
             }}
             nodeDragThreshold={0}
@@ -3056,7 +3067,7 @@ function Workspace() {
                 blocked={busy || historyBlocked || !!pendingAction.current || texts.hasPending()}
                 create={() => void createSelectedGroup()}
                 createFrame={() => void createSelectedFrame()}
-                ungroup={id => void ungroupSelected(id)}
+                ungroupSelected={() => void ungroupSelectedGroups()} ungroup={id => void ungroupSelected(id)}
                 remove={id => void deleteSelectedCanvas(id)}
                 enter={id => canvasSelection.set({ targets: [], enteredGroupId: id })}
                 layer={layerProps} />
@@ -3069,7 +3080,7 @@ function Workspace() {
                 focus={connectorCreate.focusId === value.id || connectorEdit.focusId === value.id}
                 focused={() => { if (connectorCreate.focusId === value.id) connectorCreate.focused(); if (connectorEdit.focusId === value.id) connectorEdit.focused(); }}
                 drag={event => { if (!connectorLabel.session) connectorEdit.move(value, event); }}
-                choose={extend => { if (!connectorCreate.hasPending() && !connectorEdit.hasPending()) { editorEpoch.current++; setSelection([]);
+                choose={extend => { if (!connectorCreate.hasPending() && !connectorEdit.hasPending()) { editorEpoch.current++; setFrameSelection(null); if (!extend) setSelection([]);
                   setSelectedConnectors(previous => extend ? previous.includes(value.id) ? previous.filter(id => id !== value.id) : [...previous, value.id] : [value.id]); } }} />)}
               {!connectorLabel.session && (state.connectors ?? []).filter(value => value.id === selectedConnector).map(value => <ConnectorHandles key={value.id} value={value}
                 resolve={connectorTargets.resolve} blocked={busy || historyBlocked || composition.current || !!pendingAction.current}

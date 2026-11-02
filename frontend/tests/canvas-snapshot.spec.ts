@@ -7,6 +7,22 @@ test("键盘与菜单完成复制副本、冻结粘贴、独立编辑和保存�
     payload: { id: "origin", title: "市场观察", text: "需求增长", x: 80, y: 120 } });
   await page.reload();
   await expect(page.getByRole("status")).toHaveText("已保存到本机");
+  page.on('console', message => { if (message.text().startsWith('ISSUE30_PASTE_EVENT')) console.log(message.text()); });
+  page.on('request', request => {
+    if (request.url().endsWith('/api/mapping/execute') && request.postDataJSON()?.type === 'canvas.paste')
+      console.log('ISSUE30_PASTE_SEND', JSON.stringify({ at: Date.now(), commandId: request.postDataJSON().commandId }));
+  });
+  page.on('response', response => {
+    const request = response.request();
+    if (request.url().endsWith('/api/mapping/execute') && request.postDataJSON()?.type === 'canvas.paste')
+      console.log('ISSUE30_PASTE_ACK', JSON.stringify({ at: Date.now(), commandId: request.postDataJSON().commandId, status: response.status() }));
+  });
+  await page.evaluate(() => window.addEventListener('paste', event => {
+    const observation = { at: Date.now(), trusted: event.isTrusted, status: document.querySelector('[role=status]')?.textContent,
+      types: [...(event.clipboardData?.types ?? [])] };
+    void crypto.subtle.digest('SHA-256', new TextEncoder().encode(event.clipboardData?.getData('text/plain') ?? '')).then(hash =>
+      console.log('ISSUE30_PASTE_EVENT', JSON.stringify({ ...observation, textSha256: [...new Uint8Array(hash)].map(byte => byte.toString(16).padStart(2, '0')).join('') })));
+  }, true));
   const guard = await preserveClipboard(page, info, "市场观察");
   try {
     const origin = (await workspace.state()).cards[0]!;
@@ -46,6 +62,7 @@ test("键盘与菜单完成复制副本、冻结粘贴、独立编辑和保存�
     expect(pasted.body.blocks.map(block => block.text).join("")).toBe("需求增长");
     expect((await workspace.state()).cards.find(card => card.id === origin.id)!.title).toBe("需求下降");
     await page.mouse.move(pane.x + 420, pane.y + 260);
+    await expect(page.getByRole('status')).toHaveText('已保存到本机');
     await page.locator(".canvas").press("Meta+v");
     await expect.poll(async () => (await workspace.state()).cards.length).toBe(3);
     const third = (await workspace.state()).cards.find(card => card.id !== origin.id && card.id !== pasted.id)!;

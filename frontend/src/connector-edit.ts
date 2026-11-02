@@ -116,14 +116,14 @@ export function useConnectorEdit(adapters: Adapters) {
     const captured = keyboard.current;
     if (!captured || captured.endpoint === 'line' || captured.value.projectId !== latest.current.current()?.project.id) return;
     captured.value = { ...captured.value, [captured.endpoint]: target.point,
-      [captured.endpoint + 'Endpoint']: { kind: 'bound', itemId: target.itemId, side: target.side } };
+      [captured.endpoint + 'Endpoint']: { kind: 'bound', itemId: target.itemId, ...(target.targetKind ? { targetKind: target.targetKind } : {}), side: target.side } };
     setDraft(captured.value);
   }
   function chooseAnchor(target: ConnectorTarget) {
     const captured = keyboard.current;
     if (!captured || captured.endpoint === 'line' || latest.current.blocked() || saving.current || captured.value.projectId !== latest.current.current()?.project.id) return;
     previewAnchor(target);
-    submitEndpoint(captured, { kind: 'bound', itemId: target.itemId, side: target.side });
+    submitEndpoint(captured, { kind: 'bound', itemId: target.itemId, ...(target.targetKind ? { targetKind: target.targetKind } : {}), side: target.side });
   }
   function submitEndpoint(captured: NonNullable<typeof keyboard.current>, value: ConnectorEndpoint) {
     if (captured.endpoint === 'line') return;

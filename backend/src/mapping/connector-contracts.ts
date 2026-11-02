@@ -21,11 +21,15 @@ const FreeEndpoint = z.object({
 }).strict();
 const BoundEndpoint = z.object({
   kind: z.literal('bound'),
+  targetKind: z.enum(['item', 'group', 'frame']).optional(),
   itemId: Id,
   side: z.enum(['top', 'right', 'bottom', 'left']),
 }).strict();
 const Endpoint = z.discriminatedUnion('kind', [FreeEndpoint, BoundEndpoint]);
 export type ConnectorEndpoint = z.infer<typeof Endpoint>;
+export function endpointKey(endpoint: Extract<ConnectorEndpoint, { kind: 'bound' }>) {
+  return `${endpoint.targetKind ?? 'item'}:${endpoint.itemId}`;
+}
 export const ConnectorCreateCommand = z.object({
   commandId: Id,
   projectId: Id,

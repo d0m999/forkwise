@@ -5,8 +5,8 @@ import { captureMemberDeletion } from './canvas-group-commands';
 export function incidentConnectorVersions(state: ProjectState, itemId: string): Record<string, string> | null {
   if (!Array.isArray(state.connectors)) return null;
   return Object.fromEntries(state.connectors.filter(line =>
-    (line.start.kind === 'bound' && line.start.itemId === itemId) ||
-    (line.end.kind === 'bound' && line.end.itemId === itemId)
+    (line.start.kind === 'bound' && (line.start.targetKind ?? 'item') === 'item' && line.start.itemId === itemId) ||
+    (line.end.kind === 'bound' && (line.end.targetKind ?? 'item') === 'item' && line.end.itemId === itemId)
   ).map(line => [line.id, line.versionId]));
 }
 

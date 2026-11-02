@@ -3,7 +3,7 @@ import type Database from 'better-sqlite3';
 import { randomUUID } from 'node:crypto';
 import { requireThat } from '../domain/errors.js';
 import type { CanvasConnector, ConnectorChange, ConnectorCommand, ConnectorEndpoint } from './connector-contracts.js';
-import { DEFAULT_CONNECTOR_STYLE } from './connector-contracts.js';
+import { DEFAULT_CONNECTOR_STYLE, endpointKey } from './connector-contracts.js';
 
 export function initializeConnectors(db: Database.Database) {
   db.exec(`CREATE TABLE IF NOT EXISTS mapping_connectors(id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES mapping_projects(id), value TEXT NOT NULL);
@@ -20,7 +20,7 @@ export function createConnector(db: Database.Database, command: Extract<Connecto
   const { projectId, payload } = command;
   requireThat(!db.prepare('SELECT 1 FROM mapping_connector_ids WHERE id=?').get(payload.id),
     'ID_CONFLICT', '身份已使用，请重新创建', 409);
-  requireThat(payload.start.kind !== 'bound' || payload.end.kind !== 'bound' || payload.start.itemId !== payload.end.itemId,
+  requireThat(payload.start.kind !== 'bound' || payload.end.kind !== 'bound' || endpointKey(payload.start) !== endpointKey(payload.end),
     'INVALID_ENDPOINT', '普通连线不能将两端绑定到同一个对象', 400);
   requireDistinctFreeEndpoints(payload.start, payload.end);
   requireConnectorEndpoint(db, projectId, payload.start);
@@ -35,11 +35,13 @@ export function reconnectConnector(db: Database.Database, command: Extract<Conne
   const before = requireConnector(db, command);
   const after = structuredClone(before);
   after[command.payload.endpoint] = command.payload.value;
-  requireThat(after.start.kind !== 'bound' || after.end.kind !== 'bound' || after.start.itemId !== after.end.itemId,
+  requireThat(after.start.kind !== 'bound' || after.end.kind !== 'bound' || endpointKey(after.start) !== endpointKey(after.end),
     'INVALID_ENDPOINT', '普通连线不能将两端绑定到同一个对象', 400);
   requireDistinctFreeEndpoints(after.start, after.end);
   requireConnectorEndpoint(db, command.projectId, after.start);
   requireConnectorEndpoint(db, command.projectId, after.end);
+  const previous = before[command.payload.endpoint], next = after[command.payload.endpoint];
+  if (previous.kind === 'bound' && next.kind === 'bound' && endpointKey(previous) === endpointKey(next) && previous.side === next.side) return null;
   if (JSON.stringify(before) === JSON.stringify(after)) return null;
   after.versionId = randomUUID();
   saveConnector(db, command.projectId, after);
@@ -113,8 +115,8 @@ export function deleteConnector(db: Database.Database, command: Extract<Connecto
 export function prepareIncidentConnectorDeletion(db: Database.Database, projectId: string, itemId: string | readonly string[], expected: Record<string, string>): ConnectorChange[] {
   const ids = new Set(typeof itemId === 'string' ? [itemId] : itemId);
   const incident = readConnectors(db, projectId).filter(value =>
-    value.start.kind === 'bound' && ids.has(value.start.itemId) ||
-    value.end.kind === 'bound' && ids.has(value.end.itemId));
+    value.start.kind === 'bound' && (value.start.targetKind ?? 'item') === 'item' && ids.has(value.start.itemId) ||
+    value.end.kind === 'bound' && (value.end.targetKind ?? 'item') === 'item' && ids.has(value.end.itemId));
   requireThat(Object.keys(expected).length === incident.length && incident.every(value =>
     Object.hasOwn(expected, value.id) && expected[value.id] === value.versionId),
   'VERSION_CONFLICT', '相连连线范围或版本已更新，请重新读取', 409);
@@ -158,7 +160,7 @@ function requireConnector(db: Database.Database, command: { projectId: string; e
   return before;
 }
 
-function saveConnector(db: Database.Database, projectId: string, value: CanvasConnector) {
+export function saveConnector(db: Database.Database, projectId: string, value: CanvasConnector) {
   db.prepare('INSERT INTO mapping_connectors VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET value=excluded.value')
     .run(value.id, projectId, JSON.stringify(value));
   db.prepare('INSERT OR IGNORE INTO mapping_versions VALUES(?,?,?,?,?)')

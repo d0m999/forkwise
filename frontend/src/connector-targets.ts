@@ -1,3 +1,5 @@
+import { sidePoint } from '../../backend/src/mapping/container-endpoints';
+import { endpointKey } from '../../backend/src/mapping/connector-contracts';
 import { useLayoutEffect, useRef, useState } from 'react';
 import { useNodesInitialized, useStore } from '@xyflow/react';
 import type { ConnectorEndpoint } from '../../backend/src/mapping/connector-contracts';
@@ -5,7 +7,7 @@ import type { ProjectState } from './api';
 import type { ConnectorPoint } from './connector-geometry';
 
 type Side = Extract<ConnectorEndpoint, { kind: 'bound' }>['side'];
-export type ConnectorTarget = { itemId: string; side: Side; point: ConnectorPoint; label: string };
+export type ConnectorTarget = { itemId: string; targetKind?: 'group' | 'frame'; side: Side; point: ConnectorPoint; label: string };
 export function useConnectorTargets(state: ProjectState | null, world: (client: ConnectorPoint) => ConnectorPoint) {
   const nodesInitialized = useNodesInitialized();
   // Object ranks and the temporary selected-card lift can exceed the default control layer.
@@ -38,17 +40,31 @@ export function useConnectorTargets(state: ProjectState | null, world: (client: 
       ];
       for (const [side, client] of sides) values.push({ itemId, side, client, point: current.current.world(client), surface, label: target.label });
     }
+    for (const container of [
+      ...(project?.groups?.map(group => ({ itemId: group.itemId, targetKind: 'group' as const, selector: `[data-group-id="${CSS.escape(group.id)}"]`, label: '组合' })) ?? []),
+      ...(project?.frames?.map(frame => ({ itemId: frame.id, targetKind: 'frame' as const, selector: `[data-frame-id="${CSS.escape(frame.id)}"]`, label: '分区 ' + frame.name })) ?? []),
+    ]) {
+      const surface = document.querySelector<HTMLElement>(container.selector);
+      if (!surface || !surface.getClientRects().length) continue;
+      const box = surface.getBoundingClientRect();
+      for (const side of ['top', 'right', 'bottom', 'left'] as const) {
+        const client = sidePoint({ x: box.x, y: box.y, width: box.width, height: box.height }, side);
+        values.push({ itemId: container.itemId, targetKind: container.targetKind, side, client, point: current.current.world(client), surface, label: container.label });
+      }
+    }
     return values;
   }
   useLayoutEffect(() => {
     const measure = () => {
-      const next = read().map(({ itemId, side, point, label }) => ({ itemId, side, point, label }));
+      const next = read().map(({ itemId, targetKind, side, point, label }) => ({ itemId, ...(targetKind ? { targetKind } : {}), side, point, label }));
       setTargets(previous => JSON.stringify(previous) === JSON.stringify(next) ? previous : next);
     };
     measure();
     const observer = new ResizeObserver(measure);
     for (const value of read()) observer.observe(value.surface);
-    return () => observer.disconnect();
+    const movement = new MutationObserver(measure);
+    for (const value of read().filter(value => value.targetKind)) movement.observe(value.surface, { attributes: true, attributeFilter: ['style'] });
+    return () => { observer.disconnect(); movement.disconnect(); };
   }, [state, nodesInitialized, nodeGeometry]);
   return {
     controlsLayer,
@@ -56,10 +72,10 @@ export function useConnectorTargets(state: ProjectState | null, world: (client: 
     origin(client: ConnectorPoint) {
       const nearest = read().map(value => ({ ...value, distance: Math.hypot(value.client.x - client.x, value.client.y - client.y) }))
         .filter(value => value.distance <= 12).sort((a, b) => a.distance - b.distance)[0];
-      return nearest ? { endpoint: { kind: 'bound' as const, itemId: nearest.itemId, side: nearest.side }, point: nearest.point } : null;
+      return nearest ? { endpoint: { kind: 'bound' as const, itemId: nearest.itemId, ...(nearest.targetKind ? { targetKind: nearest.targetKind } : {}), side: nearest.side }, point: nearest.point } : null;
     },
     resolve(endpoint: ConnectorEndpoint) {
-      return endpoint.kind === 'free' ? endpoint.point : targets.find(value => value.itemId === endpoint.itemId && value.side === endpoint.side)?.point ?? null;
+      return endpoint.kind === 'free' ? endpoint.point : targets.find(value => endpointKey({ kind: 'bound', ...value }) === endpointKey(endpoint) && value.side === endpoint.side)?.point ?? null;
     },
   };
 }

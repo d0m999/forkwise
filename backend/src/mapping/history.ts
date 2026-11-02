@@ -88,12 +88,8 @@ export function recordAction(
   const stack = load(db, command.projectId);
   if (change.frameChanges?.length) {
     const value = change.frameChanges[0]!.after ?? change.frameChanges[0]!.before!;
-    stack.undo.push({ session, lastRevision: change.revision, id: command.commandId, label: command.type,
-      target: { id: value.id, title: value.name }, actor: change.actor, before: null, after: null,
-      frameChanges: change.frameChanges, ...(change.containmentChanges ? { containmentChanges: change.containmentChanges } : {}),
-      ...(change.cardChanges ? { cardChanges: change.cardChanges } : {}), ...(change.textChanges ? { textChanges: change.textChanges } : {}),
-      ...(change.shapeChanges ? { shapeChanges: change.shapeChanges } : {}), ...(change.imageChanges ? { imageChanges: change.imageChanges } : {}),
-      ...(change.strokeChanges ? { strokeChanges: change.strokeChanges } : {}), changedIds: change.changedIds });
+    stack.undo.push({ ...change, session, lastRevision: change.revision, id: command.commandId, label: command.type,
+      target: { id: value.id, title: value.name }, before: null, after: null });
     stack.undo = stack.undo.slice(-40); stack.redo = []; save(db, command.projectId, stack); return;
   }
   if (command.type === 'canvas.duplicate' || command.type === 'canvas.paste') {
@@ -112,7 +108,7 @@ export function recordAction(
     if (command.type === 'canvas.delete-selection') {
       const groupId = command.payload.groupIds[0], deleted = (change.cardLifecycleChanges?.[0]?.before ?? change.textChanges?.[0]?.before ??
         change.shapeChanges?.[0]?.before ?? change.imageChanges?.[0]?.before ?? change.strokeChanges?.[0]?.before)!;
-      selected = groupId ? { id: groupId, title: '组合' } : { id: deleted.id, title: 'body' in deleted ? deleted.title
+      selected = groupId ? { id: groupId, title: '组合' } : !deleted ? { id: command.commandId, title: '移除外框或连线' } : { id: deleted.id, title: 'body' in deleted ? deleted.title
         : deleted.kind === 'text' ? '独立文字' : deleted.kind === 'shape' ? deleted.content.shortText || '形状'
         : deleted.kind === 'stroke' ? deleted.content.penKind === 'highlighter' ? '荧光笔' : '笔迹' : '图片' };
     }
@@ -281,19 +277,12 @@ export function travelHistory(
   requireThat(action, 'HISTORY_EMPTY', '没有可撤销或重做的操作', 409);
   if (action.frameChanges?.length) {
     const frameChanges = action.frameChanges.map(change => restoreFrame(db, project.id, change, type));
-    const containmentChanges = action.containmentChanges?.length
-      ? restoreGroups(db, project.id, [], action.containmentChanges, type).containmentChanges
-      : undefined;
+    const restored = restoreGroupAction(db, project.id, action, type);
     const cardChanges = action.cardChanges ? restoreGeometry(db, project.id, action.cardChanges, type) : undefined;
-    const textChanges = action.textChanges?.map(change => restoreText(db, project.id, change, type));
-    const shapeChanges = action.shapeChanges?.map(change => restoreShape(db, project.id, change, type));
-    const imageChanges = action.imageChanges?.map(change => restoreImage(db, project.id, change, type));
-    const strokeChanges = action.strokeChanges?.map(change => restoreStroke(db, project.id, change, type));
     (type === 'history.undo' ? stack.redo : stack.undo).push(action); save(db, project.id, stack);
-    return { before: null, after: null, frameChanges, ...(containmentChanges ? { containmentChanges } : {}),
-      ...(cardChanges ? { cardChanges } : {}), ...(textChanges ? { textChanges } : {}), ...(shapeChanges ? { shapeChanges } : {}),
-      ...(imageChanges ? { imageChanges } : {}), ...(strokeChanges ? { strokeChanges } : {}), changedIds: action.changedIds,
-      deletedIds: frameChanges.filter(change => !change.after).map(change => change.before!.id),
+    return { ...restored, frameChanges, ...(cardChanges ? { cardChanges } : {}),
+      changedIds: [...new Set([...action.changedIds, ...restored.changedIds])],
+      deletedIds: [...new Set([...restored.deletedIds, ...frameChanges.filter(change => !change.after).map(change => change.before!.id)])],
       target: { ...action.target, label: action.label } };
   }
   if (action.label === 'canvas.duplicate' || action.label === 'canvas.paste') {

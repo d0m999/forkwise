@@ -1,3 +1,4 @@
+import { planContainerConnectorRemoval, applyContainerConnectorRemoval } from './container-connector-lifecycle.js';
 import { createFrame, deleteFrame, editFrame, moveFrame, readFrames } from './frame.js';
 import type { FrameRecord } from './frame-contracts.js';
 import { removeMember, ungroup, removeDeletedMember, groupOutcome, deleteGroup } from './group-lifecycle.js';
@@ -307,6 +308,7 @@ export class Mapping {
             );
           return receipt;
         };
+        const containerConnectorPlan = planContainerConnectorRemoval(this.db, command);
         let before: Card | Project | null = null;
         let after: Card | Project | null;
         let frameChanges: Change['frameChanges'];
@@ -356,7 +358,7 @@ export class Mapping {
           this.db.prepare('UPDATE mapping_projects SET revision=? WHERE id=?').run(revision, project.id);
         } else if (command.type === 'group.delete' || command.type === 'canvas.delete-selection') {
           const project = this.project(command.projectId);
-          ({ groupChanges, containmentChanges, cardLifecycleChanges, textChanges, shapeChanges, imageChanges, strokeChanges, connectorChanges, changedIds } = command.type === 'canvas.delete-selection' ? deleteSelection(this.db, command) : deleteGroup(this.db, command));
+          ({ frameChanges, groupChanges, containmentChanges, cardLifecycleChanges, textChanges, shapeChanges, imageChanges, strokeChanges, connectorChanges, changedIds } = command.type === 'canvas.delete-selection' ? deleteSelection(this.db, command) : deleteGroup(this.db, command));
           after = null; revision = project.revision + 1;
           this.db.prepare('UPDATE mapping_projects SET revision=? WHERE id=?').run(revision, project.id);
         } else if (command.type === 'group.create' || command.type === 'group.remove-member' || command.type === 'group.ungroup') {
@@ -778,6 +780,10 @@ export class Mapping {
           groupChanges = released.groupChanges; containmentChanges = released.containmentChanges;
           changedIds = [...new Set([...changedIds, ...(released.changedIds ?? [])])];
         }
+        if (containerConnectorPlan.length) {
+          connectorChanges = applyContainerConnectorRemoval(this.db, command.projectId, containerConnectorPlan, connectorChanges);
+          changedIds = [...new Set([...changedIds, ...connectorChanges.map(change => (change.after ?? change.before!).id)])];
+        }
         for (const c of cardLifecycleChanges ?? []) {
           reconcileMediaTasks(this.db, command.projectId, c.before, c.after);
           if (c.after) {
@@ -791,7 +797,7 @@ export class Mapping {
         }
         if (after && 'body' in after) retainCardVersions(this.db, command.projectId, after);
         for (const c of cardChanges ?? []) retainCardVersions(this.db, command.projectId, c.after);
-        const structuralOutcome = !frameChanges && (command.type === 'canvas.delete-selection' || groupChanges || containmentChanges) ? groupOutcome({ before, after, groupChanges: groupChanges ?? [], containmentChanges: containmentChanges ?? [], cardLifecycleChanges: cardLifecycleChanges ?? [], textChange, shapeChange, imageChange, strokeChange, textChanges, shapeChanges, imageChanges, strokeChanges, connectorChanges, changedIds } as Partial<Change>) : null;
+        const structuralOutcome = (frameChanges || command.type === 'canvas.delete-selection' || groupChanges || containmentChanges) ? groupOutcome({ before, after, frameChanges, groupChanges: groupChanges ?? [], containmentChanges: containmentChanges ?? [], cardLifecycleChanges: cardLifecycleChanges ?? [], textChange, shapeChange, imageChange, strokeChange, textChanges, shapeChanges, imageChanges, strokeChanges, connectorChanges, changedIds } as Partial<Change>) : null;
         if (structuralOutcome) changedIds = structuralOutcome.changedIds;
         const movedPoses = command.type === 'frame.move'
           ? [

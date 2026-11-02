@@ -1,3 +1,4 @@
+import { ContainerEndpointExpected } from './container-endpoints.js';
 import { z } from 'zod';
 
 const Id = z.string().min(1).max(160);
@@ -36,7 +37,7 @@ export const FrameCommands = z.discriminatedUnion('type', [
     commandId: Id,
     projectId: Id,
     type: z.literal('frame.delete'),
-    expected: z.object({ frame: Id, containment: z.record(Id, Id) }).strict(),
+    expected: z.object({ endpoints: ContainerEndpointExpected.optional(), frame: Id, containment: z.record(Id, Id) }).strict(),
     payload: z.object({ id: Id }).strict(),
   }).strict(),
   z.object({

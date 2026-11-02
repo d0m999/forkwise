@@ -111,7 +111,7 @@ export function CanvasFrames({ state, preview, selectedId, choose, focusId, onFo
                 () => setEditing(current => current === session ? null : current));
             }}>删除分区</button>
           <button type="submit" disabled={blocked || !name.trim() || !!background && !/^#[0-9a-f]{6}$/i.test(background)}>保存分区</button>
-        </form> : <>
+        </form> : <div className="canvas-frame-header">
           <button ref={element => { triggers.current[frame.id] = element; }} type="button"
             className="canvas-frame-name nodrag nopan" aria-pressed={selectedId === frame.id} disabled={blocked}
             onPointerDown={event => { choose(frame.id); move.start(event, frame); }}
@@ -121,7 +121,7 @@ export function CanvasFrames({ state, preview, selectedId, choose, focusId, onFo
             <button type="button" disabled={blocked} onClick={() => begin(frame)}>重命名分区</button>
             <button type="button" disabled={blocked} onClick={() => execute(deleteFrameCommand(state, frame), () => choose(null))}>删除分区</button>
           </div>}
-        </>}
+        </div>}
       </div>;
     })}
     {preview && <div aria-hidden="true" className="canvas-frame-preview" style={{ left: preview.x, top: preview.y,
