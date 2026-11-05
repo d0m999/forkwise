@@ -96,3 +96,54 @@ for (const kind of ['thought', 'shape', 'stroke', 'text', 'image'] as const) {
     } finally { await page.unrouteAll({ behavior: 'wait' }); }
   });
 }
+
+test('放弃文字创建的刷新尚未结束时，点击画布不会在之后补发这次文字', async ({ page, workspace }) => {
+  const creates: { command: any; status: number }[] = [];
+  await page.route('**/api/mapping/execute', async route => {
+    const command = route.request().postDataJSON();
+    if (command.type !== 'text.create') return route.continue();
+    if (!creates.length) {
+      creates.push({ command, status: 409 });
+      return route.fulfill({ status: 409, json: { code: 'VERSION_CONFLICT', message: '分区已更新，请重新读取' } });
+    }
+    const response = await route.fetch();
+    creates.push({ command, status: response.status() });
+    return route.fulfill({ response });
+  });
+  let release = () => {};
+  let held = false;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  try {
+    await page.getByRole('button', { name: '文字', exact: true }).click();
+    await page.locator('.react-flow__pane').click({ position: { x: 300, y: 300 } });
+    const abandon = page.getByRole('button', { name: '放弃本次文字创建', exact: true });
+    await expect(abandon).toBeEnabled();
+    await page.getByRole('button', { name: '文字', exact: true }).click();
+    await page.route('**/api/mapping/projects/*/map?**', async route => {
+      if (!held && new URL(route.request().url()).searchParams.get('view') === 'index') {
+        held = true;
+        await gate;
+      }
+      return route.continue();
+    });
+    await abandon.click();
+    await expect.poll(() => held).toBe(true);
+    await expect(page.getByRole('button', { name: '文字', exact: true })).toHaveAttribute('aria-pressed', 'false');
+    await page.locator('.react-flow__pane').click({ position: { x: 180, y: 160 } });
+    release();
+    await expect(abandon).toHaveCount(0);
+    expect(creates).toHaveLength(1);
+    expect((await workspace.state()).texts ?? []).toEqual([]);
+    await page.getByRole('button', { name: '文字', exact: true }).click();
+    await page.locator('.react-flow__pane').click({ position: { x: 520, y: 420 } });
+    await expect.poll(async () => (await workspace.state()).texts?.length ?? 0).toBe(1);
+    expect(creates.filter(item => item.status !== 409)).toHaveLength(1);
+    expect(creates[1]!.command.commandId).not.toBe(creates[0]!.command.commandId);
+    const saved = (await workspace.state()).texts![0]!;
+    expect(saved.item.pose.x).toBe(creates[1]!.command.payload.pose.x);
+    expect(saved.item.pose.y).toBe(creates[1]!.command.payload.pose.y);
+  } finally {
+    release();
+    await page.unrouteAll({ behavior: 'wait' });
+  }
+});

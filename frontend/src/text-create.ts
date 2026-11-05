@@ -12,10 +12,17 @@ export function useTextCreate(
 ) {
   const [key] = useState(() => prefix + crypto.randomUUID());
   const pending = useRef<Create | null>(null),
-    running = useRef<Promise<boolean> | null>(null);
+    running = useRef<Promise<boolean> | null>(null),
+    abandoning = useRef<Promise<boolean> | null>(null),
+    rejectedRef = useRef(false),
+    abandons = useRef(0);
   const [error, setError] = useState(""),
     [working, setWorking] = useState(false);
   const [rejected, setRejected] = useState(false);
+  function setRejection(value: boolean) {
+    rejectedRef.current = value;
+    setRejected(value);
+  }
   function list() {
     const records: { key: string; command: Create }[] = [];
     for (let i = 0; i < localStorage.length; i++) {
@@ -47,9 +54,10 @@ export function useTextCreate(
     else localStorage.removeItem(key);
   }
   async function flush(): Promise<boolean> {
+    if (abandoning.current) return false;
     if (running.current) return running.current;
     if (!pending.current) return true;
-    if (rejected) return false;
+    if (rejectedRef.current) return false;
     const command = pending.current;
     setWorking(true);
     running.current = (async () => {
@@ -65,7 +73,7 @@ export function useTextCreate(
         setError("");
         return true;
       } catch (failure) {
-        if (!executed && failure instanceof MappingError && failure.code === 'VERSION_CONFLICT') setRejected(true);
+        if (!executed && failure instanceof MappingError && failure.code === 'VERSION_CONFLICT') setRejection(true);
         setError(failure instanceof Error ? failure.message : "文字创建未确认");
         return false;
       }
@@ -76,24 +84,28 @@ export function useTextCreate(
     return result;
   }
   function send(command: Create) {
+    if (abandoning.current || rejectedRef.current) return Promise.resolve(false);
     pending.current ??= command;
     return flush();
   }
   async function abandon() {
-    if (!rejected || running.current || !pending.current) return;
+    if (!rejectedRef.current || running.current || abandoning.current || !pending.current) return;
+    abandons.current += 1;
     const command = pending.current;
     setWorking(true);
-    running.current = (async () => {
+    const task = (async () => {
       try {
         publish(await api.project(command.projectId));
         localStorage.removeItem(key);
         pending.current = null;
-        setRejected(false);
+        setRejection(false);
         setError('');
         return true;
       } catch { setError('无法刷新画布并放弃文字创建，请重试放弃'); return false; }
     })();
-    await running.current; running.current = null; setWorking(false);
+    abandoning.current = task;
+    try { await task; }
+    finally { abandoning.current = null; setWorking(false); }
   }
   async function recover(name: string) {
     if (pending.current) return;
@@ -118,6 +130,7 @@ export function useTextCreate(
     error,
     rejected,
     abandon,
+    abandons: () => abandons.current,
     hasPending: () => !!pending.current,
     status: error
       ? "文字保存未完成"

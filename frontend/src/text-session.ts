@@ -283,7 +283,10 @@ export function useCanvasTexts(
     );
   }
   async function create(x: number, y: number) {
-    if (!state || !(await before()) || !(await finish())) return;
+    if (!state) return;
+    const seenAbandons = creation.abandons();
+    if (!(await before()) || !(await finish())) return;
+    if (creation.abandons() !== seenAbandons) return;
     const id = crypto.randomUUID(),
       group = crypto.randomUUID(),
       projectId = state.project.id;
@@ -470,7 +473,7 @@ export function useCanvasTexts(
     ),
     recoverCreate: creation.recover,
     createRejected: creation.rejected,
-    abandonCreate: async () => { await creation.abandon(); if (!creation.hasPending()) setPlacing(false); },
+    abandonCreate: async () => { setPlacing(false); await creation.abandon(); },
     formatRecoveries: formats.recoveries.filter(
       (record) => record.projectId === state?.project.id,
     ),
