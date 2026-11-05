@@ -98,7 +98,7 @@ export function recordAction(
     stack.undo.push({ session, lastRevision: change.revision, id: command.commandId, label: command.type, target: { id: created?.id ?? command.commandId, title }, actor: change.actor, before: null, after: null, cardLifecycleChanges: change.cardLifecycleChanges, textChanges: change.textChanges, shapeChanges: change.shapeChanges, imageChanges: change.imageChanges, strokeChanges: change.strokeChanges, connectorChanges: change.connectorChanges, containmentChanges: change.containmentChanges, changedIds: change.changedIds });
     stack.undo = stack.undo.slice(-40); stack.redo = []; save(db, command.projectId, stack); return;
   }
-  if (command.type === 'canvas.delete-selection' || (change.groupChanges || change.containmentChanges) && !change.textChange) {
+  if (command.type === 'canvas.delete-selection' || (change.groupChanges || change.containmentChanges) && !change.textChange && command.type !== 'thought.create') {
     const value = change.groupChanges?.find(value => value.after)?.after ?? change.groupChanges?.[0]?.before;
     let selected = change.before && 'body' in change.before ? { id: change.before.id, title: change.before.title }
       : change.shapeChange?.before ? { id: change.shapeChange.before.id, title: change.shapeChange.before.content.shortText }
@@ -251,6 +251,7 @@ export function recordAction(
       after,
       ...(change.tagChange ? { tagChange: change.tagChange } : {}),
       ...(change.cardChanges ? { cardChanges: change.cardChanges } : {}),
+      ...(change.containmentChanges ? { containmentChanges: change.containmentChanges } : {}),
       ...(change.connectorChanges?.length ? { connectorChanges: change.connectorChanges } : {}),
       changedIds: change.changedIds,
     });

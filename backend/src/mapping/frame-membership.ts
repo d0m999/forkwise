@@ -34,7 +34,7 @@ export function validateSpatial(db: Database.Database, command: Command, expecte
       ...(scene.groups ?? []).filter(v => groupIds.includes(v.id)).map(v => v.itemId)];
   } else if (command.type === 'pose.batch') {
     const ids = new Set(command.payload.poses.map(v => v.id)); roots = groupItems(db, command.projectId).filter(v => v.kind === 'card' && ids.has(v.value.id)).map(v => v.value.item.id);
-  } else if (['pose.move', 'shape.move', 'text.move', 'image.transform'].includes(command.type) && 'id' in command.payload) {
+  } else if (['pose.move', 'shape.move', 'text.move', 'text.transform', 'image.transform'].includes(command.type) && 'id' in command.payload) {
     const id = command.payload.id;
     roots = groupItems(db, command.projectId).filter(v => v.value.id === id).map(v => v.value.item.id);
   }

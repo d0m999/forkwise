@@ -4,6 +4,27 @@ import { createFrameCommand, moveFrameCommand } from './nested-frame-fixture.js'
 import { captureSpatial, frameDrawMembers, spatialItems } from '../src/mapping/frame-spatial.js';
 
 afterEach(closeGroupFixtures);
+it('带placement的文字变换保留移动落点归属与历史，普通变换不重新归属', () => {
+  const f = groupFixture(), text = f.text();
+  f.execute(createFrameCommand(f.state(), [], { x: 390, y: 100, width: 40, height: 200 }));
+  const before = f.state(), frame = before.frames![0]!;
+  const content = { ...text.content, fontSize: 24 };
+  f.execute({ type: 'text.transform', placement: { expected: captureSpatial(before), point: { x: 420, y: 120 } },
+    expected: { text: text.versionId, pose: text.item.versionId }, payload: { id: text.id, content, pose: { ...text.item.pose, x: 400, y: 110 } } });
+  const moved = f.state();
+  expect(moved.containment!.find(edge => edge.id === text.item.id)?.parent).toEqual({ kind: 'frame', id: frame.id });
+  f.travel('history.undo');
+  expect(f.state().texts![0]!.content).toEqual(text.content);
+  expect(f.state().texts![0]!.item.pose).toEqual(text.item.pose);
+  expect(f.state().containment!.find(edge => edge.id === text.item.id)?.parent ?? null).toBeNull();
+  f.travel('history.redo');
+  const restored = f.state().texts![0]!;
+  expect(restored.content).toEqual(content);
+  expect(f.state().containment!.find(edge => edge.id === text.item.id)?.parent).toEqual({ kind: 'frame', id: frame.id });
+  f.execute({ type: 'text.transform', expected: { text: restored.versionId, pose: restored.item.versionId },
+    payload: { id: restored.id, content, pose: { ...restored.item.pose, x: 500, width: 200 } } });
+  expect(f.state().containment!.find(edge => edge.id === text.item.id)?.parent).toEqual({ kind: 'frame', id: frame.id });
+});
 it.each(['duplicate', 'paste'] as const)('Frame内%s的card/shape撤销删除归属边，公共投影与同库重开始终可读', method => {
   const f = groupFixture(), card = f.card(), shape = f.shape();
   const rect = { x: -100, y: -100, width: 900, height: 700 };

@@ -1,10 +1,10 @@
 import { useRef, useState, type ClipboardEvent } from 'react';
-import { api, type Command } from './api';
+import { api, MappingError, type Command } from './api';
 import { mediaFiles } from './media-input';
 import { canvasPasteAllowed } from './canvas-paste';
 import { ImageInputRecovery, type ImageInput, type ImagePlacement } from './image-input-recovery';
 
-export function useCanvasImageInput(context: () => ImagePlacement | null, commit: (command: Command) => Promise<boolean | undefined>, historyBlocked: () => boolean) {
+export function useCanvasImageInput(context: () => ImagePlacement | null, commit: (command: Command) => Promise<boolean | undefined>, historyBlocked: () => boolean, refresh: (projectId: string) => Promise<unknown>) {
   const task = useRef<ImageInput | null>(null), running = useRef(false);
   const reading = useRef(false), readTicket = useRef(0), readProject = useRef<string | null>(null);
   const [journal] = useState(() => new ImageInputRecovery());
@@ -16,6 +16,7 @@ export function useCanvasImageInput(context: () => ImagePlacement | null, commit
   const [recoveries, setRecoveries] = useState(initial.records), [recoveryError, setRecoveryError] = useState(initial.error);
   const [pending, setPending] = useState(false), [error, setError] = useState('');
   const [cancellable, setCancellable] = useState(true);
+  const rejected = useRef(false);
   function scan() {
     try { const result = readRecoveries(); setRecoveries(result.records); setRecoveryError(result.error); }
     catch { setRecoveryError('图片恢复区无法读取，原记录仍保留'); }
@@ -23,6 +24,7 @@ export function useCanvasImageInput(context: () => ImagePlacement | null, commit
   async function process() {
     const current = task.current;
     if (!current || running.current) return;
+    if (rejected.current) return;
     running.current = true; setPending(true); setError(''); setCancellable(!current.image);
     try {
       journal.write(current);
@@ -43,7 +45,10 @@ export function useCanvasImageInput(context: () => ImagePlacement | null, commit
       journal.write(current);
       if (!(await commit(current.image))) throw new Error('图片结果尚未确认，请重试原请求');
       journal.confirm(current); task.current = null; setPending(false); scan();
-    } catch (e) { if (task.current === current) setError(current.name + '：' + (e instanceof Error ? e.message : '图片保存失败')); }
+    } catch (e) { if (task.current === current) {
+      if (current.image && e instanceof MappingError && e.code === 'VERSION_CONFLICT') { rejected.current = true; setCancellable(true); }
+      setError(current.name + '：' + (e instanceof Error ? e.message : '图片保存失败'));
+    } }
     finally { running.current = false; if (!task.current) setPending(false); }
   }
   async function begin(file: File) {
@@ -76,14 +81,21 @@ export function useCanvasImageInput(context: () => ImagePlacement | null, commit
       await process();
     } catch (e) { setError(e instanceof Error ? e.message : '无法恢复图片，原记录仍保留'); }
   }
-  function cancel() {
+  async function cancel() {
     const current = task.current;
-    if (current?.image) return;
+    if (current?.image && (!rejected.current || running.current)) return;
+    if (current?.image) { running.current = true; setCancellable(false); }
     try {
+      if (current?.image) {
+        if (context()?.projectId !== current.placement.projectId) throw new Error('请回到原项目放弃图片创建');
+        await refresh(current.placement.projectId);
+      }
       if (current) journal.confirm(current);
       readTicket.current++; readProject.current = null; task.current = null; setError(''); scan();
+      rejected.current = false;
       if (!running.current && !reading.current) setPending(false);
     } catch (e) { setError(e instanceof Error ? e.message : '无法取消图片，原请求仍保留'); }
+    finally { if (current?.image) { running.current = false; setCancellable(true); if (!task.current) setPending(false); } }
   }
   return { paste, begin, pending: pending || recoveries.length > 0, error, retry: process,
     recoveries, recoveryError, recover, cancel, active: pending, cancellable,

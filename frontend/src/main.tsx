@@ -1760,7 +1760,7 @@ function Workspace() {
         canvasSelection.generation() === pending.selectionIntent.generation) pending.onDone?.();
       return true;
     } catch (e) {
-      if (structural && !executed && !pending.rejected && e instanceof MappingError &&
+      if ((structural || ['thought.create', 'shape.create', 'stroke.create'].includes(command.type)) && !executed && !pending.rejected && e instanceof MappingError &&
         ['VERSION_CONFLICT', 'NOT_FOUND', 'UNAUTHORIZED', 'PROJECT_FORBIDDEN', 'UNTRUSTED_PRINCIPAL'].includes(e.code)) {
         pending.rejected = e.message;
         try { await refresh(command.projectId); } catch { /* Comparison retries retain the definite rejection and original request. */ }
@@ -1790,15 +1790,20 @@ function Workspace() {
     try {
       await refresh(pending.command.projectId);
       if (pendingAction.current !== pending) return;
+      if (pending.command.type === 'stroke.create') { strokeJournal.confirm(pending.command); scanStrokeRecoveries(); }
       pendingAction.current = null;
       pending.onSettled?.();
+      if (pending.command.type === 'stroke.create') pending.onDone?.();
+      if (pending.command.type === 'thought.create') setPlacing(false);
+      if (pending.command.type === 'shape.create') setShapePreset(null);
       if (pending.command.type === 'frame.edit' && authority.current?.project.id === pending.command.projectId) {
         frameEditorFocus.current = { projectId: pending.command.projectId, id: pending.command.payload.id };
         setFrameEditorEpoch(value => value + 1);
       }
       if (pending.command.type === 'group.scale' || pending.command.type === 'group.rotate90') groupGeometry.discard();
       setError('');
-      setStatus(pending.command.type === 'text.delete'
+      setStatus(['thought.create', 'shape.create', 'stroke.create'].includes(pending.command.type)
+        ? '已放弃本次创建，可重新放置' : pending.command.type === 'text.delete'
         ? '已保留当前保存状态，请重新明确删除' : pending.command.type.startsWith('frame.')
           ? '已保留当前保存状态，请重新明确分区操作' : '已保留当前保存状态，请重新明确组合操作');
     } catch (failure) { fail(failure); }
@@ -1887,7 +1892,7 @@ function Workspace() {
     const rect = element.getBoundingClientRect(), zoom = flow.getZoom();
     const point = flow.screenToFlowPosition({ x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 });
     return { projectId: current.project.id, spatial: captureSpatial(current), ...point, maxWidth: rect.width * 0.6 / zoom, maxHeight: rect.height * 0.6 / zoom };
-  }, action, () => historyLock.current || !!historyCommand.current);
+  }, action, () => historyLock.current || !!historyCommand.current, refresh);
   const saveStatus = connectorLabel.status || (connectorLabel.recoveryError ? '部分连线文字恢复记录未确认'
     : connectorLabel.recoveries.some(record => record.value.session.projectId === state?.project.id && record.value.purpose !== 'preserved-remote') ? '连线文字草稿待处理'
     : imageGeometry.rejected ? '图片调整未保存' : imageGeometry.pending ? '图片布局尚未确认' : imageInput.pending ? (imageInput.error ? '图片保存失败 · 原输入保留' : '图片处理中 · 尚未保存') : imageInput.recoveryError ? '部分图片恢复记录未确认' : mediaQueue.hasUnconfirmed
@@ -3320,6 +3325,7 @@ function Workspace() {
           <p>
             已保存位置：{pose.conflict.pose.x}, {pose.conflict.pose.y}
           </p>
+          {pose.conflict.placements.map(value => <p key={value.id}>{value.label}</p>)}
           <p>画布保留你本次移动的位置，确认后保存；对方版本保留在历史中。</p>
           <button onClick={pose.resolveConflict}>确认保留本次位置</button>
         </section>
@@ -3467,6 +3473,7 @@ function Workspace() {
         {texts.formatRecoveries.map(record => <button key={record.key} onClick={() => void recoverCanvasText(record.key, 'format')}>恢复独立文字草稿</button>)}
         {texts.recoveries.map(record => <button key={record.key} onClick={() => void recoverCanvasText(record.key, 'draft')}>恢复独立文字草稿</button>)}
         {texts.error && <><span role="alert">{texts.error}</span><button onClick={() => void texts.retry()}>重试{texts.operationScope}保存</button></>}
+        {texts.createRejected && <button onClick={texts.abandonCreate}>放弃本次文字创建</button>}
         {mediaQueue.hasUnconfirmed && <button onClick={mediaQueue.retryUnconfirmed} disabled={historyBlocked}>重试媒体保存确认</button>}
         <span role="status" aria-live="polite">
           {connectorCreate.working ? '正在保存…' : shapeMove.status || shapeText.status || texts.status || (appearance.error
@@ -3543,7 +3550,7 @@ function Workspace() {
                 : "重试保存"}
             </button>
             {pendingAction.current?.rejected && <button disabled={busy} onClick={() => void abandonStructure()}>
-              {pendingAction.current.command.type === 'text.delete' ? '放弃本次删除' : pendingAction.current.command.type.startsWith('frame.') ? '放弃本次分区操作' : '放弃本次组合操作'}
+              {['thought.create', 'shape.create', 'stroke.create'].includes(pendingAction.current.command.type) ? '放弃本次创建' : pendingAction.current.command.type === 'text.delete' ? '放弃本次删除' : pendingAction.current.command.type.startsWith('frame.') ? '放弃本次分区操作' : '放弃本次组合操作'}
             </button>}
           </>
         )}

@@ -112,6 +112,8 @@ export function useCanvasTexts(
       group: command.editGroup!,
     });
     setPlacing(false);
+  }, latest => {
+    if (stateRef.current?.project.id === latest.project.id) publish(latest);
   });
   const formats = useTextFormats(
     operations.enqueue,
@@ -212,6 +214,7 @@ export function useCanvasTexts(
           throw new TextPrepareConflict(
             {
               commandId: crypto.randomUUID(), projectId, type: "text.move",
+              ...(spatial ? { placement: { expected: spatial, ...(pointer ? { point: pointer } : {}) } } : {}),
               expected: value.item.versionId,
               payload: { id: value.id, x: point.x, y: point.y },
             },
@@ -466,6 +469,8 @@ export function useCanvasTexts(
       (record) => record.command.projectId === state?.project.id,
     ),
     recoverCreate: creation.recover,
+    createRejected: creation.rejected,
+    abandonCreate: async () => { await creation.abandon(); if (!creation.hasPending()) setPlacing(false); },
     formatRecoveries: formats.recoveries.filter(
       (record) => record.projectId === state?.project.id,
     ),

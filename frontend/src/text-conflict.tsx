@@ -1,6 +1,7 @@
 import { useRef, useState } from "react";
 import { api, MappingError, type ProjectState, type Command } from "./api";
 import { incidentConnectorVersions } from "./connector-deletion";
+import { captureSpatial, frameCandidate, FramePlacement } from '../../backend/src/mapping/frame-spatial';
 import {
   TextContentSchema,
   TextPoseSchema,
@@ -19,15 +20,27 @@ type Conflict = {
   local: CanvasText;
   remote: CanvasText | null;
   remoteConnectors?: Record<string, string> | undefined;
+  placement?: Replacement['placement'];
+  placementLabel?: string;
   rejected: Command;
   followup?: TextContent;
   replaceContent?: boolean;
   resolution?: { copy: Create; followup?: Create; replace?: Replacement };
 };
 const prefix = "forkwise:text-conflict-recovery:v1:";
-function remoteSnapshot(state: ProjectState, id: string) {
+function remoteSnapshot(state: ProjectState, id: string, rejected: Command, local: CanvasText, replaceContent = false) {
   const remote = state.texts?.find(text => text.id === id) ?? null;
-  return { remote, remoteConnectors: remote ? incidentConnectorVersions(state, remote.item.id) ?? undefined : undefined };
+  const placement = (rejected.type === 'text.move' || rejected.type === 'text.transform') && rejected.placement
+    ? { ...rejected.placement, expected: captureSpatial(state) } : undefined;
+  const pose = rejected.type === 'text.move' && !replaceContent && remote
+    ? { ...remote.item.pose, x: local.item.pose.x, y: local.item.pose.y } : local.item.pose;
+  const membership = state.containment?.find(edge => edge.id === local.item.id)?.parent;
+  const unchanged = remote && pose.x === remote.item.pose.x && pose.y === remote.item.pose.y;
+  const parent = unchanged ? state.frames?.find(frame => membership?.kind === 'frame' && frame.id === membership.id)
+    : placement ? frameCandidate(state, placement.point ?? { x: pose.x + pose.width / 2, y: pose.y + pose.height / 2 }) : null;
+  const grouped = membership?.kind === 'group';
+  return { remote, remoteConnectors: remote ? incidentConnectorVersions(state, remote.item.id) ?? undefined : undefined,
+    ...(placement ? { placement, placementLabel: grouped ? '本次归属：保留所在组合' : `本次位置的分区：${parent?.name ?? '画布顶层'}` } : {}) };
 }
 function validText(value: CanvasText) {
   return (
@@ -65,6 +78,7 @@ export function useTextConflicts(publish: (value: ProjectState) => void) {
         if (c.remoteConnectors !== undefined && (!c.remoteConnectors || typeof c.remoteConnectors !== 'object' ||
           Array.isArray(c.remoteConnectors) || !Object.entries(c.remoteConnectors).every(([id, version]) =>
             id.length > 0 && id.length <= 160 && typeof version === 'string' && version.length > 0 && version.length <= 160))) continue;
+        if (c.placement !== undefined && (!FramePlacement.safeParse(c.placement).success || typeof c.placementLabel !== 'string')) continue;
         if (
           !TextCommands.safeParse(c.rejected).success ||
           c.rejected.projectId !== c.projectId ||
@@ -112,7 +126,7 @@ export function useTextConflicts(publish: (value: ProjectState) => void) {
     store({
       projectId,
       local,
-      ...remoteSnapshot(latest, local.id),
+      ...remoteSnapshot(latest, local.id, rejected, local, replaceContent),
       rejected,
       ...(followup ? { followup } : {}),
       ...(replaceContent ? { replaceContent } : {}),
@@ -151,7 +165,7 @@ export function useTextConflicts(publish: (value: ProjectState) => void) {
           const latest = await api.project(value.projectId);
           store({
             ...retained,
-            ...remoteSnapshot(latest, value.local.id),
+            ...remoteSnapshot(latest, value.local.id, value.rejected, value.local, value.replaceContent),
           });
           setError("对方再次更新，请重新比较两份文字");
         } else
@@ -174,10 +188,11 @@ export function useTextConflicts(publish: (value: ProjectState) => void) {
       return;
     }
     if (value.rejected.type === "text.copy") choice = "remote";
-    if (choice === 'mine' && value.remote && value.rejected.type === 'text.delete' && value.remoteConnectors === undefined) {
+    if (choice === 'mine' && value.remote && ((value.rejected.type === 'text.delete' && value.remoteConnectors === undefined) ||
+      ((value.rejected.type === 'text.move' || value.rejected.type === 'text.transform') && value.rejected.placement && !value.placement))) {
       try {
         const latest = await api.project(value.projectId);
-        store({ ...value, ...remoteSnapshot(latest, value.local.id) });
+        store({ ...value, ...remoteSnapshot(latest, value.local.id, value.rejected, value.local, value.replaceContent) });
         setError('已重新读取，请再次明确确认保留我的文字');
       } catch { setError('无法重新比较原文字和关联线，请保留原记录后重试'); }
       return;
@@ -190,6 +205,7 @@ export function useTextConflicts(publish: (value: ProjectState) => void) {
       const common = {
         commandId: crypto.randomUUID(),
         projectId: value.projectId,
+        ...(value.placement ? { placement: value.placement } : {}),
       };
       const expected = {
         text: value.remote.versionId,
@@ -305,6 +321,7 @@ export function TextConflictPanel({
   return (
     <section className="conflict-panel" aria-label="独立文字保存冲突">
       <h2>独立文字已由其他调用者更新</h2>
+      {value.placementLabel && <p>{value.placementLabel}</p>}
       <p>
         比较两份文字。确认选择前，先将另一份完整内容和样式保存为独立恢复副本。
       </p>

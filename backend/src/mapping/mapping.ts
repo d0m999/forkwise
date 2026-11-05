@@ -791,7 +791,7 @@ export class Mapping {
             point: { x: v.item.pose.x + v.item.pose.width / 2, y: v.item.pose.y + v.item.pose.height / 2 } })));
           if (added.length) containmentChanges = [...(containmentChanges ?? []), ...added];
         }
-        if (['canvas.move', 'canvas.move-selection', 'group.move', 'frame.move', 'pose.move', 'pose.batch', 'text.move', 'shape.move', 'image.transform'].includes(command.type)) {
+        if (['canvas.move', 'canvas.move-selection', 'group.move', 'frame.move', 'pose.move', 'pose.batch', 'text.move', 'shape.move', 'image.transform'].includes(command.type) || command.type === 'text.transform' && command.placement) {
           const pointer = 'placement' in command ? command.placement?.point : undefined;
           const moved = [
             ...(after && 'body' in after && before && 'body' in before ? [{ before, after }] : []),

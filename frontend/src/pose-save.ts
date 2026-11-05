@@ -1,4 +1,4 @@
-import { captureSpatial } from '../../backend/src/mapping/frame-spatial';
+import { captureSpatial, frameCandidate } from '../../backend/src/mapping/frame-spatial';
 import { useRef, useState } from "react";
 import type { Receipt } from "../../backend/src/mapping/contracts";
 import {
@@ -32,8 +32,8 @@ export function usePoseSave(
   const previewPoses = useRef<Record<string, Pose>>({});
   const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
-  const [conflict, setConflict] = useState<Card["item"] | null>(null);
-  const remote = useRef<Card[] | null>(null);
+  const [conflict, setConflict] = useState<(Card["item"] & { placements: { id: string; label: string }[] }) | null>(null);
+  const remote = useRef<{ cards: Card[]; placement?: GeometryCommand['placement'] } | null>(null);
   const command = useRef<Pending | null>(null);
   const gesture = useRef<Pending | null>(null);
   const saving = useRef<Promise<boolean> | null>(null);
@@ -77,8 +77,20 @@ export function usePoseSave(
               latest.cards.find((x) => x.id === c.id),
             );
             if (cards.every((c): c is Card => !!c)) {
-              remote.current = cards;
-              setConflict(cards[0]!.item);
+              const placement = current.command.placement ? { ...current.command.placement, expected: captureSpatial(latest) } : undefined;
+              const poses = current.command.type === 'pose.move' ? [{ ...cards[0]!.item.pose, ...current.command.payload }] : current.command.payload.poses;
+              const placements = placement ? poses.map(local => {
+                const card = cards.find(card => card.id === local.id)!;
+                const membership = latest.containment?.find(edge => edge.id === card.item.id)?.parent;
+                const unchanged = local.x === card.item.pose.x && local.y === card.item.pose.y;
+                const parent = unchanged ? latest.frames?.find(frame => membership?.kind === 'frame' && frame.id === membership.id)
+                  : frameCandidate(latest, placement.point ?? { x: local.x + local.width / 2, y: local.y + local.height / 2 });
+                const grouped = membership?.kind === 'group';
+                const label = grouped ? '本次归属：保留所在组合' : `本次位置的分区：${parent?.name ?? '画布顶层'}`;
+                return { id: card.id, label: cards.length > 1 ? `${card.title || '未命名卡片'}：${label}` : label };
+              }) : [];
+              remote.current = { cards, ...(placement ? { placement } : {}) };
+              setConflict({ ...cards[0]!.item, placements });
             }
           } catch {
             /* The original batch remains available for explicit retry. */
@@ -196,11 +208,13 @@ export function usePoseSave(
   }
   function resolveConflict() {
     const current = command.current,
-      cards = remote.current;
-    if (!current || !cards || saving.current) return;
+      compared = remote.current;
+    if (!current || !compared || saving.current) return;
+    const { cards, placement } = compared;
     current.command = {
       ...current.command,
       commandId: crypto.randomUUID(),
+      ...(placement ? { placement } : {}),
       expected:
         current.command.type === "pose.move"
           ? cards[0]!.item.versionId

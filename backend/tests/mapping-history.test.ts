@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { openMapping } from '../src/mapping/storage.js';
 import type { CommitOptions } from '../src/mapping/mapping.js';
+import { createFrameCommand } from './nested-frame-fixture.js';
 
 const cleanups: (() => void)[] = [];
 afterEach(() => {
@@ -220,6 +221,33 @@ it('相邻正文保存批次合为一组，布局及其他actor命令截断，un
   expect(f.state().cards[0]!.body.blocks[0]!.text).toBe('Agent');
   f.travel('history.undo');
   expect(f.state().cards[0]!.body.blocks[0]!.text).toBe('四');
+});
+it('Frame内新卡和连续首次标题合为一步，撤销归属边并重做相同身份与最终标题', () => {
+  const f = fixture();
+  f.run(createFrameCommand(f.state(), [], { x: -100, y: -100, width: 800, height: 600 }));
+  const frame = f.state().frames![0]!;
+  f.create('c', 'p', 'frame-first-title');
+  const original = f.state().cards[0]!;
+  for (const title of ['库', '库存观察']) f.run({
+    type: 'thought.title', editGroup: 'frame-first-title', expected: f.state().cards[0]!.versionId,
+    payload: { id: original.id, title },
+  });
+  expect(f.history().undo).toHaveLength(2);
+  expect(f.history().undo.at(-1)).toMatchObject({ label: 'thought.create', target: { id: original.id, title: '库存观察' } });
+  expect(f.state().containment!.find(edge => edge.id === original.item.id)?.parent).toEqual({ kind: 'frame', id: frame.id });
+  const undone = f.travel('history.undo');
+  expect(f.state().cards).toEqual([]);
+  expect(f.state().containment!.some(edge => edge.id === original.item.id)).toBe(false);
+  expect(f.mapping.observe({ projectId: 'p', afterRevision: undone.revision - 1 }, f.human).changes[0]!.deletedIds).toContain(original.id);
+  f.restart();
+  f.travel('history.redo');
+  expect(f.state().cards[0]).toMatchObject({ id: original.id, title: '库存观察', body: { id: original.body.id, blocks: original.body.blocks }, item: { id: original.item.id, pose: original.item.pose } });
+  expect(f.state().containment!.find(edge => edge.id === original.item.id)?.parent).toEqual({ kind: 'frame', id: frame.id });
+  f.run({ type: 'pose.move', expected: f.state().cards[0]!.item.versionId, payload: { id: original.id, x: 30, y: 40 } });
+  f.run({ type: 'thought.title', editGroup: 'frame-first-title', expected: f.state().cards[0]!.versionId, payload: { id: original.id, title: '另一次输入' } });
+  expect(f.history().undo).toHaveLength(4);
+  f.travel('history.undo');
+  expect(f.state().cards[0]!.title).toBe('库存观察');
 });
 it('首次标题和创建只合并连续同组动作，已有标题整轮撤销，回到原标题不留空动作', () => {
   const f = fixture();
