@@ -14,7 +14,8 @@ import { cropImage, createImage, readImages, transformImage, rotateImage, delete
 import type { ImageVersion } from './image-contracts.js';
 import { moveCanvas } from './canvas-move.js';
 import { layerCanvas } from './layer-order.js';
-import { duplicateCanvas, pasteCanvas } from './snapshot.js';
+import { pasteCanvas } from './snapshot.js';
+import { duplicateCanvas } from './snapshot-duplicate.js';
 import { nextCreatedOrder } from './created-order.js';
 import { createStroke, deleteStroke, readStrokes } from './stroke.js';
 import { createShape, deleteShape, editShape, moveShape, readShapes, transformShape } from './shape.js';
@@ -430,7 +431,7 @@ export class Mapping {
           this.db.prepare('UPDATE mapping_projects SET revision=? WHERE id=?').run(revision, project.id);
         } else if (command.type === 'canvas.duplicate' || command.type === 'canvas.paste') {
           const project = this.project(command.projectId);
-          ({ cardLifecycleChanges, textChanges, shapeChanges, imageChanges, strokeChanges, connectorChanges, changedIds } = command.type === 'canvas.duplicate' ? duplicateCanvas(this.db, command) : pasteCanvas(this.db, command));
+          ({ cardLifecycleChanges, textChanges, shapeChanges, imageChanges, strokeChanges, connectorChanges, groupChanges, frameChanges, containmentChanges, changedIds } = command.type === 'canvas.duplicate' ? duplicateCanvas(this.db, command) : pasteCanvas(this.db, command));
           after = null; revision = project.revision + 1;
           this.db.prepare('UPDATE mapping_projects SET revision=? WHERE id=?').run(revision, project.id);
         } else if (command.type === 'shape.create' || command.type === 'shape.edit' || command.type === 'shape.move' || command.type === 'shape.delete' || command.type === 'shape.transform') {
@@ -786,7 +787,7 @@ export class Mapping {
           ...[textChange, shapeChange, imageChange, strokeChange].flatMap(v => v?.after && !v.before ? [v.after] : []),
           ...[...(cardLifecycleChanges ?? []), ...(textChanges ?? []), ...(shapeChanges ?? []), ...(imageChanges ?? []), ...(strokeChanges ?? [])].flatMap(v => v.after && !v.before ? [v.after] : []),
         ];
-        if (createdItems.length && ['thought.create', 'text.create', 'text.copy', 'shape.create', 'image.create', 'stroke.create', 'canvas.duplicate', 'canvas.paste'].includes(command.type)) {
+        if (createdItems.length && ['thought.create', 'text.create', 'text.copy', 'shape.create', 'image.create', 'stroke.create'].includes(command.type)) {
           const added = updateFrameParents(this.db, command.projectId, createdItems.map(v => ({ id: v.item.id,
             point: { x: v.item.pose.x + v.item.pose.width / 2, y: v.item.pose.y + v.item.pose.height / 2 } })));
           if (added.length) containmentChanges = [...(containmentChanges ?? []), ...added];

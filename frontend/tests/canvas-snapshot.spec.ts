@@ -92,7 +92,7 @@ test("键盘与菜单完成复制副本、冻结粘贴、独立编辑和保存�
   }
 });
 
-test("整组选中时不提供复制入口，成员单独复制仍在组外", async ({ page, workspace }) => {
+test("整组选中可复制完整组，成员单独复制仍在组外", async ({ page, workspace }) => {
   const projectId = (await workspace.state()).project.id;
   await workspace.execute(page, { commandId: "seed-a", projectId, type: "text.create", expected: null, payload: {
     id: "note", content: { runs: [{ text: "说明" }], fontSize: 18, lineHeight: 1.5, align: "left", widthMode: "fixed", width: 120 },
@@ -110,11 +110,15 @@ test("整组选中时不提供复制入口，成员单独复制仍在组外", as
   await expect(page.getByRole("status")).toHaveText("已保存到本机");
   const grouped = (await workspace.state()).texts!.length;
   await page.getByRole("button", { name: "复制", exact: true }).click();
-  await expect(page.getByRole("menuitem", { name: "复制副本", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("menuitem", { name: "复制副本", exact: true })).toBeVisible();
   await expect(page.getByRole("menuitem", { name: "粘贴", exact: true })).toBeVisible();
   await page.keyboard.press("Escape");
   await page.keyboard.press("Meta+d");
-  await expect.poll(async () => (await workspace.state()).texts!.length).toBe(grouped);
+  await expect.poll(async () => (await workspace.state()).texts!.length).toBe(grouped + 1);
+  await expect.poll(async () => (await workspace.state()).groups!.length).toBe(2);
+  await page.getByRole("button", { name: "撤销", exact: true }).click();
+  await expect.poll(async () => (await workspace.state()).groups!.length).toBe(1);
+  await page.locator(`.react-flow__node[data-id="${note.item.id}"]`).click();
   await page.getByRole("button", { name: "进入组合", exact: true }).click();
   await page.locator(`.react-flow__node[data-id="${note.item.id}"]`).click();
   await page.getByRole("button", { name: "复制", exact: true }).click();

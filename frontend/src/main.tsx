@@ -1,6 +1,7 @@
 import { captureSpatial, frameCandidate, frameCreationParent } from '../../backend/src/mapping/frame-spatial';
 import { canvasPlainText } from "./canvas-paste";
-import { CANVAS_CLIPBOARD_TYPE, canCopySelection, captureClipboard, clipboardCenter, copiedItemIds, duplicatePlan, parseClipboard, pastePlan } from "./canvas-snapshot";
+import { CANVAS_CLIPBOARD_TYPE, canCopySelection, captureClipboard, clipboardCenter, copiedSelection, duplicatePlan, parseClipboard, pastePlan } from "./canvas-snapshot";
+import type { CopyRef } from "./canvas-snapshot";
 import { nextPaste, pasteTranslation, type PasteSequence } from "./canvas-snapshot-geometry";
 import { SnapshotMenu } from "./snapshot-menu";
 import { useCanvasImageInput } from "./canvas-image-input";
@@ -263,7 +264,7 @@ function Workspace() {
   const singleItemId = singleTarget?.kind === "item" ? singleTarget.itemId : null;
   const [panTool, setPanTool] = useState(false);
   const [frameTool, setFrameTool] = useState(false);
-  const [frameSelection, setFrameSelection] = useState<{ projectId: string; id: string; generation: number } | null>(null);
+  const [frameSelection, setFrameSelection] = useState<{ projectId: string; ids: string[]; generation: number } | null>(null);
   const [frameEditorEpoch, setFrameEditorEpoch] = useState(0);
   const frameEditorFocus = useRef<{ projectId: string; id: string } | null>(null);
   const [frameDropCandidate, setFrameDropCandidate] = useState<string | null>(null);
@@ -288,8 +289,16 @@ function Workspace() {
   const [projects, setProjects] = useState<Project[]>([]);
   const authority = useRef<ProjectState | null>(null);
   const [selectedConnectors, setSelectedConnectors] = useState<string[]>([]);
-  const selectedFrameId = frameSelection?.projectId === state?.project.id && frameSelection?.generation === canvasSelection.generation() &&
-    !selectedConnectors.length && state?.frames?.some(frame => frame.id === frameSelection.id) ? frameSelection.id : null;
+  const selectedFrameIds = frameSelection?.projectId === state?.project.id && frameSelection?.generation === canvasSelection.generation()
+    ? frameSelection.ids.filter(id => state?.frames?.some(frame => frame.id === id)) : [];
+  const selectedFrameId = selectedFrameIds.length === 1 && !selectedConnectors.length && !canvasSelection.value.targets.length ? selectedFrameIds[0]! : null;
+  useEffect(() => {
+    setFrameSelection(current => {
+      if (!current || current.projectId !== state?.project.id || current.generation !== canvasSelection.generation()) return null;
+      const ids = current.ids.filter(id => state.frames?.some(frame => frame.id === id));
+      return ids.length === current.ids.length ? current : ids.length ? { ...current, ids } : null;
+    });
+  }, [state, canvasSelection.value]);
   const selectedConnector = selectedConnectors.length === 1 ? selectedConnectors[0]! : null;
   function setSelectedConnector(id: string | null) { setSelectedConnectors(id ? [id] : []); }
   const strokeSelected = selection.some(id => state?.strokes?.some(stroke => stroke.item.id === id));
@@ -1069,13 +1078,12 @@ function Workspace() {
     connectorEdit.cancel({ restoreFocus: false });
     if (!keepSelected) setSelectedConnector(null);
   }
-  function chooseFrame(id: string | null) {
+  function chooseFrame(id: string | null, extend = false) {
     if (id === null) { setFrameSelection(null); return; }
     const projectId = authority.current?.project.id;
     if (!projectId || selectedFrameId === id) return;
-    canvasSelection.set({ targets: [], enteredGroupId: null });
-    clearConnectorSelection();
-    setFrameSelection({ projectId, id, generation: canvasSelection.generation() });
+    if (!extend) { canvasSelection.set({ targets: [], enteredGroupId: null }); clearConnectorSelection(); }
+    setFrameSelection({ projectId, ids: extend ? [...new Set([...selectedFrameIds, id])] : [id], generation: canvasSelection.generation() });
   }
   async function reverseConnectors() {
     const current = authority.current;
@@ -2276,6 +2284,7 @@ function Workspace() {
         texts.nodes.some(node => node.data.editing) || imageGeometry.cropping ||
         !(event.target instanceof Element) || !event.target.closest('.canvas') ||
         event.target.closest('input, textarea, [contenteditable=true], dialog, [role=dialog], [role=menu]')) return;
+      if (selectedFrameIds.length && !selectedFrameId) { event.preventDefault(); event.stopPropagation(); return; }
       const snapshot = authority.current, frame = snapshot?.frames?.find(value => value.id === selectedFrameId);
       if (snapshot && frame) {
         event.preventDefault(); event.stopPropagation();
@@ -2323,10 +2332,12 @@ function Workspace() {
     return await shapeMove.flush() && await connectorLabel.finish() && await shapeText.finish() && await texts.finish() &&
       await appearance.flush() && await cardLayout.flush() && await pose.flush() && await flush();
   }
-  function selectCopies(projectId: string, objectCopyIds: { kind: "card" | "text" | "shape" | "image" | "stroke"; copyId: string }[], connectorCopyIds: string[]) {
+  function selectCopies(projectId: string, objectCopyIds: CopyRef[], connectorCopyIds: string[]) {
     const latest = authority.current;
     if (!latest || latest.project.id !== projectId) return;
-    canvasSelection.set({ targets: copiedItemIds(latest, objectCopyIds).map(itemId => ({ kind: "item", itemId })), enteredGroupId: null });
+    canvasSelection.set(copiedSelection(latest, objectCopyIds));
+    const frames = objectCopyIds.filter(v => v.kind === "frame").map(v => v.copyId);
+    setFrameSelection(frames.length ? { projectId, ids: frames, generation: canvasSelection.generation() } : null);
     keepBoard.current = canvasSelection.generation();
     setSelectedConnectors(connectorCopyIds);
   }
@@ -2334,7 +2345,7 @@ function Workspace() {
     if (!(await prepareSnapshot())) return;
     const current = authority.current;
     if (!current) return;
-    const captured = captureClipboard(current, canvasSelection.current(), selectedConnectors);
+    const captured = captureClipboard(current, canvasSelection.current(), selectedConnectors, selectedFrameIds);
     if (!captured) return;
     try {
       await navigator.clipboard.write([new ClipboardItem({
@@ -2349,7 +2360,7 @@ function Workspace() {
     if (!(await prepareSnapshot())) return;
     const current = authority.current;
     if (!current) return;
-    const plan = duplicatePlan(current, canvasSelection.current(), selectedConnectors);
+    const plan = duplicatePlan(current, canvasSelection.current(), selectedConnectors, selectedFrameIds);
     if (!plan) return;
     await action(plan.command, () => selectCopies(current.project.id, plan.objectCopyIds, plan.connectorCopyIds));
   }
@@ -2403,7 +2414,7 @@ function Workspace() {
       if (key !== "c" && key !== "d") return;
       if (editing(event.target) || busy || historyBlocked || composition.current || pendingAction.current) return;
       const current = authority.current;
-      if (!current || !canCopySelection(current, canvasSelection.current(), selectedConnectors)) return;
+      if (!current || !canCopySelection(current, canvasSelection.current(), selectedConnectors, selectedFrameIds)) return;
       event.preventDefault();
       event.stopPropagation();
       if (key === "c") void copySelection(); else void duplicateSelection();
@@ -3078,7 +3089,7 @@ function Workspace() {
             <Background gap={24} color="#dce0e7" />
             <Controls showInteractive={false} />
             <ViewportPortal>
-              <CanvasFrames drawMemberIds={frameDrawMemberIds} dropCandidateId={frameDropCandidate} key={`${state.project.id}:${frameEditorEpoch}`} state={state} preview={framePreview} selectedId={selectedFrameId} choose={chooseFrame}
+              <CanvasFrames drawMemberIds={frameDrawMemberIds} dropCandidateId={frameDropCandidate} key={`${state.project.id}:${frameEditorEpoch}`} state={state} preview={framePreview} selectedId={selectedFrameId} selectedIds={selectedFrameIds} choose={chooseFrame}
                 focusId={frameEditorFocus.current?.projectId === state.project.id ? frameEditorFocus.current.id : null}
                 onFocusRestored={id => { if (frameEditorFocus.current?.projectId === state.project.id && frameEditorFocus.current.id === id) frameEditorFocus.current = null; }}
                 blocked={busy || historyBlocked || !!pendingAction.current}
@@ -3171,7 +3182,7 @@ function Workspace() {
         </div>}
         {state && (
           <div className="creation-tools" aria-label="创作工具">
-            <SnapshotMenu canCopy={canCopySelection(state, canvasSelection.value, selectedConnectors)}
+            <SnapshotMenu canCopy={canCopySelection(state, canvasSelection.value, selectedConnectors, selectedFrameIds)}
               blocked={busy || historyBlocked || composition.current || !!pendingAction.current}
               copy={() => void copySelection()} paste={() => void pasteSelection()} duplicate={() => void duplicateSelection()} />
             <button

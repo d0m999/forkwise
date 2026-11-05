@@ -1,169 +1,134 @@
 import { endpointBounds, sidePoint, captureOptionalContainerEndpoints } from "../../backend/src/mapping/container-endpoints";
-import { endpointKey } from "../../backend/src/mapping/connector-contracts";
+import { endpointKey, type ConnectorEndpoint } from "../../backend/src/mapping/connector-contracts";
+import { CanvasClipboardSchema } from "../../backend/src/mapping/snapshot-contracts";
+import { snapshotScope } from "../../backend/src/mapping/snapshot-tree";
 export { sidePoint } from "../../backend/src/mapping/container-endpoints";
-import type { ConnectorEndpoint } from "../../backend/src/mapping/connector-contracts";
 import type { Command, ProjectState } from "./api";
 import type { CanvasSelection } from "./canvas-selection";
-import { boundsCenter, type Box, type Point } from "./canvas-snapshot-geometry";
+import { boundsCenter, type Point } from "./canvas-snapshot-geometry";
 
 export const CANVAS_CLIPBOARD_TYPE = "web application/x-forkwise-canvas";
-type Side = "top" | "right" | "bottom" | "left";
-type Kind = "card" | "text" | "shape" | "image" | "stroke";
+export type CanvasClipboardDocument = ReturnType<typeof CanvasClipboardSchema.parse>;
+type FrozenObject = CanvasClipboardDocument['objects'][number];
+type FrozenEnd = CanvasClipboardDocument['connectors'][number]['start'];
+type Kind = FrozenObject['kind'];
 type Located =
-  | { kind: "card"; value: ProjectState["cards"][number] }
-  | { kind: "text"; value: NonNullable<ProjectState["texts"]>[number] }
-  | { kind: "shape"; value: NonNullable<ProjectState["shapes"]>[number] }
-  | { kind: "image"; value: NonNullable<ProjectState["images"]>[number] }
-  | { kind: "stroke"; value: NonNullable<ProjectState["strokes"]>[number] };
-type FrozenEnd = { kind: "free"; point: Point } | { kind: "bound"; itemId: string; side: Side };
-type FrozenObject = {
-  kind: Kind;
-  sourceId: string;
-  itemId: string;
-  stack: number;
-  pose: Box | NonNullable<ProjectState["images"]>[number]["item"]["pose"];
-  title?: string;
-  blocks?: ProjectState["cards"][number]["body"]["blocks"];
-  tagIds?: string[] | null;
-  appearance?: { titleColor: NonNullable<ProjectState["cards"][number]["appearance"]>["titleColor"]; showPreview: boolean } | null;
-  heightPolicy?: ProjectState["cards"][number]["item"]["heightPolicy"];
-  content?: unknown;
-};
-export type CanvasClipboardDocument = {
-  kind: "forkwise-canvas-snapshot";
-  version: 1;
-  objects: FrozenObject[];
-  connectors: { path: "straight" | "elbow" | "curve"; style?: NonNullable<NonNullable<ProjectState["connectors"]>[number]["style"]>; label?: NonNullable<ProjectState["connectors"]>[number]["label"]; start: FrozenEnd; end: FrozenEnd }[];
-};
-type Plan = { command: Command; objectCopyIds: { kind: Kind; copyId: string }[]; connectorCopyIds: string[] };
+  | { kind: 'card'; value: ProjectState['cards'][number] }
+  | { kind: 'text'; value: NonNullable<ProjectState['texts']>[number] }
+  | { kind: 'shape'; value: NonNullable<ProjectState['shapes']>[number] }
+  | { kind: 'image'; value: NonNullable<ProjectState['images']>[number] }
+  | { kind: 'stroke'; value: NonNullable<ProjectState['strokes']>[number] };
+export type CopyRef = { kind: Kind; copyId: string };
+type Plan = { command: Command; objectCopyIds: CopyRef[]; connectorCopyIds: string[] };
 
-function located(state: ProjectState, itemId: string): Located | null {
-  const card = state.cards.find(value => value.item.id === itemId);
-  if (card) return { kind: "card", value: card };
-  const text = state.texts?.find(value => value.item.id === itemId);
-  if (text) return { kind: "text", value: text };
-  const shape = state.shapes?.find(value => value.item.id === itemId);
-  if (shape) return { kind: "shape", value: shape };
-  const image = state.images?.find(value => value.item.id === itemId);
-  if (image) return { kind: "image", value: image };
-  const stroke = state.strokes?.find(value => value.item.id === itemId);
-  if (stroke) return { kind: "stroke", value: stroke };
-  return null;
+function located(state: ProjectState): Located[] {
+  return [...state.cards.map(value => ({ kind: 'card' as const, value })),
+    ...(state.texts ?? []).map(value => ({ kind: 'text' as const, value })),
+    ...(state.shapes ?? []).map(value => ({ kind: 'shape' as const, value })),
+    ...(state.images ?? []).map(value => ({ kind: 'image' as const, value })),
+    ...(state.strokes ?? []).map(value => ({ kind: 'stroke' as const, value }))];
 }
-function picked(state: ProjectState, selection: CanvasSelection, connectorIds: string[]) {
-  if (selection.targets.some(target => target.kind === "group")) return null;
-  const objects = selection.targets.flatMap(target => target.kind === "item" ? [located(state, target.itemId)] : []).filter((value): value is Located => !!value);
-  const itemIds = new Set(objects.map(value => value.value.item.id));
-  const chosen = new Set(connectorIds);
-  const connectors = (state.connectors ?? []).filter(line => {
-    const inside = (end: ConnectorEndpoint) => end.kind === "bound" && (end.targetKind ?? "item") === "item" && itemIds.has(end.itemId);
-    return chosen.has(line.id) || (inside(line.start) && inside(line.end));
-  });
-  return objects.length || connectors.length ? { objects, connectors, itemIds } : null;
+function picked(state: ProjectState, selection: CanvasSelection, connectorIds: string[], frameIds: string[]) {
+  const scope = snapshotScope(state, [...selection.targets.flatMap(target => target.kind === 'group'
+    ? state.groups?.filter(v => v.id === target.id).map(v => v.itemId) ?? [] : [target.itemId]), ...frameIds]);
+  const objects = located(state).filter(v => scope.ids.has(v.value.item.id));
+  const groups = (state.groups ?? []).filter(v => scope.ids.has(v.itemId)), frames = (state.frames ?? []).filter(v => scope.ids.has(v.id));
+  const keys = new Set([...objects.map(v => `item:${v.value.item.id}`), ...groups.map(v => `group:${v.itemId}`), ...frames.map(v => `frame:${v.id}`)]);
+  const inside = (end: ConnectorEndpoint) => end.kind === 'bound' && keys.has(endpointKey(end));
+  const connectors = (state.connectors ?? []).filter(line => connectorIds.includes(line.id) || inside(line.start) && inside(line.end));
+  return objects.length || groups.length || frames.length || connectors.length ? { ...scope, objects, groups, frames, connectors, inside } : null;
 }
-function freezeEnd(state: ProjectState, end: ConnectorEndpoint, itemIds: Set<string>): FrozenEnd {
-  if (end.kind === "bound" && (end.targetKind ?? "item") === "item" && itemIds.has(end.itemId)) return { kind: "bound", itemId: end.itemId, side: end.side };
-  if (end.kind === "bound") {
+function freezeEnd(state: ProjectState, end: ConnectorEndpoint, inside: (end: ConnectorEndpoint) => boolean): FrozenEnd {
+  if (end.kind === 'bound' && inside(end)) return { kind: 'bound', itemId: end.itemId, side: end.side, ...(end.targetKind ? { targetKind: end.targetKind } : {}) };
+  if (end.kind === 'bound') {
     const pose = endpointBounds(state, end);
-    if (!pose) throw new Error("连线端点不在完整快照中，请重新读取后复制");
-    return { kind: "free", point: sidePoint(pose, end.side) };
+    if (!pose) throw new Error('连线端点不在完整快照中，请重新读取后复制');
+    return { kind: 'free', point: sidePoint(pose, end.side) };
   }
-  return { kind: "free", point: { ...end.point } };
+  return { kind: 'free', point: { ...end.point } };
 }
-export function canCopySelection(state: ProjectState | null, selection: CanvasSelection, connectorIds: string[]) {
-  return !!state && !!picked(state, selection, connectorIds);
+export function canCopySelection(state: ProjectState | null, selection: CanvasSelection, connectorIds: string[], frameIds: string[] = []) {
+  return !!state && !!picked(state, selection, connectorIds, frameIds);
 }
-export function duplicatePlan(state: ProjectState, selection: CanvasSelection, connectorIds: string[]): Plan | null {
-  const source = picked(state, selection, connectorIds);
+export function duplicatePlan(state: ProjectState, selection: CanvasSelection, connectorIds: string[], frameIds: string[] = []): Plan | null {
+  const source = picked(state, selection, connectorIds, frameIds);
   if (!source) return null;
-  const objects = source.objects.map(value => ({ kind: value.kind, id: value.value.id, copyId: crypto.randomUUID() }));
+  const objects = [...source.objects.map(v => ({ kind: v.kind, id: v.value.id, sourceItemId: v.value.item.id, copyId: crypto.randomUUID() })),
+    ...source.groups.map(v => ({ kind: 'group' as const, id: v.id, sourceItemId: v.itemId, copyId: crypto.randomUUID() })),
+    ...source.frames.map(v => ({ kind: 'frame' as const, id: v.id, sourceItemId: v.id, copyId: crypto.randomUUID() }))];
   const connectors = source.connectors.map(line => ({ id: line.id, copyId: crypto.randomUUID() }));
-  const anchors = [...new Map(source.connectors.flatMap(line => [line.start, line.end].flatMap(end => end.kind === "bound" && !((end.targetKind ?? "item") === "item" && source.itemIds.has(end.itemId)) ? [[endpointKey(end), end] as const] : []))).values()];
-  const containerKeys = anchors.filter(end => (end.targetKind ?? "item") !== "item").map(endpointKey);
-  const cardVersion = (value: Extract<Located, { kind: "card" }>) => ({ thought: value.value.versionId, body: value.value.body.versionId, pose: value.value.item.versionId, appearance: value.value.appearance?.versionId ?? null, cardTags: value.value.cardTags?.versionId ?? null });
-  const pairVersion = (value: Exclude<Located, { kind: "card" }>) => ({ content: value.value.versionId, pose: value.value.item.versionId });
-  const of = (kind: Kind) => source.objects.filter(value => value.kind === kind);
+  const anchors = [...new Map(source.connectors.flatMap(line => [line.start, line.end].flatMap(end => end.kind === 'bound' && !source.inside(end) ? [[endpointKey(end), end] as const] : []))).values()];
+  const containerKeys = anchors.filter(end => (end.targetKind ?? 'item') !== 'item').map(endpointKey);
+  const pairVersion = (v: Exclude<Located, { kind: 'card' }>) => ({ content: v.value.versionId, pose: v.value.item.versionId });
+  const of = (kind: Located['kind']) => source.objects.filter(v => v.kind === kind);
+  const tree = source.groups.length || source.frames.length ? { version: 2 as const, roots: source.roots } : {};
   const command = {
-    commandId: crypto.randomUUID(), projectId: state.project.id, type: "canvas.duplicate",
+    commandId: crypto.randomUUID(), projectId: state.project.id, type: 'canvas.duplicate',
     expected: {
-      cards: Object.fromEntries(of("card").map(value => [value.value.id, cardVersion(value as Extract<Located, { kind: "card" }> )])),
-      texts: Object.fromEntries(of("text").map(value => [value.value.id, pairVersion(value as Exclude<Located, { kind: "card" }> )])),
-      shapes: Object.fromEntries(of("shape").map(value => [value.value.id, pairVersion(value as Exclude<Located, { kind: "card" }> )])),
-      images: Object.fromEntries(of("image").map(value => [value.value.id, pairVersion(value as Exclude<Located, { kind: "card" }> )])),
-      strokes: Object.fromEntries(of("stroke").map(value => [value.value.id, pairVersion(value as Exclude<Located, { kind: "card" }> )])),
-      connectors: Object.fromEntries(connectors.map(line => [line.id, source.connectors.find(value => value.id === line.id)!.versionId])),
-      anchors: Object.fromEntries(anchors.map(end => [endpointKey(end), end.targetKind === "group" ? state.groups!.find(group => group.itemId === end.itemId)!.versionId : end.targetKind === "frame" ? state.frames!.find(frame => frame.id === end.itemId)!.versionId : located(state, end.itemId)!.value.item.versionId])),
+      cards: Object.fromEntries(of('card').map(v => { const card = (v as Extract<Located, { kind: 'card' }>).value; return [card.id, { thought: card.versionId, body: card.body.versionId, pose: card.item.versionId, appearance: card.appearance?.versionId ?? null, cardTags: card.cardTags?.versionId ?? null }]; })),
+      texts: Object.fromEntries(of('text').map(v => [v.value.id, pairVersion(v as Exclude<Located, { kind: 'card' }>)])),
+      shapes: Object.fromEntries(of('shape').map(v => [v.value.id, pairVersion(v as Exclude<Located, { kind: 'card' }>)])),
+      images: Object.fromEntries(of('image').map(v => [v.value.id, pairVersion(v as Exclude<Located, { kind: 'card' }>)])),
+      strokes: Object.fromEntries(of('stroke').map(v => [v.value.id, pairVersion(v as Exclude<Located, { kind: 'card' }>)])),
+      ...(tree.version ? { groups: Object.fromEntries(source.groups.map(v => [v.id, v.versionId])), frames: Object.fromEntries(source.frames.map(v => [v.id, v.versionId])),
+        containment: Object.fromEntries([...source.ids].map(id => [id, state.containment?.find(v => v.id === id)?.versionId ?? null])) } : {}),
+      connectors: Object.fromEntries(source.connectors.map(v => [v.id, v.versionId])),
+      anchors: Object.fromEntries(anchors.map(end => [endpointKey(end), end.targetKind === 'group' ? state.groups!.find(v => v.itemId === end.itemId)!.versionId : end.targetKind === 'frame' ? state.frames!.find(v => v.id === end.itemId)!.versionId : located(state).find(v => v.value.item.id === end.itemId)!.value.item.versionId])),
       ...(containerKeys.length ? { endpoints: captureOptionalContainerEndpoints({ ...state, connectors: source.connectors }, containerKeys) } : {}),
     },
-    payload: { objects, connectors },
+    payload: { ...tree, objects: objects.map(({ sourceItemId: _, ...ref }) => ref), connectors },
   } as Command;
-  return { command, objectCopyIds: objects.map(value => ({ kind: value.kind, copyId: value.copyId })), connectorCopyIds: connectors.map(value => value.copyId) };
+  return { command, objectCopyIds: objects.filter(v => source.roots.includes(v.sourceItemId)).map(({ kind, copyId }) => ({ kind, copyId })), connectorCopyIds: source.connectors.flatMap((line, index) => connectorIds.includes(line.id) && !(source.inside(line.start) && source.inside(line.end)) ? [connectors[index]!.copyId] : []) };
 }
 function freezeObject(value: Located): FrozenObject {
-  const base = { kind: value.kind, sourceId: value.value.id, itemId: value.value.item.id, stack: value.value.item.createdOrder ?? 0, pose: structuredClone(value.value.item.pose) };
-  if (value.kind === "card") return { ...base, title: value.value.title, blocks: structuredClone(value.value.body.blocks), tagIds: value.value.cardTags ? [...value.value.cardTags.tagIds] : null, appearance: value.value.appearance ? { titleColor: value.value.appearance.titleColor, showPreview: value.value.appearance.showPreview } : null, ...(value.value.item.heightPolicy ? { heightPolicy: structuredClone(value.value.item.heightPolicy) } : {}) };
-  return { ...base, content: structuredClone(value.value.content) };
+  const base = { sourceId: value.value.id, itemId: value.value.item.id, stack: value.value.item.createdOrder ?? 0, pose: structuredClone(value.value.item.pose) };
+  if (value.kind === 'card') return { ...base, kind: 'card', title: value.value.title, blocks: structuredClone(value.value.body.blocks), tagIds: value.value.cardTags ? [...value.value.cardTags.tagIds] : null, appearance: value.value.appearance ? { titleColor: value.value.appearance.titleColor, showPreview: value.value.appearance.showPreview } : null, ...(value.value.item.heightPolicy ? { heightPolicy: structuredClone(value.value.item.heightPolicy) } : {}) };
+  return { ...base, kind: value.kind, content: structuredClone(value.value.content) } as FrozenObject;
 }
-export function captureClipboard(state: ProjectState, selection: CanvasSelection, connectorIds: string[]) {
-  const source = picked(state, selection, connectorIds);
+export function captureClipboard(state: ProjectState, selection: CanvasSelection, connectorIds: string[], frameIds: string[] = []) {
+  const source = picked(state, selection, connectorIds, frameIds);
   if (!source) return null;
+  const tree = source.groups.length || source.frames.length ? { version: 2 as const, roots: source.roots,
+    containment: (state.containment ?? []).flatMap(edge => edge.parent && source.ids.has(edge.id) && source.ids.has(edge.parent.id) ? [{ itemId: edge.id, parentItemId: edge.parent.id }] : []) } : { version: 1 as const };
   const document: CanvasClipboardDocument = {
-    kind: "forkwise-canvas-snapshot", version: 1,
-    objects: source.objects.map(freezeObject),
-    connectors: source.connectors.map(line => ({
-      path: line.path, start: freezeEnd(state, line.start, source.itemIds), end: freezeEnd(state, line.end, source.itemIds),
-      ...(line.style ? { style: structuredClone(line.style) } : {}),
-      ...(line.label !== undefined ? { label: line.label ? structuredClone(line.label) : null } : {}),
-    })),
+    kind: 'forkwise-canvas-snapshot', ...tree,
+    objects: [...source.objects.map(freezeObject),
+      ...source.groups.map(v => ({ kind: 'group' as const, sourceId: v.id, itemId: v.itemId, stack: v.createdOrder, pose: structuredClone(v.bounds) })),
+      ...source.frames.map(v => ({ kind: 'frame' as const, sourceId: v.id, itemId: v.id, stack: state.frames!.indexOf(v), pose: structuredClone(v.pose), name: v.name, background: v.background }))],
+    connectors: source.connectors.map(line => ({ path: line.path, start: freezeEnd(state, line.start, source.inside), end: freezeEnd(state, line.end, source.inside),
+      ...(line.style ? { style: structuredClone(line.style) } : {}), ...(line.label !== undefined ? { label: line.label ? structuredClone(line.label) : null } : {}) })),
   };
   return { document, text: clipboardText(document) };
 }
 export function clipboardText(document: CanvasClipboardDocument) {
-  const text = document.objects.map(value => value.kind === "card" ? value.title : value.kind === "text" ? textOf(value.content) : value.kind === "shape" ? shapeText(value.content) : value.kind === "image" ? "图片" : "笔迹").concat(document.connectors.map(line => line.label && typeof line.label === "object" ? line.label.text : "连线")).filter(Boolean);
-  return text.join("\n") || "画布对象";
-}
-function textOf(content: unknown) {
-  const runs = content && typeof content === "object" && "runs" in content ? content.runs : [];
-  return Array.isArray(runs) ? runs.map(run => run && typeof run === "object" && "text" in run ? String(run.text) : "").join("") : "";
-}
-function shapeText(content: unknown) {
-  return content && typeof content === "object" && "shortText" in content ? String(content.shortText) : "形状";
+  const text = document.objects.map(v => v.kind === 'card' ? v.title : v.kind === 'text' ? v.content.runs.map(run => run.text).join('') : v.kind === 'shape' ? v.content.shortText : v.kind === 'image' ? '图片' : v.kind === 'stroke' ? '笔迹' : v.kind === 'frame' ? v.name : '组合')
+    .concat(document.connectors.map(line => line.label?.text ?? '连线')).filter(Boolean);
+  return text.join('\n') || '画布对象';
 }
 export function parseClipboard(raw: string): CanvasClipboardDocument {
-  const value = JSON.parse(raw) as CanvasClipboardDocument;
-  if (value?.kind !== "forkwise-canvas-snapshot" || value.version !== 1 || !Array.isArray(value.objects) || !Array.isArray(value.connectors))
-    throw new Error("无法读取这份画布剪贴板，原内容未改变");
-  return value;
+  try { return CanvasClipboardSchema.parse(JSON.parse(raw)); }
+  catch { throw new Error("无法读取这份画布剪贴板，原内容未改变"); }
 }
 export function clipboardCenter(document: CanvasClipboardDocument) {
-  const points = document.connectors.flatMap(line => [line.start, line.end].flatMap(end => end.kind === "free" ? [end.point] : []));
-  return boundsCenter(document.objects.map(value => value.pose), document.objects.length ? [] : points);
+  const points = document.connectors.flatMap(line => [line.start, line.end].flatMap(end => end.kind === 'free' ? [end.point] : []));
+  return boundsCenter(document.objects.map(v => v.pose), document.objects.length ? [] : points);
 }
 export function pastePlan(projectId: string, document: CanvasClipboardDocument, translation: Point): Plan {
-  const copyIds = new Map(document.objects.map(value => [value.itemId, crypto.randomUUID()]));
-  const mapEnd = (end: FrozenEnd) => end.kind === "bound"
-    ? { kind: "bound" as const, copyId: copyIds.get(end.itemId)!, side: end.side }
-    : { kind: "free" as const, point: end.point };
-  const objects = document.objects.map(value => {
-    const copyId = copyIds.get(value.itemId)!;
-    if (value.kind === "card") return { kind: "card" as const, copyId, stack: value.stack, title: value.title ?? "", blocks: value.blocks ?? [{ id: "blank", type: "text", text: "" }], tagIds: value.tagIds ?? null, appearance: value.appearance ?? null, pose: value.pose, ...(value.heightPolicy ? { heightPolicy: value.heightPolicy } : {}) };
-    if (value.kind === "text") return { kind: "text" as const, copyId, stack: value.stack, content: value.content, pose: value.pose };
-    if (value.kind === "shape") return { kind: "shape" as const, copyId, stack: value.stack, content: value.content, pose: value.pose };
-    if (value.kind === "image") return { kind: "image" as const, copyId, stack: value.stack, content: value.content, pose: value.pose };
-    return { kind: "stroke" as const, copyId, stack: value.stack, content: value.content, pose: value.pose };
-  });
-  const connectors = document.connectors.map(line => ({
-    copyId: crypto.randomUUID(), path: line.path, start: mapEnd(line.start), end: mapEnd(line.end),
-    ...(line.style ? { style: line.style } : {}),
-    ...(line.label !== undefined ? { label: line.label } : {}),
-  }));
-  const command = { commandId: crypto.randomUUID(), projectId, type: "canvas.paste", expected: null, payload: { translation, objects, connectors } } as Command;
-  return { command, objectCopyIds: objects.map(value => ({ kind: value.kind, copyId: value.copyId })), connectorCopyIds: connectors.map(value => value.copyId) };
+  const copyIds = new Map(document.objects.map(v => [v.itemId, crypto.randomUUID()]));
+  const mapEnd = (end: FrozenEnd) => end.kind === 'bound' ? { kind: 'bound' as const, copyId: copyIds.get(end.itemId)!, side: end.side, ...(end.targetKind ? { targetKind: end.targetKind } : {}) } : end;
+  const objects = document.objects.map(({ sourceId: _, itemId, ...value }) => ({ ...value, copyId: copyIds.get(itemId)! }));
+  const connectors = document.connectors.map(line => ({ ...line, copyId: crypto.randomUUID(), start: mapEnd(line.start), end: mapEnd(line.end) }));
+  const roots = document.version === 2 ? document.roots! : document.objects.map(v => v.itemId);
+  const rootCopies = new Set(roots.map(id => copyIds.get(id)!));
+  const tree = document.version === 2 ? { version: 2 as const, roots: [...rootCopies], containment: document.containment!.map(edge => ({ copyId: copyIds.get(edge.itemId)!, parentCopyId: copyIds.get(edge.parentItemId)! })) } : {};
+  const command = { commandId: crypto.randomUUID(), projectId, type: 'canvas.paste', expected: null, payload: { ...tree, translation, objects, connectors } } as Command;
+  return { command, objectCopyIds: objects.filter(v => rootCopies.has(v.copyId)).map(({ kind, copyId }) => ({ kind, copyId })),
+    connectorCopyIds: document.connectors.flatMap((line, i) => line.start.kind === 'free' || line.end.kind === 'free' ? [connectors[i]!.copyId] : []) };
 }
-export function copiedItemIds(state: ProjectState, entries: { kind: Kind; copyId: string }[]) {
-  return entries.flatMap(entry => {
-    const list = entry.kind === "card" ? state.cards : entry.kind === "text" ? state.texts : entry.kind === "shape" ? state.shapes : entry.kind === "image" ? state.images : state.strokes;
-    const found = list?.find(value => value.id === entry.copyId);
-    return found ? [found.item.id] : [];
-  });
+export function copiedSelection(state: ProjectState, entries: CopyRef[]): CanvasSelection {
+  return { targets: entries.flatMap<CanvasSelection['targets'][number]>(entry => entry.kind === 'group' ? state.groups?.filter(v => v.id === entry.copyId).map(v => ({ kind: 'group' as const, id: v.id })) ?? []
+    : entry.kind === 'frame' ? [] : located(state).filter(v => v.kind === entry.kind && v.value.id === entry.copyId).map(v => ({ kind: 'item' as const, itemId: v.value.item.id }))), enteredGroupId: null };
+}
+export function copiedItemIds(state: ProjectState, entries: CopyRef[]) {
+  return copiedSelection(state, entries).targets.flatMap(v => v.kind === 'item' ? [v.itemId] : []);
 }
