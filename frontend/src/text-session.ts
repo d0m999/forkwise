@@ -1,3 +1,4 @@
+import { captureSpatial } from '../../backend/src/mapping/frame-spatial';
 import { useTextConflicts } from "./text-conflict";
 import { useCanvasMoveConflict, type CanvasMoveIntent } from "./canvas-move-conflict";
 import { useTextCreate } from "./text-create";
@@ -122,6 +123,7 @@ export function useCanvasTexts(
     Record<string, { x: number; y: number }>
   >({});
   const moving = useRef<CanvasText | null>(null);
+  const moveSpatial = useRef<ReturnType<typeof captureSpatial> | null>(null);
   function enqueueGeometry(prepare: () => Promise<Command>, done: () => void, intent: CanvasMoveIntent, discard: () => void) {
     operations.enqueue(async () => {
       if (mixedConflict.hasPending()) throw new Error("请先处理混合移动冲突");
@@ -157,6 +159,7 @@ export function useCanvasTexts(
     );
   }
   function startMove(id: string) {
+    moveSpatial.current = state ? captureSpatial(state) : null;
     moving.current = state?.texts?.find((text) => text.item.id === id) ?? null;
     return !!moving.current;
   }
@@ -175,8 +178,9 @@ export function useCanvasTexts(
     setPositions((previous) => ({ ...previous, [id]: point }));
     return true;
   }
-  function finishMove(point: { x: number; y: number }) {
+  function finishMove(point: { x: number; y: number }, pointer?: { x: number; y: number }) {
     const value = moving.current;
+    const spatial = moveSpatial.current;
     moving.current = null;
     if (!value) return false;
     if (point.x === value.item.pose.x && point.y === value.item.pose.y) {
@@ -218,6 +222,7 @@ export function useCanvasTexts(
           commandId: crypto.randomUUID(),
           projectId,
           type: "text.move",
+          ...(spatial ? { placement: { expected: spatial, ...(pointer ? { point: pointer } : {}) } } : {}),
           expected: target.item.versionId,
           payload: { id: target.id, x: point.x, y: point.y },
         };
@@ -291,6 +296,7 @@ export function useCanvasTexts(
       commandId: crypto.randomUUID(),
       projectId,
       type: "text.create",
+      ...(state ? { placement: { expected: captureSpatial(state) } } : {}),
       expected: null,
       editGroup: group,
       payload: { id, content, pose: { x, y, width: 20, height: 27 } },

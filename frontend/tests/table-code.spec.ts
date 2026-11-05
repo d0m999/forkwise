@@ -276,7 +276,21 @@ test('表格和代码组合输入优先于Enter、Tab、Esc和快捷键，代码
     expect(await workspace.state()).toEqual(before);
     await expect(page.getByRole('complementary', { name: '写字板' })).toBeVisible();
   }
-  await page.keyboard.insertText('  <b>literal</b>\n**raw**');
+  const literal = '  <b>literal</b>\n**raw**';
+  await page.keyboard.insertText('  <b>literal</b>');
+  await page.keyboard.press('Enter');
+  await page.keyboard.press('Backspace');
+  await page.keyboard.press('Backspace');
+  await page.keyboard.insertText('**raw**');
+  const code = editor.locator('[data-kind=code]');
+  await expect(code).toHaveCount(1);
+  const codeId = await code.getAttribute('data-block-id');
+  await expect.poll(async () => (await workspace.state()).cards[0]!.body.blocks.filter(block => block.type === 'code'))
+    .toMatchObject([{ id: codeId, text: literal }]);
+  expect(await editor.evaluate(() => {
+    const node = window.getSelection()?.anchorNode;
+    return (node instanceof Element ? node : node?.parentElement)?.closest('[data-block-id]')?.getAttribute('data-block-id');
+  })).toBe(codeId);
   await page.getByRole('button', { name: '块菜单', exact: true }).click();
   await page.getByRole('menuitem', { name: '转为段落', exact: true }).click();
   await expect
@@ -552,7 +566,21 @@ test('复制代码写入真实浏览器剪贴板的是完整字面纯文本且�
   await page.keyboard.type('```html');
   await page.keyboard.press('Enter');
   const literal = '<div>中文</div>\n  **literal**\n';
-  await page.keyboard.insertText(literal);
+  await page.keyboard.insertText('<div>中文</div>');
+  await page.keyboard.press('Enter');
+  await page.keyboard.insertText('  **literal**');
+  await page.keyboard.press('Enter');
+  await page.keyboard.press('Backspace');
+  await page.keyboard.press('Backspace');
+  const code = editor.locator('[data-kind=code]');
+  await expect(code).toHaveCount(1);
+  const codeId = await code.getAttribute('data-block-id');
+  await expect.poll(async () => (await workspace.state()).cards[0]!.body.blocks.filter(block => block.type === 'code'))
+    .toMatchObject([{ id: codeId, text: literal }]);
+  expect(await editor.evaluate(() => {
+    const node = window.getSelection()?.anchorNode;
+    return (node instanceof Element ? node : node?.parentElement)?.closest('[data-block-id]')?.getAttribute('data-block-id');
+  })).toBe(codeId);
   await expect(page.getByRole('status')).toHaveText('已保存到本机');
   const before = await workspace.state();
   const guard = await preserveClipboard(page, info, literal, false);

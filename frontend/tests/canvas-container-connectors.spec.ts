@@ -266,7 +266,7 @@ for (const kind of ['group', 'frame'] as const) test(`${kind}单线真实浏览�
       payload: { id, content: { shapeType: 'rectangle', shortText: id }, pose: { x, y: 180, width: 100, height: 60 } } });
   const seeded = await workspace.state();
   if (kind === 'group') await workspace.execute(page, { commandId: crypto.randomUUID(), projectId, type: 'group.create', expected: { groups: { g: null }, containment: Object.fromEntries(seeded.shapes!.map(shape => [shape.item.id, null])) }, payload: { id: 'g', itemIds: seeded.shapes!.map(shape => shape.item.id) } });
-  else await workspace.execute(page, { commandId: crypto.randomUUID(), projectId, type: 'frame.create', expected: { frame: null, groups: {}, containment: {}, poses: {} }, payload: { id: 'frame', itemIds: [], pose: { x: 200, y: 180, width: 100, height: 60 } } });
+  else await workspace.execute(page, { commandId: crypto.randomUUID(), projectId, type: 'frame.create', expected: { frame: null, groups: {}, containment: {}, poses: {} }, payload: { id: 'frame', itemIds: [], parentId: null, pose: { x: 200, y: 180, width: 100, height: 60 } } });
   const container = await workspace.state(), itemId = kind === 'group' ? container.groups![0]!.itemId : container.frames![0]!.id;
   await workspace.execute(page, { commandId: crypto.randomUUID(), projectId, type: 'connector.create', expected: null, payload: { id: 'source-line',
     start: { kind: 'bound', targetKind: kind, itemId, side: 'right' }, end: { kind: 'free', point: { x: 900, y: 210 } } } });

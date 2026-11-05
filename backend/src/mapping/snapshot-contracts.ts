@@ -1,3 +1,4 @@
+import { FramePlacement } from './frame-spatial.js';
 import { ContainerEndpointExpected } from './container-endpoints.js';
 import { z } from 'zod';
 import { ConnectorLabelSchema, ConnectorPathSchema, ConnectorStyleSchema } from './connector-contracts.js';
@@ -8,7 +9,7 @@ import { StrokeContentSchema, StrokePoseSchema } from './stroke-contracts.js';
 import { TextContentSchema, TextPoseSchema } from './text-contracts.js';
 
 const Id = z.string().min(1).max(160);
-const Envelope = { commandId: Id, projectId: Id };
+const Envelope = { commandId: Id, projectId: Id, placement: FramePlacement.optional() };
 const Side = z.enum(['top', 'right', 'bottom', 'left']);
 const Point = z.object({ x: z.number().finite(), y: z.number().finite() }).strict();
 const CardVersions = z.object({

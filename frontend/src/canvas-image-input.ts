@@ -35,6 +35,7 @@ export function useCanvasImageInput(context: () => ImagePlacement | null, commit
         const factor = Math.min(1, p.maxWidth / asset.width, p.maxHeight / asset.height);
         const width = asset.width * factor, height = asset.height * factor;
         current.image = { commandId: crypto.randomUUID(), projectId: p.projectId, type: 'image.create', expected: null,
+          ...(p.spatial ? { placement: { expected: p.spatial } } : {}),
           payload: { id: crypto.randomUUID(), content: { assetId: asset.id, crop: { x: 0, y: 0, width: 1, height: 1 } },
             pose: { x: p.x - width / 2, y: p.y - height / 2, width, height, rotation: 0 } } };
       }

@@ -78,7 +78,12 @@ test("形状移动与尺寸真实409确认同一目标的no-op回执释放保存
       expect(confirmed.status).toBe(200); expect(confirmed.body.changedIds).toEqual([]);
       expect(confirmed.body.shapeVersions).toBeUndefined();
       expect(confirmed.command.commandId).not.toBe(first.command.commandId);
-      expect(confirmed.command).toEqual({ ...first.command, commandId: confirmed.command.commandId, expected: peer.shapes[0].item.versionId });
+      expect({ ...confirmed.command, placement: undefined }).toEqual({ ...first.command,
+        commandId: confirmed.command.commandId, expected: peer.shapes[0].item.versionId, placement: undefined });
+      if (first.command.placement) {
+        expect(confirmed.command.placement.point).toEqual(first.command.placement.point);
+        expect(confirmed.command.placement.expected.poses[shape.item.id]).toBe(peer.shapes[0].item.versionId);
+      }
       expect(confirmed.body).toMatchObject({ commandId: confirmed.command.commandId, projectId, revision: peer.project.revision });
       expect(await read()).toEqual(peer); expect(await read("/history")).toEqual(active.peerHistory);
       await expect(page.getByRole("status"), "真实成功no-op必须解除形状几何保存屏障").toHaveText("已保存到本机");

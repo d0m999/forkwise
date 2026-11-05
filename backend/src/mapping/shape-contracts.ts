@@ -1,3 +1,4 @@
+import { FramePlacement } from './frame-spatial.js';
 import { MembershipExpected } from './containment-contracts.js';
 import { z } from 'zod';
 
@@ -17,35 +18,35 @@ export const ShapePoseSchema = z.object({
 }).strict();
 export const ShapeCreateCommand = z.object({
   commandId: Id,
-  projectId: Id,
+  projectId: Id, placement: FramePlacement.optional(),
   type: z.literal('shape.create'),
   expected: z.null(),
   payload: z.object({ id: Id, content: ShapeContentSchema, pose: ShapePoseSchema }).strict(),
 }).strict();
 export const ShapeEditCommand = z.object({
   commandId: Id,
-  projectId: Id,
+  projectId: Id, placement: FramePlacement.optional(),
   type: z.literal('shape.edit'),
   expected: Id,
   payload: z.object({ id: Id, content: ShapeContentSchema }).strict(),
 }).strict();
 export const ShapeMoveCommand = z.object({
   commandId: Id,
-  projectId: Id,
+  projectId: Id, placement: FramePlacement.optional(),
   type: z.literal('shape.move'),
   expected: Id,
   payload: z.object({ id: Id, x: z.number().finite(), y: z.number().finite() }).strict(),
 }).strict();
 export const ShapeDeleteCommand = z.object({
   commandId: Id,
-  projectId: Id,
+  projectId: Id, placement: FramePlacement.optional(),
   type: z.literal('shape.delete'),
   expected: z.object({ shape: Id, pose: Id, connectors: z.record(Id, Id).optional(), membership: MembershipExpected.optional() }).strict(),
   payload: z.object({ id: Id }).strict(),
 }).strict();
 export const ShapeTransformCommand = z.object({
   commandId: Id,
-  projectId: Id,
+  projectId: Id, placement: FramePlacement.optional(),
   type: z.literal('shape.transform'),
   expected: Id,
   payload: z.object({ id: Id, pose: ShapePoseSchema }).strict(),

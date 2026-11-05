@@ -1244,3 +1244,17 @@ body:has(.workspace[data-board-full="true"]) .card-tooltip { display: none; }
   pointer-events: auto;
   z-index: 1000;
 }
+
+.canvas-frame[data-drop-candidate=true] { border-color: #2563eb; box-shadow: 0 0 0 3px #2563eb55; }
+.frame-resize-overlay { position: absolute; box-sizing: border-box; border: 1px solid transparent; overflow: visible; pointer-events: none; z-index: calc(var(--connector-controls-layer) + 1); }
+.frame-resize-handle { position: absolute; width: 10px; height: 10px; border: 1px solid var(--canvas-selection-color); background: white; padding: 0; pointer-events: auto; transform: translate(-50%, -50%); }
+.frame-resize-handle[data-corner*=n] { top: 0; }
+.frame-resize-handle[data-corner*=s] { top: 100%; }
+.frame-resize-handle[data-corner*=w] { left: 0; }
+.frame-resize-handle[data-corner*=e] { left: 100%; }
+.frame-resize-handle[data-corner=n], .frame-resize-handle[data-corner=s] { left: 50%; cursor: ns-resize; }
+.frame-resize-handle[data-corner=e], .frame-resize-handle[data-corner=w] { top: 50%; cursor: ew-resize; }
+.frame-resize-handle[data-corner=nw], .frame-resize-handle[data-corner=se] { cursor: nwse-resize; }
+.frame-resize-handle[data-corner=ne], .frame-resize-handle[data-corner=sw] { cursor: nesw-resize; }
+.frame-member-preview { position: absolute; pointer-events: none; border: 2px dashed #2563eb; box-sizing: border-box; }
+.frame-member-preview[data-releasing=true] { border-color: #c2410c; }

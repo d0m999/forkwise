@@ -7,12 +7,13 @@ export function groupProjection(
   groups: { first: CompactPage<GroupIndex>; items: GroupIndex[] },
   containment: { first: CompactPage<Containment>; items: Containment[] },
   items: { item: { id: string; createdOrder?: number } }[],
+  frameIds: Set<string> = new Set(),
 ) {
   for (const page of [groups, containment])
     if (page.first.revision !== snapshot.revision || page.first.snapshot !== snapshot.snapshot)
       throw new Error('组合归属与地图快照不一致，请重新读取');
   const ordered = [...items].sort((a, b) => (a.item.createdOrder ?? 0) - (b.item.createdOrder ?? 0));
-  const liveIds = new Set([...ordered.map(value => value.item.id), ...groups.items.map(group => group.itemId)]);
+  const liveIds = new Set([...ordered.map(value => value.item.id), ...groups.items.map(group => group.itemId), ...frameIds]);
   if (new Set(containment.items.map(value => value.id)).size !== containment.items.length ||
     containment.items.some(value => !liveIds.has(value.id) || value.parent?.kind === 'group' && !groups.items.some(g => g.itemId === value.parent!.id)))
     throw new Error('组合成员归属不完整，请重新读取');

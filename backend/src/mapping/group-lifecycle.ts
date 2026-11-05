@@ -87,14 +87,23 @@ export function groupOutcome(change: Partial<Change>) {
     if (!c.after) { deleted.add(value.id); deleted.add(value.itemId); }
   }
   for (const c of change.containmentChanges ?? []) changed.add((c.after ?? c.before!).id);
+  for (const c of change.cardChanges ?? []) if (c.before.item.versionId !== c.after.item.versionId) changed.add(c.after.item.id);
   const cards = [...(change.cardLifecycleChanges ?? [])];
   if (change.before && 'body' in change.before || change.after && 'body' in change.after)
     cards.push({ before: change.before && 'body' in change.before ? change.before : null, after: change.after && 'body' in change.after ? change.after : null });
   for (const c of cards) {
     const value = c.after ?? c.before!;
-    const ids = [value.id, value.body.id, value.item.id, value.appearance?.id, value.cardTags?.id].filter((id): id is string => !!id);
-    for (const id of ids) changed.add(id);
-    if (!c.after) for (const id of ids) deleted.add(id);
+    if (c.before && c.after) {
+      if (c.before.versionId !== c.after.versionId) changed.add(value.id);
+      if (c.before.body.versionId !== c.after.body.versionId) changed.add(value.body.id);
+      if (c.before.item.versionId !== c.after.item.versionId) changed.add(value.item.id);
+      if (c.before.appearance?.versionId !== c.after.appearance?.versionId) changed.add((c.after.appearance ?? c.before.appearance)!.id);
+      if (c.before.cardTags?.versionId !== c.after.cardTags?.versionId) changed.add((c.after.cardTags ?? c.before.cardTags)!.id);
+    } else {
+      const ids = [value.id, value.body.id, value.item.id, value.appearance?.id, value.cardTags?.id].filter((id): id is string => !!id);
+      for (const id of ids) changed.add(id);
+      if (!c.after) for (const id of ids) deleted.add(id);
+    }
   }
   const items = [...(change.textChanges ?? []), ...(change.textChange ? [change.textChange] : []),
     ...(change.shapeChanges ?? []), ...(change.shapeChange ? [change.shapeChange] : []),

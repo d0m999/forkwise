@@ -1,3 +1,4 @@
+import { FramePlacement } from './frame-spatial.js';
 import { MembershipExpected } from './containment-contracts.js';
 import { z } from 'zod';
 
@@ -17,14 +18,14 @@ export const StrokePoseSchema = z.object({
 }).strict();
 export const StrokeCreateCommand = z.object({
   commandId: Id,
-  projectId: Id,
+  projectId: Id, placement: FramePlacement.optional(),
   type: z.literal('stroke.create'),
   expected: z.null(),
   payload: z.object({ id: Id, content: StrokeContentSchema, pose: StrokePoseSchema }).strict(),
 }).strict();
 export const StrokeDeleteCommand = z.object({
   commandId: Id,
-  projectId: Id,
+  projectId: Id, placement: FramePlacement.optional(),
   type: z.literal('stroke.delete'),
   expected: z.object({ stroke: Id, pose: Id, membership: MembershipExpected.optional() }).strict(),
   payload: z.object({ id: Id }).strict(),

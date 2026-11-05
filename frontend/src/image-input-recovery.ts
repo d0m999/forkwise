@@ -1,6 +1,7 @@
+import { SpatialExpected, captureSpatial } from '../../backend/src/mapping/frame-spatial';
 import { MappingCommand, type Command } from '../../backend/src/mapping/contracts';
 
-export type ImagePlacement = { projectId: string; x: number; y: number; maxWidth: number; maxHeight: number };
+export type ImagePlacement = { projectId: string; x: number; y: number; maxWidth: number; maxHeight: number; spatial?: ReturnType<typeof captureSpatial> };
 export type ImageInput = { name: string; placement: ImagePlacement; asset: Extract<Command, { type: 'asset.save' }>; image?: Extract<Command, { type: 'image.create' }> };
 const prefix = 'forkwise:canvas-image-input:v1:';
 const knownKeys = (value: unknown, keys: string[]) => !!value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).every(key => keys.includes(key));
@@ -8,13 +9,15 @@ function parse(raw: string): ImageInput | null {
   try {
     const record = JSON.parse(raw), input = record.input, p = input?.placement;
     if (!knownKeys(record, ['schema', 'input']) || !knownKeys(input, ['name', 'placement', 'asset', 'image']) ||
-      !knownKeys(p, ['projectId', 'x', 'y', 'maxWidth', 'maxHeight']) || record.schema !== 1 || typeof input?.name !== 'string' || !p || typeof p.projectId !== 'string' ||
+      !knownKeys(p, ['projectId', 'x', 'y', 'maxWidth', 'maxHeight', 'spatial']) || record.schema !== 1 || typeof input?.name !== 'string' || !p || typeof p.projectId !== 'string' ||
       !p.projectId || !['x', 'y', 'maxWidth', 'maxHeight'].every(key => typeof p[key] === 'number' && Number.isFinite(p[key])) ||
       p.maxWidth <= 0 || p.maxHeight <= 0) return null;
+    const spatial = p.spatial === undefined ? undefined : SpatialExpected.safeParse(p.spatial);
+    if (spatial && !spatial.success) return null;
     const asset = MappingCommand.safeParse(input.asset), image = input.image === undefined ? null : MappingCommand.safeParse(input.image);
     if (!asset.success || asset.data.type !== 'asset.save' || asset.data.projectId !== p.projectId || asset.data.payload.name !== input.name) return null;
     if (image && (!image.success || image.data.type !== 'image.create' || image.data.projectId !== p.projectId || image.data.payload.content.assetId !== asset.data.payload.id)) return null;
-    return { name: input.name, placement: { projectId: p.projectId, x: p.x, y: p.y, maxWidth: p.maxWidth, maxHeight: p.maxHeight },
+    return { name: input.name, placement: { projectId: p.projectId, x: p.x, y: p.y, maxWidth: p.maxWidth, maxHeight: p.maxHeight, ...(spatial?.success ? { spatial: spatial.data } : {}) },
       asset: asset.data, ...(image?.success && image.data.type === 'image.create' ? { image: image.data } : {}) };
   } catch { return null; }
 }

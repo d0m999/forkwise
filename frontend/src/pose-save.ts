@@ -1,3 +1,4 @@
+import { captureSpatial } from '../../backend/src/mapping/frame-spatial';
 import { useRef, useState } from "react";
 import type { Receipt } from "../../backend/src/mapping/contracts";
 import {
@@ -12,6 +13,7 @@ type Position = { x: number; y: number };
 type Pose = Card["item"]["pose"];
 type GeometryCommand = Extract<Command, { type: "pose.move" | "pose.batch" }>;
 export interface MoveOrder {
+  placement?: ReturnType<typeof captureSpatial>;
   beforeSubmit: () => Promise<boolean>;
   afterAttempt: () => void;
 }
@@ -100,7 +102,7 @@ export function usePoseSave(
     const cards = Array.isArray(input) ? input : [input];
     const card = cards[0];
     if (!card) return false;
-    const common = { commandId: crypto.randomUUID(), projectId };
+    const common = { commandId: crypto.randomUUID(), projectId, ...(!fullGeometry && order?.placement ? { placement: { expected: order.placement } } : {}) };
     gesture.current = {
       cards,
       ...(order ? { order } : {}),
@@ -142,10 +144,11 @@ export function usePoseSave(
       setPositions((previous) => ({ ...previous, [itemId]: pose }));
     }
   }
-  function finish(position?: Position) {
+  function finish(position?: Position, pointer?: Position) {
     const current = gesture.current;
     if (!current) return;
     gesture.current = null;
+    if (pointer && current.command.placement) current.command.placement.point = pointer;
     setDragging(false);
     const anchor = current.cards[0]!;
     const final =

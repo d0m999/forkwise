@@ -1,3 +1,5 @@
+import { resizeFrame } from './frame-resize.js';
+import { updateFrameParents, validateSpatial } from './frame-membership.js';
 import { planContainerConnectorRemoval, applyContainerConnectorRemoval } from './container-connector-lifecycle.js';
 import { createFrame, deleteFrame, editFrame, moveFrame, readFrames } from './frame.js';
 import type { FrameRecord } from './frame-contracts.js';
@@ -308,6 +310,7 @@ export class Mapping {
             );
           return receipt;
         };
+        if ('placement' in command && command.placement) validateSpatial(this.db, command, command.placement.expected);
         const containerConnectorPlan = planContainerConnectorRemoval(this.db, command);
         let before: Card | Project | null = null;
         let after: Card | Project | null;
@@ -329,13 +332,17 @@ export class Mapping {
         let travel: ReturnType<typeof travelHistory> | undefined;
         let revision: number;
         let changedIds: string[];
-        if (command.type === 'frame.create' || command.type === 'frame.edit' || command.type === 'frame.move' || command.type === 'frame.delete') {
+        if (command.type === 'frame.resize' || command.type === 'frame.create' || command.type === 'frame.edit' || command.type === 'frame.move' || command.type === 'frame.delete') {
           const project = this.project(command.projectId);
           if (command.type === 'frame.create') {
             const created = createFrame(this.db, command);
             frameChanges = [{ before: null, after: created.frame }];
             if (created.containmentChanges.length) containmentChanges = created.containmentChanges;
             changedIds = created.changedIds;
+          } else if (command.type === 'frame.resize') {
+            const result = resizeFrame(this.db, command);
+            if (!result) return unchanged(project.revision);
+            frameChanges = [result.frameChange]; containmentChanges = result.containmentChanges; changedIds = result.changedIds;
           } else if (command.type === 'frame.delete') {
             const result = deleteFrame(this.db, command);
             frameChanges = [result.frameChange];
@@ -344,7 +351,7 @@ export class Mapping {
           } else if (command.type === 'frame.move') {
             const result = moveFrame(this.db, command);
             if (!result) return unchanged(project.revision);
-            frameChanges = [result.frameChange];
+            frameChanges = result.frameChanges;
             cardChanges = result.cardChanges; textChanges = result.textChanges; shapeChanges = result.shapeChanges;
             imageChanges = result.imageChanges; strokeChanges = result.strokeChanges;
             changedIds = result.changedIds;
@@ -773,6 +780,39 @@ export class Mapping {
           this.db
             .prepare('UPDATE mapping_projects SET revision=? WHERE id=?')
             .run(revision, project.id);
+        }
+        const createdItems = [
+          ...(after && 'body' in after && !before ? [after] : []),
+          ...[textChange, shapeChange, imageChange, strokeChange].flatMap(v => v?.after && !v.before ? [v.after] : []),
+          ...[...(cardLifecycleChanges ?? []), ...(textChanges ?? []), ...(shapeChanges ?? []), ...(imageChanges ?? []), ...(strokeChanges ?? [])].flatMap(v => v.after && !v.before ? [v.after] : []),
+        ];
+        if (createdItems.length && ['thought.create', 'text.create', 'text.copy', 'shape.create', 'image.create', 'stroke.create', 'canvas.duplicate', 'canvas.paste'].includes(command.type)) {
+          const added = updateFrameParents(this.db, command.projectId, createdItems.map(v => ({ id: v.item.id,
+            point: { x: v.item.pose.x + v.item.pose.width / 2, y: v.item.pose.y + v.item.pose.height / 2 } })));
+          if (added.length) containmentChanges = [...(containmentChanges ?? []), ...added];
+        }
+        if (['canvas.move', 'canvas.move-selection', 'group.move', 'frame.move', 'pose.move', 'pose.batch', 'text.move', 'shape.move', 'image.transform'].includes(command.type)) {
+          const pointer = 'placement' in command ? command.placement?.point : undefined;
+          const moved = [
+            ...(after && 'body' in after && before && 'body' in before ? [{ before, after }] : []),
+            ...[textChange, shapeChange, imageChange].filter(v => v?.before && v.after),
+            ...(cardChanges ?? []), ...(textChanges ?? []), ...(shapeChanges ?? []), ...(imageChanges ?? []), ...(strokeChanges ?? []),
+          ].flatMap(v => v?.before && v.after && (v.before.item.pose.x !== v.after.item.pose.x || v.before.item.pose.y !== v.after.item.pose.y) ? [v.after] : []);
+          const targets = moved.map(v => ({ id: v.item.id, point: pointer ?? { x: v.item.pose.x + v.item.pose.width / 2, y: v.item.pose.y + v.item.pose.height / 2 } }));
+          if (command.type === 'group.move' || command.type === 'canvas.move-selection') {
+            const ids = command.type === 'group.move' ? [command.payload.id] : command.payload.groupIds;
+            for (const group of readGroups(this.db, command.projectId).filter(g => ids.includes(g.id))) {
+              const members = new Set(group.memberItemIds);
+              for (let i = targets.length - 1; i >= 0; i--) if (members.has(targets[i]!.id)) targets.splice(i, 1);
+              targets.push({ id: group.itemId, point: pointer ?? { x: group.bounds.x + group.bounds.width / 2, y: group.bounds.y + group.bounds.height / 2 } });
+            }
+          }
+          if (command.type === 'frame.move') {
+            targets.splice(0); const frame = frameChanges!.find(v => v.after?.id === command.payload.id)!.after!;
+            targets.push({ id: frame.id, point: pointer ?? { x: frame.pose.x + frame.pose.width / 2, y: frame.pose.y + frame.pose.height / 2 } });
+          }
+          const movedMemberships = updateFrameParents(this.db, command.projectId, targets);
+          if (movedMemberships.length) containmentChanges = [...(containmentChanges ?? []), ...movedMemberships];
         }
         if (command.type === 'thought.delete' || command.type === 'text.delete' || command.type === 'shape.delete' || command.type === 'image.delete' || command.type === 'stroke.delete') {
           const itemId = before && 'body' in before ? before.item.id : (textChange?.before ?? shapeChange?.before ?? imageChange?.before ?? strokeChange?.before)!.item.id;

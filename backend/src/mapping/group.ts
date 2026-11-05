@@ -92,9 +92,11 @@ export function createGroup(db: Database.Database, command: Extract<GroupCommand
   requireThat(Object.keys(expected.groups).length === affected.length + 1 && expected.groups[payload.id] === null && affected.every(group => Object.hasOwn(expected.groups, group.id)) &&
     Object.keys(expected.containment).length === expectedMembershipIds.size && [...expectedMembershipIds].every(id => Object.hasOwn(expected.containment, id)),
     'EXPECTED_DOMAINS', '须校验新组合、原组合及全部成员归属', 400);
+  const directParents = payload.itemIds.map(id => memberships.find(v => v.id === id)?.parent ?? null);
+  const commonFrame = directParents[0]?.kind === 'frame' && directParents.every(v => v?.kind === 'frame' && v.id === directParents[0]!.id) ? directParents[0] : null;
   const containmentChanges: ContainmentChange[] = [...selected].map(id => {
     const before = memberships.find(value => value.id === id) ?? null;
-    requireThat(!before?.parent || before.parent.kind === 'group', 'INVALID_GROUP_MEMBER', '当前操作不改变其他容器的归属', 409);
+    requireThat(!before?.parent || before.parent.kind === 'group' || commonFrame?.id === before.parent.id, 'INVALID_GROUP_MEMBER', '当前操作不改变其他容器的归属', 409);
     return { before, after: null };
   });
   const project = db.prepare('SELECT revision FROM mapping_projects WHERE id=?').get(projectId) as { revision: number };
@@ -119,6 +121,10 @@ export function createGroup(db: Database.Database, command: Extract<GroupCommand
     if (!before) continue;
     db.prepare('DELETE FROM mapping_containment WHERE project_id=? AND item_id=?').run(projectId, before.id);
     containmentChanges.push({ before, after: null });
+  }
+  if (commonFrame) {
+    const after: Containment = { id: group.itemId, versionId: randomUUID(), parent: commonFrame };
+    writeContainment(db, projectId, after); containmentChanges.push({ before: null, after });
   }
   return { groupChanges, containmentChanges, changedIds: [...new Set([...groupChanges.flatMap(value => [(value.after ?? value.before!).id, (value.after ?? value.before!).itemId]), ...ids])],
     deletedIds: groupChanges.filter(value => !value.after).flatMap(value => [value.before!.id, value.before!.itemId]) };

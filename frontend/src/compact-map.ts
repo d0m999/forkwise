@@ -214,8 +214,8 @@ export async function readCompactMap(
   const groupPage = await collect<GroupIndex>({ view: 'group-index', snapshot: index.first.snapshot });
   const containmentPage = await collect<Containment>({ view: 'containment', snapshot: index.first.snapshot });
   const items = [...cards, ...texts, ...shapes, ...images, ...strokes];
-  const grouping = groupProjection(index.first, groupPage, containmentPage, items);
   const framePage = await collect<FrameIndex>({ view: 'frame-index', snapshot: index.first.snapshot });
+  const grouping = groupProjection(index.first, groupPage, containmentPage, items, new Set(framePage.items.map(v => v.id)));
   const framing = frameProjection(index.first, framePage, containmentPage, new Set([
     ...items.map(value => value.item.id), ...grouping.groups.map(group => group.itemId),
   ]));

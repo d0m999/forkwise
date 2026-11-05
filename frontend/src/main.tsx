@@ -1,3 +1,4 @@
+import { captureSpatial, frameCandidate, frameCreationParent } from '../../backend/src/mapping/frame-spatial';
 import { canvasPlainText } from "./canvas-paste";
 import { CANVAS_CLIPBOARD_TYPE, canCopySelection, captureClipboard, clipboardCenter, copiedItemIds, duplicatePlan, parseClipboard, pastePlan } from "./canvas-snapshot";
 import { nextPaste, pasteTranslation, type PasteSequence } from "./canvas-snapshot-geometry";
@@ -265,8 +266,11 @@ function Workspace() {
   const [frameSelection, setFrameSelection] = useState<{ projectId: string; id: string; generation: number } | null>(null);
   const [frameEditorEpoch, setFrameEditorEpoch] = useState(0);
   const frameEditorFocus = useRef<{ projectId: string; id: string } | null>(null);
+  const [frameDropCandidate, setFrameDropCandidate] = useState<string | null>(null);
+  const frameDropSnapshot = useRef<ProjectState | null>(null);
+  const [frameDrawMemberIds, setFrameDrawMemberIds] = useState<string[]>([]);
   const [framePreview, setFramePreview] = useState<FrameRect | null>(null);
-  const frameDrag = useRef<{ projectId: string; start: { x: number; y: number } } | null>(null);
+  const frameDrag = useRef<{ projectId: string; state: ProjectState; start: { x: number; y: number } } | null>(null);
   const [shapePreset, setShapePreset] = useState<ShapeType | null>(null);
   const shapeCreating = useRef(false);
   const [snap, setSnap] = useState(true);
@@ -1131,6 +1135,7 @@ function Workspace() {
         projectId,
         cards,
         {
+          ...(!resizing && authority.current ? { placement: captureSpatial(authority.current) } : {}),
           beforeSubmit: async () =>
             (await drainCompletedPrefix(barrier.cutoff)) !== "unknown",
           afterAttempt: () => {
@@ -1173,21 +1178,24 @@ function Workspace() {
     setGuides([]);
     marqueeSelection.cancel();
     frameDrag.current = null;
-    setFramePreview(null);
+    setFramePreview(null); setFrameDropCandidate(null); setFrameDrawMemberIds([]);
   }
   useEffect(() => {
     const move = (event: PointerEvent) => {
       const current = frameDrag.current;
       if (!current || authority.current?.project.id !== current.projectId) return;
       const point = flow.screenToFlowPosition({ x: event.clientX, y: event.clientY }, { snapToGrid: false });
-      setFramePreview({ x: Math.min(current.start.x, point.x), y: Math.min(current.start.y, point.y),
-        width: Math.abs(point.x - current.start.x), height: Math.abs(point.y - current.start.y) });
+      const rect = { x: Math.min(current.start.x, point.x), y: Math.min(current.start.y, point.y),
+        width: Math.abs(point.x - current.start.x), height: Math.abs(point.y - current.start.y) };
+      setFramePreview(rect);
+      setFrameDropCandidate(frameCreationParent(current.state, rect)?.id ?? null);
+      setFrameDrawMemberIds(frameItemsInRect(current.state, rect));
     };
     const up = (event: PointerEvent) => {
       const current = frameDrag.current;
       frameDrag.current = null;
-      setFramePreview(null);
-      const snapshot = authority.current;
+      setFramePreview(null); setFrameDropCandidate(null); setFrameDrawMemberIds([]);
+      const snapshot = current?.state;
       if (!current || !snapshot || snapshot.project.id !== current.projectId) return;
       const point = flow.screenToFlowPosition({ x: event.clientX, y: event.clientY }, { snapToGrid: false });
       const pose = { x: Math.min(current.start.x, point.x), y: Math.min(current.start.y, point.y),
@@ -1674,6 +1682,8 @@ function Workspace() {
   }
   async function action(command: Command, onDone?: () => void, beforeSubmit?: () => boolean, onSettled?: () => void) {
     if (connectorCreate.hasPending()) return false;
+    if (['thought.create', 'shape.create', 'stroke.create', 'canvas.duplicate', 'canvas.paste'].includes(command.type) && !('placement' in command && command.placement) && authority.current?.project.id === command.projectId)
+      Object.assign(command, { placement: { expected: captureSpatial(authority.current) } });
     const imageCommand = command.type.startsWith('image.');
     const backgroundImage = () => imageCommand && command.projectId !== authority.current?.project.id;
     const finishImage = async () => {
@@ -1876,7 +1886,7 @@ function Workspace() {
     if (!current || !element) return null;
     const rect = element.getBoundingClientRect(), zoom = flow.getZoom();
     const point = flow.screenToFlowPosition({ x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 });
-    return { projectId: current.project.id, ...point, maxWidth: rect.width * 0.6 / zoom, maxHeight: rect.height * 0.6 / zoom };
+    return { projectId: current.project.id, spatial: captureSpatial(current), ...point, maxWidth: rect.width * 0.6 / zoom, maxHeight: rect.height * 0.6 / zoom };
   }, action, () => historyLock.current || !!historyCommand.current);
   const saveStatus = connectorLabel.status || (connectorLabel.recoveryError ? '部分连线文字恢复记录未确认'
     : connectorLabel.recoveries.some(record => record.value.session.projectId === state?.project.id && record.value.purpose !== 'preserved-remote') ? '连线文字草稿待处理'
@@ -2918,7 +2928,7 @@ function Workspace() {
         onPointerDownCapture={(event) => {
           if (frameTool && event.button === 0 && (event.target as Element).classList.contains('react-flow__pane') && state) {
             event.preventDefault(); event.stopPropagation();
-            frameDrag.current = { projectId: state.project.id,
+            frameDrag.current = { projectId: state.project.id, state,
               start: flow.screenToFlowPosition({ x: event.clientX, y: event.clientY }, { snapToGrid: false }) };
             setFramePreview({ ...frameDrag.current.start, width: 0, height: 0 });
             return;
@@ -2936,9 +2946,13 @@ function Workspace() {
           const hit = (event.target as Element).closest<HTMLElement>('.react-flow__node')?.dataset.id;
           if (hit && event.button === 0 && !(event.target as Element).closest('.nodrag, input, textarea, [contenteditable=true]')) {
             const captured = canvasSelection.capture(hit, event.shiftKey);
-            if (captured) canvasMove.arm(hit, captured.state, captured.selection,
+            if (captured) {
+              const member = captured.state.containment?.find(v => v.id === hit)?.parent?.kind === 'group';
+              frameDropSnapshot.current = member && !captured.selection.targets.some(v => v.kind === 'group') ? null : captured.state;
+              canvasMove.arm(hit, captured.state, captured.selection,
               flow.screenToFlowPosition({ x: event.clientX, y: event.clientY }, { snapToGrid: false }),
               { x: event.clientX, y: event.clientY });
+            }
           }
           if (
             event.button === 0 &&
@@ -2988,6 +3002,8 @@ function Workspace() {
               beginCanvasNodeDrag(event, node);
             }}
             onNodeDrag={(event, node) => {
+              const dropPoint = canvasDragPoint(event);
+              if (frameDropSnapshot.current && dropPoint) setFrameDropCandidate(frameCandidate(frameDropSnapshot.current, dropPoint)?.id ?? null);
               if (canvasMove.pointerEnded(node.id)) return;
               const gate = canvasMove.pointerGate(node.id, event);
               if (gate === 'armed') return;
@@ -2998,16 +3014,17 @@ function Workspace() {
               if (!texts.previewMove(node.id, point)) previewMove(point, "altKey" in event && event.altKey);
             }}
             onNodeDragStop={(event, node) => {
+              frameDropSnapshot.current = null; setFrameDropCandidate(null);
               if (canvasMove.pointerEnded(node.id)) return;
               if (canvasMove.pointerArmed(node.id)) { canvasMove.endPointer(); return; }
               const point = canvasMove.point(node.id, node.position, canvasDragPoint(event), 'touches' in event);
               canvasMove.endPointer();
               canvasSelection.finishDrag();
-              if (canvasMove.finish(point)) return;
-              if (node.type === "canvasShape") { shapeMove.finish(node.id, point); return; }
-              if (texts.finishMove(point)) return;
+              if (canvasMove.finish(point, canvasDragPoint(event))) return;
+              if (node.type === "canvasShape") { shapeMove.finish(node.id, point, canvasDragPoint(event)); return; }
+              if (texts.finishMove(point, canvasDragPoint(event))) return;
               previewMove(point, 'altKey' in event && event.altKey);
-              pose.finish(moving.current?.aligned ?? point);
+              pose.finish(moving.current?.aligned ?? point, canvasDragPoint(event));
               moving.current = null;
               setGuides([]);
             }}
@@ -3056,7 +3073,7 @@ function Workspace() {
             <Background gap={24} color="#dce0e7" />
             <Controls showInteractive={false} />
             <ViewportPortal>
-              <CanvasFrames key={`${state.project.id}:${frameEditorEpoch}`} state={state} preview={framePreview} selectedId={selectedFrameId} choose={chooseFrame}
+              <CanvasFrames drawMemberIds={frameDrawMemberIds} dropCandidateId={frameDropCandidate} key={`${state.project.id}:${frameEditorEpoch}`} state={state} preview={framePreview} selectedId={selectedFrameId} choose={chooseFrame}
                 focusId={frameEditorFocus.current?.projectId === state.project.id ? frameEditorFocus.current.id : null}
                 onFocusRestored={id => { if (frameEditorFocus.current?.projectId === state.project.id && frameEditorFocus.current.id === id) frameEditorFocus.current = null; }}
                 blocked={busy || historyBlocked || !!pendingAction.current}
@@ -3311,6 +3328,7 @@ function Workspace() {
         <h2>形状布局已由其他调用者更新</h2>
         <p>本次位置：{shapeMove.conflict.local.x}, {shapeMove.conflict.local.y}</p>
         <p>已保存位置：{shapeMove.conflict.remote.item.pose.x}, {shapeMove.conflict.remote.item.pose.y}</p>
+        {shapeMove.conflict.parentName && <p>本次位置的分区：{shapeMove.conflict.parentName}</p>}
         {shapeMove.conflict.type === "shape.transform" ? <>
           <p>本次尺寸：{shapeMove.conflict.local.width}, {shapeMove.conflict.local.height}</p>
           <p>已保存尺寸：{shapeMove.conflict.remote.item.pose.width}, {shapeMove.conflict.remote.item.pose.height}</p>

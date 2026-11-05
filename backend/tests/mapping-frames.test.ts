@@ -278,7 +278,7 @@ it('Frame 内旧组合被重新组合消耗时不留下悬挂归属，一次 und
   const f = groupFixture(), text = f.text(), shape = f.shape(), card = f.card(), group = f.group([text.item.id, shape.item.id]);
   f.execute({ type: 'frame.create', expected: { frame: null, groups: { [group.id]: group.versionId }, containment: { [group.itemId]: null },
     poses: { [text.item.id]: text.item.versionId, [shape.item.id]: shape.item.versionId } },
-    payload: { id: 'frame', itemIds: [group.itemId], pose: { x: 0, y: 0, width: 800, height: 400 } } });
+    payload: { id: 'frame', itemIds: [group.itemId], parentId: null, pose: { x: 0, y: 0, width: 800, height: 400 } } });
   const before = f.state(), history = f.history();
   f.execute({ type: 'group.create', expected: { groups: { replacement: null, [group.id]: group.versionId },
     containment: { ...f.structure().containment, [group.itemId]: f.state().containment!.find(value => value.id === group.itemId)!.versionId, [card.item.id]: null } }, payload: { id: 'replacement', itemIds: [group.itemId, card.item.id] } });
@@ -326,7 +326,7 @@ it.each(['group.delete', 'group.remove-member', 'text.delete', 'group.create'])(
     : { type, expected: { groups: { replacement: null, [group.id]: current.versionId }, containment: { ...structure.containment, [card.item.id]: null } }, payload: { id: 'replacement', itemIds: [group.itemId, card.item.id] } };
   f.execute({ type: 'frame.create', expected: { frame: null, groups: { [group.id]: current.versionId }, containment: { [group.itemId]: null },
     poses: { [text.item.id]: text.item.versionId, ...(current.memberItemIds.includes(shape.item.id) ? { [shape.item.id]: shape.item.versionId } : {}) } },
-    payload: { id: 'frame', itemIds: [group.itemId], pose: { x: 0, y: 0, width: 800, height: 400 } } });
+    payload: { id: 'frame', itemIds: [group.itemId], parentId: null, pose: { x: 0, y: 0, width: 800, height: 400 } } });
   const before = f.state(), history = f.history();
   expect(() => f.execute(command)).toThrowError(expect.objectContaining({ code: 'VERSION_CONFLICT', status: 409 }));
   expect(f.state()).toEqual(before); expect(f.history()).toEqual(history);

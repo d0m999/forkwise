@@ -2,6 +2,7 @@ import type Database from 'better-sqlite3';
 import type { Card, Change } from './contracts.js';
 import { restoreGroups } from './group.js';
 import { restoreCard } from './card-history.js';
+import { restoreGeometry } from './geometry.js';
 import { restoreText } from './text.js';
 import { restoreShape } from './shape.js';
 import { restoreImage } from './image.js';
@@ -15,7 +16,9 @@ function unique<T extends { before: { id: string } | null; after: { id: string }
 }
 export function restoreGroupAction(db: Database.Database, projectId: string, action: Action, type: 'history.undo' | 'history.redo') {
   const cards: { before: Card | null; after: Card | null }[] = [...(action.cardLifecycleChanges ?? [])];
-  if (action.before && 'body' in action.before || action.after && 'body' in action.after)
+  const cardChanges = restoreGeometry(db, projectId, action.cardChanges ?? [], type);
+  const geometryIds = new Set(cardChanges.map(change => change.after.id));
+  if ((action.before && 'body' in action.before && !geometryIds.has(action.before.id)) || (action.after && 'body' in action.after && !geometryIds.has(action.after.id)))
     cards.push({ before: action.before && 'body' in action.before ? action.before : null, after: action.after && 'body' in action.after ? action.after : null });
   const cardLifecycleChanges = unique(cards).map(change => restoreCard(db, projectId, change, type, action.changedIds));
   const textChanges = unique([...(action.textChanges ?? []), ...(action.textChange ? [action.textChange] : [])]).map(change => restoreText(db, projectId, change, type));
@@ -24,6 +27,6 @@ export function restoreGroupAction(db: Database.Database, projectId: string, act
   const strokeChanges = unique([...(action.strokeChanges ?? []), ...(action.strokeChange ? [action.strokeChange] : [])]).map(change => restoreStroke(db, projectId, change, type));
   const structural = restoreGroups(db, projectId, action.groupChanges ?? [], action.containmentChanges ?? [], type);
   const connectorChanges = unique(action.connectorChanges ?? []).map(change => restoreConnector(db, projectId, change, type));
-  const changes = { before: null, after: null, ...structural, cardLifecycleChanges, textChanges, shapeChanges, imageChanges, strokeChanges, connectorChanges };
+  const changes = { before: null, after: null, ...structural, cardChanges, cardLifecycleChanges, textChanges, shapeChanges, imageChanges, strokeChanges, connectorChanges };
   return { ...changes, ...groupOutcome({ ...changes, changedIds: action.changedIds }) };
 }

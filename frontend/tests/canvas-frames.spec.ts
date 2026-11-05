@@ -187,7 +187,7 @@ test('分区名称 Shift+Enter 换行，IME Enter/Esc 不抢输入，Esc 完成�
   expect(writes.map(command => command.type)).toEqual(['frame.edit']);
 });
 
-test('既有对象移入分区几何范围不自动改变归属', async ({ page, workspace }) => {
+test('既有对象按指针移入分区后更新唯一归属并保存重开', async ({ page, workspace }) => {
   const projectId = (await workspace.state()).project.id;
   await workspace.execute(page, { commandId: crypto.randomUUID(), projectId, type: 'thought.create', expected: null,
     payload: { id: 'drop-card', title: '独立移动卡片', text: '正文保持', x: 900, y: 500 } });
@@ -212,11 +212,11 @@ test('既有对象移入分区几何范围不自动改变归属', async ({ page,
   await expect.poll(async () => (await workspace.state()).cards[0]!.item.pose.x).toBe(300);
   const moved = await workspace.state();
   expect(moved.cards[0]!.item.pose.y).toBe(250);
-  expect(moved.frames![0]!.memberItemIds).toEqual([]);
-  expect(moved.containment!.some(value => value.id === itemId)).toBe(false);
+  expect(moved.frames![0]!.memberItemIds).toEqual([itemId]);
+  expect(moved.containment!.find(value => value.id === itemId)?.parent).toEqual({ kind: 'frame', id: moved.frames![0]!.id });
   await page.reload();
   await expect(page.getByRole('status')).toHaveText('已保存到本机');
-  expect((await workspace.state()).containment!.some(value => value.id === itemId)).toBe(false);
+  expect((await workspace.state()).containment!.find(value => value.id === itemId)?.parent).toEqual({ kind: 'frame', id: moved.frames![0]!.id });
 });
 
 async function frameWithGroup(page: Page, workspace: Workspace) {
@@ -365,7 +365,7 @@ test('删除分区只释放直接成员，保留 Group/内容/成员连线，一
   const copied = await workspace.state(), copy = copied.cards.find(card => card.id !== f.card.id)!;
   expect(copied.frames).toHaveLength(1);
   expect(copied.containment!.find(value => value.id === f.card.item.id)!.parent).toEqual({ kind: 'frame', id: f.frame.id });
-  expect(copied.containment!.some(value => value.id === copy.item.id)).toBe(false);
+  expect(copied.containment!.find(value => value.id === copy.item.id)?.parent).toEqual({ kind: 'frame', id: f.frame.id });
   expect(copied.groups).toEqual(restored.groups);
   expect(copied.connectors).toEqual(restored.connectors);
 });

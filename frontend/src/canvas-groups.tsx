@@ -34,10 +34,13 @@ export function CanvasGroups({ state, selection, positions, geometry, blocked, c
         top: selection.targets.length > 1 && selected.every(value => 'body' in value) ? bottom + 12 : top - 48 }}
       onPointerDown={e => e.stopPropagation()}>
       {selection.targets.length > 1 && <><button disabled={blocked} onClick={create}>组合所选对象</button><span>不含连线</span></>}
-      {selection.targets.every(target => {
-        const itemId = target.kind === 'item' ? target.itemId : state.groups?.find(group => group.id === target.id)?.itemId;
-        return itemId && !state.containment?.some(value => value.id === itemId && value.parent);
-      }) && <button disabled={blocked} onClick={createFrame}>创建分区</button>}
+      {selection.targets.length > 0 && (() => {
+        const parents = selection.targets.map(target => {
+          const id = target.kind === 'item' ? target.itemId : state.groups?.find(g => g.id === target.id)?.itemId;
+          return state.containment?.find(v => v.id === id)?.parent ?? null;
+        });
+        return parents.every(v => v?.kind !== 'group' && (v?.id ?? null) === (parents[0]?.id ?? null));
+      })() && <button disabled={blocked} onClick={createFrame}>创建分区</button>}
       {selection.targets.length > 1 && selection.targets.every(target => target.kind === 'group') && <button disabled={blocked} onClick={ungroupSelected}>取消所选组合</button>}
       {groupId && <button disabled={blocked} onClick={() => enter(groupId)}>进入组合</button>}
       {groupId && <button disabled={blocked} onClick={() => ungroup(groupId)}>取消组合</button>}

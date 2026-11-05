@@ -1,3 +1,4 @@
+import { FramePlacement } from './frame-spatial.js';
 import { FrameCommands, type CanvasFrame, type FrameChange } from './frame-contracts.js';
 import { MembershipExpected } from './containment-contracts.js';
 import { GroupGeometryCommands } from './group-geometry-contracts.js';
@@ -16,7 +17,7 @@ import { bodyText } from './body-text.js';
 import { SearchConditionsSchema, type SearchStateView } from './search-contracts.js';
 const Id = z.string().min(1).max(160);
 const Name = z.string().trim().min(1).max(240);
-const Envelope = { commandId: Id, projectId: Id };
+const Envelope = { commandId: Id, projectId: Id, placement: FramePlacement.optional() };
 export const BodyBlock = z
   .object({ id: Id, type: z.string().min(1), text: z.string().optional(), inlineId: Id.optional() })
   .passthrough();

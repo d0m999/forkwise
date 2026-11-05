@@ -1,3 +1,4 @@
+import { FramePlacement } from './frame-spatial.js';
 import { MembershipExpected } from './containment-contracts.js';
 import { z } from 'zod';
 
@@ -13,15 +14,15 @@ export const ImagePoseSchema = z.object({
 }).strict();
 export const ImageContentSchema = z.object({ assetId: Id, crop: ImageCropSchema }).strict();
 export const ImageCommands = z.discriminatedUnion('type', [
-  z.object({ commandId: Id, projectId: Id, type: z.literal('image.crop'), expected: z.object({ image: Id, pose: Id }).strict(),
+  z.object({ commandId: Id, projectId: Id, placement: FramePlacement.optional(), type: z.literal('image.crop'), expected: z.object({ image: Id, pose: Id }).strict(),
     payload: z.object({ id: Id, crop: ImageCropSchema }).strict() }).strict(),
-  z.object({ commandId: Id, projectId: Id, type: z.literal('image.delete'), expected: z.object({ image: Id, pose: Id, connectors: z.record(Id, Id).optional(), membership: MembershipExpected.optional() }).strict(),
+  z.object({ commandId: Id, projectId: Id, placement: FramePlacement.optional(), type: z.literal('image.delete'), expected: z.object({ image: Id, pose: Id, connectors: z.record(Id, Id).optional(), membership: MembershipExpected.optional() }).strict(),
     payload: z.object({ id: Id }).strict() }).strict(),
-  z.object({ commandId: Id, projectId: Id, type: z.literal('image.rotate'), expected: z.object({ image: Id, pose: Id }).strict(),
+  z.object({ commandId: Id, projectId: Id, placement: FramePlacement.optional(), type: z.literal('image.rotate'), expected: z.object({ image: Id, pose: Id }).strict(),
     payload: z.object({ id: Id, direction: z.enum(['left', 'right']) }).strict() }).strict(),
-  z.object({ commandId: Id, projectId: Id, type: z.literal('image.transform'), expected: z.object({ image: Id, pose: Id }).strict(),
+  z.object({ commandId: Id, projectId: Id, placement: FramePlacement.optional(), type: z.literal('image.transform'), expected: z.object({ image: Id, pose: Id }).strict(),
     payload: z.object({ id: Id, pose: ImagePoseSchema.omit({ rotation: true }) }).strict() }).strict(),
-  z.object({ commandId: Id, projectId: Id, type: z.literal('image.create'), expected: z.null(),
+  z.object({ commandId: Id, projectId: Id, placement: FramePlacement.optional(), type: z.literal('image.create'), expected: z.null(),
     payload: z.object({ id: Id, content: ImageContentSchema, pose: ImagePoseSchema }).strict() }).strict(),
 ]);
 export type ImageCommand = z.infer<typeof ImageCommands>;

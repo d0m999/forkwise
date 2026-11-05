@@ -180,7 +180,7 @@ it('跨项目Group或Frame不是有效端点，legacy普通成功回执重开重
   f.execute({ projectId: 'q', type: 'frame.create', expected: { frame: null, groups: {}, containment: {}, poses: {} }, payload: { id: 'foreign', itemIds: [], pose: { x: 1, y: 2, width: 100, height: 80 } } });
   for (const id of ['qa', 'qb']) f.execute({ projectId: 'q', type: 'shape.create', expected: null, payload: { id, content: { shapeType: 'rectangle', shortText: id }, pose: { x: 10, y: 20, width: 100, height: 60 } } });
   const q = f.mapping.read({ type: 'project', projectId: 'q' }, f.human);
-  f.execute({ projectId: 'q', type: 'group.create', expected: { groups: { 'foreign-group': null }, containment: Object.fromEntries(q.shapes!.map(shape => [shape.item.id, null])) }, payload: { id: 'foreign-group', itemIds: q.shapes!.map(shape => shape.item.id) } });
+  f.execute({ projectId: 'q', type: 'group.create', expected: { groups: { 'foreign-group': null }, containment: Object.fromEntries(q.shapes!.map(shape => [shape.item.id, q.containment!.find(v => v.id === shape.item.id)?.versionId ?? null])) }, payload: { id: 'foreign-group', itemIds: q.shapes!.map(shape => shape.item.id) } });
   const foreignGroup = f.mapping.read({ type: 'project', projectId: 'q' }, f.human).groups![0]!;
   expect(() => f.execute({ type: 'connector.create', expected: null, payload: { id: 'invalid', start: { kind: 'bound', targetKind: 'frame', itemId: 'foreign', side: 'left' }, end: { kind: 'free', point: { x: 0, y: 0 } } } })).toThrowError(expect.objectContaining({ code: 'INVALID_ENDPOINT' }));
   expect(() => f.execute({ type: 'connector.create', expected: null, payload: { id: 'invalid-group', start: { kind: 'bound', targetKind: 'group', itemId: foreignGroup.itemId, side: 'left' }, end: { kind: 'free', point: { x: 0, y: 0 } } } })).toThrowError(expect.objectContaining({ code: 'INVALID_ENDPOINT' }));
@@ -191,7 +191,7 @@ it('跨项目Group或Frame不是有效端点，legacy普通成功回执重开重
 
 it('Frame自身pose版本变化使旧冻结命令原子拒绝，合法重叠冻结不套新建零长度校验', () => {
   const f = groupFixture();
-  for (const id of ['a', 'b']) f.execute({ type: 'frame.create', expected: { frame: null, groups: {}, containment: {}, poses: {} }, payload: { id, itemIds: [], pose: { x: 100, y: 10, width: 100, height: 80 } } });
+  for (const id of ['a', 'b']) f.execute({ type: 'frame.create', expected: { frame: null, groups: {}, containment: {}, poses: {} }, payload: { id, itemIds: [], parentId: null, pose: { x: 100, y: 10, width: 100, height: 80 } } });
   f.execute({ type: 'connector.create', expected: null, payload: { id: 'overlap', start: { kind: 'bound', targetKind: 'frame', itemId: 'a', side: 'right' }, end: { kind: 'bound', targetKind: 'frame', itemId: 'b', side: 'right' } } });
   const initial = f.state(), captured = { type: 'frame.delete', expected: { frame: initial.frames![0]!.versionId, containment: {}, endpoints: captureContainerEndpoints(initial, ['frame:a']) }, payload: { id: 'a' } };
   f.execute({ type: 'frame.move', expected: { frame: initial.frames![0]!.versionId, groups: {}, containment: {}, poses: {} }, payload: { id: 'a', dx: 20, dy: 0 } });

@@ -1,3 +1,4 @@
+import { FramePlacement } from './frame-spatial.js';
 import { MembershipExpected } from './containment-contracts.js';
 import { z } from 'zod';
 const Id = z.string().min(1).max(160);
@@ -30,7 +31,7 @@ export const TextPoseSchema = z
     height: z.number().finite().positive(),
   })
   .strict();
-const envelope = { commandId: Id, projectId: Id, editGroup: Id.optional() };
+const envelope = { commandId: Id, projectId: Id, placement: FramePlacement.optional(), editGroup: Id.optional() };
 export const TextCommands = z.discriminatedUnion('type', [
   z
     .object({

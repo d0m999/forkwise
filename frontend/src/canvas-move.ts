@@ -1,3 +1,4 @@
+import { captureSpatial } from '../../backend/src/mapping/frame-spatial';
 import { useRef, useState } from "react";
 import type { Command, ProjectState } from "./api";
 import { canvasItems, selectedItemIds, type CanvasSelection } from './canvas-selection';
@@ -18,6 +19,7 @@ export function useCanvasMove(
   const gesture = useRef<{
     projectId: string;
     targets: Target[];
+    spatial: ReturnType<typeof captureSpatial>;
     anchor: Target;
     command: Extract<Command, { type: 'canvas.move-selection' }> | null;
   } | null>(null);
@@ -72,7 +74,7 @@ export function useCanvasMove(
           poses: Object.fromEntries(targets.map(t => [t.item.id, t.item.versionId])) },
         payload: { groupIds: selected.targets.flatMap(t => t.kind === 'group' ? [t.id] : []), directItemIds: selected.targets.flatMap(t => t.kind === 'item' ? [t.itemId] : []), dx: 0, dy: 0 } }
       : null;
-    gesture.current = { projectId: snapshot.project.id, targets, anchor, command };
+    gesture.current = { projectId: snapshot.project.id, targets, anchor, command, spatial: captureSpatial(snapshot) };
     setDragging(true);
     return true;
   }
@@ -98,7 +100,7 @@ export function useCanvasMove(
     );
     return true;
   }
-  function finish(point: Point) {
+  function finish(point: Point, pointer?: Point) {
     const current = gesture.current;
     if (!current) return ended.current.size > 0;
     const dx = point.x - current.anchor.item.pose.x, dy = point.y - current.anchor.item.pose.y;
@@ -110,10 +112,11 @@ export function useCanvasMove(
       return true;
     }
     enqueue(
-      async () => current.command ? { ...current.command, payload: { ...current.command.payload, dx, dy } } : ({
+      async () => current.command ? { ...current.command, placement: { expected: current.spatial, ...(pointer ? { point: pointer } : {}) }, payload: { ...current.command.payload, dx, dy } } : ({
         commandId: crypto.randomUUID(),
         projectId: current.projectId,
         type: "canvas.move",
+        placement: { expected: current.spatial, ...(pointer ? { point: pointer } : {}) },
         expected: Object.fromEntries(
           current.targets.map((value) => [value.item.id, value.item.versionId]),
         ),

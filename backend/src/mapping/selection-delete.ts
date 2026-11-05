@@ -58,7 +58,7 @@ export function deleteSelection(db: Database.Database, command: Extract<GroupCom
   for (const id of payload.frameIds ?? []) {
     requireThat(frames.some(frame => frame.id === id), 'VERSION_CONFLICT', '分区目标已变化，请重新读取', 409);
     affectedFrames.add(id);
-    for (const value of containment.filter(value => value.parent?.kind === 'frame' && value.parent.id === id)) membershipIds.add(value.id);
+    for (const value of containment.filter(value => value.id === id || value.parent?.kind === 'frame' && value.parent.id === id)) membershipIds.add(value.id);
   }
   const members = groupItems(db, projectId).filter(value => ids.has(value.value.item.id));
   requireThat(exactIds(expected.groups, affectedGroups) && exactIds(expected.frames ?? {}, affectedFrames) &&
@@ -102,7 +102,7 @@ export function deleteSelection(db: Database.Database, command: Extract<GroupCom
   for (const id of payload.frameIds ?? []) {
     const frame = readFrames(db, projectId).find(frame => frame.id === id)!;
     const released = deleteFrame(db, { ...command, type: 'frame.delete', payload: { id }, expected: { frame: frame.versionId,
-      containment: Object.fromEntries(readContainment(db, projectId).filter(value => value.parent?.kind === 'frame' && value.parent.id === id).map(value => [value.id, value.versionId])) } });
+      containment: Object.fromEntries(readContainment(db, projectId).filter(value => value.id === id || value.parent?.kind === 'frame' && value.parent.id === id).map(value => [value.id, value.versionId])) } });
     frameChanges.push(released.frameChange); containmentChanges.push(...released.containmentChanges);
   }
   const coalesce = <T extends { before: { id: string } | null; after: { id: string } | null }>(values: T[]) => {

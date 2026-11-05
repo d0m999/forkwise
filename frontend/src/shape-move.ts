@@ -1,11 +1,12 @@
+import { captureSpatial, frameCandidate } from '../../backend/src/mapping/frame-spatial';
 import { useRef, useState } from "react";
 import { api, MappingError, type Command, type ProjectState } from "./api";
 import type { CanvasShape } from "../../backend/src/mapping/shape-contracts";
 type Point = { x: number; y: number };
 type Pose = CanvasShape["item"]["pose"];
 type Geometry = Extract<Command, { type: "shape.move" | "shape.transform" }>;
-type Target = { projectId: string; value: CanvasShape; transform: boolean };
-type Conflict = { commandId: string; type: Geometry["type"]; local: Pose; remote: CanvasShape };
+type Target = { projectId: string; value: CanvasShape; transform: boolean; spatial?: ReturnType<typeof captureSpatial> };
+type Conflict = { commandId: string; type: Geometry["type"]; local: Pose; remote: CanvasShape; placement?: Geometry['placement']; parentName?: string };
 type KeyIntent = { projectId: string; id: string; itemId: string; adjust: (pose: Pose) => Pose | null; commandId: string | null };
 
 export function useShapeMove(
@@ -27,7 +28,7 @@ export function useShapeMove(
     if (gesture.current || pending.current || running.current || keyQueue.current.length || keySaving.current) return false;
     const state = authority(), value = state?.shapes?.find(shape => shape.item.id === itemId);
     if (!state || !value) return false;
-    gesture.current = { projectId: state.project.id, value: structuredClone(value), transform };
+    gesture.current = { projectId: state.project.id, value: structuredClone(value), transform, spatial: captureSpatial(state) };
     setDragging(true); setError(""); return true;
   }
   function preview(itemId: string, point: Point) {
@@ -108,7 +109,10 @@ export function useShapeMove(
             if (authority()?.project.id === command.projectId && remote && failure.code === "VERSION_CONFLICT") {
               const local = command.type === "shape.transform" ? command.payload.pose
                 : { ...target.value.item.pose, x: command.payload.x, y: command.payload.y };
-              const value = { commandId: command.commandId, type: command.type, local, remote };
+              const placement = command.placement ? { expected: captureSpatial(latest), ...(command.placement.point ? { point: command.placement.point } : {}) } : undefined;
+              const parent = placement ? frameCandidate(latest, placement.point ?? { x: local.x + local.width / 2, y: local.y + local.height / 2 }) : null;
+              const value: Conflict = { commandId: command.commandId, type: command.type, local, remote,
+                ...(placement ? { placement, parentName: parent?.name ?? '画布顶层' } : {}) };
               conflictRef.current = value; setConflict(value);
             } else setError("形状目标已变化，原位置请求仍保留");
           } catch { setError("无法读取对方位置，原请求及本次位置仍保留，请重试"); }
@@ -126,7 +130,7 @@ export function useShapeMove(
     // Only this explicit choice authorizes a new command from the compared
     // peer Pose version. Unknown outcomes keep retrying the original command.
     const previousId = current.command.commandId;
-    current.command = { ...current.command, commandId: crypto.randomUUID(), expected: selected.remote.item.versionId };
+    current.command = { ...current.command, commandId: crypto.randomUUID(), expected: selected.remote.item.versionId, ...(selected.placement ? { placement: selected.placement } : {}) };
     if (current.command.type === "shape.move") current.target.value = { ...current.target.value,
       item: { ...current.target.value.item, pose: selected.remote.item.pose } };
     if (keyDependency.current === previousId) keyDependency.current = current.command.commandId;
@@ -134,12 +138,13 @@ export function useShapeMove(
     conflictRef.current = null; setConflict(null); setError("");
     void retry();
   }
-  function finish(itemId: string, point: Point) {
+  function finish(itemId: string, point: Point, pointer?: Point) {
     const target = gesture.current;
     if (!target || target.transform || target.value.item.id !== itemId) return;
     gesture.current = null; setDragging(false);
     if (point.x === target.value.item.pose.x && point.y === target.value.item.pose.y) { setPositions({}); return; }
     const command: Geometry = { commandId: crypto.randomUUID(), projectId: target.projectId, type: "shape.move",
+      ...(target.spatial ? { placement: { expected: target.spatial, ...(pointer ? { point: pointer } : {}) } } : {}),
       expected: target.value.item.versionId, payload: { id: target.value.id, x: point.x, y: point.y } };
     pending.current = { target, command }; setPositions({ [itemId]: { ...target.value.item.pose, ...point } }); setWaiting(true);
     void retry();
