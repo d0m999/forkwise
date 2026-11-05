@@ -60,29 +60,29 @@ test('独立Frame选择支持空框键盘复制，菜单Escape与Tab保留，原
   await expect(page.locator('.react-flow__node.selected')).toHaveCount(0);
 });
 
-test('多Frame根同批复制只选新根，多根Delete不写子集，点具体框收窄；undo后选择不复活', async ({ page, workspace }) => {
-  await workspace.execute(page, createFrameCommand(await workspace.state(), [], { x: 150, y: 200, width: 220, height: 250 }));
-  await workspace.execute(page, createFrameCommand(await workspace.state(), [], { x: 650, y: 200, width: 220, height: 250 }));
-  await page.reload(); await expect(page.getByRole('status')).toHaveText('已保存到本机');
-  await page.getByRole('button', { name: '分区1', exact: true }).click();
-  await page.getByRole('button', { name: '分区2', exact: true }).click({ modifiers: ['Shift'] });
-  await expect(page.locator('[data-frame-id][data-selected=true]')).toHaveCount(2);
-  await page.keyboard.press('Meta+d');
-  await expect.poll(async () => (await workspace.state()).frames!.length).toBe(4);
-  const state = await workspace.state(), copies = state.frames!.slice(2), copyIds = copies.map(v => v.id).sort();
-  await expect.poll(async () => page.locator('[data-frame-id][data-selected=true]').evaluateAll(nodes => nodes.map(n => n.getAttribute('data-frame-id')).sort())).toEqual(copyIds);
+test('粘贴多个分区根后一并选中，Delete 仍删除同批卡片，点其中一个分区后只删该框', async ({ page, workspace }) => {
+  const document = { kind: 'forkwise-canvas-snapshot', version: 2, roots: ['root-card', 'root-a', 'root-b'], containment: [],
+    objects: [
+      { kind: 'card', sourceId: 'src-card', itemId: 'root-card', stack: 0, title: '同批卡片', blocks: [{ id: 'p', type: 'text', text: '正文' }], tagIds: null, appearance: null, pose: { x: 80, y: 80, width: 240, height: 140 } },
+      { kind: 'frame', sourceId: 'src-a', itemId: 'root-a', stack: 1, name: '根甲', background: null, pose: { x: 400, y: 80, width: 220, height: 180 } },
+      { kind: 'frame', sourceId: 'src-b', itemId: 'root-b', stack: 2, name: '根乙', background: null, pose: { x: 700, y: 80, width: 220, height: 180 } },
+    ], connectors: [] };
+  await page.locator('.react-flow__pane').evaluate((element, raw) => {
+    const data = new DataTransfer(); data.setData('web application/x-forkwise-canvas', raw);
+    element.dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }));
+  }, JSON.stringify(document));
+  await expect.poll(async () => (await workspace.state()).frames!.length).toBe(2);
+  await expect.poll(async () => (await workspace.state()).cards.length).toBe(1);
+  const pasted = await workspace.state(), frameIds = pasted.frames!.map(frame => frame.id).sort();
+  await expect.poll(async () => page.locator('[data-frame-id][data-selected=true]').evaluateAll(nodes => nodes.map(node => node.getAttribute('data-frame-id')).sort())).toEqual(frameIds);
+  await expect(page.locator('.react-flow__node.selected')).toHaveCount(1);
   await page.locator('.canvas').press('Delete');
-  expect(await workspace.state()).toEqual(state);
-  await page.locator(`[data-frame-id="${copies[0]!.id}"]`).getByRole('button', { name: '分区1', exact: true }).click();
+  await expect.poll(async () => (await workspace.state()).cards.length).toBe(0);
+  expect((await workspace.state()).frames!.map(frame => frame.id).sort()).toEqual(frameIds);
+  const kept = pasted.frames![0]!;
+  await page.locator(`[data-frame-id="${kept.id}"]`).getByRole('button', { name: kept.name, exact: true }).click();
   await expect(page.locator('[data-frame-id][data-selected=true]')).toHaveCount(1);
-  await page.keyboard.press('Meta+d');
-  await expect.poll(async () => (await workspace.state()).frames!.length).toBe(5);
-  const fifth = (await workspace.state()).frames![4]!;
-  await expect.poll(async () => page.locator('[data-frame-id][data-selected=true]').getAttribute('data-frame-id')).toBe(fifth.id);
-  await page.getByRole('button', { name: '撤销', exact: true }).click();
-  await expect.poll(async () => (await workspace.state()).frames!.length).toBe(4);
-  await expect(page.locator('[data-frame-id][data-selected=true]')).toHaveCount(0);
-  await page.getByRole('button', { name: '重做', exact: true }).click();
-  await expect.poll(async () => (await workspace.state()).frames!.length).toBe(5);
-  await expect(page.locator('[data-frame-id][data-selected=true]')).toHaveCount(0);
+  await page.locator('.canvas').press('Delete');
+  await expect.poll(async () => (await workspace.state()).frames!.length).toBe(1);
+  expect((await workspace.state()).frames![0]!.id).not.toBe(kept.id);
 });

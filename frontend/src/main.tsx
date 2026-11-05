@@ -1078,12 +1078,13 @@ function Workspace() {
     connectorEdit.cancel({ restoreFocus: false });
     if (!keepSelected) setSelectedConnector(null);
   }
-  function chooseFrame(id: string | null, extend = false) {
+  function chooseFrame(id: string | null) {
     if (id === null) { setFrameSelection(null); return; }
     const projectId = authority.current?.project.id;
     if (!projectId || selectedFrameId === id) return;
-    if (!extend) { canvasSelection.set({ targets: [], enteredGroupId: null }); clearConnectorSelection(); }
-    setFrameSelection({ projectId, ids: extend ? [...new Set([...selectedFrameIds, id])] : [id], generation: canvasSelection.generation() });
+    canvasSelection.set({ targets: [], enteredGroupId: null });
+    clearConnectorSelection();
+    setFrameSelection({ projectId, ids: [id], generation: canvasSelection.generation() });
   }
   async function reverseConnectors() {
     const current = authority.current;
@@ -2284,7 +2285,6 @@ function Workspace() {
         texts.nodes.some(node => node.data.editing) || imageGeometry.cropping ||
         !(event.target instanceof Element) || !event.target.closest('.canvas') ||
         event.target.closest('input, textarea, [contenteditable=true], dialog, [role=dialog], [role=menu]')) return;
-      if (selectedFrameIds.length && !selectedFrameId) { event.preventDefault(); event.stopPropagation(); return; }
       const snapshot = authority.current, frame = snapshot?.frames?.find(value => value.id === selectedFrameId);
       if (snapshot && frame) {
         event.preventDefault(); event.stopPropagation();
