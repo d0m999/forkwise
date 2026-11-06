@@ -2284,8 +2284,11 @@ function Workspace() {
         texts.nodes.some(node => node.data.editing) || imageGeometry.cropping ||
         !(event.target instanceof Element) || !event.target.closest('.canvas') ||
         event.target.closest('input, textarea, [contenteditable=true], dialog, [role=dialog], [role=menu]')) return;
-      if (selectedFrameIds.length && !selectedFrameId) { event.preventDefault(); event.stopPropagation(); return; }
-      const snapshot = authority.current, frame = snapshot?.frames?.find(value => value.id === selectedFrameId);
+      // One selected frame owns Delete even alongside a connector or canvas item. With several
+      // frames there is no batch-delete owner: fall through so a selected connector or a pasted
+      // card stays deletable instead of the whole key being swallowed.
+      const snapshot = authority.current;
+      const frame = selectedFrameIds.length === 1 ? snapshot?.frames?.find(value => value.id === selectedFrameIds[0]) : undefined;
       if (snapshot && frame) {
         event.preventDefault(); event.stopPropagation();
         void action(deleteFrameCommand(snapshot, frame), () => setFrameSelection(null));

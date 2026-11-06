@@ -86,3 +86,24 @@ test('多Frame根同批复制只选新根，多根Delete不写子集，点具体
   await expect.poll(async () => (await workspace.state()).frames!.length).toBe(5);
   await expect(page.locator('[data-frame-id][data-selected=true]')).toHaveCount(0);
 });
+
+test('粘贴卡片与多个分区根后Delete仍删除同批卡片，分区副本不受影响', async ({ page, workspace }) => {
+  const document = { kind: 'forkwise-canvas-snapshot', version: 2, roots: ['root-card', 'root-a', 'root-b'], containment: [],
+    objects: [
+      { kind: 'card', sourceId: 'src-card', itemId: 'root-card', stack: 0, title: '同批卡片', blocks: [{ id: 'p', type: 'text', text: '正文' }], tagIds: null, appearance: null, pose: { x: 80, y: 80, width: 240, height: 140 } },
+      { kind: 'frame', sourceId: 'src-a', itemId: 'root-a', stack: 1, name: '根甲', background: null, pose: { x: 400, y: 80, width: 220, height: 180 } },
+      { kind: 'frame', sourceId: 'src-b', itemId: 'root-b', stack: 2, name: '根乙', background: null, pose: { x: 700, y: 80, width: 220, height: 180 } },
+    ], connectors: [] };
+  await page.locator('.react-flow__pane').evaluate((element, raw) => {
+    const data = new DataTransfer(); data.setData('web application/x-forkwise-canvas', raw);
+    element.dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }));
+  }, JSON.stringify(document));
+  await expect.poll(async () => (await workspace.state()).frames!.length).toBe(2);
+  await expect.poll(async () => (await workspace.state()).cards.length).toBe(1);
+  await expect(page.getByRole('status')).toHaveText('已保存到本机');
+  await expect(page.locator('.react-flow__node.selected')).toHaveCount(1);
+  const frameIds = (await workspace.state()).frames!.map(frame => frame.id).sort();
+  await page.locator('.canvas').press('Delete');
+  await expect.poll(async () => (await workspace.state()).cards.length).toBe(0);
+  expect((await workspace.state()).frames!.map(frame => frame.id).sort()).toEqual(frameIds);
+});

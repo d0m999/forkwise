@@ -1,5 +1,6 @@
 import { test, expect, type Workspace } from './writing-board-fixture';
 import type { Page } from '@playwright/test';
+import { createFrameCommand } from '../src/canvas-frame-commands';
 
 test('创作工具拖出空分区，默认名称、透明细边和无卡片控件', async ({ page, workspace }) => {
   await page.getByRole('button', { name: '分区', exact: true }).click();
@@ -586,6 +587,27 @@ test('创建分区回选择工具并选中新框，Frame 选择与普通选区�
   const restored = await workspace.state();
   expect([...restored.frames![0]!.memberItemIds].sort()).toEqual([...f.frame.memberItemIds].sort());
   await name.dblclick(); await expect(editor).toBeFocused();
+});
+
+
+test('分区与连线同时选中时 Delete 先删分区并保留连线，再按一次才删连线', async ({ page, workspace }) => {
+  const projectId = (await workspace.state()).project.id;
+  await workspace.execute(page, createFrameCommand(await workspace.state(), [], { x: 120, y: 160, width: 240, height: 200 }));
+  await workspace.execute(page, { commandId: crypto.randomUUID(), projectId, type: 'connector.create', expected: null,
+    payload: { id: 'free-line', start: { kind: 'free', point: { x: 520, y: 160 } }, end: { kind: 'free', point: { x: 720, y: 160 } } } });
+  await page.reload(); await expect(page.getByRole('status')).toHaveText('已保存到本机');
+  const line = page.locator('[data-connector-id="free-line"]');
+  await line.click(); await expect(line).toHaveAttribute('aria-pressed', 'true');
+  await page.getByRole('button', { name: '分区1', exact: true }).click({ modifiers: ['Shift'] });
+  await expect(page.locator('[data-frame-id][data-selected=true]')).toHaveCount(1);
+  await expect(line).toHaveAttribute('aria-pressed', 'true');
+  await page.locator('.canvas').press('Delete');
+  await expect.poll(async () => (await workspace.state()).frames!.length).toBe(0);
+  expect((await workspace.state()).connectors!.map(value => value.id)).toEqual(['free-line']);
+  await expect(page.getByRole('status')).toHaveText('已保存到本机');
+  await expect(line).toHaveAttribute('aria-pressed', 'true');
+  await page.locator('.canvas').press('Delete');
+  await expect.poll(async () => (await workspace.state()).connectors!.length).toBe(0);
 });
 
 
