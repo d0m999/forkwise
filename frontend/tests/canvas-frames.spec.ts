@@ -590,7 +590,7 @@ test('创建分区回选择工具并选中新框，Frame 选择与普通选区�
 });
 
 
-test('分区与连线同时选中时 Delete 先删分区并保留连线，再按一次才删连线', async ({ page, workspace }) => {
+test('分区与连线同时选中时 Delete 先删连线并保留分区，再按一次才删分区', async ({ page, workspace }) => {
   const projectId = (await workspace.state()).project.id;
   await workspace.execute(page, createFrameCommand(await workspace.state(), [], { x: 120, y: 160, width: 240, height: 200 }));
   await workspace.execute(page, { commandId: crypto.randomUUID(), projectId, type: 'connector.create', expected: null,
@@ -601,13 +601,33 @@ test('分区与连线同时选中时 Delete 先删分区并保留连线，再按
   await page.getByRole('button', { name: '分区1', exact: true }).click({ modifiers: ['Shift'] });
   await expect(page.locator('[data-frame-id][data-selected=true]')).toHaveCount(1);
   await expect(line).toHaveAttribute('aria-pressed', 'true');
-  await page.locator('.canvas').press('Delete');
-  await expect.poll(async () => (await workspace.state()).frames!.length).toBe(0);
-  expect((await workspace.state()).connectors!.map(value => value.id)).toEqual(['free-line']);
-  await expect(page.getByRole('status')).toHaveText('已保存到本机');
-  await expect(line).toHaveAttribute('aria-pressed', 'true');
+  const frameId = (await workspace.state()).frames![0]!.id;
   await page.locator('.canvas').press('Delete');
   await expect.poll(async () => (await workspace.state()).connectors!.length).toBe(0);
+  expect((await workspace.state()).frames!.map(frame => frame.id)).toEqual([frameId]);
+  await expect(page.getByRole('status')).toHaveText('已保存到本机');
+  await expect(page.locator('[data-frame-id][data-selected=true]')).toHaveAttribute('data-frame-id', frameId);
+  await page.locator('.canvas').press('Delete');
+  await expect.poll(async () => (await workspace.state()).frames!.length).toBe(0);
+});
+
+test('恰好一个分区与一张卡片同选时 Delete 只删卡片', async ({ page, workspace }) => {
+  const projectId = (await workspace.state()).project.id;
+  await workspace.execute(page, createFrameCommand(await workspace.state(), [], { x: 120, y: 160, width: 240, height: 200 }));
+  await workspace.execute(page, { commandId: crypto.randomUUID(), projectId, type: 'thought.create', expected: null,
+    payload: { id: 'mixed-card', title: '同选卡片', text: '正文保持', x: 700, y: 400 } });
+  await page.reload(); await expect(page.getByRole('status')).toHaveText('已保存到本机');
+  const card = page.getByRole('button', { name: '同选卡片', exact: true });
+  await card.click();
+  await expect(page.locator('.react-flow__node.selected')).toHaveCount(1);
+  await page.getByRole('button', { name: '分区1', exact: true }).click({ modifiers: ['Shift'] });
+  await expect(page.locator('[data-frame-id][data-selected=true]')).toHaveCount(1);
+  await expect(page.locator('.react-flow__node.selected')).toHaveCount(1);
+  const frameId = (await workspace.state()).frames![0]!.id;
+  await page.locator('.canvas').press('Delete');
+  await expect.poll(async () => (await workspace.state()).cards.length).toBe(0);
+  expect((await workspace.state()).frames!.map(frame => frame.id)).toEqual([frameId]);
+  await expect(page.getByRole('status')).toHaveText('已保存到本机');
 });
 
 
