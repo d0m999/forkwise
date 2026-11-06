@@ -17,14 +17,13 @@ async function prefixFrame(page: Page, workspace: Workspace) {
   return { state: await workspace.state(), frameId, shape };
 }
 
-test('Shift 点分区会清掉已选连线，复制后只选新分区根、不选新内部线', async ({ page, workspace }) => {
+test('显式内部线再Shift选Frame复制，只选新根不选新内部线', async ({ page, workspace }) => {
   const { frameId } = await prefixFrame(page, workspace);
   const original = page.locator('[data-connector-id="internal"]');
   await original.click(); await expect(original).toHaveAttribute('aria-pressed', 'true');
   await page.getByRole('button', { name: '分区1', exact: true }).click({ modifiers: ['Shift'] });
   await expect(page.locator(`[data-frame-id="${frameId}"]`)).toHaveAttribute('data-selected', 'true');
-  await expect(page.locator('[data-frame-id][data-selected=true]')).toHaveCount(1);
-  await expect(original).toHaveAttribute('aria-pressed', 'false');
+  await expect(original).toHaveAttribute('aria-pressed', 'true');
   await page.keyboard.press('Meta+d');
   await expect.poll(async () => (await workspace.state()).frames!.length).toBe(2);
   const copied = await workspace.state(), frame = copied.frames!.find(v => v.id !== frameId)!, line = copied.connectors!.find(v => v.id !== 'internal')!;
