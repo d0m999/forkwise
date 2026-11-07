@@ -162,6 +162,7 @@ function adoptLibrary(db: Database.Database, projectId: string, payload: Paste['
     }
     const entry = library.tags.find(tag => tag.id === id);
     if (!entry) continue;
+    // 标签名在项目内大小写不敏感唯一；同一份 payload 里同名的后续条目复用刚创建的标签，不再造一个同名标签。
     const same = liveTags.find(tag => !tag.deleted && tag.name.toLowerCase() === entry.name.toLowerCase());
     if (same) {
       tagMap.set(id, same.id);

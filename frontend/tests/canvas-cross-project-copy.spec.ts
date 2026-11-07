@@ -1,6 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { openMapping } from '../../backend/src/mapping/storage';
 import { expect, test } from './writing-board-fixture';
 
@@ -46,8 +47,10 @@ test('真实键盘经系统剪贴板跨项目粘贴，保存重开后目标撤�
   await expect.poll(() => new URL(page.url()).searchParams.get('project')).toBe(sourceId);
   await page.reload();
   await expect(page.getByRole('status')).toHaveText('已保存到本机');
-  const evidence = join(process.cwd(), '../backend/artifacts/issue34-20261107');
-  mkdirSync(evidence, { recursive: true });
+  const repo = fileURLToPath(new URL('../..', import.meta.url));
+  const artifacts = join(repo, 'backend/artifacts/issue34-20261107');
+  const evidence = join(repo, 'docs/plans/evidence/issue-34-cross-project-copy-2026-11-07.json');
+  mkdirSync(artifacts, { recursive: true });
   await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
   await page.getByRole('button', { name: '市场观察', exact: true }).click();
   const readPageClipboard = () => page.evaluate(async () => {
@@ -60,39 +63,54 @@ test('真实键盘经系统剪贴板跨项目粘贴，保存重开后目标撤�
   await page.keyboard.press('Meta+c');
   await expect.poll(async () => (await readPageClipboard()).raw).toContain('"library"');
   const clipboard = await readPageClipboard();
-  writeFileSync(join(evidence, 'browser-clipboard.json'), clipboard.raw);
-  expect(clipboard.raw).toContain('"library"');
+  writeFileSync(join(artifacts, 'browser-clipboard.json'), clipboard.raw);
   expect(clipboard.text).toContain('市场观察');
+  // headless Chromium 的页面剪贴板与系统剪贴板分离，系统侧读取只在 headed 运行里成立。
   if (test.info().project.use.headless === false) {
-    const swift = join(evidence, 'read-pasteboard.swift');
-    const reader = join(evidence, 'read-pasteboard');
+    const swift = join(artifacts, 'read-pasteboard.swift');
+    const reader = join(artifacts, 'read-pasteboard');
     writeFileSync(swift, `import Cocoa
 let pasteboard = NSPasteboard.general
 print("changeCount \\(pasteboard.changeCount)")
 for item in pasteboard.pasteboardItems ?? [] {
-  for type in item.types {
+  for type in item.types where type.rawValue == "public.utf8-plain-text" || type.rawValue.hasPrefix("org.w3.web-custom-format.") {
     let data = item.data(forType: type)
     print("TYPE \\(type.rawValue) BYTES \\(data?.count ?? 0)")
-    if let data, let text = String(data: data, encoding: .utf8), text.contains("forkwise-canvas-snapshot") || type.rawValue.contains("map") {
+    if let data, let text = String(data: data, encoding: .utf8) {
       print(text)
     }
   }
 }
 `);
     execFileSync('swiftc', ['-o', reader, swift]);
-    let pasteboard = '';
-    let plain = '';
-    for (let attempt = 0; attempt < 5; attempt++) {
-      if (attempt) await page.keyboard.press('Meta+c');
-      pasteboard = execFileSync(reader, { encoding: 'utf8' });
-      plain = execFileSync('pbpaste', { encoding: 'utf8' });
-      if (plain.includes('市场观察') && pasteboard.includes(clipboard.raw) && pasteboard.includes('application/x-forkwise-canvas')) break;
-    }
-    writeFileSync(join(evidence, 'nspasteboard.txt'), pasteboard);
-    writeFileSync(join(evidence, 'pbpaste.txt'), plain);
-    expect(plain).toContain('市场观察');
-    expect(pasteboard).toContain(clipboard.raw);
-    expect(pasteboard).toContain('application/x-forkwise-canvas');
+    const readSystemPasteboard = () => ({
+      pasteboard: execFileSync(reader, { encoding: 'utf8' }),
+      plain: execFileSync('pbpaste', { encoding: 'utf8' }),
+    });
+    await expect.poll(async () => {
+      const system = readSystemPasteboard();
+      if (system.plain.includes('市场观察') && system.pasteboard.includes(clipboard.raw) && system.pasteboard.includes('application/x-forkwise-canvas')) return true;
+      await page.keyboard.press('Meta+c');
+      return false;
+    }, { timeout: 30000, intervals: [1000] }).toBe(true);
+    const system = readSystemPasteboard();
+    writeFileSync(join(artifacts, 'nspasteboard.txt'), system.pasteboard);
+    writeFileSync(join(artifacts, 'pbpaste.txt'), system.plain);
+    expect(system.plain).toContain('市场观察');
+    expect(system.pasteboard).toContain(clipboard.raw);
+    expect(system.pasteboard).toContain('application/x-forkwise-canvas');
+    mkdirSync(dirname(evidence), { recursive: true });
+    writeFileSync(evidence, JSON.stringify({
+      issue: 34, ac: 'AC5', run: 'headed', at: new Date().toISOString(),
+      systemTypes: [...new Set([...system.pasteboard.matchAll(/TYPE (\S+)/g)].map(match => match[1]))],
+      pbpaste: system.plain,
+      pageClipboard: clipboard.raw,
+    }, null, 2));
+  } else {
+    test.info().annotations.push({
+      type: 'system-clipboard',
+      description: 'headless 运行不读系统剪贴板；FORKWISE_SYSTEM_CLIPBOARD=1 跑 headed 项目补齐 AC5',
+    });
   }
 
   const host = openMapping(workspace.directory);

@@ -6,16 +6,8 @@ import type Database from 'better-sqlite3';
 import { createHash } from 'node:crypto';
 import { requireThat } from '../domain/errors.js';
 import { rasterImage } from '../services/raster-image.js';
-import type { Command } from './contracts.js';
-export interface MediaAsset {
-  id: string;
-  name: string;
-  mime: string;
-  base64: string;
-  width: number;
-  height: number;
-  hash: string;
-}
+import type { AssetChange, Command, MediaAsset } from './contracts.js';
+export type { MediaAsset };
 export function initializeMedia(db: Database.Database) {
   db.exec(
     'CREATE TABLE IF NOT EXISTS mapping_assets(project_id TEXT NOT NULL REFERENCES mapping_projects(id), id TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY(project_id,id))',
@@ -85,12 +77,22 @@ export function saveAsset(
     '不可变资源身份已使用',
     409,
   );
-  if (!existing)
-    db.prepare('INSERT INTO mapping_assets VALUES(?,?,?)').run(
-      command.projectId,
-      p.id,
-      JSON.stringify(value),
-    );
+  if (!existing) writeAssetRow(db, command.projectId, p.id, value);
+}
+
+function writeAssetRow(db: Database.Database, projectId: string, id: string, value: MediaAsset) {
+  db.prepare('INSERT INTO mapping_assets VALUES(?,?,?)').run(projectId, id, JSON.stringify(value));
+}
+
+export function restoreAsset(
+  db: Database.Database,
+  projectId: string,
+  change: AssetChange,
+  direction: 'history.undo' | 'history.redo',
+) {
+  if (direction === 'history.undo')
+    db.prepare('DELETE FROM mapping_assets WHERE project_id=? AND id=?').run(projectId, change.after.id);
+  else writeAssetRow(db, projectId, change.after.id, change.after);
 }
 
 function completePng(bytes: Buffer): boolean {

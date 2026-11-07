@@ -16,6 +16,7 @@ import { requireThat } from '../domain/errors.js';
 import { restoreGeometry } from './geometry.js';
 import { bodyContentUnchanged } from './body.js';
 import { restoreTag, restoreTagCards } from './tags.js';
+import { restoreAsset } from './media.js';
 
 interface StoredAction extends HistoryAction {
   frameChanges?: Change['frameChanges'];
@@ -261,12 +262,10 @@ export function recordAction(
   stack.redo = [];
   save(db, command.projectId, stack);
 }
+// redo 先补回标签与媒体再恢复对象，undo 顺序相反：撤销时对象须先离开，卡片才不会引用已删除的标签与资源。
 function restorePasteLibrary(db: Database.Database, projectId: string, action: StoredAction, type: 'history.undo' | 'history.redo') {
   for (const change of action.tagChanges ?? []) restoreTag(db, projectId, change, type);
-  for (const change of action.assetChanges ?? []) {
-    if (type === 'history.undo') db.prepare('DELETE FROM mapping_assets WHERE project_id=? AND id=?').run(projectId, change.after.id);
-    else db.prepare('INSERT INTO mapping_assets VALUES(?,?,?)').run(projectId, change.after.id, JSON.stringify(change.after));
-  }
+  for (const change of action.assetChanges ?? []) restoreAsset(db, projectId, change, type);
 }
 type HistoryTravel = Pick<Change, 'before' | 'after' | 'changedIds'> & {
   [K in 'frameChanges' | 'cardLifecycleChanges' | 'groupChanges' | 'containmentChanges' | 'connectorChanges' | 'cardChanges' | 'tagChange' | 'textChange' | 'textChanges' | 'shapeChange' | 'shapeChanges' | 'strokeChange' | 'strokeChanges' | 'imageChange' | 'imageChanges']?: Change[K] | undefined;

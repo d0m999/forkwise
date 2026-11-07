@@ -274,6 +274,17 @@ export interface Receipt {
   versions?: { thought: string; body: string; pose: string; appearance?: string };
 }
 export type { VersionQuery, CardIdentity, IdentityQuery, AssetQuery, ReadQuery } from './read-contracts.js';
+export type TagChange = { before: Tag | null; after: Tag };
+export interface MediaAsset {
+  id: string;
+  name: string;
+  mime: string;
+  base64: string;
+  width: number;
+  height: number;
+  hash: string;
+}
+export type AssetChange = { before: { id: string } | null; after: MediaAsset };
 export interface Change extends Receipt {
   frameChanges?: FrameChange[];
   cardLifecycleChanges?: { before: Card | null; after: Card | null }[];
@@ -288,9 +299,9 @@ export interface Change extends Receipt {
   shapeChanges?: ShapeChange[];
   textChanges?: TextChange[];
   textChange?: TextChange;
-  tagChange?: { before: Tag | null; after: Tag };
-  tagChanges?: { before: Tag | null; after: Tag }[];
-  assetChanges?: { before: { id: string } | null; after: { id: string; name: string; mime: string; base64: string; width: number; height: number; hash: string } }[];
+  tagChange?: TagChange;
+  tagChanges?: TagChange[];
+  assetChanges?: AssetChange[];
   cardChanges?: { before: Card; after: Card }[];
   before: Project | Card | null;
   after: Project | Card | null;

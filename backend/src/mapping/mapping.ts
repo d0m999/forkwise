@@ -24,7 +24,7 @@ import type { StrokeVersion } from './stroke-contracts.js';
 import { readTexts, writeText } from './text.js';
 import { reconcileMediaTasks, completeMediaTask } from './media-tasks.js';
 import { completeMediaHistory } from './history.js';
-import { readAsset, saveAsset, validateImageAssets, type MediaAsset } from './media.js';
+import { readAsset, saveAsset, validateImageAssets } from './media.js';
 import { DEFAULT_APPEARANCE, DEFAULT_PREVIEW_HEIGHT } from './presentation-values.js';
 import type Database from 'better-sqlite3';
 import { CompactMaps, type CompactOptions } from './compact.js';
@@ -66,6 +66,7 @@ import {
   type VersionQuery,
   type Receipt,
   type Tag,
+  type MediaAsset,
 } from './contracts.js';
 
 export interface CommitOptions {

@@ -13,16 +13,25 @@ afterEach(closeGroupFixtures);
 const YELLOW = '#f8dfc4';
 const BLUE = '#d9e7f1';
 
+type Fixture = ReturnType<typeof groupFixture>;
+function seedTag(f: Fixture, id: string, name: string, color?: string) {
+  f.execute({ type: 'tag.create', expected: null, payload: { id, name } });
+  if (color) f.execute({ type: 'tag.update', expected: f.state().tags!.find(tag => tag.id === id)!.versionId, payload: { id, color } });
+}
+function seedTargetTag(f: Fixture, projectId: string, id: string, name: string, color?: string) {
+  f.mapping.execute({ commandId: `tag-${projectId}-${id}`, projectId, type: 'tag.create', expected: null, payload: { id, name } }, f.human);
+  if (color) f.mapping.execute({
+    commandId: `tag-color-${projectId}-${id}`, projectId, type: 'tag.update',
+    expected: f.mapping.read({ type: 'project', projectId }, f.human).tags!.find(tag => tag.id === id)!.versionId, payload: { id, color },
+  }, f.human);
+}
+
 it('跨项目粘贴使用目标标签和新建媒体，不绑定源项目对象，源项目保持原样', () => {
   const f = groupFixture();
   f.mapping.execute({ commandId: 'project-q', projectId: 'q', type: 'project.create', expected: null, payload: { name: '目标' } }, f.human);
-  f.execute({ type: 'tag.create', expected: null, payload: { id: 'src-ai', name: 'AI' } });
-  f.execute({ type: 'tag.update', expected: f.state().tags!.find(tag => tag.id === 'src-ai')!.versionId, payload: { id: 'src-ai', color: YELLOW } });
-  f.execute({ type: 'tag.create', expected: null, payload: { id: 'src-defi', name: 'DeFi' } });
-  f.execute({ type: 'tag.update', expected: f.state().tags!.find(tag => tag.id === 'src-defi')!.versionId, payload: { id: 'src-defi', color: YELLOW } });
-  f.mapping.execute({ commandId: 'tag-q', projectId: 'q', type: 'tag.create', expected: null, payload: { id: 'dst-ai', name: 'ai' } }, f.human);
-  const targetAi = f.mapping.read({ type: 'project', projectId: 'q' }, f.human).tags!.find(tag => tag.id === 'dst-ai')!;
-  f.mapping.execute({ commandId: 'tag-q-color', projectId: 'q', type: 'tag.update', expected: targetAi.versionId, payload: { id: 'dst-ai', color: BLUE } }, f.human);
+  seedTag(f, 'src-ai', 'AI', YELLOW);
+  seedTag(f, 'src-defi', 'DeFi', YELLOW);
+  seedTargetTag(f, 'q', 'dst-ai', 'ai', BLUE);
   f.execute({ type: 'thought.create', expected: null, payload: { id: 'source-card', title: '市场观察', text: '需求增长', x: 10, y: 20 } });
   f.execute({ type: 'card.tags', expected: null, payload: { id: 'source-card', tagIds: ['src-defi', 'src-ai'] } });
   const base64 = createCanvas(2, 3).toBuffer('image/png').toString('base64');
@@ -78,13 +87,9 @@ it('跨项目粘贴使用目标标签和新建媒体，不绑定源项目对象�
 it('目标项目撤销粘贴只撤回新建标签和媒体，重做后重开仍恢复，复用标签不变', () => {
   const f = groupFixture();
   f.mapping.execute({ commandId: 'project-q', projectId: 'q', type: 'project.create', expected: null, payload: { name: '目标' } }, f.human);
-  f.execute({ type: 'tag.create', expected: null, payload: { id: 'src-ai', name: 'AI' } });
-  f.execute({ type: 'tag.update', expected: f.state().tags!.find(tag => tag.id === 'src-ai')!.versionId, payload: { id: 'src-ai', color: YELLOW } });
-  f.execute({ type: 'tag.create', expected: null, payload: { id: 'src-defi', name: 'DeFi' } });
-  f.execute({ type: 'tag.update', expected: f.state().tags!.find(tag => tag.id === 'src-defi')!.versionId, payload: { id: 'src-defi', color: YELLOW } });
-  f.mapping.execute({ commandId: 'tag-q', projectId: 'q', type: 'tag.create', expected: null, payload: { id: 'dst-ai', name: 'ai' } }, f.human);
-  const targetAi = f.mapping.read({ type: 'project', projectId: 'q' }, f.human).tags!.find(tag => tag.id === 'dst-ai')!;
-  f.mapping.execute({ commandId: 'tag-q-color', projectId: 'q', type: 'tag.update', expected: targetAi.versionId, payload: { id: 'dst-ai', color: BLUE } }, f.human);
+  seedTag(f, 'src-ai', 'AI', YELLOW);
+  seedTag(f, 'src-defi', 'DeFi', YELLOW);
+  seedTargetTag(f, 'q', 'dst-ai', 'ai', BLUE);
   f.execute({ type: 'thought.create', expected: null, payload: { id: 'source-card', title: '市场观察', text: '需求增长', x: 10, y: 20 } });
   f.execute({ type: 'card.tags', expected: null, payload: { id: 'source-card', tagIds: ['src-defi', 'src-ai'] } });
   const base64 = createCanvas(2, 3).toBuffer('image/png').toString('base64');
@@ -142,7 +147,7 @@ it('目标项目撤销粘贴只撤回新建标签和媒体，重做后重开仍�
 it('目标媒体无效时不留下标签、卡片或资源，源项目不变', () => {
   const f = groupFixture();
   f.mapping.execute({ commandId: 'project-q', projectId: 'q', type: 'project.create', expected: null, payload: { name: '目标' } }, f.human);
-  f.execute({ type: 'tag.create', expected: null, payload: { id: 'src-defi', name: 'DeFi' } });
+  seedTag(f, 'src-defi', 'DeFi');
   f.execute({ type: 'thought.create', expected: null, payload: { id: 'source-card', title: '市场观察', text: '需求增长', x: 10, y: 20 } });
   const frozen = f.state();
   const targetBefore = f.mapping.read({ type: 'project', projectId: 'q' }, f.human);
@@ -169,8 +174,7 @@ it('目标媒体无效时不留下标签、卡片或资源，源项目不变', (
 
 it('同一项目粘贴附带材料时仍复用已有标签和媒体，不改写原标签', () => {
   const f = groupFixture();
-  f.execute({ type: 'tag.create', expected: null, payload: { id: 'src-ai', name: 'AI' } });
-  f.execute({ type: 'tag.update', expected: f.state().tags!.find(tag => tag.id === 'src-ai')!.versionId, payload: { id: 'src-ai', color: YELLOW } });
+  seedTag(f, 'src-ai', 'AI', YELLOW);
   const base64 = createCanvas(2, 3).toBuffer('image/png').toString('base64');
   f.execute({ type: 'asset.save', expected: null, payload: { id: 'src-asset', name: '图.png', mime: 'image/png', base64 } });
   f.execute({ type: 'thought.create', expected: null, payload: { id: 'source-card', title: '市场观察', text: '需求增长', x: 10, y: 20 } });
@@ -203,13 +207,10 @@ it('同一项目粘贴附带材料时仍复用已有标签和媒体，不改写�
 it('目标同名标签已删除时新建标签，不恢复被删除的标签', () => {
   const f = groupFixture();
   f.mapping.execute({ commandId: 'project-q', projectId: 'q', type: 'project.create', expected: null, payload: { name: '目标' } }, f.human);
-  f.mapping.execute({ commandId: 'tag-q', projectId: 'q', type: 'tag.create', expected: null, payload: { id: 'dst-ai', name: 'ai' } }, f.human);
-  const created = f.mapping.read({ type: 'project', projectId: 'q' }, f.human).tags!.find(tag => tag.id === 'dst-ai')!;
-  f.mapping.execute({ commandId: 'tag-q-color', projectId: 'q', type: 'tag.update', expected: created.versionId, payload: { id: 'dst-ai', color: BLUE } }, f.human);
+  seedTargetTag(f, 'q', 'dst-ai', 'ai', BLUE);
   const colored = f.mapping.read({ type: 'project', projectId: 'q' }, f.human).tags!.find(tag => tag.id === 'dst-ai')!;
   f.mapping.execute({ commandId: 'tag-q-delete', projectId: 'q', type: 'tag.delete', expected: { tag: colored.versionId, cardTags: {} }, payload: { id: 'dst-ai' } }, f.human);
-  f.execute({ type: 'tag.create', expected: null, payload: { id: 'src-ai', name: 'AI' } });
-  f.execute({ type: 'tag.update', expected: f.state().tags!.find(tag => tag.id === 'src-ai')!.versionId, payload: { id: 'src-ai', color: YELLOW } });
+  seedTag(f, 'src-ai', 'AI', YELLOW);
   f.execute({ type: 'thought.create', expected: null, payload: { id: 'source-card', title: '市场观察', text: '需求增长', x: 10, y: 20 } });
   const card = f.state().cards[0]!;
   f.mapping.execute({
@@ -253,7 +254,7 @@ it('没有目标项目授权时拒绝跨项目粘贴，两边项目都不变', (
 it('撤销后重复同一粘贴命令不复活目标对象', () => {
   const f = groupFixture();
   f.mapping.execute({ commandId: 'project-q', projectId: 'q', type: 'project.create', expected: null, payload: { name: '目标' } }, f.human);
-  f.execute({ type: 'tag.create', expected: null, payload: { id: 'src-defi', name: 'DeFi' } });
+  seedTag(f, 'src-defi', 'DeFi');
   f.execute({ type: 'thought.create', expected: null, payload: { id: 'source-card', title: '市场观察', text: '需求增长', x: 10, y: 20 } });
   f.execute({ type: 'card.tags', expected: null, payload: { id: 'source-card', tagIds: ['src-defi'] } });
   const frozen = f.state();
@@ -282,8 +283,7 @@ it('撤销后重复同一粘贴命令不复活目标对象', () => {
 it('分区粘贴的撤销同时撤回本次新建的标签和媒体，重做后恢复', () => {
   const f = groupFixture();
   f.mapping.execute({ commandId: 'project-q', projectId: 'q', type: 'project.create', expected: null, payload: { name: '目标' } }, f.human);
-  f.execute({ type: 'tag.create', expected: null, payload: { id: 'src-defi', name: 'DeFi' } });
-  f.execute({ type: 'tag.update', expected: f.state().tags!.find(tag => tag.id === 'src-defi')!.versionId, payload: { id: 'src-defi', color: YELLOW } });
+  seedTag(f, 'src-defi', 'DeFi', YELLOW);
   const base64 = createCanvas(2, 3).toBuffer('image/png').toString('base64');
   f.execute({ type: 'asset.save', expected: null, payload: { id: 'src-asset', name: '图.png', mime: 'image/png', base64 } });
   f.execute({ type: 'thought.create', expected: null, payload: { id: 'source-card', title: '市场观察', text: '需求增长', x: 20, y: 30 } });
