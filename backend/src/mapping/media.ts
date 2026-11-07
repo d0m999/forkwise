@@ -14,11 +14,9 @@ export function initializeMedia(db: Database.Database) {
   );
 }
 export function readAsset(db: Database.Database, projectId: string, id: string): MediaAsset {
-  const row = db
-    .prepare('SELECT value FROM mapping_assets WHERE project_id=? AND id=?')
-    .get(projectId, id) as { value: string } | undefined;
-  requireThat(row, 'MEDIA_NOT_PERSISTED', '所需媒体尚未持久保存，请完成或移除媒体后重试', 409);
-  return JSON.parse(row.value) as MediaAsset;
+  const value = readAssetRow(db, projectId, id);
+  requireThat(value, 'MEDIA_NOT_PERSISTED', '所需媒体尚未持久保存，请完成或移除媒体后重试', 409);
+  return JSON.parse(value) as MediaAsset;
 }
 export function saveAsset(
   db: Database.Database,
@@ -68,22 +66,25 @@ export function saveAsset(
     height,
     hash: createHash('sha256').update(bytes).digest('hex'),
   };
-  const existing = db
+  writeAssetRow(db, command.projectId, value);
+}
+
+function readAssetRow(db: Database.Database, projectId: string, id: string) {
+  const row = db
     .prepare('SELECT value FROM mapping_assets WHERE project_id=? AND id=?')
-    .get(command.projectId, p.id) as { value: string } | undefined;
-  requireThat(
-    !existing || existing.value === JSON.stringify(value),
-    'ID_CONFLICT',
-    '不可变资源身份已使用',
-    409,
-  );
-  if (!existing) writeAssetRow(db, command.projectId, p.id, value);
+    .get(projectId, id) as { value: string } | undefined;
+  return row?.value;
 }
 
-function writeAssetRow(db: Database.Database, projectId: string, id: string, value: MediaAsset) {
-  db.prepare('INSERT INTO mapping_assets VALUES(?,?,?)').run(projectId, id, JSON.stringify(value));
+// 资源写入统一经此校验：redo 恢复历史资源时也不能覆盖同 ID 的不可变内容。
+function writeAssetRow(db: Database.Database, projectId: string, value: MediaAsset) {
+  const serialized = JSON.stringify(value);
+  const existing = readAssetRow(db, projectId, value.id);
+  requireThat(!existing || existing === serialized, 'ID_CONFLICT', '不可变资源身份已使用', 409);
+  if (!existing) db.prepare('INSERT INTO mapping_assets VALUES(?,?,?)').run(projectId, value.id, serialized);
 }
 
+// 资源内容不可变：undo 只需幂等移除本次粘贴新建的行；redo 的写入仍走 writeAssetRow 的身份校验。
 export function restoreAsset(
   db: Database.Database,
   projectId: string,
@@ -92,7 +93,7 @@ export function restoreAsset(
 ) {
   if (direction === 'history.undo')
     db.prepare('DELETE FROM mapping_assets WHERE project_id=? AND id=?').run(projectId, change.after.id);
-  else writeAssetRow(db, projectId, change.after.id, change.after);
+  else writeAssetRow(db, projectId, change.after);
 }
 
 function completePng(bytes: Buffer): boolean {
