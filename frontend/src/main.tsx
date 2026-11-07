@@ -1,6 +1,6 @@
 import { captureSpatial, frameCandidate, frameCreationParent } from '../../backend/src/mapping/frame-spatial';
 import { canvasPlainText } from "./canvas-paste";
-import { CANVAS_CLIPBOARD_TYPE, canCopySelection, captureClipboard, clipboardCenter, copiedSelection, duplicatePlan, parseClipboard, pastePlan } from "./canvas-snapshot";
+import { CANVAS_CLIPBOARD_TYPE, canCopySelection, captureClipboard, clipboardAssetIds, clipboardCenter, clipboardLibrary, copiedSelection, duplicatePlan, parseClipboard, pastePlan } from "./canvas-snapshot";
 import type { CopyRef } from "./canvas-snapshot";
 import { nextPaste, pasteTranslation, type PasteSequence } from "./canvas-snapshot-geometry";
 import { SnapshotMenu } from "./snapshot-menu";
@@ -2348,10 +2348,19 @@ function Workspace() {
     if (!current) return;
     const captured = captureClipboard(current, canvasSelection.current(), selectedConnectors, selectedFrameIds);
     if (!captured) return;
+    let document = captured.document;
+    try {
+      const assets = await Promise.all(clipboardAssetIds(document).map(id => api.asset(current.project.id, id)));
+      const library = clipboardLibrary(current, document, assets);
+      if (library) document = { ...document, library };
+    } catch (error) {
+      fail(error instanceof Error ? error : new Error("无法读取复制所需的标签或媒体，原对象未改变"));
+      return;
+    }
     try {
       await navigator.clipboard.write([new ClipboardItem({
         "text/plain": new Blob([captured.text], { type: "text/plain" }),
-        [CANVAS_CLIPBOARD_TYPE]: new Blob([JSON.stringify(captured.document)], { type: CANVAS_CLIPBOARD_TYPE }),
+        [CANVAS_CLIPBOARD_TYPE]: new Blob([JSON.stringify(document)], { type: CANVAS_CLIPBOARD_TYPE }),
       })]);
     } catch {
       fail(new Error("无法写入剪贴板，原对象未改变"));

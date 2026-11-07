@@ -32,6 +32,8 @@ interface StoredAction extends HistoryAction {
   textChange?: Change['textChange'];
   textChanges?: Change['textChanges'];
   tagChange?: Change['tagChange'];
+  tagChanges?: Change['tagChanges'];
+  assetChanges?: Change['assetChanges'];
   cardChanges?: Change['cardChanges'];
   before: Card | Project | null;
   after: Card | Project | null;
@@ -95,7 +97,7 @@ export function recordAction(
   if (command.type === 'canvas.duplicate' || command.type === 'canvas.paste') {
     const created = change.cardLifecycleChanges?.[0]?.after ?? change.textChanges?.[0]?.after ?? change.shapeChanges?.[0]?.after ?? change.imageChanges?.[0]?.after ?? change.strokeChanges?.[0]?.after ?? change.connectorChanges?.[0]?.after;
     const title = !created ? '副本' : 'title' in created ? created.title : created.kind === 'text' ? created.content.runs.map(run => run.text).join('') : created.kind === 'shape' ? created.content.shortText || '形状' : created.kind === 'stroke' ? created.content.penKind === 'highlighter' ? '荧光笔' : '笔迹' : created.kind === 'image' ? '图片' : '连线';
-    stack.undo.push({ session, lastRevision: change.revision, id: command.commandId, label: command.type, target: { id: created?.id ?? command.commandId, title }, actor: change.actor, before: null, after: null, cardLifecycleChanges: change.cardLifecycleChanges, textChanges: change.textChanges, shapeChanges: change.shapeChanges, imageChanges: change.imageChanges, strokeChanges: change.strokeChanges, connectorChanges: change.connectorChanges, groupChanges: change.groupChanges, frameChanges: change.frameChanges, containmentChanges: change.containmentChanges, changedIds: change.changedIds });
+    stack.undo.push({ session, lastRevision: change.revision, id: command.commandId, label: command.type, target: { id: created?.id ?? command.commandId, title }, actor: change.actor, before: null, after: null, cardLifecycleChanges: change.cardLifecycleChanges, textChanges: change.textChanges, shapeChanges: change.shapeChanges, imageChanges: change.imageChanges, strokeChanges: change.strokeChanges, connectorChanges: change.connectorChanges, groupChanges: change.groupChanges, frameChanges: change.frameChanges, containmentChanges: change.containmentChanges, changedIds: change.changedIds, ...(change.tagChanges?.length ? { tagChanges: change.tagChanges } : {}), ...(change.assetChanges?.length ? { assetChanges: change.assetChanges } : {}) });
     stack.undo = stack.undo.slice(-40); stack.redo = []; save(db, command.projectId, stack); return;
   }
   if (command.type === 'canvas.delete-selection' || (change.groupChanges || change.containmentChanges) && !change.textChange && command.type !== 'thought.create') {
@@ -259,6 +261,13 @@ export function recordAction(
   stack.redo = [];
   save(db, command.projectId, stack);
 }
+function restorePasteLibrary(db: Database.Database, projectId: string, action: StoredAction, type: 'history.undo' | 'history.redo') {
+  for (const change of action.tagChanges ?? []) restoreTag(db, projectId, change, type);
+  for (const change of action.assetChanges ?? []) {
+    if (type === 'history.undo') db.prepare('DELETE FROM mapping_assets WHERE project_id=? AND id=?').run(projectId, change.after.id);
+    else db.prepare('INSERT INTO mapping_assets VALUES(?,?,?)').run(projectId, change.after.id, JSON.stringify(change.after));
+  }
+}
 type HistoryTravel = Pick<Change, 'before' | 'after' | 'changedIds'> & {
   [K in 'frameChanges' | 'cardLifecycleChanges' | 'groupChanges' | 'containmentChanges' | 'connectorChanges' | 'cardChanges' | 'tagChange' | 'textChange' | 'textChanges' | 'shapeChange' | 'shapeChanges' | 'strokeChange' | 'strokeChanges' | 'imageChange' | 'imageChanges']?: Change[K] | undefined;
 } & {
@@ -277,8 +286,10 @@ export function travelHistory(
   const action = from.pop();
   requireThat(action, 'HISTORY_EMPTY', '没有可撤销或重做的操作', 409);
   if (action.frameChanges?.length) {
+    if (type === 'history.redo') restorePasteLibrary(db, project.id, action, type);
     const frameChanges = action.frameChanges.map(change => restoreFrame(db, project.id, change, type));
     const restored = restoreGroupAction(db, project.id, action, type);
+    if (type === 'history.undo') restorePasteLibrary(db, project.id, action, type);
     (type === 'history.undo' ? stack.redo : stack.undo).push(action); save(db, project.id, stack);
     return { ...restored, frameChanges,
       changedIds: [...new Set([...action.changedIds, ...restored.changedIds])],
@@ -286,7 +297,9 @@ export function travelHistory(
       target: { ...action.target, label: action.label } };
   }
   if (action.label === 'canvas.duplicate' || action.label === 'canvas.paste') {
+    if (type === 'history.redo') restorePasteLibrary(db, project.id, action, type);
     const restored = restoreGroupAction(db, project.id, action, type);
+    if (type === 'history.undo') restorePasteLibrary(db, project.id, action, type);
     (type === 'history.undo' ? stack.redo : stack.undo).push(action); save(db, project.id, stack);
     return { ...restored, target: { ...action.target, label: action.label } };
   }

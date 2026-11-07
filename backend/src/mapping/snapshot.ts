@@ -16,8 +16,9 @@ import { readImages } from './image.js';
 import { readShapes } from './shape.js';
 import { readStrokes } from './stroke.js';
 import { readTexts } from './text.js';
-import { readAsset } from './media.js';
-import { readTags } from './tags.js';
+import { readAsset, saveAsset } from './media.js';
+import { readTags, saveTag } from './tags.js';
+import type { Tag } from './contracts.js';
 import { retainCardVersions } from './versions.js';
 import { nextCreatedOrder } from './created-order.js';
 import { bodyText } from './body-text.js';
@@ -37,6 +38,8 @@ export type SnapshotWrite = {
   frameChanges: NonNullable<Change['frameChanges']>;
   containmentChanges: NonNullable<Change['containmentChanges']>;
   changedIds: string[];
+  tagChanges?: Change['tagChanges'];
+  assetChanges?: Change['assetChanges'];
 };
 
 function cards(db: Database.Database, projectId: string): Card[] {
@@ -94,7 +97,7 @@ export function readSnapshotScene(db: Database.Database, projectId: string) {
     ...state.frames.map(frame => ({ pose: frame.pose, versionId: frame.versionId, key: `frame:${frame.id}` })),
   ] };
 }
-function finish(changes: Omit<SnapshotWrite, 'changedIds'>): SnapshotWrite {
+function finish(changes: Omit<SnapshotWrite, 'changedIds' | 'tagChanges' | 'assetChanges'>): SnapshotWrite {
   return { ...changes, changedIds: groupOutcome(changes).changedIds };
 }
 function distinctEnds(start: ConnectorEndpoint, end: ConnectorEndpoint) {
@@ -144,8 +147,68 @@ function insertStroke(db: Database.Database, projectId: string, value: CanvasStr
   version(db, projectId, 'pose', value.item.id, value.item.versionId, value.item);
 }
 
+function adoptLibrary(db: Database.Database, projectId: string, payload: Paste['payload']) {
+  const library = payload.library;
+  const tagChanges: NonNullable<Change['tagChanges']> = [];
+  const assetChanges: NonNullable<Change['assetChanges']> = [];
+  if (!library) return { objects: payload.objects, tagChanges, assetChanges };
+  const liveTags = readTags(db, projectId);
+  const tagMap = new Map<string, string>();
+  const referencedTagIds = [...new Set(payload.objects.flatMap(value => value.kind === 'card' && value.tagIds ? value.tagIds : []))];
+  for (const id of referencedTagIds) {
+    if (liveTags.some(tag => tag.id === id && !tag.deleted)) {
+      tagMap.set(id, id);
+      continue;
+    }
+    const entry = library.tags.find(tag => tag.id === id);
+    if (!entry) continue;
+    const same = liveTags.find(tag => !tag.deleted && tag.name.toLowerCase() === entry.name.toLowerCase());
+    if (same) {
+      tagMap.set(id, same.id);
+      continue;
+    }
+    const created: Tag = { id: randomUUID(), name: entry.name, color: entry.color, deleted: false, versionId: randomUUID() };
+    saveTag(db, projectId, created);
+    liveTags.push(created);
+    tagMap.set(id, created.id);
+    tagChanges.push({ before: null, after: created });
+  }
+  const assetMap = new Map<string, string>();
+  const referencedAssetIds = [...new Set([
+    ...payload.objects.flatMap(value => value.kind === 'image' ? [value.content.assetId] : []),
+    ...payload.objects.flatMap(value => value.kind === 'card' ? imageAssetIds(value.blocks as Block[]) : []),
+  ])];
+  for (const id of referencedAssetIds) {
+    if (db.prepare('SELECT 1 FROM mapping_assets WHERE project_id=? AND id=?').get(projectId, id)) {
+      assetMap.set(id, id);
+      continue;
+    }
+    const entry = library.assets.find(asset => asset.id === id);
+    if (!entry) continue;
+    const nextId = randomUUID();
+    saveAsset(db, { commandId: nextId, projectId, type: 'asset.save', expected: null, payload: { id: nextId, name: entry.name, mime: entry.mime, base64: entry.base64 } });
+    assetMap.set(id, nextId);
+    assetChanges.push({ before: null, after: readAsset(db, projectId, nextId) });
+  }
+  const objects = structuredClone(payload.objects);
+  for (const value of objects) {
+    if (value.kind === 'card') {
+      if (value.tagIds) value.tagIds = value.tagIds.map(id => tagMap.get(id) ?? id);
+      for (const block of value.blocks) {
+        if (block.type === 'image' && typeof block.assetId === 'string' && assetMap.has(block.assetId)) block.assetId = assetMap.get(block.assetId);
+      }
+    } else if (value.kind === 'image') {
+      const nextId = assetMap.get(value.content.assetId);
+      if (nextId) value.content = { ...value.content, assetId: nextId };
+    }
+  }
+  return { objects, tagChanges, assetChanges };
+}
+
 export function pasteCanvas(db: Database.Database, command: Paste): SnapshotWrite {
-  const { projectId, payload } = command;
+  const { projectId } = command;
+  const adopted = adoptLibrary(db, projectId, command.payload);
+  const payload = { ...command.payload, objects: adopted.objects };
   const { translation } = payload;
   const scene = readSnapshotScene(db, projectId).state;
   const copyIds = [...payload.objects.map(value => value.copyId), ...payload.connectors.map(value => value.copyId)];
@@ -255,5 +318,11 @@ export function pasteCanvas(db: Database.Database, command: Paste): SnapshotWrit
   }
   for (const change of containmentChanges) writeContainment(db, projectId, change.after!);
   for (const change of connectorChanges) insertConnector(db, projectId, change.after!);
-  return finish({ cardLifecycleChanges, textChanges, shapeChanges, imageChanges, strokeChanges, connectorChanges, groupChanges, frameChanges, containmentChanges });
+  const written = finish({ cardLifecycleChanges, textChanges, shapeChanges, imageChanges, strokeChanges, connectorChanges, groupChanges, frameChanges, containmentChanges });
+  return {
+    ...written,
+    ...(adopted.tagChanges.length ? { tagChanges: adopted.tagChanges } : {}),
+    ...(adopted.assetChanges.length ? { assetChanges: adopted.assetChanges } : {}),
+    changedIds: [...written.changedIds, ...adopted.tagChanges.map(change => change.after.id), ...adopted.assetChanges.map(change => change.after.id)],
+  };
 }

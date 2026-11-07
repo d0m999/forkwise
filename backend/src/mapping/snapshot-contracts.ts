@@ -1,5 +1,6 @@
 import { FramePlacement } from './frame-spatial.js';
 import { ContainerEndpointExpected } from './container-endpoints.js';
+import { TAG_COLORS } from './tag-contracts.js';
 import { z } from 'zod';
 import { ConnectorLabelSchema, ConnectorPathSchema, ConnectorStyleSchema } from './connector-contracts.js';
 import { ImageContentSchema, ImagePoseSchema } from './image-contracts.js';
@@ -65,6 +66,11 @@ export const PasteObject = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('frame'), copyId: Id, stack: z.number().finite(), name: z.string().trim().min(1).max(240), background: z.string().nullable(), pose: TextPoseSchema }).strict(),
 ]);
 const Tree = { version: z.literal(2).optional(), roots: z.array(Id).max(200).optional(), containment: z.array(z.object({ copyId: Id, parentCopyId: Id }).strict()).max(200).optional() };
+// 数量不超过快照里已经允许的引用：200 个对象、每张卡 100 个标签、每张卡 5000 个块。
+export const PasteLibrary = z.object({
+  tags: z.array(z.object({ id: Id, name: z.string().min(1).max(240), color: z.enum(TAG_COLORS) }).strict()).max(20_000),
+  assets: z.array(z.object({ id: Id, name: z.string().min(1).max(4096), mime: z.string().max(100), base64: z.string().max(699052) }).strict()).max(1_000_000),
+}).strict();
 const PasteConnector = z.object({
   copyId: Id,
   path: ConnectorPathSchema,
@@ -134,6 +140,7 @@ export const CanvasPasteCommand = z.object({
   payload: z.object({
     ...Tree,
     translation: Point,
+    library: PasteLibrary.optional(),
     objects: z.array(PasteObject).max(200),
     connectors: z.array(PasteConnector).max(400),
   }).strict().refine(value => value.objects.length + value.connectors.length > 0, '剪贴板没有可粘贴的画布对象').superRefine(validateSnapshotTree),
@@ -160,6 +167,7 @@ export const CanvasClipboardSchema = z.object({
   kind: z.literal('forkwise-canvas-snapshot'), version: z.union([z.literal(1), z.literal(2)]),
   roots: z.array(Id).max(200).optional(),
   containment: z.array(z.object({ itemId: Id, parentItemId: Id }).strict()).max(200).optional(),
+  library: PasteLibrary.optional(),
   objects: z.array(FrozenObject).max(200),
   connectors: z.array(PasteConnector.omit({ copyId: true, start: true, end: true }).extend({ start: FrozenEnd, end: FrozenEnd })).max(400),
 }).strict().refine(v => v.objects.length + v.connectors.length > 0, '剪贴板没有可粘贴的画布对象').superRefine((value, ctx) => {

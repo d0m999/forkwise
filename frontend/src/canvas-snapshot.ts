@@ -1,6 +1,7 @@
 import { endpointBounds, sidePoint, captureOptionalContainerEndpoints } from "../../backend/src/mapping/container-endpoints";
 import { endpointKey, type ConnectorEndpoint } from "../../backend/src/mapping/connector-contracts";
 import { CanvasClipboardSchema } from "../../backend/src/mapping/snapshot-contracts";
+import { TAG_COLORS } from "../../backend/src/mapping/tag-contracts";
 import { snapshotScope } from "../../backend/src/mapping/snapshot-tree";
 export { sidePoint } from "../../backend/src/mapping/container-endpoints";
 import type { Command, ProjectState } from "./api";
@@ -105,6 +106,31 @@ export function clipboardText(document: CanvasClipboardDocument) {
     .concat(document.connectors.map(line => line.label?.text ?? '连线')).filter(Boolean);
   return text.join('\n') || '画布对象';
 }
+export function clipboardAssetIds(document: CanvasClipboardDocument): string[] {
+  return [...new Set(document.objects.flatMap(value => {
+    if (value.kind === 'image') return [value.content.assetId];
+    if (value.kind === 'card') return value.blocks.flatMap(block => block.type === 'image' && typeof block.assetId === 'string' ? [block.assetId] : []);
+    return [];
+  }))];
+}
+export function clipboardLibrary(state: ProjectState, document: CanvasClipboardDocument, assets: { id: string; name: string; mime: string; base64: string }[]) {
+  const tagIds = [...new Set(document.objects.flatMap(value => value.kind === 'card' && value.tagIds ? value.tagIds : []))];
+  const assetIds = clipboardAssetIds(document);
+  if (!tagIds.length && !assetIds.length) return undefined;
+  const tags = tagIds.flatMap(id => {
+    const tag = state.tags?.find(value => value.id === id && !value.deleted);
+    if (!tag || !(TAG_COLORS as readonly string[]).includes(tag.color)) return [];
+    return [{ id: tag.id, name: tag.name, color: tag.color as typeof TAG_COLORS[number] }];
+  });
+  if (tags.length !== tagIds.length) throw new Error('标签不存在于当前项目');
+  const byId = new Map(assets.map(asset => [asset.id, asset]));
+  const stored = assetIds.flatMap(id => {
+    const asset = byId.get(id);
+    return asset ? [{ id: asset.id, name: asset.name, mime: asset.mime, base64: asset.base64 }] : [];
+  });
+  if (stored.length !== assetIds.length) throw new Error('所需媒体尚未持久保存，请完成或移除媒体后重试');
+  return { tags, assets: stored };
+}
 export function parseClipboard(raw: string): CanvasClipboardDocument {
   try { return CanvasClipboardSchema.parse(JSON.parse(raw)); }
   catch { throw new Error("无法读取这份画布剪贴板，原内容未改变"); }
@@ -121,7 +147,7 @@ export function pastePlan(projectId: string, document: CanvasClipboardDocument, 
   const roots = document.version === 2 ? document.roots! : document.objects.map(v => v.itemId);
   const rootCopies = new Set(roots.map(id => copyIds.get(id)!));
   const tree = document.version === 2 ? { version: 2 as const, roots: [...rootCopies], containment: document.containment!.map(edge => ({ copyId: copyIds.get(edge.itemId)!, parentCopyId: copyIds.get(edge.parentItemId)! })) } : {};
-  const command = { commandId: crypto.randomUUID(), projectId, type: 'canvas.paste', expected: null, payload: { ...tree, translation, objects, connectors } } as Command;
+  const command = { commandId: crypto.randomUUID(), projectId, type: 'canvas.paste', expected: null, payload: { ...tree, translation, objects, connectors, ...(document.library ? { library: structuredClone(document.library) } : {}) } } as Command;
   return { command, objectCopyIds: objects.filter(v => rootCopies.has(v.copyId)).map(({ kind, copyId }) => ({ kind, copyId })),
     connectorCopyIds: document.connectors.flatMap((line, i) => line.start.kind === 'free' || line.end.kind === 'free' ? [connectors[i]!.copyId] : []) };
 }

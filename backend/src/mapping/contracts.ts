@@ -289,6 +289,8 @@ export interface Change extends Receipt {
   textChanges?: TextChange[];
   textChange?: TextChange;
   tagChange?: { before: Tag | null; after: Tag };
+  tagChanges?: { before: Tag | null; after: Tag }[];
+  assetChanges?: { before: { id: string } | null; after: { id: string; name: string; mime: string; base64: string; width: number; height: number; hash: string } }[];
   cardChanges?: { before: Card; after: Card }[];
   before: Project | Card | null;
   after: Project | Card | null;

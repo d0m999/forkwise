@@ -322,6 +322,8 @@ export class Mapping {
         let cardChanges: Change['cardChanges'];
         let cardLifecycleChanges: Change['cardLifecycleChanges'];
         let tagChange: Change['tagChange'];
+        let tagChanges: Change['tagChanges'];
+        let assetChanges: Change['assetChanges'];
         let textChange: Change['textChange'];
         let shapeChange: Change['shapeChange'];
         let strokeChange: Change['strokeChange'];
@@ -431,7 +433,7 @@ export class Mapping {
           this.db.prepare('UPDATE mapping_projects SET revision=? WHERE id=?').run(revision, project.id);
         } else if (command.type === 'canvas.duplicate' || command.type === 'canvas.paste') {
           const project = this.project(command.projectId);
-          ({ cardLifecycleChanges, textChanges, shapeChanges, imageChanges, strokeChanges, connectorChanges, groupChanges, frameChanges, containmentChanges, changedIds } = command.type === 'canvas.duplicate' ? duplicateCanvas(this.db, command) : pasteCanvas(this.db, command));
+          ({ cardLifecycleChanges, textChanges, shapeChanges, imageChanges, strokeChanges, connectorChanges, groupChanges, frameChanges, containmentChanges, changedIds, tagChanges, assetChanges } = command.type === 'canvas.duplicate' ? duplicateCanvas(this.db, command) : pasteCanvas(this.db, command));
           after = null; revision = project.revision + 1;
           this.db.prepare('UPDATE mapping_projects SET revision=? WHERE id=?').run(revision, project.id);
         } else if (command.type === 'shape.create' || command.type === 'shape.edit' || command.type === 'shape.move' || command.type === 'shape.delete' || command.type === 'shape.transform') {
@@ -895,6 +897,8 @@ export class Mapping {
           ...(imageChange ? { imageChange } : {}),
           ...(imageChanges ? { imageChanges } : {}),
           ...(tagChange ? { tagChange } : {}),
+          ...(tagChanges?.length ? { tagChanges } : {}),
+          ...(assetChanges?.length ? { assetChanges } : {}),
           ...(shapeChange ? { shapeChange } : {}),
           ...(strokeChange ? { strokeChange } : {}),
           ...(strokeChanges ? { strokeChanges } : {}),
