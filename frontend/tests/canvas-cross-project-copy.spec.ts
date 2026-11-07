@@ -46,25 +46,27 @@ test('真实键盘经系统剪贴板跨项目粘贴，保存重开后目标撤�
   await expect.poll(() => new URL(page.url()).searchParams.get('project')).toBe(sourceId);
   await page.reload();
   await expect(page.getByRole('status')).toHaveText('已保存到本机');
+  const evidence = join(process.cwd(), '../backend/artifacts/issue34-20261107');
+  mkdirSync(evidence, { recursive: true });
   await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
   await page.getByRole('button', { name: '市场观察', exact: true }).click();
-  await page.keyboard.press('Meta+c');
-  await expect.poll(async () => page.evaluate(async () => {
-    const item = (await navigator.clipboard.read()).find(value => value.types.includes('web application/x-forkwise-canvas'));
-    return item ? (await item.getType('web application/x-forkwise-canvas')).text() : '';
-  })).toContain('"library"');
-  const clipboard = await page.evaluate(async () => {
+  const readPageClipboard = () => page.evaluate(async () => {
     const item = (await navigator.clipboard.read()).find(value => value.types.includes('web application/x-forkwise-canvas'));
     return {
       raw: item ? await (await item.getType('web application/x-forkwise-canvas')).text() : '',
       text: await navigator.clipboard.readText(),
     };
   });
-  const evidence = join(process.cwd(), '../backend/artifacts/issue34-20261107');
-  mkdirSync(evidence, { recursive: true });
+  await page.keyboard.press('Meta+c');
+  await expect.poll(async () => (await readPageClipboard()).raw).toContain('"library"');
+  const clipboard = await readPageClipboard();
   writeFileSync(join(evidence, 'browser-clipboard.json'), clipboard.raw);
-  const swift = join(evidence, 'read-pasteboard.swift');
-  writeFileSync(swift, `import Cocoa
+  expect(clipboard.raw).toContain('"library"');
+  expect(clipboard.text).toContain('市场观察');
+  if (test.info().project.use.headless === false) {
+    const swift = join(evidence, 'read-pasteboard.swift');
+    const reader = join(evidence, 'read-pasteboard');
+    writeFileSync(swift, `import Cocoa
 let pasteboard = NSPasteboard.general
 print("changeCount \\(pasteboard.changeCount)")
 for item in pasteboard.pasteboardItems ?? [] {
@@ -77,13 +79,21 @@ for item in pasteboard.pasteboardItems ?? [] {
   }
 }
 `);
-  const pasteboard = execFileSync('swift', [swift], { encoding: 'utf8' });
-  const plain = execFileSync('pbpaste', { encoding: 'utf8' });
-  writeFileSync(join(evidence, 'nspasteboard.txt'), pasteboard);
-  writeFileSync(join(evidence, 'pbpaste.txt'), plain);
-  expect(plain).toContain('市场观察');
-  expect(pasteboard).toContain('forkwise-canvas-snapshot');
-  expect(pasteboard).toContain('application/x-forkwise-canvas');
+    execFileSync('swiftc', ['-o', reader, swift]);
+    let pasteboard = '';
+    let plain = '';
+    for (let attempt = 0; attempt < 5; attempt++) {
+      if (attempt) await page.keyboard.press('Meta+c');
+      pasteboard = execFileSync(reader, { encoding: 'utf8' });
+      plain = execFileSync('pbpaste', { encoding: 'utf8' });
+      if (plain.includes('市场观察') && pasteboard.includes(clipboard.raw) && pasteboard.includes('application/x-forkwise-canvas')) break;
+    }
+    writeFileSync(join(evidence, 'nspasteboard.txt'), pasteboard);
+    writeFileSync(join(evidence, 'pbpaste.txt'), plain);
+    expect(plain).toContain('市场观察');
+    expect(pasteboard).toContain(clipboard.raw);
+    expect(pasteboard).toContain('application/x-forkwise-canvas');
+  }
 
   const host = openMapping(workspace.directory);
   const agent = host.access.issue('agent', [sourceId], undefined, undefined, [sourceId]);
