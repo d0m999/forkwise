@@ -5,6 +5,7 @@ import { GroupGeometryCommands } from './group-geometry-contracts.js';
 import { GroupCommands, type CanvasGroup, type Containment, type GroupChange, type ContainmentChange } from './group-contracts.js';
 import { LayerOrderCommand } from './layer-contracts.js';
 import { CanvasDuplicateCommand, CanvasPasteCommand } from './snapshot-contracts.js';
+import { CutCommands } from './cut-contracts.js';
 import { ConnectorCommands, type CanvasConnector, type ConnectorChange } from './connector-contracts.js';
 import { ImageCommands, type CanvasImage, type ImageChange } from './image-contracts.js';
 import { TagCommandSchema } from './tag-contracts.js';
@@ -48,6 +49,7 @@ export const MappingCommand = z.discriminatedUnion('type', [
   LayerOrderCommand,
   CanvasDuplicateCommand,
   CanvasPasteCommand,
+  ...CutCommands,
   z.object({ ...Envelope, type: z.literal('search.delete'), expected: Id.nullable(), payload: z.object({ query: SearchConditionsSchema, id: Id }).strict() }).strict(),
   z.object({ ...Envelope, type: z.literal('search.clear'), expected: Id.nullable(), payload: z.object({ query: SearchConditionsSchema }).strict() }).strict(),
   z.object({ ...Envelope, type: z.literal('search.restore'), expected: Id.nullable(), payload: z.object({ undoId: Id }).strict() }).strict(),
@@ -257,6 +259,8 @@ export interface ProjectState {
   strokes?: CanvasStroke[];
 }
 export interface Receipt {
+  // 剪切资格随回执返回，前端据此确认首次搬动是否被服务端接受。
+  cut?: import('./cut-contracts.js').CutStateView;
   itemPoseVersions?: Record<string, string>;
   cardPoseVersions?: Record<string, string>;
   connectorVersions?: Record<string, string>;

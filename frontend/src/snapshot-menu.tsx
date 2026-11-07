@@ -2,9 +2,11 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useViewport } from "@xyflow/react";
 
-export function SnapshotMenu({ canCopy, blocked, copy, paste, duplicate }: {
+export function SnapshotMenu({ canCopy, canCut, blocked, cut, copy, paste, duplicate }: {
   canCopy: boolean;
+  canCut: boolean;
   blocked: boolean;
+  cut: () => void;
   copy: () => void;
   paste: () => void;
   duplicate: () => void;
@@ -14,6 +16,7 @@ export function SnapshotMenu({ canCopy, blocked, copy, paste, duplicate }: {
   const [point, setPoint] = useState<{ left: number; top: number } | null>(null);
   useViewport();
   const items: [string, () => void][] = [
+    ...(canCut ? [["剪切到剪贴板", cut] as [string, () => void]] : []),
     ...(canCopy ? [["复制到剪贴板", copy] as [string, () => void], ["复制副本", duplicate] as [string, () => void]] : []),
     ["粘贴", paste],
   ];

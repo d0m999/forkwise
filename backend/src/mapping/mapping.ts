@@ -15,6 +15,8 @@ import type { ImageVersion } from './image-contracts.js';
 import { moveCanvas } from './canvas-move.js';
 import { layerCanvas } from './layer-order.js';
 import { pasteCanvas } from './snapshot.js';
+import { cutCanvas, pasteCut, readCutState, recordCut } from './cut.js';
+import type { CutStateView } from './cut-contracts.js';
 import { duplicateCanvas } from './snapshot-duplicate.js';
 import { nextCreatedOrder } from './created-order.js';
 import { createStroke, deleteStroke, readStrokes } from './stroke.js';
@@ -103,6 +105,7 @@ export class Mapping {
   read(query: IdentityQuery, actor: Principal): CardIdentity;
   read(query: { type: 'projects' }, actor: Principal): Project[];
   read(query: { type: 'history'; projectId: string }, actor: Principal): ProjectHistory;
+  read(query: { type: 'cut.state'; projectId: string; cutId: string }, actor: Principal): CutStateView;
   read(query: { type: 'project'; projectId: string }, actor: Principal): ProjectState;
   read(query: VersionQuery & { domain: 'body' }, actor: Principal): Card['body'];
   read(query: VersionQuery & { domain: 'pose' }, actor: Principal): Card['item'];
@@ -140,6 +143,7 @@ export class Mapping {
     | FrameRecord
     | MediaAsset
     | SearchStateView
+    | CutStateView
     | Promise<SearchResult> {
     if (query.type === 'search')
       return this.readSearch(SearchQuerySchema.parse(query), actor);
@@ -163,6 +167,7 @@ export class Mapping {
         return { ...readSearchState(this.db, query.projectId), projectRevision: project.revision, tags: readTags(this.db, project.id) };
       }
       if (query.type === 'asset') return readAsset(this.db, query.projectId, query.id);
+      if (query.type === 'cut.state') return readCutState(this.db, query.projectId, query.cutId);
       if (query.type === 'map') return this.compact.read(query);
       if (query.type === 'card.identity') {
         this.project(query.projectId);
@@ -333,6 +338,7 @@ export class Mapping {
         let imageChanges: Change['imageChanges'];
         let shapeChanges: Change['shapeChanges'];
         let textChanges: Change['textChanges'];
+        let cut: CutStateView | undefined;
         let travel: ReturnType<typeof travelHistory> | undefined;
         let revision: number;
         let changedIds: string[];
@@ -367,9 +373,14 @@ export class Mapping {
           }
           after = null; revision = project.revision + 1;
           this.db.prepare('UPDATE mapping_projects SET revision=? WHERE id=?').run(revision, project.id);
-        } else if (command.type === 'group.delete' || command.type === 'canvas.delete-selection') {
+        } else if (command.type === 'group.delete' || command.type === 'canvas.delete-selection' || command.type === 'canvas.cut') {
           const project = this.project(command.projectId);
-          ({ frameChanges, groupChanges, containmentChanges, cardLifecycleChanges, textChanges, shapeChanges, imageChanges, strokeChanges, connectorChanges, changedIds } = command.type === 'canvas.delete-selection' ? deleteSelection(this.db, command) : deleteGroup(this.db, command));
+          if (command.type === 'canvas.cut') {
+            ({ frameChanges, groupChanges, containmentChanges, cardLifecycleChanges, textChanges, shapeChanges, imageChanges, strokeChanges, connectorChanges, changedIds } = cutCanvas(this.db, command));
+            // 剪切记录与对象移除、版本、历史、changefeed 同事务提交。
+            cut = recordCut(this.db, command.projectId, command.payload.cutId, project.revision + 1);
+          } else
+            ({ frameChanges, groupChanges, containmentChanges, cardLifecycleChanges, textChanges, shapeChanges, imageChanges, strokeChanges, connectorChanges, changedIds } = command.type === 'canvas.delete-selection' ? deleteSelection(this.db, command) : deleteGroup(this.db, command));
           after = null; revision = project.revision + 1;
           this.db.prepare('UPDATE mapping_projects SET revision=? WHERE id=?').run(revision, project.id);
         } else if (command.type === 'group.create' || command.type === 'group.remove-member' || command.type === 'group.ungroup') {
@@ -432,9 +443,14 @@ export class Mapping {
           if (!changedIds.length) return unchanged(project.revision);
           after = null; revision = project.revision + 1;
           this.db.prepare('UPDATE mapping_projects SET revision=? WHERE id=?').run(revision, project.id);
-        } else if (command.type === 'canvas.duplicate' || command.type === 'canvas.paste') {
+        } else if (command.type === 'canvas.duplicate' || command.type === 'canvas.paste' || command.type === 'canvas.paste-cut') {
           const project = this.project(command.projectId);
-          ({ cardLifecycleChanges, textChanges, shapeChanges, imageChanges, strokeChanges, connectorChanges, groupChanges, frameChanges, containmentChanges, changedIds, tagChanges, assetChanges } = command.type === 'canvas.duplicate' ? duplicateCanvas(this.db, command) : pasteCanvas(this.db, command));
+          if (command.type === 'canvas.paste-cut') {
+            const restored = pasteCut(this.db, command);
+            ({ cardLifecycleChanges, textChanges, shapeChanges, imageChanges, strokeChanges, connectorChanges, groupChanges, frameChanges, containmentChanges, changedIds } = restored);
+            cut = restored.cut;
+          } else
+            ({ cardLifecycleChanges, textChanges, shapeChanges, imageChanges, strokeChanges, connectorChanges, groupChanges, frameChanges, containmentChanges, changedIds, tagChanges, assetChanges } = command.type === 'canvas.duplicate' ? duplicateCanvas(this.db, command) : pasteCanvas(this.db, command));
           after = null; revision = project.revision + 1;
           this.db.prepare('UPDATE mapping_projects SET revision=? WHERE id=?').run(revision, project.id);
         } else if (command.type === 'shape.create' || command.type === 'shape.edit' || command.type === 'shape.move' || command.type === 'shape.delete' || command.type === 'shape.transform') {
@@ -841,7 +857,7 @@ export class Mapping {
         }
         if (after && 'body' in after) retainCardVersions(this.db, command.projectId, after);
         for (const c of cardChanges ?? []) retainCardVersions(this.db, command.projectId, c.after);
-        const structuralOutcome = (frameChanges || command.type === 'canvas.delete-selection' || groupChanges || containmentChanges) ? groupOutcome({ before, after, frameChanges, groupChanges: groupChanges ?? [], containmentChanges: containmentChanges ?? [], cardLifecycleChanges: cardLifecycleChanges ?? [], textChange, shapeChange, imageChange, strokeChange, textChanges, shapeChanges, imageChanges, strokeChanges, connectorChanges, changedIds } as Partial<Change>) : null;
+        const structuralOutcome = (frameChanges || command.type === 'canvas.delete-selection' || command.type === 'canvas.cut' || command.type === 'canvas.paste-cut' || groupChanges || containmentChanges) ? groupOutcome({ before, after, frameChanges, groupChanges: groupChanges ?? [], containmentChanges: containmentChanges ?? [], cardLifecycleChanges: cardLifecycleChanges ?? [], textChange, shapeChange, imageChange, strokeChange, textChanges, shapeChanges, imageChanges, strokeChanges, connectorChanges, changedIds } as Partial<Change>) : null;
         if (structuralOutcome) changedIds = structuralOutcome.changedIds;
         const movedPoses = command.type === 'frame.move'
           ? [
@@ -875,6 +891,7 @@ export class Mapping {
           ...(tagChange?.after.deleted ? { deletedIds: [tagChange.after.id] } : {}),
           ...(command.type === 'thought.delete' ? { deletedIds: changedIds, historyTarget: { id: command.payload.id, title: before && 'body' in before ? before.title : '', label: command.type } } : {}),
           ...(travel ? { deletedIds: travel.deletedIds, historyTarget: travel.target } : {}),
+          ...(cut ? { cut } : {}),
           ...(after && 'body' in after
             ? {
                 versions: {

@@ -3,7 +3,7 @@ import { ContainerEndpointExpected } from './container-endpoints.js';
 import { z } from 'zod';
 
 const Id = z.string().min(1).max(160);
-const DeleteMember = z.discriminatedUnion('kind', [
+export const DeleteMember = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('card'), thought: Id, body: Id, pose: Id, appearance: Id.nullable(), cardTags: Id.nullable() }).strict(),
   z.object({ kind: z.literal('text'), text: Id, pose: Id }).strict(),
   z.object({ kind: z.literal('shape'), shape: Id, pose: Id }).strict(),

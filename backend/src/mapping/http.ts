@@ -120,6 +120,9 @@ export function createWorkspaceApp(
   app.get('/api/mapping/projects/:id/history', (c) =>
     c.json(mapping.read({ type: 'history', projectId: c.req.param('id') }, c.get('principal'))),
   );
+  app.get('/api/mapping/projects/:id/cuts/:cutId', (c) =>
+    c.json(mapping.read({ type: 'cut.state', projectId: c.req.param('id'), cutId: c.req.param('cutId') }, c.get('principal'))),
+  );
   app.get('/api/mapping/projects/:id/changes', (c) =>
     c.json(
       mapping.observe(

@@ -1,6 +1,8 @@
 import { captureSpatial, frameCandidate, frameCreationParent } from '../../backend/src/mapping/frame-spatial';
 import { canvasPlainText } from "./canvas-paste";
-import { CANVAS_CLIPBOARD_TYPE, canCopySelection, captureClipboard, clipboardAssetIds, clipboardCenter, clipboardLibrary, copiedSelection, duplicatePlan, parseClipboard, pastePlan } from "./canvas-snapshot";
+import { CANVAS_CLIPBOARD_TYPE, canCopySelection, canCutSelection, captureClipboard, clipboardAssetIds, clipboardCenter, clipboardLibrary, copiedSelection, duplicatePlan, parseClipboard, pastePlan, restoredCopyRefs } from "./canvas-snapshot";
+import { captureCutCommand } from "../../backend/src/mapping/cut-command";
+import { cutJournal } from "./cut-recovery";
 import type { CopyRef } from "./canvas-snapshot";
 import { nextPaste, pasteTranslation, type PasteSequence } from "./canvas-snapshot-geometry";
 import { SnapshotMenu } from "./snapshot-menu";
@@ -1775,7 +1777,7 @@ function Workspace() {
         pending.onSettled?.();
       }
       if (!executed && e instanceof MappingError &&
-        ((['connector.reconnect', 'connector.path', 'connector.move', 'connector.delete', 'connector.style', 'connector.reverse', 'connector.label', 'canvas.layer', 'canvas.duplicate', 'canvas.paste'].includes(command.type) && ['VERSION_CONFLICT', 'NOT_FOUND'].includes(e.code)) ||
+        ((['connector.reconnect', 'connector.path', 'connector.move', 'connector.delete', 'connector.style', 'connector.reverse', 'connector.label', 'canvas.layer', 'canvas.duplicate', 'canvas.paste', 'canvas.cut', 'canvas.paste-cut'].includes(command.type) && ['VERSION_CONFLICT', 'NOT_FOUND', 'ID_CONFLICT', 'CUT_STATE_CONFLICT', 'CUT_NOT_FOUND', 'CUT_RESTORE_MISSING'].includes(e.code)) ||
           (command.type === 'connector.reconnect' && e.code === 'INVALID_ENDPOINT'))) {
         pendingAction.current = null;
         onDone?.();
@@ -2366,6 +2368,57 @@ function Workspace() {
       fail(new Error("无法写入剪贴板，原对象未改变"));
     }
   }
+  // 先写系统剪贴板，成功后才提交剪切；提交失败时把剪贴板降级为普通副本，避免留下无法判定的剪切信封。
+  async function writeCanvasClipboard(text: string, document: unknown) {
+    await navigator.clipboard.write([new ClipboardItem({
+      "text/plain": new Blob([text], { type: "text/plain" }),
+      [CANVAS_CLIPBOARD_TYPE]: new Blob([JSON.stringify(document)], { type: CANVAS_CLIPBOARD_TYPE }),
+    })]);
+  }
+  async function cutSelection() {
+    // 剪贴板一旦写入就代表用户意图；历史或保存未收口时不抢写，避免留下没有服务端记录的剪切信封。
+    if (busy || historyBlocked || composition.current || !!pendingAction.current) return;
+    if (!(await prepareSnapshot())) return;
+    const current = authority.current;
+    if (!current) return;
+    const captured = captureClipboard(current, canvasSelection.current(), selectedConnectors, selectedFrameIds);
+    if (!captured) return;
+    let document = captured.document;
+    try {
+      const assets = await Promise.all(clipboardAssetIds(document).map(id => api.asset(current.project.id, id)));
+      const library = clipboardLibrary(current, document, assets);
+      if (library) document = { ...document, library };
+    } catch (error) {
+      fail(error instanceof Error ? error : new Error("无法读取剪切所需的标签或媒体，原对象未改变"));
+      return;
+    }
+    const cutId = crypto.randomUUID();
+    let command: Command;
+    try {
+      command = captureCutCommand(current, { commandId: crypto.randomUUID(), projectId: current.project.id, cutId,
+        itemIds: captured.scope.items, groupIds: captured.scope.groups, frameIds: captured.scope.frames });
+    } catch (error) {
+      fail(error instanceof Error ? error : new Error("无法确定剪切范围，原对象未改变"));
+      return;
+    }
+    const envelope = { ...document, cut: { cutId, sourceProjectId: current.project.id } };
+    try {
+      await writeCanvasClipboard(captured.text, envelope);
+    } catch {
+      fail(new Error("无法写入剪贴板，原对象未改变"));
+      return;
+    }
+    cutJournal.write({ projectId: current.project.id, cutId, phase: 'clipboard-written', command });
+    const done = await action(command);
+    if (done) { cutJournal.clear(); return; }
+    // action 可能在失败时重新挂起同一请求；用惰性读取避开上面的空值收窄。
+    const stillPending = () => pendingAction.current?.command.commandId === command.commandId;
+    if (!stillPending()) {
+      // 明确拒绝：原件未动，剪贴板退回普通副本，避免下次粘贴读到不存在的剪切记录。
+      cutJournal.clear();
+      try { await writeCanvasClipboard(captured.text, document); } catch { /* 原剪贴板保留，粘贴时会明确拒绝 */ }
+    }
+  }
   async function duplicateSelection() {
     if (!(await prepareSnapshot())) return;
     const current = authority.current;
@@ -2393,7 +2446,29 @@ function Workspace() {
     const target = pasteDrop();
     const step = nextPaste(pasteSequence.current, { clipboard: raw, drop: target.dropKey, viewport: target.viewportKey });
     pasteSequence.current = step.sequence;
-    const plan = pastePlan(current.project.id, document, pasteTranslation(clipboardCenter(document), target.drop, step.index));
+    const translation = pasteTranslation(clipboardCenter(document), target.drop, step.index);
+    if (document.cut) {
+      if (document.cut.sourceProjectId !== current.project.id) {
+        fail(new Error("跨项目剪切尚未支持；原画布未改变"));
+        return;
+      }
+      let view: { state: string; revision: number };
+      try { view = await api.cutState(current.project.id, document.cut.cutId); }
+      catch (error) {
+        fail(error instanceof MappingError && error.code === 'CUT_NOT_FOUND'
+          ? new Error("剪切记录已不可用，未粘贴任何内容") : error instanceof Error ? error : new Error("无法确认剪切资格"));
+        return;
+      }
+      // 只有服务端仍判定“可首次搬动”才恢复原身份；已消费或已撤销时按普通复制生成副本。
+      if (view.state === 'eligible') {
+        const command = { commandId: crypto.randomUUID(), projectId: current.project.id, type: "canvas.paste-cut",
+          expected: { cut: document.cut.cutId, cutRevision: view.revision },
+          payload: { cutId: document.cut.cutId, translation } } as Command;
+        await action(command, () => selectCopies(current.project.id, restoredCopyRefs(document), []));
+        return;
+      }
+    }
+    const plan = pastePlan(current.project.id, document, translation);
     await action(plan.command, () => selectCopies(current.project.id, plan.objectCopyIds, plan.connectorCopyIds));
   }
   async function pastePlainText(text: string) {
@@ -2421,13 +2496,17 @@ function Workspace() {
     const keydown = (event: KeyboardEvent) => {
       if (!(event.metaKey || event.ctrlKey) || event.altKey || event.repeat || event.isComposing || event.keyCode === 229) return;
       const key = event.key.toLowerCase();
-      if (key !== "c" && key !== "d") return;
+      if (key !== "c" && key !== "d" && key !== "x") return;
       if (editing(event.target) || busy || historyBlocked || composition.current || pendingAction.current) return;
       const current = authority.current;
-      if (!current || !canCopySelection(current, canvasSelection.current(), selectedConnectors, selectedFrameIds)) return;
+      if (!current) return;
+      const canAct = key === "x"
+        ? canCutSelection(current, canvasSelection.current(), selectedConnectors, selectedFrameIds)
+        : canCopySelection(current, canvasSelection.current(), selectedConnectors, selectedFrameIds);
+      if (!canAct) return;
       event.preventDefault();
       event.stopPropagation();
-      if (key === "c") void copySelection(); else void duplicateSelection();
+      if (key === "x") void cutSelection(); else if (key === "c") void copySelection(); else void duplicateSelection();
     };
     const paste = (event: ClipboardEvent) => {
       if (editing(event.target) || busy || historyBlocked || composition.current || pendingAction.current) return;
@@ -2458,6 +2537,19 @@ function Workspace() {
       window.removeEventListener("paste", paste, true);
     };
   });
+  // 未确认的剪切在下次加载时用原 commandId 与 expected 重试；粘贴路径不补做剪切。
+  const cutRecovery = useRef<string | null>(null);
+  useEffect(() => {
+    const id = state?.project.id;
+    if (!id) return;
+    const pending = cutJournal.read();
+    if (!pending || pending.projectId !== id || cutRecovery.current === pending.cutId || pendingAction.current) return;
+    cutRecovery.current = pending.cutId;
+    void (async () => {
+      const done = await action(pending.command);
+      if (done || pendingAction.current?.command.commandId !== pending.command.commandId) cutJournal.clear();
+    })();
+  }, [state?.project.id]);
   const canvasMove = useCanvasMove(state, canvasSelection.value, (prepare, done, intent, discard) => texts.enqueueGeometry(async () => {
     if (!(await shapeMove.flush())) throw new Error("请先确认形状布局保存，整组移动意图仍保留");
     return prepare();
@@ -3193,8 +3285,9 @@ function Workspace() {
         {state && (
           <div className="creation-tools" aria-label="创作工具">
             <SnapshotMenu canCopy={canCopySelection(state, canvasSelection.value, selectedConnectors, selectedFrameIds)}
+              canCut={canCutSelection(state, canvasSelection.value, selectedConnectors, selectedFrameIds)}
               blocked={busy || historyBlocked || composition.current || !!pendingAction.current}
-              copy={() => void copySelection()} paste={() => void pasteSelection()} duplicate={() => void duplicateSelection()} />
+              cut={() => void cutSelection()} copy={() => void copySelection()} paste={() => void pasteSelection()} duplicate={() => void duplicateSelection()} />
             <button
               aria-pressed={!placing && !shapePreset && !strokeDraw.mode && !connectorCreate.mode && !panTool && !texts.placing && !frameTool}
               onClick={() => {

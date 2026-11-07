@@ -51,6 +51,12 @@ function freezeEnd(state: ProjectState, end: ConnectorEndpoint, inside: (end: Co
 export function canCopySelection(state: ProjectState | null, selection: CanvasSelection, connectorIds: string[], frameIds: string[] = []) {
   return !!state && !!picked(state, selection, connectorIds, frameIds);
 }
+// 单独选中一条线不能剪切：搬动必须至少包含一个画布对象或容器。
+export function canCutSelection(state: ProjectState | null, selection: CanvasSelection, connectorIds: string[], frameIds: string[] = []) {
+  if (!state) return false;
+  const source = picked(state, selection, connectorIds, frameIds);
+  return !!source && source.objects.length + source.groups.length + source.frames.length > 0;
+}
 export function duplicatePlan(state: ProjectState, selection: CanvasSelection, connectorIds: string[], frameIds: string[] = []): Plan | null {
   const source = picked(state, selection, connectorIds, frameIds);
   if (!source) return null;
@@ -89,6 +95,8 @@ function freezeObject(value: Located): FrozenObject {
 export function captureClipboard(state: ProjectState, selection: CanvasSelection, connectorIds: string[], frameIds: string[] = []) {
   const source = picked(state, selection, connectorIds, frameIds);
   if (!source) return null;
+  // 剪切命令需要同一份范围的显式身份：对象、整段组合与分区。
+  const scope = { items: source.objects.map(value => value.value.item.id), groups: source.groups.map(value => value.id), frames: source.frames.map(value => value.id) };
   const tree = source.groups.length || source.frames.length ? { version: 2 as const, roots: source.roots,
     containment: (state.containment ?? []).flatMap(edge => edge.parent && source.ids.has(edge.id) && source.ids.has(edge.parent.id) ? [{ itemId: edge.id, parentItemId: edge.parent.id }] : []) } : { version: 1 as const };
   const document: CanvasClipboardDocument = {
@@ -99,7 +107,7 @@ export function captureClipboard(state: ProjectState, selection: CanvasSelection
     connectors: source.connectors.map(line => ({ path: line.path, start: freezeEnd(state, line.start, source.inside), end: freezeEnd(state, line.end, source.inside),
       ...(line.style ? { style: structuredClone(line.style) } : {}), ...(line.label !== undefined ? { label: line.label ? structuredClone(line.label) : null } : {}) })),
   };
-  return { document, text: clipboardText(document) };
+  return { document, text: clipboardText(document), scope };
 }
 export function clipboardText(document: CanvasClipboardDocument) {
   const text = document.objects.map(v => v.kind === 'card' ? v.title : v.kind === 'text' ? v.content.runs.map(run => run.text).join('') : v.kind === 'shape' ? v.content.shortText : v.kind === 'image' ? '图片' : v.kind === 'stroke' ? '笔迹' : v.kind === 'frame' ? v.name : '组合')
@@ -150,6 +158,11 @@ export function pastePlan(projectId: string, document: CanvasClipboardDocument, 
   const command = { commandId: crypto.randomUUID(), projectId, type: 'canvas.paste', expected: null, payload: { ...tree, translation, objects, connectors, ...(document.library ? { library: structuredClone(document.library) } : {}) } } as Command;
   return { command, objectCopyIds: objects.filter(v => rootCopies.has(v.copyId)).map(({ kind, copyId }) => ({ kind, copyId })),
     connectorCopyIds: document.connectors.flatMap((line, i) => line.start.kind === 'free' || line.end.kind === 'free' ? [connectors[i]!.copyId] : []) };
+}
+// 首次搬动沿用原身份，因此选择集合直接取剪贴板冻结快照的根。
+export function restoredCopyRefs(document: CanvasClipboardDocument): CopyRef[] {
+  const roots = document.version === 2 ? document.roots! : document.objects.map(value => value.itemId);
+  return document.objects.filter(value => roots.includes(value.itemId)).map(value => ({ kind: value.kind, copyId: value.itemId }));
 }
 export function copiedSelection(state: ProjectState, entries: CopyRef[]): CanvasSelection {
   return { targets: entries.flatMap<CanvasSelection['targets'][number]>(entry => entry.kind === 'group' ? state.groups?.filter(v => v.id === entry.copyId).map(v => ({ kind: 'group' as const, id: v.id })) ?? []

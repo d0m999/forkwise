@@ -11,7 +11,7 @@ import { captureContainerEndpoints, endpointBounds, sidePoint, type ContainerEnd
 
 // Plan from the transaction's before snapshot, including containers emptied indirectly.
 export function planContainerConnectorRemoval(db: Database.Database, command: Command): ConnectorChange[] {
-  if (!['group.ungroup', 'group.remove-member', 'group.create', 'group.delete', 'frame.delete', 'canvas.delete-selection',
+  if (!['group.ungroup', 'group.remove-member', 'group.create', 'group.delete', 'frame.delete', 'canvas.delete-selection', 'canvas.cut',
     'thought.delete', 'text.delete', 'shape.delete', 'image.delete', 'stroke.delete'].includes(command.type)) return [];
   const groups = readGroups(db, command.projectId), frames = readFrames(db, command.projectId), items = groupItems(db, command.projectId);
   const state = { groups, frames, cards: items.map(value => value.value), containment: readContainment(db, command.projectId), connectors: readConnectors(db, command.projectId) };
@@ -37,6 +37,14 @@ export function planContainerConnectorRemoval(db: Database.Database, command: Co
     }
     for (const id of command.payload.frameIds ?? []) removed.set(`frame:${id}`, 'freeze');
     for (const id of command.payload.connectorIds ?? []) explicitLines.add(id);
+  } else if (command.type === 'canvas.cut') {
+    // 剪切整段子树：显式容器与其连线一起消失，随剪切一起恢复。
+    for (const id of command.payload.itemIds) deletedItems.add(id);
+    for (const id of command.payload.groupIds) {
+      const group = groups.find(group => group.id === id);
+      if (group) { removed.set(`group:${group.itemId}`, 'delete'); for (const member of group.memberItemIds) deletedItems.add(member); }
+    }
+    for (const id of command.payload.frameIds ?? []) removed.set(`frame:${id}`, 'delete');
   } else if ('id' in command.payload) {
     const kind = command.type.split('.')[0], id = command.payload.id;
     const item = items.find(value => value.value.id === id && (kind === 'thought' ? value.kind === 'card' : value.kind === kind));

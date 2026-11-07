@@ -17,6 +17,8 @@ import { restoreGeometry } from './geometry.js';
 import { bodyContentUnchanged } from './body.js';
 import { restoreTag, restoreTagCards } from './tags.js';
 import { restoreAsset } from './media.js';
+import { travelCutState } from './cut.js';
+import type { CutStateView } from './cut-contracts.js';
 
 interface StoredAction extends HistoryAction {
   frameChanges?: Change['frameChanges'];
@@ -39,6 +41,7 @@ interface StoredAction extends HistoryAction {
   before: Card | Project | null;
   after: Card | Project | null;
   changedIds: string[];
+  cut?: CutStateView;
   editGroup?: string;
   lastRevision: number;
   session: string;
@@ -89,16 +92,30 @@ export function recordAction(
 ) {
   if (command.type === 'project.create') return;
   const stack = load(db, command.projectId);
+  // 剪切是独立的源端动作：它可能只删一张没有归属行的卡片，不能落到后面的通用分支。
+  if (command.type === 'canvas.cut') {
+    const removed = change.cardLifecycleChanges?.find(value => value.before && !value.after)?.before
+      ?? change.textChanges?.find(value => value.before && !value.after)?.before
+      ?? change.shapeChanges?.find(value => value.before && !value.after)?.before
+      ?? change.imageChanges?.find(value => value.before && !value.after)?.before
+      ?? change.strokeChanges?.find(value => value.before && !value.after)?.before;
+    const title = !removed ? '剪切' : 'body' in removed ? removed.title
+      : removed.kind === 'text' ? '独立文字' : removed.kind === 'shape' ? removed.content.shortText || '形状'
+      : removed.kind === 'stroke' ? removed.content.penKind === 'highlighter' ? '荧光笔' : '笔迹' : '图片';
+    stack.undo.push({ ...change, session, lastRevision: change.revision, id: command.commandId, label: command.type,
+      target: { id: removed?.id ?? command.payload.cutId, title }, actor: change.actor });
+    stack.undo = stack.undo.slice(-40); stack.redo = []; save(db, command.projectId, stack); return;
+  }
   if (change.frameChanges?.length) {
     const value = change.frameChanges[0]!.after ?? change.frameChanges[0]!.before!;
     stack.undo.push({ ...change, session, lastRevision: change.revision, id: command.commandId, label: command.type,
       target: { id: value.id, title: value.name }, before: null, after: null });
     stack.undo = stack.undo.slice(-40); stack.redo = []; save(db, command.projectId, stack); return;
   }
-  if (command.type === 'canvas.duplicate' || command.type === 'canvas.paste') {
+  if (command.type === 'canvas.duplicate' || command.type === 'canvas.paste' || command.type === 'canvas.paste-cut') {
     const created = change.cardLifecycleChanges?.[0]?.after ?? change.textChanges?.[0]?.after ?? change.shapeChanges?.[0]?.after ?? change.imageChanges?.[0]?.after ?? change.strokeChanges?.[0]?.after ?? change.connectorChanges?.[0]?.after;
     const title = !created ? '副本' : 'title' in created ? created.title : created.kind === 'text' ? created.content.runs.map(run => run.text).join('') : created.kind === 'shape' ? created.content.shortText || '形状' : created.kind === 'stroke' ? created.content.penKind === 'highlighter' ? '荧光笔' : '笔迹' : created.kind === 'image' ? '图片' : '连线';
-    stack.undo.push({ session, lastRevision: change.revision, id: command.commandId, label: command.type, target: { id: created?.id ?? command.commandId, title }, actor: change.actor, before: null, after: null, cardLifecycleChanges: change.cardLifecycleChanges, textChanges: change.textChanges, shapeChanges: change.shapeChanges, imageChanges: change.imageChanges, strokeChanges: change.strokeChanges, connectorChanges: change.connectorChanges, groupChanges: change.groupChanges, frameChanges: change.frameChanges, containmentChanges: change.containmentChanges, changedIds: change.changedIds, ...(change.tagChanges?.length ? { tagChanges: change.tagChanges } : {}), ...(change.assetChanges?.length ? { assetChanges: change.assetChanges } : {}) });
+    stack.undo.push({ session, lastRevision: change.revision, id: command.commandId, label: command.type, target: { id: created?.id ?? command.commandId, title }, actor: change.actor, before: null, after: null, ...(change.cut ? { cut: change.cut } : {}), cardLifecycleChanges: change.cardLifecycleChanges, textChanges: change.textChanges, shapeChanges: change.shapeChanges, imageChanges: change.imageChanges, strokeChanges: change.strokeChanges, connectorChanges: change.connectorChanges, groupChanges: change.groupChanges, frameChanges: change.frameChanges, containmentChanges: change.containmentChanges, changedIds: change.changedIds, ...(change.tagChanges?.length ? { tagChanges: change.tagChanges } : {}), ...(change.assetChanges?.length ? { assetChanges: change.assetChanges } : {}) });
     stack.undo = stack.undo.slice(-40); stack.redo = []; save(db, command.projectId, stack); return;
   }
   if (command.type === 'canvas.delete-selection' || (change.groupChanges || change.containmentChanges) && !change.textChange && command.type !== 'thought.create') {
@@ -284,6 +301,8 @@ export function travelHistory(
   requireThat(!actionId || from.at(-1)?.id === actionId, 'HISTORY_TARGET_CHANGED', '历史目标已变化，不能撤销其他操作', 409);
   const action = from.pop();
   requireThat(action, 'HISTORY_EMPTY', '没有可撤销或重做的操作', 409);
+  // 对象恢复与剪切资格同事务：任一步失败都整体回滚，不留“对象已恢复但资格未更新”。
+  if (action.cut) travelCutState(db, project.id, action.cut.cutId, action.label, type);
   if (action.frameChanges?.length) {
     if (type === 'history.redo') restorePasteLibrary(db, project.id, action, type);
     const frameChanges = action.frameChanges.map(change => restoreFrame(db, project.id, change, type));
@@ -295,7 +314,7 @@ export function travelHistory(
       deletedIds: [...new Set([...restored.deletedIds, ...frameChanges.filter(change => !change.after).map(change => change.before!.id)])],
       target: { ...action.target, label: action.label } };
   }
-  if (action.label === 'canvas.duplicate' || action.label === 'canvas.paste') {
+  if (action.label === 'canvas.duplicate' || action.label === 'canvas.paste' || action.label === 'canvas.paste-cut') {
     if (type === 'history.redo') restorePasteLibrary(db, project.id, action, type);
     const restored = restoreGroupAction(db, project.id, action, type);
     if (type === 'history.undo') restorePasteLibrary(db, project.id, action, type);

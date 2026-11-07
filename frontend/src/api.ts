@@ -1,5 +1,6 @@
 import type { SearchQuery, SearchResult, SearchStateView } from '../../backend/src/mapping/search-contracts';
 import type { MediaAsset } from '../../backend/src/mapping/media';
+import type { CutStateView } from '../../backend/src/mapping/cut-contracts';
 import type { CanvasShape } from '../../backend/src/mapping/shape-contracts';
 import type {
   CardIdentity,
@@ -60,6 +61,8 @@ export const api = {
     ),
   history: (id: string) =>
     request<ProjectHistory>("/projects/" + encodeURIComponent(id) + "/history"),
+  cutState: (projectId: string, cutId: string) =>
+    request<CutStateView>(`/projects/${encodeURIComponent(projectId)}/cuts/${encodeURIComponent(cutId)}`),
   projects: () => request<Project[]>("/projects"),
   project: (id: string) => readCompactMap(id, request),
   poseVersion: (projectId: string, itemId: string, versionId: string) =>

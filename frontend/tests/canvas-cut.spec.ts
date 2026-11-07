@@ -1,0 +1,271 @@
+import { execFileSync } from 'node:child_process';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { dirname, join, relative } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import type { Page } from '@playwright/test';
+import { expect, test, type Workspace } from './writing-board-fixture';
+
+const repo = fileURLToPath(new URL('../..', import.meta.url));
+const artifacts = join(repo, 'backend/artifacts/issue33-20261107');
+const evidence = join(repo, 'docs/plans/evidence/issue-33-same-project-cut-2026-11-07.json');
+const systemClipboard = process.env.FORKWISE_SYSTEM_CLIPBOARD === '1';
+const artifact = (name: string) => join(artifacts, name);
+const artifactRef = (name: string) => relative(repo, artifact(name));
+type CheckStatus = 'EXECUTED' | 'NOT_RUN';
+
+const pasteboardReader = `import Cocoa
+let pasteboard = NSPasteboard.general
+print("changeCount \\(pasteboard.changeCount)")
+for item in pasteboard.pasteboardItems ?? [] {
+  for type in item.types where type.rawValue == "public.utf8-plain-text" || type.rawValue.hasPrefix("org.w3.web-custom-format.") {
+    let data = item.data(forType: type)
+    print("TYPE \\(type.rawValue) BYTES \\(data?.count ?? 0)")
+    if let data, type.rawValue == "org.w3.web-custom-format.type-0" {
+      try? data.write(to: URL(fileURLWithPath: CommandLine.arguments[1]))
+    }
+    if let data, let text = String(data: data, encoding: .utf8) { print(text) }
+  }
+}
+`;
+
+function readSystemPasteboard() {
+  mkdirSync(artifacts, { recursive: true });
+  const swift = artifact('read-pasteboard.swift'), reader = artifact('read-pasteboard'), snapshot = artifact('system-snapshot.json');
+  writeFileSync(swift, pasteboardReader);
+  execFileSync('swiftc', ['-o', reader, swift]);
+  return {
+    pasteboard: execFileSync(reader, [snapshot], { encoding: 'utf8' }),
+    plain: execFileSync('pbpaste', { encoding: 'utf8' }),
+    snapshot,
+  };
+}
+
+async function runCutFlow(page: Page, workspace: Workspace, system: boolean) {
+  const checks: Record<string, { status: CheckStatus; via: string }> = {};
+  const projectId = (await workspace.state()).project.id;
+  const execute = (type: string, payload: unknown, expected: unknown = null) =>
+    workspace.execute(page, { commandId: crypto.randomUUID(), projectId, type, expected, payload });
+  const read = () => workspace.state();
+  // 历史按钮是异步命令：等到项目 revision 前进再断言，避免点击落在保存阻塞窗口里。
+  const travel = async (name: '撤销' | '重做') => {
+    const before = (await read()).project.revision;
+    await page.getByRole('button', { name, exact: true }).click();
+    await expect.poll(async () => (await read()).project.revision, { timeout: 20000 }).toBeGreaterThan(before);
+  };
+  const cutState = async (cutId: string) => {
+    const response = await page.request.get(`${workspace.origin}/api/mapping/projects/${projectId}/cuts/${cutId}`);
+    return { status: response.status(), body: await response.json() };
+  };
+  await execute('thought.create', { id: 'a', title: '甲', text: '甲的正文', x: 120, y: 160 });
+  await execute('thought.create', { id: 'b', title: '乙', text: '乙的正文', x: 620, y: 160 });
+  const seeded = await read();
+  const a = seeded.cards.find(card => card.id === 'a')!;
+  const b = seeded.cards.find(card => card.id === 'b')!;
+  await execute('connector.create', { id: 'line', start: { kind: 'bound', itemId: a.item.id, side: 'right' },
+    end: { kind: 'bound', itemId: b.item.id, side: 'left' }, path: 'straight' });
+  await page.reload();
+  await expect(page.getByRole('status')).toHaveText('已保存到本机');
+  await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
+  mkdirSync(artifacts, { recursive: true });
+
+  // AC1：系统剪贴板写入被拒绝时，对象、连线与历史都不变。
+  await page.evaluate(() => {
+    Object.defineProperty(navigator.clipboard, 'write', { configurable: true, value: () => Promise.reject(new Error('denied')) });
+  });
+  await page.getByRole('button', { name: '甲', exact: true }).click();
+  await page.locator('.canvas').press('Meta+x');
+  await expect(page.getByRole('alert')).toContainText('无法写入剪贴板');
+  const afterDenied = await read();
+  expect(afterDenied.cards.map(card => card.id).sort()).toEqual(['a', 'b']);
+  expect(afterDenied.connectors!.map(line => line.id)).toEqual(['line']);
+  const deniedHistory = await (await page.request.get(`${workspace.origin}/api/mapping/projects/${projectId}/history`)).json();
+  expect(deniedHistory.undo.some((action: { label: string }) => action.label === 'canvas.cut')).toBe(false);
+  checks.clipboardDenied = { status: 'EXECUTED', via: 'navigator.clipboard.write 被拒绝后 read(project) 仍为两张卡与一条线' };
+
+  await page.reload();
+  await expect(page.getByRole('status')).toHaveText('已保存到本机');
+  const pane = (await page.locator('.react-flow__pane').boundingBox())!;
+  await page.mouse.move(pane.x + 380, pane.y + 420);
+  await page.getByRole('button', { name: '甲', exact: true }).click();
+  await page.locator('.canvas').press('Meta+x');
+  await expect.poll(async () => (await read()).cards.map(card => card.id)).toEqual(['b']);
+  const cut = await read();
+  expect(cut.connectors).toEqual([]);
+  checks.remove = { status: 'EXECUTED', via: 'Meta+x 后 read(project) 只剩乙且连线消失' };
+
+  const readPageClipboard = () => page.evaluate(async () => {
+    const item = (await navigator.clipboard.read()).find(value => value.types.includes('web application/x-forkwise-canvas'));
+    return item ? await (await item.getType('web application/x-forkwise-canvas')).text() : '';
+  });
+  await expect.poll(async () => await readPageClipboard()).toContain('"cut"');
+  const raw = await readPageClipboard();
+  writeFileSync(artifact('browser-clipboard-cut.json'), raw);
+  const envelope = JSON.parse(raw);
+  expect(envelope.cut).toMatchObject({ sourceProjectId: projectId });
+  expect(typeof envelope.cut.cutId).toBe('string');
+  expect((await cutState(envelope.cut.cutId)).body).toMatchObject({ state: 'eligible', revision: 0 });
+  checks.envelope = { status: 'EXECUTED', via: `页面剪贴板含 cut.sourceProjectId/cutId，服务端记录 eligible；原始载荷 ${artifactRef('browser-clipboard-cut.json')}` };
+  if (system) {
+    // headed 运行里系统剪贴板与页面剪贴板共用同一份写入：从 NSPasteboard 读回同一切割信封。
+    const current = readSystemPasteboard();
+    writeFileSync(artifact('nspasteboard.txt'), current.pasteboard);
+    writeFileSync(artifact('pbpaste.txt'), current.plain);
+    expect(current.plain).toContain('甲');
+    expect(current.pasteboard).toContain('application/x-forkwise-canvas');
+    expect(current.pasteboard).toContain(envelope.cut.cutId);
+    expect(JSON.parse(readFileSync(current.snapshot, 'utf8')).cut).toEqual(envelope.cut);
+    checks.systemClipboard = { status: 'EXECUTED', via: `NSPasteboard 读回同一剪切信封；原始载荷 ${artifactRef('nspasteboard.txt')}` };
+  } else {
+    checks.systemClipboard = { status: 'NOT_RUN', via: 'headless 无系统剪贴板；AC5 系统侧需 FORKWISE_SYSTEM_CLIPBOARD=1 的 headed 项目' };
+  }
+
+  // AC2 + AC3：首次粘贴恢复原身份与外线，第二次粘贴生成副本。
+  await page.locator('.canvas').press('Meta+v');
+  await expect.poll(async () => (await read()).cards.length).toBe(2);
+  const restored = await read();
+  const back = restored.cards.find(card => card.id === 'a')!;
+  expect(back.item.id).toBe(a.item.id);
+  expect(back.versionId).not.toBe(a.versionId);
+  expect(restored.connectors!.map(line => line.id)).toEqual(['line']);
+  expect(restored.connectors![0]!.start).toMatchObject({ kind: 'bound', itemId: a.item.id });
+  expect((await cutState(envelope.cut.cutId)).body).toMatchObject({ state: 'consumed', revision: 1 });
+  checks.firstMove = { status: 'EXECUTED', via: 'Meta+v 后原 id/item id 恢复、版本更新、外线恢复，服务端 consumed' };
+
+  await page.locator('.canvas').press('Meta+v');
+  await expect.poll(async () => (await read()).cards.length).toBe(3);
+  const copied = await read();
+  const extra = copied.cards.filter(card => card.id !== 'a' && card.id !== 'b');
+  expect(extra).toHaveLength(1);
+  expect(copied.connectors!.map(line => line.id)).toEqual(['line']);
+  const identity = await page.request.get(
+    `${workspace.origin}/api/mapping/projects/${projectId}/cards/${extra[0]!.id}/identity`);
+  expect(await identity.json()).toMatchObject({ availability: 'available' });
+  checks.secondPaste = { status: 'EXECUTED', via: '第二次 Meta+v 生成新身份副本且不复制外线' };
+
+  // AC3 + AC5：撤销首次粘贴回到可首次搬动，撤销剪切回到原件，重做重新消费。
+  await travel('撤销');
+  await expect.poll(async () => (await read()).cards.length).toBe(2);
+  await travel('撤销');
+  await expect.poll(async () => (await read()).cards.map(card => card.id)).toEqual(['b']);
+  expect((await cutState(envelope.cut.cutId)).body).toMatchObject({ state: 'eligible', revision: 2 });
+  await page.locator('.canvas').press('Meta+v');
+  await expect.poll(async () => (await read()).cards.length).toBe(2);
+  expect((await read()).cards.some(card => card.id === 'a')).toBe(true);
+  await travel('撤销');
+  await expect.poll(async () => (await read()).cards.map(card => card.id)).toEqual(['b']);
+  await travel('撤销');
+  await expect.poll(async () => (await read()).cards.map(card => card.id).sort()).toEqual(['a', 'b']);
+  expect((await read()).connectors!.map(line => line.id)).toEqual(['line']);
+  expect((await cutState(envelope.cut.cutId)).body).toMatchObject({ state: 'cut-undone' });
+  checks.undoCut = { status: 'EXECUTED', via: '撤销首次粘贴→eligible 且重试恢复原身份；撤销剪切→原件与外线回来且 cut-undone' };
+
+  // 重做按撤销的逆序回放：先剪切、再首次搬动；资格随对象一起回到 eligible→consumed。
+  await travel('重做');
+  await expect.poll(async () => (await read()).cards.length).toBe(1);
+  expect((await cutState(envelope.cut.cutId)).body).toMatchObject({ state: 'eligible' });
+  await travel('重做');
+  await expect.poll(async () => (await read()).cards.length).toBe(2);
+  expect((await cutState(envelope.cut.cutId)).body).toMatchObject({ state: 'consumed' });
+  await travel('撤销');
+  await expect.poll(async () => (await read()).cards.length).toBe(1);
+  expect((await cutState(envelope.cut.cutId)).body).toMatchObject({ state: 'eligible' });
+  await travel('重做');
+  await expect.poll(async () => (await read()).cards.length).toBe(2);
+  expect((await cutState(envelope.cut.cutId)).body).toMatchObject({ state: 'consumed' });
+  checks.redo = { status: 'EXECUTED', via: '重做按逆序恢复剪切(eligible)→首次搬动(consumed)，再撤销/重做仍同步' };
+
+  // AC4：替换剪贴板不复活原件，撤销剪切仍可用。
+  await page.getByRole('button', { name: '乙', exact: true }).click();
+  await page.getByRole('button', { name: '复制', exact: true }).click();
+  await page.getByRole('menuitem', { name: '剪切到剪贴板' }).click();
+  await expect.poll(async () => (await read()).cards.some(card => card.id === 'b')).toBe(false);
+  await page.getByRole('button', { name: '甲', exact: true }).click();
+  await page.locator('.canvas').press('Meta+c');
+  await expect.poll(async () => (await read()).cards.some(card => card.id === 'b')).toBe(false);
+  await travel('撤销');
+  await expect.poll(async () => (await read()).cards.some(card => card.id === 'b')).toBe(true);
+  checks.menu = { status: 'EXECUTED', via: '菜单「剪切到剪贴板」走同一 canvas.cut 命令' };
+  checks.replaceClipboard = { status: 'EXECUTED', via: '剪切乙后复制甲：乙保持移除，撤销仍恢复乙' };
+
+  await workspace.restart();
+  await page.reload();
+  await expect(page.getByRole('status')).toHaveText('已保存到本机');
+  const reopened = await read();
+  expect(reopened.cards.map(card => card.id).sort()).toEqual(['a', 'b']);
+  expect((await cutState(envelope.cut.cutId)).body).toMatchObject({ state: 'consumed' });
+  checks.reopen = { status: 'EXECUTED', via: 'workspace.restart() + reload 后对象、连线与资格一致' };
+
+  const receipt = { issue: 33, scope: system ? 'system-clipboard' : 'page-clipboard-only',
+    run: system ? 'headed' : 'headless', at: new Date().toISOString(),
+    ac: {
+      AC1: ['clipboardDenied', 'remove'],
+      AC2: ['firstMove'],
+      AC3: ['firstMove', 'secondPaste', 'undoCut', 'redo'],
+      AC4: ['replaceClipboard', 'menu'],
+      AC5: ['reopen', 'systemClipboard', 'redo'],
+    },
+    checks,
+    unverified: [
+      '写入期间源版本变化的浏览器侧失败时序未单独构造（后端真实 SQLite 的 VERSION_CONFLICT 已覆盖）',
+      '网络丢 ACK 后的 journal 重放未在浏览器内构造（幂等由既有 receipt 测试与后端用例覆盖）',
+      '40/41 步裁剪由后端真实 SQLite 用例覆盖，浏览器未重复',
+    ],
+    sources: { browserClipboard: artifactRef('browser-clipboard-cut.json') } };
+  writeFileSync(system ? evidence : artifact('headless-paths.json'), JSON.stringify(receipt, null, 2));
+  if (system) {
+    mkdirSync(dirname(evidence), { recursive: true });
+    writeFileSync(evidence, JSON.stringify(receipt, null, 2));
+  }
+  writeFileSync(artifact(system ? 'headed-state.json' : 'headless-state.json'), JSON.stringify(reopened, null, 2));
+  expect(readFileSync(artifact(system ? 'headed-state.json' : 'headless-state.json'), 'utf8')).toContain('"cards"');
+}
+
+test.describe('页面剪贴板剪切状态机', () => {
+  test.skip(systemClipboard, 'headed 项目由系统剪贴板用例覆盖完整流程');
+  test('菜单与真实键盘剪切、首次搬动、副本、撤销、重开', async ({ page, workspace }) => {
+    test.setTimeout(240000);
+    await workspace.open(page);
+    await expect(page.getByRole('button', { name: '复制', exact: true })).toBeVisible();
+    await runCutFlow(page, workspace, false);
+  });
+});
+
+test.describe('AC5 系统剪贴板剪切验收', () => {
+  test.skip(!systemClipboard, 'AC5 系统侧验证需真实窗口：FORKWISE_SYSTEM_CLIPBOARD=1 npx playwright test tests/canvas-cut.spec.ts');
+  test('真实系统剪贴板剪切、首次搬动、副本、撤销与重开', async ({ page, workspace }) => {
+    test.setTimeout(240000);
+    await workspace.open(page);
+    await runCutFlow(page, workspace, true);
+  });
+});
+
+test.describe('跨项目剪切包边界', () => {
+  test.skip(systemClipboard, '系统剪贴板验收只跑主流程');
+  test('异项目剪切包明确拒绝，目标项目不写入', async ({ page, workspace }) => {
+    test.setTimeout(180000);
+    await workspace.open(page);
+    const sourceId = (await workspace.state()).project.id;
+    await workspace.execute(page, { commandId: crypto.randomUUID(), projectId: sourceId, type: 'thought.create',
+      expected: null, payload: { id: 'moved', title: '待搬动', text: '正文', x: 160, y: 200 } });
+    await page.reload();
+    await expect(page.getByRole('status')).toHaveText('已保存到本机');
+    await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
+    await page.getByRole('button', { name: '待搬动', exact: true }).click();
+    await page.locator('.canvas').press('Meta+x');
+    await expect.poll(async () => (await workspace.state()).cards.length).toBe(0);
+    const listProjects = async () => (await page.request.get(`${workspace.origin}/api/mapping/projects`)).json() as Promise<{ id: string }[]>;
+    const before = await listProjects();
+    await page.getByRole('button', { name: '新建研究', exact: true }).click();
+    await expect.poll(async () => (await listProjects()).length).toBe(before.length + 1);
+    const targetId = (await listProjects()).find(project => !before.some(previous => previous.id === project.id))!.id;
+    await expect(page.locator(`[role="tab"][title="${targetId}"]`)).toHaveAttribute('aria-selected', 'true');
+    const pane = (await page.locator('.react-flow__pane').boundingBox())!;
+    await page.mouse.move(pane.x + 420, pane.y + 300);
+    await page.locator('.react-flow__pane').click({ position: { x: 20, y: 20 } });
+    await page.locator('.canvas').press('Meta+v');
+    await expect(page.getByRole('alert')).toContainText('跨项目剪切尚未支持');
+    const target = await (await page.request.get(`${workspace.origin}/api/mapping/projects/${targetId}`)).json();
+    expect(target.cards).toHaveLength(0);
+    expect(target.connectors ?? []).toHaveLength(0);
+  });
+});

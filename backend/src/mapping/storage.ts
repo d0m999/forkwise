@@ -23,6 +23,7 @@ import { initializeHistory } from './history.js';
 import { initializeVersions } from './versions.js';
 import { initializeTags } from './tags.js';
 import { initializeSearchState } from './search-state.js';
+import { initializeCuts } from './cut.js';
 
 // Separate from research.sqlite: opening the workspace never runs legacy migrations,
 // activation recovery, background jobs, or retention cleanup.
@@ -108,6 +109,7 @@ export function openMapping(directory: string, options: CommitOptions = {}): Map
     initializeConnectors(db);
     initializeGroups(db);
     initializeFrames(db);
+    initializeCuts(db);
     return new Mapping(db, options);
   } catch (error) {
     db.close();

@@ -20,7 +20,7 @@ export default defineConfig({
     ? [
         {
           name: "system-clipboard",
-          testMatch: /canvas-cross-project-copy\.spec\.ts/,
+          testMatch: /(canvas-cross-project-copy|canvas-cut)\.spec\.ts/,
           use: { headless: false },
         },
       ]

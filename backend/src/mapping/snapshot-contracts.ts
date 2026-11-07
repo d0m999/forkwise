@@ -163,8 +163,11 @@ const FrozenEnd = z.discriminatedUnion('kind', [
   PasteEnd.options[0],
   PasteEnd.options[1].omit({ copyId: true }).extend({ itemId: Id }),
 ]);
+// 剪切信封随剪贴板一起走：cutId 指向源项目持久记录，sourceProjectId 用于拒绝跨项目剪切。
+const CutEnvelope = z.object({ cutId: Id, sourceProjectId: Id }).strict();
 export const CanvasClipboardSchema = z.object({
   kind: z.literal('forkwise-canvas-snapshot'), version: z.union([z.literal(1), z.literal(2)]),
+  cut: CutEnvelope.optional(),
   roots: z.array(Id).max(200).optional(),
   containment: z.array(z.object({ itemId: Id, parentItemId: Id }).strict()).max(200).optional(),
   library: PasteLibrary.optional(),

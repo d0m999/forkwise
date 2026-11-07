@@ -21,6 +21,7 @@ export type ReadQuery =
   | CompactQuery
   | IdentityQuery
   | { type: 'history'; projectId: string }
+  | { type: 'cut.state'; projectId: string; cutId: string }
   | { type: 'projects' }
   | { type: 'project'; projectId: string }
   | VersionQuery;
