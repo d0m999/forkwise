@@ -13,6 +13,16 @@ const artifact = (name: string) => join(artifacts, name);
 const artifactRef = (name: string) => relative(repo, artifact(name));
 type CheckStatus = 'EXECUTED' | 'NOT_RUN';
 
+// 阶段回执：ac 只能引用本次真正跑过（EXECUTED）的检查。NOT_RUN 进 ac 等于把未运行记成 PASS。
+function writeStageReceipt(name: string, scope: string,
+  checks: Record<string, { status: CheckStatus; via: string }>, ac: Record<string, string[]>,
+  unverified: string[], extra: Record<string, unknown> = {}) {
+  expect(Object.values(ac).flat().every(id => checks[id]?.status === 'EXECUTED')).toBe(true);
+  const receipt = { issue: 33, scope, run: systemClipboard ? 'headed' : 'headless',
+    at: new Date().toISOString(), ac, checks, unverified, ...extra };
+  writeFileSync(artifact(name), JSON.stringify(receipt, null, 2));
+}
+
 const pasteboardReader = `import Cocoa
 let pasteboard = NSPasteboard.general
 print("changeCount \\(pasteboard.changeCount)")
@@ -67,29 +77,44 @@ async function runCutFlow(page: Page, workspace: Workspace, system: boolean) {
   await expect(page.getByRole('status')).toHaveText('已保存到本机');
   mkdirSync(artifacts, { recursive: true });
 
-  // AC1：浏览器权限层真实拒绝 clipboard.write（CDP Browser.setPermission=denied），
-  // 不改写 navigator.clipboard.write、不靠 JS 打桩；前置 probe 证明权限确实被拒。
-  const cdp = await page.context().newCDPSession(page);
-  const clipboardPermission = { name: 'clipboard-write' };
-  await cdp.send('Browser.setPermission', { permission: clipboardPermission, setting: 'denied', origin: workspace.origin });
-  const writeRejected = await page.evaluate(async () => {
-    try {
-      await navigator.clipboard.write([new ClipboardItem({ 'text/plain': new Blob(['probe'], { type: 'text/plain' }) })]);
-      return false;
-    } catch { return true; }
-  });
-  expect(writeRejected).toBe(true);
-  await page.getByRole('button', { name: '甲', exact: true }).click();
-  await page.locator('.canvas').press('Meta+x');
-  await expect(page.getByRole('alert')).toContainText('无法写入剪贴板');
-  const afterDenied = await read();
-  expect(afterDenied.cards.map(card => card.id).sort()).toEqual(['a', 'b']);
-  expect(afterDenied.connectors!.map(line => line.id)).toEqual(['line']);
-  const deniedHistory = await (await page.request.get(`${workspace.origin}/api/mapping/projects/${projectId}/history`)).json();
-  expect(deniedHistory.undo.some((action: { label: string }) => action.label === 'canvas.cut')).toBe(false);
-  checks.clipboardDenied = { status: 'EXECUTED', via: 'CDP Browser.setPermission(clipboard-write=denied) 让真实 navigator.clipboard.write reject（前置 probe 已断言），Meta+x 后对象/连线/历史不变；OS 层 NSPasteboard 写入失败仍未构造' };
-  await cdp.send('Browser.setPermission', { permission: clipboardPermission, setting: 'granted', origin: workspace.origin });
-  await cdp.detach();
+  // AC1：浏览器权限层真实拒绝 clipboard.write（CDP Browser.setPermission=denied），不改写
+  // navigator.clipboard.write、不靠 JS 打桩；denied/granted 双向 probe 证明拒绝来自权限层而非环境。
+  if (system) {
+    // 实测：headed 下带用户激活的 clipboard.write 不受该权限拒绝约束，denied 后 Meta+x 仍写成功。
+    // 该失败分支只能在 headless 权限层构造，headed 记 NOT_RUN，不记 PASS。
+    checks.clipboardDenied = { status: 'NOT_RUN', via: 'headed 下用户激活的 navigator.clipboard.write 不受 CDP clipboard-write=denied 约束（实测 Meta+x 仍写成功），AC1 写失败分支只在 headless 权限层构造' };
+  } else {
+    // 必须在浏览器级 CDP 上开，并显式带上本 page 的 browserContextId：Playwright 的 context 不是默认
+    // 浏览器上下文，缺 browserContextId 时拒绝不会生效。
+    const browserCdp = await page.context().browser()!.newBrowserCDPSession();
+    const pageTarget = (await browserCdp.send('Target.getTargets')).targetInfos
+      .find(target => target.type === 'page' && target.url.startsWith(workspace.origin))!;
+    const browserContextId = pageTarget.browserContextId!;
+    const clipboardPermission = { name: 'clipboard-write' };
+    const setClipboardPermission = (setting: 'denied' | 'granted') => browserCdp.send('Browser.setPermission',
+      { permission: clipboardPermission, setting, origin: workspace.origin, browserContextId });
+    const probeWrite = () => page.evaluate(async () => {
+      try {
+        await navigator.clipboard.write([new ClipboardItem({ 'text/plain': new Blob(['probe'], { type: 'text/plain' }) })]);
+        return true;
+      } catch { return false; }
+    });
+    await setClipboardPermission('denied');
+    // 拒绝必须真的来自权限层：同一 probe 在 denied 下失败、在 granted 下成功，才排除「环境本来写不进去」。
+    expect(await probeWrite()).toBe(false);
+    await page.getByRole('button', { name: '甲', exact: true }).click();
+    await page.locator('.canvas').press('Meta+x');
+    await expect(page.getByRole('alert')).toContainText('无法写入剪贴板');
+    const afterDenied = await read();
+    expect(afterDenied.cards.map(card => card.id).sort()).toEqual(['a', 'b']);
+    expect(afterDenied.connectors!.map(line => line.id)).toEqual(['line']);
+    const deniedHistory = await (await page.request.get(`${workspace.origin}/api/mapping/projects/${projectId}/history`)).json();
+    expect(deniedHistory.undo.some((action: { label: string }) => action.label === 'canvas.cut')).toBe(false);
+    checks.clipboardDenied = { status: 'EXECUTED', via: 'CDP Browser.setPermission(clipboard-write=denied, 带 browserContextId) 让真实 navigator.clipboard.write reject（denied/granted 双向 probe 对照），Meta+x 后对象/连线/历史不变；OS 层 NSPasteboard 写入失败仍未构造' };
+    await setClipboardPermission('granted');
+    expect(await probeWrite()).toBe(true);
+    await browserCdp.detach();
+  }
   await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
 
   await page.reload();
@@ -184,12 +209,20 @@ async function runCutFlow(page: Page, workspace: Workspace, system: boolean) {
   expect((await cutState(envelope.cut.cutId)).body).toMatchObject({ state: 'consumed' });
   checks.redo = { status: 'EXECUTED', via: '重做按逆序恢复剪切(eligible)→首次搬动(consumed)，再撤销/重做仍同步' };
 
-  // 菜单入口的可访问性：首项自动聚焦、Esc 关闭并归还焦点、IME 组合期间的 Esc 不误关。
+  // 菜单入口的可访问性：首项自动聚焦、Tab/Shift+Tab 在菜单项间移动、Esc 关闭并归还焦点、IME 组合期间的 Esc 不误关。
   const copyTrigger = page.getByRole('button', { name: '复制', exact: true });
   const copyMenu = page.getByRole('menu', { name: '复制操作' });
+  await page.getByRole('button', { name: '甲', exact: true }).click();
   await copyTrigger.click();
   await expect(copyMenu).toBeVisible();
-  await expect(copyMenu.getByRole('menuitem').first()).toBeFocused();
+  const menuItems = copyMenu.getByRole('menuitem');
+  await expect(menuItems.first()).toBeFocused();
+  // Tab 不被菜单拦截，应落到下一项；Shift+Tab 回到首项。选中对象后菜单至少有剪切/复制/粘贴多项。
+  expect(await menuItems.count()).toBeGreaterThan(1);
+  await page.keyboard.press('Tab');
+  await expect(menuItems.nth(1)).toBeFocused();
+  await page.keyboard.press('Shift+Tab');
+  await expect(menuItems.first()).toBeFocused();
   // 对照：不带组合状态的合成 Esc 确实能到达处理器并关闭菜单，排除「事件没派发到」的假阳性。
   await page.evaluate(() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })));
   await expect(copyMenu).toBeHidden();
@@ -199,7 +232,7 @@ async function runCutFlow(page: Page, workspace: Workspace, system: boolean) {
   await page.keyboard.press('Escape');
   await expect(copyMenu).toBeHidden();
   await expect(copyTrigger).toBeFocused();
-  checks.menuKeyboard = { status: 'EXECUTED', via: '真实键盘 Esc 关闭并归还焦点，菜单首项自动聚焦；合成 Esc 对照确认事件可达处理器' };
+  checks.menuKeyboard = { status: 'EXECUTED', via: '真实键盘 Esc 关闭并归还焦点，菜单首项自动聚焦；Tab/Shift+Tab 在菜单项间前后移动；合成 Esc 对照确认事件可达处理器' };
   checks.menuImeGuard = { status: 'NOT_RUN', via: '只有合成 KeyboardEvent(isComposing) 的守卫断言；Playwright 只能派发 CDP/DOM 合成事件，真实 OS 输入法组合需系统 IME 参与，headless 与 headed 均无法在自动化内构造，按规格不计 PASS' };
 
   // AC4：替换剪贴板不复活原件，撤销剪切仍可用。
@@ -227,26 +260,31 @@ async function runCutFlow(page: Page, workspace: Workspace, system: boolean) {
   expect((await cutState(envelope.cut.cutId)).body).toMatchObject({ state: 'consumed' });
   checks.reopen = { status: 'EXECUTED', via: 'workspace.restart() + reload 后对象、连线与资格一致' };
 
+  // ac 只登记本次 run 真正跑过的检查：headless 没有系统剪贴板，systemClipboard 不得进 ac。
+  const ac: Record<string, string[]> = {
+    AC1: [...(system ? [] : ['clipboardDenied']), 'remove'],
+    AC2: ['firstMove'],
+    AC3: ['firstMove', 'secondPaste', 'undoCut', 'redo'],
+    AC4: ['replaceClipboard', 'menu'],
+    AC5: [...(system ? ['systemClipboard'] : []), 'reopen', 'redo'],
+  };
+  expect(Object.values(ac).flat().every(id => checks[id]?.status === 'EXECUTED')).toBe(true);
   const receipt = { issue: 33, scope: system ? 'system-clipboard' : 'page-clipboard-only',
     run: system ? 'headed' : 'headless', at: new Date().toISOString(),
-    ac: {
-      AC1: ['clipboardDenied', 'remove'],
-      AC2: ['firstMove'],
-      AC3: ['firstMove', 'secondPaste', 'undoCut', 'redo'],
-      AC4: ['replaceClipboard', 'menu'],
-      AC5: ['reopen', 'systemClipboard', 'redo'],
-    },
+    ac,
     checks,
     unverified: [
       '写入期间源版本变化的浏览器侧失败时序未单独构造（后端真实 SQLite 的 VERSION_CONFLICT 已覆盖）',
-      'OS 层系统剪贴板写入失败未构造：已用 CDP 权限层真实拒绝覆盖浏览器侧 write 失败，NSPasteboard 写入失败需 OS 级故障注入',
+      'OS 层系统剪贴板写入失败未构造：浏览器侧 write 失败用 headless 的 CDP 权限拒绝覆盖（双向 probe 对照），headed 下该拒绝对用户激活的写入不生效、记 NOT_RUN',
       '真实 OS IME 组合输入未构造：自动化只能派发 CDP/DOM 合成事件，守卫证据已与真实键盘证据分开记录',
+      '辅助技术（屏幕阅读器/语音控制）未接入：菜单与画布的可访问性只有键盘、焦点与角色断言，无真实 AT 证据',
       '丢 ACK 用 route.fetch + 503 构造（服务端已提交、客户端响应失败）；真实网络分区与进程被杀未构造',
       '40/41 步裁剪由后端真实 SQLite 用例覆盖，浏览器未重复',
-      '外端并发修改（AC5）的拒绝路径由独立用例回执承接，见 linkedReceipts.outerChanged',
     ],
     sources: { browserClipboard: artifactRef('browser-clipboard-cut.json') },
-    linkedReceipts: { outerChanged: artifactRef('outer-end-changed.json') } };
+    linkedReceipts: { outerChanged: artifactRef('outer-end-changed.json'),
+      outerFrameChanged: artifactRef('outer-frame-changed.json'),
+      outerGroupChanged: artifactRef('outer-group-changed.json') } };
   writeFileSync(system ? evidence : artifact('headless-paths.json'), JSON.stringify(receipt, null, 2));
   if (system) {
     mkdirSync(dirname(evidence), { recursive: true });
@@ -355,16 +393,95 @@ test.describe('外端在剪切后被修改', () => {
     expect(await (await page.request.get(cutUrl)).json()).toMatchObject({ state: 'eligible', revision: 0 });
     checks.outerChangedReopen = { status: 'EXECUTED', via: 'workspace.restart() + reload 后对象、连线与 eligible/revision 0 一致，拒绝结论跨重启保持' };
 
-    // 每阶段一份汇总：该场景独立成回执，ac 只登记本用例真正执行的检查，不并入主流程 checks。
-    const receipt = { issue: 33, scope: systemClipboard ? 'system-clipboard' : 'page-clipboard-only',
-      run: systemClipboard ? 'headed' : 'headless', at: new Date().toISOString(),
-      ac: { AC2: ['outerChanged'], AC5: ['outerChanged', 'outerChangedReopen'] },
-      checks,
-      unverified: ['外端为组合/分区时的真实 UI 拒绝路径未单独构造（后端真实 SQLite 已覆盖）',
-        'OS 层系统剪贴板写入失败与真实 OS IME 组合输入未构造，见主回执 unverified'],
-      sources: { cutId: envelope.cut.cutId } };
-    writeFileSync(artifact('outer-end-changed.json'), JSON.stringify(receipt, null, 2));
-    expect(readFileSync(artifact('outer-end-changed.json'), 'utf8')).toContain('"outerChangedReopen"');
+    // 每阶段一份汇总：本用例只读页面剪贴板，所以 scope 固定 page-clipboard-only，不随 run 环境改名。
+    writeStageReceipt('outer-end-changed.json', 'page-clipboard-only', checks,
+      { AC5: ['outerChanged', 'outerChangedReopen'] },
+      ['OS 层系统剪贴板写入失败与真实 OS IME 组合输入未构造，见主回执 unverified'],
+      { sources: { cutId: envelope.cut.cutId } });
+  });
+
+  test('外端是分区时改名后首次粘贴经真实入口拒绝', async ({ page, workspace }) => {
+    test.setTimeout(180000);
+    await workspace.open(page);
+    const projectId = (await workspace.state()).project.id;
+    const execute = (type: string, payload: unknown, expected: unknown = null) =>
+      workspace.execute(page, { commandId: crypto.randomUUID(), projectId, type, expected, payload });
+    await execute('frame.create', { id: 'frame', itemIds: [], pose: { x: 0, y: 0, width: 300, height: 200 } },
+      { frame: null, groups: {}, containment: {}, poses: {} });
+    // 卡片放在分区外，避免被自动归属成成员；分区本身作为连线外端。
+    await execute('thought.create', { id: 'a', title: '甲', text: '甲的正文', x: 900, y: 700 });
+    const card = (await workspace.state()).cards.find(value => value.id === 'a')!;
+    await execute('connector.create', { id: 'line', start: { kind: 'bound', itemId: card.item.id, side: 'right' },
+      end: { kind: 'bound', targetKind: 'frame', itemId: 'frame', side: 'left' }, path: 'straight' });
+    await page.reload();
+    await expect(page.getByRole('status')).toHaveText('已保存到本机');
+    await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
+    await page.getByRole('button', { name: '甲', exact: true }).click();
+    await page.locator('.canvas').press('Meta+x');
+    await expect.poll(async () => (await workspace.state()).cards.length).toBe(0);
+    const envelope = JSON.parse(await page.evaluate(async () => {
+      const item = (await navigator.clipboard.read()).find(value => value.types.includes('web application/x-forkwise-canvas'));
+      return item ? await (await item.getType('web application/x-forkwise-canvas')).text() : '';
+    }));
+    const cutUrl = `${workspace.origin}/api/mapping/projects/${projectId}/cuts/${envelope.cut.cutId}`;
+    const frame = (await workspace.state()).frames!.find(value => value.id === 'frame')!;
+    await execute('frame.edit', { id: 'frame', name: '改过名', background: null }, frame.versionId);
+    await page.locator('.react-flow__pane').click({ position: { x: 20, y: 20 } });
+    await page.locator('.canvas').press('Meta+v');
+    await expect(page.getByRole('alert')).toContainText('剪切后外部连线端点已变化');
+    const after = await workspace.state();
+    expect(after.cards).toEqual([]);
+    expect(after.connectors ?? []).toEqual([]);
+    // 分区改名换了版本，外端指纹必须随之变化；拒绝后画布与资格都不动。
+    expect(after.frames!.find(value => value.id === 'frame')!.versionId).not.toBe(frame.versionId);
+    expect(await (await page.request.get(cutUrl)).json()).toMatchObject({ state: 'eligible', revision: 0 });
+    writeStageReceipt('outer-frame-changed.json', 'page-clipboard-only',
+      { outerFrameChanged: { status: 'EXECUTED', via: '真实 UI：Meta+x → frame.edit 改名 → Meta+v 被 CUT_OUTER_CHANGED 拒绝；alert 文案、画布、分区版本与 cut 资格均核验' } },
+      { AC5: ['outerFrameChanged'] },
+      ['OS 层系统剪贴板写入失败与真实 OS IME 组合输入未构造，见主回执 unverified']);
+  });
+
+  test('外端是组合时成员移动后首次粘贴经真实入口拒绝', async ({ page, workspace }) => {
+    test.setTimeout(180000);
+    await workspace.open(page);
+    const projectId = (await workspace.state()).project.id;
+    const execute = (type: string, payload: unknown, expected: unknown = null) =>
+      workspace.execute(page, { commandId: crypto.randomUUID(), projectId, type, expected, payload });
+    for (const [id, x] of [['a', 120], ['b', 620], ['c', 920]] as const)
+      await execute('thought.create', { id, title: id === 'a' ? '甲' : `成员${id}`, text: `${id} 的正文`, x, y: 160 });
+    const seeded = await workspace.state();
+    const [a, b, c] = ['a', 'b', 'c'].map(id => seeded.cards.find(card => card.id === id)!);
+    // 组合轮廓由成员 pose 派生：移动成员改指纹，而组合自身 versionId 不变。
+    await execute('group.create', { id: 'g', itemIds: [b!.item.id, c!.item.id] },
+      { groups: { g: null }, containment: { [b!.item.id]: null, [c!.item.id]: null } });
+    const group = (await workspace.state()).groups!.find(value => value.id === 'g')!;
+    await execute('connector.create', { id: 'line', start: { kind: 'bound', itemId: a!.item.id, side: 'right' },
+      end: { kind: 'bound', targetKind: 'group', itemId: group.itemId, side: 'left' }, path: 'straight' });
+    await page.reload();
+    await expect(page.getByRole('status')).toHaveText('已保存到本机');
+    await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
+    await page.getByRole('button', { name: '甲', exact: true }).click();
+    await page.locator('.canvas').press('Meta+x');
+    await expect.poll(async () => (await workspace.state()).cards.map(card => card.id).sort()).toEqual(['b', 'c']);
+    const envelope = JSON.parse(await page.evaluate(async () => {
+      const item = (await navigator.clipboard.read()).find(value => value.types.includes('web application/x-forkwise-canvas'));
+      return item ? await (await item.getType('web application/x-forkwise-canvas')).text() : '';
+    }));
+    const cutUrl = `${workspace.origin}/api/mapping/projects/${projectId}/cuts/${envelope.cut.cutId}`;
+    const moved = (await workspace.state()).cards.find(card => card.id === 'b')!;
+    await execute('card.edit', { id: 'b', text: '成员 b 的新正文，长度明显增加以触发增高', x: 660, y: 520 },
+      { body: moved.body.versionId, pose: moved.item.versionId });
+    await page.locator('.react-flow__pane').click({ position: { x: 20, y: 20 } });
+    await page.locator('.canvas').press('Meta+v');
+    await expect(page.getByRole('alert')).toContainText('剪切后外部连线端点已变化');
+    const after = await workspace.state();
+    expect(after.cards.map(card => card.id).sort()).toEqual(['b', 'c']);
+    expect(after.connectors ?? []).toEqual([]);
+    expect(await (await page.request.get(cutUrl)).json()).toMatchObject({ state: 'eligible', revision: 0 });
+    writeStageReceipt('outer-group-changed.json', 'page-clipboard-only',
+      { outerGroupChanged: { status: 'EXECUTED', via: '真实 UI：Meta+x → card.edit 移动组合成员 → Meta+v 被 CUT_OUTER_CHANGED 拒绝；alert 文案、画布与 cut 资格均核验' } },
+      { AC5: ['outerGroupChanged'] },
+      ['OS 层系统剪贴板写入失败与真实 OS IME 组合输入未构造，见主回执 unverified']);
   });
 });
 

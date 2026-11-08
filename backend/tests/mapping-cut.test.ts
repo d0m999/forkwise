@@ -218,6 +218,10 @@ it.each([
   ['对象而非数组', {}],
   ['数组含空元素', [null]],
   ['元素缺字段', [{ kind: 'item' }]],
+  // 空串能通过 typeof 校验，但永远比不中指纹：旧实现会把它报成 CUT_OUTER_CHANGED（并发修改）。
+  ['元素指纹为空串', [{ kind: 'item', itemId: 'a', fingerprint: '' }]],
+  // 空串 id 让 endpointFingerprint 返回 null，旧实现会当成「外端已删除」静默跳过整条线。
+  ['元素 id 为空串', [{ kind: 'item', itemId: '', fingerprint: 'v1' }]],
 ])('外端冻结字段损坏（%s）时按状态不可判定拒绝，不抛未捕获异常', (_label, damaged) => {
   const f = groupFixture();
   const a = f.card('a'), b = f.card('b');

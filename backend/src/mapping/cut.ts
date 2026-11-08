@@ -174,9 +174,12 @@ export function pasteCut(db: Database.Database, command: CanvasPasteCut): CutWri
   // 84af656c 的旧回执只有 cutOuterVersions（id→version），缺 kind 与组合成员 pose，无法重建
   // 外端指纹；缺 cutOuterEnds 一律按状态不可判定拒绝（AC5 保全数据并报告），不做猜测性迁移。
   const frozen = change.cutOuterEnds;
+  // 空串 id 会让 endpointFingerprint 返回 null、被当成「外端已删除」而跳过；空串指纹永远比不中，
+  // 会把损坏回执报成 CUT_OUTER_CHANGED（并发修改）。两者都必须落到「不可判定」。
   requireThat(Array.isArray(frozen) && frozen.every((end: CutOuterEnd) =>
     end && (end.kind === 'item' || end.kind === 'group' || end.kind === 'frame') &&
-    typeof end.itemId === 'string' && typeof end.fingerprint === 'string'),
+    typeof end.itemId === 'string' && end.itemId.length > 0 &&
+    typeof end.fingerprint === 'string' && end.fingerprint.length > 0),
     'CUT_OUTER_UNKNOWN', '剪切外线状态不可用，已保留当前画布，未粘贴任何内容', 409);
   const plan = restorePlan(change);
   const itemIds = new Set<string>([
