@@ -313,7 +313,8 @@ export interface Change extends Receipt {
   tagChanges?: TagChange[];
   assetChanges?: AssetChange[];
   cardChanges?: { before: Card; after: Card }[];
-  // 本次之前的剪切回执没有该字段，粘贴时按状态不可判定拒绝（CUT_OUTER_UNKNOWN）。
+  // 84af656c 及更早的剪切回执没有该字段（旧字段 cutOuterVersions 只有 id→version，缺 kind 与
+  // 组合成员 pose，无法重建指纹）；粘贴时按状态不可判定拒绝（CUT_OUTER_UNKNOWN），不猜测性迁移。
   cutOuterEnds?: CutOuterEnd[];
   before: Project | Card | null;
   after: Project | Card | null;

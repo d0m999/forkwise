@@ -162,6 +162,44 @@ it('挂在被剪切组合上的外线，另一端被移动仍判为并发修改'
   expect(() => pasteCut(f, 'cut-1')).toThrowError(expect.objectContaining({ code: 'CUT_OUTER_CHANGED' }));
 });
 
+it('外端是分区时被改名也判为并发修改，首次粘贴拒绝', () => {
+  const f = groupFixture();
+  f.execute({ type: 'frame.create', expected: { frame: null, groups: {}, containment: {}, poses: {} },
+    payload: { id: 'frame', itemIds: [], pose: { x: 0, y: 0, width: 300, height: 200 } } });
+  // 卡片放在分区外，避免被自动归属成成员；分区本身作为连线外端。
+  f.execute({ type: 'thought.create', expected: null, payload: { id: 'a', title: '甲', text: '正文', x: 900, y: 700 } });
+  const a = f.state().cards.find(card => card.id === 'a')!;
+  f.execute({ type: 'connector.create', expected: null, payload: { id: 'line',
+    start: { kind: 'bound', itemId: a.item.id, side: 'right' },
+    end: { kind: 'bound', targetKind: 'frame', itemId: 'frame', side: 'left' }, path: 'straight' } });
+  cut(f, 'cut-1', [a.item.id]);
+  const frame = f.state().frames!.find(value => value.id === 'frame')!;
+  f.execute({ type: 'frame.edit', expected: frame.versionId,
+    payload: { id: 'frame', name: '改过名', background: null } });
+  const after = f.state();
+  // endpointFingerprint 的 frame 分支取 frame.versionId；改名换版本必须判为并发修改。
+  expect(after.frames!.find(value => value.id === 'frame')!.versionId).not.toBe(frame.versionId);
+  expect(() => pasteCut(f, 'cut-1')).toThrowError(expect.objectContaining({ code: 'CUT_OUTER_CHANGED' }));
+  expect(f.state()).toEqual(after);
+});
+
+it('挂在被剪切分区上的外线，另一端被移动仍判为并发修改', () => {
+  const f = groupFixture();
+  f.execute({ type: 'frame.create', expected: { frame: null, groups: {}, containment: {}, poses: {} },
+    payload: { id: 'frame', itemIds: [], pose: { x: 0, y: 0, width: 300, height: 200 } } });
+  f.execute({ type: 'thought.create', expected: null, payload: { id: 'a', title: '甲', text: '正文', x: 900, y: 700 } });
+  const a = f.state().cards.find(card => card.id === 'a')!;
+  f.execute({ type: 'connector.create', expected: null, payload: { id: 'line',
+    start: { kind: 'bound', targetKind: 'frame', itemId: 'frame', side: 'right' },
+    end: { kind: 'bound', itemId: a.item.id, side: 'left' }, path: 'straight' } });
+  cut(f, 'cut-1', ['frame']);
+  expect(f.state().connectors).toEqual([]);
+  const moved = f.state().cards.find(card => card.id === 'a')!;
+  f.execute({ type: 'card.edit', expected: { body: moved.body.versionId, pose: moved.item.versionId },
+    payload: { id: 'a', text: '原始正文', x: 1200, y: 900 } });
+  expect(() => pasteCut(f, 'cut-1')).toThrowError(expect.objectContaining({ code: 'CUT_OUTER_CHANGED' }));
+});
+
 it('缺少外端冻结的旧剪切回执按状态不可判定拒绝', () => {
   const f = groupFixture();
   const a = f.card('a'), b = f.card('b');
@@ -172,6 +210,51 @@ it('缺少外端冻结的旧剪切回执按状态不可判定拒绝', () => {
     .run(cutState(f, 'cut-1').sourceRevision);
   db.close();
   const before = f.state();
+  expect(() => pasteCut(f, 'cut-1')).toThrowError(expect.objectContaining({ code: 'CUT_OUTER_UNKNOWN' }));
+  expect(f.state()).toEqual(before);
+});
+
+it.each([
+  ['对象而非数组', {}],
+  ['数组含空元素', [null]],
+  ['元素缺字段', [{ kind: 'item' }]],
+])('外端冻结字段损坏（%s）时按状态不可判定拒绝，不抛未捕获异常', (_label, damaged) => {
+  const f = groupFixture();
+  const a = f.card('a'), b = f.card('b');
+  link(f, 'line', a.item.id, b.item.id);
+  cut(f, 'cut-1', [a.item.id]);
+  const revision = cutState(f, 'cut-1').sourceRevision;
+  const db = new Database(join(f.directory, 'workspace.sqlite'));
+  const row = db.prepare('SELECT receipt FROM mapping_changes WHERE project_id=? AND revision=?')
+    .get('p', revision) as { receipt: string };
+  const receipt = JSON.parse(row.receipt);
+  receipt.cutOuterEnds = damaged;
+  db.prepare('UPDATE mapping_changes SET receipt=? WHERE project_id=? AND revision=?')
+    .run(JSON.stringify(receipt), 'p', revision);
+  db.close();
+  const before = f.state();
+  // 旧实现的 truthy 校验会让 for…of 在 {} / [null] 上抛 TypeError，而非受控报告。
+  expect(() => pasteCut(f, 'cut-1')).toThrowError(expect.objectContaining({ code: 'CUT_OUTER_UNKNOWN' }));
+  expect(f.state()).toEqual(before);
+});
+
+it('84af656c 旧回执仅有 cutOuterVersions 时按状态不可判定拒绝', () => {
+  const f = groupFixture();
+  const a = f.card('a'), b = f.card('b');
+  link(f, 'line', a.item.id, b.item.id);
+  cut(f, 'cut-1', [a.item.id]);
+  const revision = cutState(f, 'cut-1').sourceRevision;
+  const db = new Database(join(f.directory, 'workspace.sqlite'));
+  const row = db.prepare('SELECT receipt FROM mapping_changes WHERE project_id=? AND revision=?')
+    .get('p', revision) as { receipt: string };
+  const receipt = JSON.parse(row.receipt);
+  delete receipt.cutOuterEnds;
+  receipt.cutOuterVersions = { [b.item.id]: b.item.versionId };
+  db.prepare('UPDATE mapping_changes SET receipt=? WHERE project_id=? AND revision=?')
+    .run(JSON.stringify(receipt), 'p', revision);
+  db.close();
+  const before = f.state();
+  // 旧字段缺 kind 与组合成员 pose，无法重建指纹；按 AC5 拒绝，不猜测性迁移。
   expect(() => pasteCut(f, 'cut-1')).toThrowError(expect.objectContaining({ code: 'CUT_OUTER_UNKNOWN' }));
   expect(f.state()).toEqual(before);
 });

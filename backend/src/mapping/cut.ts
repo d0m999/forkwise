@@ -170,8 +170,14 @@ export function pasteCut(db: Database.Database, command: CanvasPasteCut): CutWri
     .get(projectId, record.sourceRevision) as { receipt: string } | undefined;
   const change = row ? (JSON.parse(row.receipt) as Change) : null;
   requireThat(change, 'CUT_RESTORE_MISSING', '剪切恢复资料不可用，未粘贴任何内容', 409);
+  // receipt 经 JSON.parse 进来，属外部数据：只在这里校验一次，往里传已校验的 CutOuterEnd[]。
+  // 84af656c 的旧回执只有 cutOuterVersions（id→version），缺 kind 与组合成员 pose，无法重建
+  // 外端指纹；缺 cutOuterEnds 一律按状态不可判定拒绝（AC5 保全数据并报告），不做猜测性迁移。
   const frozen = change.cutOuterEnds;
-  requireThat(frozen, 'CUT_OUTER_UNKNOWN', '剪切外线状态不可用，已保留当前画布，未粘贴任何内容', 409);
+  requireThat(Array.isArray(frozen) && frozen.every((end: CutOuterEnd) =>
+    end && (end.kind === 'item' || end.kind === 'group' || end.kind === 'frame') &&
+    typeof end.itemId === 'string' && typeof end.fingerprint === 'string'),
+    'CUT_OUTER_UNKNOWN', '剪切外线状态不可用，已保留当前画布，未粘贴任何内容', 409);
   const plan = restorePlan(change);
   const itemIds = new Set<string>([
     ...plan.cards.map(value => value.item.id),
