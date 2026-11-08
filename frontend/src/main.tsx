@@ -101,6 +101,10 @@ import { useAppearanceSave, type AppearanceInput } from "./appearance-save";
 import { ProjectTags, CardTagSummary } from "./project-tags";
 import type { Tag } from "../../backend/src/mapping/contracts";
 
+// 结构类命令的读已过期失败靠一次刷新收敛：命令集与错误码集中在这里，新增错误码不必改条件里的长行。
+const STALE_READ_COMMANDS = new Set(['connector.reconnect', 'connector.path', 'connector.move', 'connector.delete', 'connector.style', 'connector.reverse', 'connector.label', 'canvas.layer', 'canvas.duplicate', 'canvas.paste', 'canvas.cut', 'canvas.paste-cut']);
+const STALE_READ_CODES = new Set(['VERSION_CONFLICT', 'NOT_FOUND', 'ID_CONFLICT', 'CUT_STATE_CONFLICT', 'CUT_NOT_FOUND', 'CUT_RESTORE_MISSING', 'CUT_OUTER_CHANGED', 'CUT_OUTER_UNKNOWN']);
+
 type CardData = {
   cardOnlySelection: boolean;
   tags: Tag[];
@@ -1777,7 +1781,7 @@ function Workspace() {
         pending.onSettled?.();
       }
       if (!executed && e instanceof MappingError &&
-        ((['connector.reconnect', 'connector.path', 'connector.move', 'connector.delete', 'connector.style', 'connector.reverse', 'connector.label', 'canvas.layer', 'canvas.duplicate', 'canvas.paste', 'canvas.cut', 'canvas.paste-cut'].includes(command.type) && ['VERSION_CONFLICT', 'NOT_FOUND', 'ID_CONFLICT', 'CUT_STATE_CONFLICT', 'CUT_NOT_FOUND', 'CUT_RESTORE_MISSING', 'CUT_OUTER_CHANGED'].includes(e.code)) ||
+        ((STALE_READ_COMMANDS.has(command.type) && STALE_READ_CODES.has(e.code)) ||
           (command.type === 'connector.reconnect' && e.code === 'INVALID_ENDPOINT'))) {
         pendingAction.current = null;
         onDone?.();

@@ -15,7 +15,7 @@ import type { ImageVersion } from './image-contracts.js';
 import { moveCanvas } from './canvas-move.js';
 import { layerCanvas } from './layer-order.js';
 import { pasteCanvas } from './snapshot.js';
-import { cutCanvas, pasteCut, readCutState, recordCut } from './cut.js';
+import { cutCanvas, freezeOuterEnds, pasteCut, readCutState, recordCut } from './cut.js';
 import type { CutStateView } from './cut-contracts.js';
 import { duplicateCanvas } from './snapshot-duplicate.js';
 import { nextCreatedOrder } from './created-order.js';
@@ -339,7 +339,7 @@ export class Mapping {
         let shapeChanges: Change['shapeChanges'];
         let textChanges: Change['textChanges'];
         let cut: CutStateView | undefined;
-        let cutOuterVersions: Record<string, string> | undefined;
+        let cutOuterEnds: Change['cutOuterEnds'];
         let travel: ReturnType<typeof travelHistory> | undefined;
         let revision: number;
         let changedIds: string[];
@@ -377,7 +377,7 @@ export class Mapping {
         } else if (command.type === 'group.delete' || command.type === 'canvas.delete-selection' || command.type === 'canvas.cut') {
           const project = this.project(command.projectId);
           if (command.type === 'canvas.cut') {
-            ({ frameChanges, groupChanges, containmentChanges, cardLifecycleChanges, textChanges, shapeChanges, imageChanges, strokeChanges, connectorChanges, changedIds, cutOuterVersions } = cutCanvas(this.db, command));
+            ({ frameChanges, groupChanges, containmentChanges, cardLifecycleChanges, textChanges, shapeChanges, imageChanges, strokeChanges, connectorChanges, changedIds } = cutCanvas(this.db, command));
             // 剪切记录与对象移除、版本、历史、changefeed 同事务提交。
             cut = recordCut(this.db, command.projectId, command.payload.cutId, project.revision + 1);
           } else
@@ -845,6 +845,8 @@ export class Mapping {
           connectorChanges = applyContainerConnectorRemoval(this.db, command.projectId, containerConnectorPlan, connectorChanges);
           changedIds = [...new Set([...changedIds, ...connectorChanges.map(change => (change.after ?? change.before!).id)])];
         }
+        // 外端指纹在容器连线合并之后取：挂在被删组合/分区上的线此时才算真正删除。
+        if (command.type === 'canvas.cut') cutOuterEnds = freezeOuterEnds(this.db, command.projectId, connectorChanges ?? []);
         for (const c of cardLifecycleChanges ?? []) {
           reconcileMediaTasks(this.db, command.projectId, c.before, c.after);
           if (c.after) {
@@ -926,7 +928,7 @@ export class Mapping {
           ...(textChanges ? { textChanges } : {}),
           ...(cardChanges ? { cardChanges } : {}),
           ...(cardLifecycleChanges ? { cardLifecycleChanges } : {}),
-          ...(cutOuterVersions ? { cutOuterVersions } : {}),
+          ...(cutOuterEnds ? { cutOuterEnds } : {}),
           actor: actor.actor,
           writtenAt: new Date().toISOString(),
         };

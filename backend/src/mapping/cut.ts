@@ -1,13 +1,14 @@
 import type Database from 'better-sqlite3';
 import { randomUUID } from 'node:crypto';
 import { requireThat } from '../domain/errors.js';
-import type { Card, Change } from './contracts.js';
+import type { Card, Change, CutOuterEnd } from './contracts.js';
 import type { CanvasCut, CanvasPasteCut, CutRecord, CutState, CutStateView } from './cut-contracts.js';
 import { deleteSelection } from './selection-delete.js';
 import { readGroupRecords, writeContainment, writeGroup, groupItems } from './group.js';
 import { readFrames } from './frame.js';
-import { readConnectors, saveConnector } from './connector.js';
-import { endpointBounds } from './container-endpoints.js';
+import { saveConnector } from './connector.js';
+import { endpointKey, endpointKind } from './connector-contracts.js';
+import { endpointBounds, endpointFingerprint } from './container-endpoints.js';
 import { frameCandidate } from './frame-spatial.js';
 import { groupOutcome } from './group-lifecycle.js';
 import { readSnapshotScene } from './snapshot.js';
@@ -109,21 +110,22 @@ function writeVersion(db: Database.Database, projectId: string, domain: string, 
   db.prepare('INSERT OR IGNORE INTO mapping_versions(project_id,domain,id,version_id,value) VALUES(?,?,?,?,?)')
     .run(projectId, domain, id, versionId, JSON.stringify(value));
 }
-// 按冻结的外端 id 读当前版本。剪切时由调用方收集外端 id，粘贴时直接复用冻结 map 的 keys；
-// 两处读的是同一组 id，避免各自的 scope 计算出现偏差时静默漏检并发修改。
-function outerVersions(db: Database.Database, projectId: string, ids: Set<string>): Record<string, string> {
-  if (!ids.size) return {};
-  const items = groupItems(db, projectId), groups = readGroupRecords(db, projectId), frames = readFrames(db, projectId);
-  const versions: Record<string, string> = {};
-  for (const id of ids) {
-    const item = items.find(value => value.value.item.id === id);
-    if (item) { versions[id] = item.value.item.versionId; continue; }
-    const group = groups.find(value => value.itemId === id);
-    if (group) { versions[id] = group.versionId; continue; }
-    const frame = frames.find(value => value.id === id);
-    if (frame) versions[id] = frame.versionId;
+// 只冻结本次真正删除的连线外端：线随剪切消失，剩下端点的当前状态就是首次搬动的比对基线。
+// 不自己推导剪切范围——范围有任何偏差都会让整条线静默漏检。调用点在容器连线合并之后，
+// 否则挂在被删组合/分区上的线会漏掉另一端。
+export function freezeOuterEnds(db: Database.Database, projectId: string, connectorChanges: NonNullable<Change['connectorChanges']>): CutOuterEnd[] {
+  const removedLines = connectorChanges.filter(change => !change.after);
+  if (!removedLines.length) return [];
+  const state = readSnapshotScene(db, projectId).state;
+  const ends = new Map<string, CutOuterEnd>();
+  for (const { before } of removedLines) {
+    for (const end of [before!.start, before!.end]) {
+      if (end.kind !== 'bound') continue;
+      const kind = endpointKind(end), fingerprint = endpointFingerprint(state, kind, end.itemId);
+      if (fingerprint !== null) ends.set(endpointKey(end), { kind, itemId: end.itemId, fingerprint });
+    }
   }
-  return versions;
+  return [...ends.values()];
 }
 // 只取剪切实际移除的那部分：before 有值、after 为空。
 function restorePlan(change: Change): Restore {
@@ -142,18 +144,10 @@ function restorePlan(change: Change): Restore {
 function shift<T extends { x: number; y: number }>(point: T, dx: number, dy: number): T {
   return { ...point, x: point.x + dx, y: point.y + dy };
 }
-export function cutCanvas(db: Database.Database, command: CanvasCut): ReturnType<typeof deleteSelection> & { cutOuterVersions: Record<string, string> } {
-  const { payload, expected } = command;
-  // 冻结读必须在删除之前：删除后连线行已不在库里，外端版本也无从对齐。
-  const scope = new Set([...Object.keys(expected.items), ...Object.keys(expected.containment), ...Object.keys(expected.frames ?? {})]);
-  const outer = new Set<string>();
-  for (const line of readConnectors(db, command.projectId)) {
-    if (![line.start, line.end].some(end => end.kind === 'bound' && scope.has(end.itemId))) continue;
-    for (const end of [line.start, line.end]) if (end.kind === 'bound' && !scope.has(end.itemId)) outer.add(end.itemId);
-  }
-  const cutOuterVersions = outerVersions(db, command.projectId, outer);
+export function cutCanvas(db: Database.Database, command: CanvasCut): ReturnType<typeof deleteSelection> {
+  const { payload } = command;
   // 剪切沿用删选的完整事实校验与原子性；差别只在提交成功后写一份可恢复的剪切记录。
-  const removed = deleteSelection(db, {
+  return deleteSelection(db, {
     ...command,
     type: 'canvas.delete-selection',
     payload: {
@@ -162,7 +156,6 @@ export function cutCanvas(db: Database.Database, command: CanvasCut): ReturnType
       ...(payload.frameIds?.length ? { frameIds: payload.frameIds } : {}),
     },
   } as Parameters<typeof deleteSelection>[1]);
-  return { ...removed, cutOuterVersions };
 }
 
 export function pasteCut(db: Database.Database, command: CanvasPasteCut): CutWrite {
@@ -177,8 +170,8 @@ export function pasteCut(db: Database.Database, command: CanvasPasteCut): CutWri
     .get(projectId, record.sourceRevision) as { receipt: string } | undefined;
   const change = row ? (JSON.parse(row.receipt) as Change) : null;
   requireThat(change, 'CUT_RESTORE_MISSING', '剪切恢复资料不可用，未粘贴任何内容', 409);
-  const frozen = change.cutOuterVersions;
-  requireThat(frozen, 'CUT_OUTER_CHANGED', '剪切外线状态不可用，已保留当前画布，未粘贴任何内容', 409);
+  const frozen = change.cutOuterEnds;
+  requireThat(frozen, 'CUT_OUTER_UNKNOWN', '剪切外线状态不可用，已保留当前画布，未粘贴任何内容', 409);
   const plan = restorePlan(change);
   const itemIds = new Set<string>([
     ...plan.cards.map(value => value.item.id),
@@ -190,12 +183,14 @@ export function pasteCut(db: Database.Database, command: CanvasPasteCut): CutWri
   const containerIds = new Set<string>([...plan.groups.map(value => value.itemId), ...plan.frames.map(value => value.id)]);
   requireThat(itemIds.size + containerIds.size > 0, 'CUT_RESTORE_MISSING', '剪切恢复资料不含可搬动内容，未粘贴任何内容', 409);
   const scope = new Set([...itemIds, ...containerIds]);
-  // 外端仍存在但版本已变（移动、增高、改写）属 AC5 的并发修改：整体拒绝并报告，不静默按当前几何恢复。
-  // 外端已删除则交给 endAvailable 跳过该线，是 AC2 的既定行为，不判为竞争。
-  const current = outerVersions(db, projectId, new Set(Object.keys(frozen)));
-  for (const [id, version] of Object.entries(frozen))
-    if (current[id] !== undefined)
-      requireThat(current[id] === version, 'CUT_OUTER_CHANGED', '剪切后外部连线端点已变化，已保留当前画布，未粘贴任何内容', 409);
+  // 外端仍存在但指纹变了（位置、尺寸、组合成员变动；分区改名也算）属 AC5 的并发修改：整体拒绝并报告，
+  // 不静默按当前几何恢复。指纹为空说明外端已删除，交给 endAvailable 跳过该线，是 AC2 的既定行为。
+  const live = readSnapshotScene(db, projectId).state;
+  for (const end of frozen) {
+    const current = endpointFingerprint(live, end.kind, end.itemId);
+    if (current === null) continue;
+    requireThat(current === end.fingerprint, 'CUT_OUTER_CHANGED', '剪切后外部连线端点已变化，已保留当前画布，未粘贴任何内容', 409);
+  }
   const parentOf = new Map(plan.containment.map(value => [value.before!.id, value.before!.parent]));
   const roots = [...scope].filter(id => {
     const parent = parentOf.get(id);

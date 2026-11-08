@@ -6,7 +6,7 @@ import { GroupCommands, type CanvasGroup, type Containment, type GroupChange, ty
 import { LayerOrderCommand } from './layer-contracts.js';
 import { CanvasDuplicateCommand, CanvasPasteCommand } from './snapshot-contracts.js';
 import { CutCommands } from './cut-contracts.js';
-import { ConnectorCommands, type CanvasConnector, type ConnectorChange } from './connector-contracts.js';
+import { ConnectorCommands, type CanvasConnector, type ConnectorChange, type EndpointKind } from './connector-contracts.js';
 import { ImageCommands, type CanvasImage, type ImageChange } from './image-contracts.js';
 import { TagCommandSchema } from './tag-contracts.js';
 import { TextCommands, type CanvasText, type TextChange } from './text-contracts.js';
@@ -289,6 +289,12 @@ export interface MediaAsset {
   hash: string;
 }
 export type AssetChange = { before: { id: string } | null; after: MediaAsset };
+// 剪切结束时仍存在的外线外端及其内容指纹；首次搬动前逐项比对，判定期间是否被改动。
+export interface CutOuterEnd {
+  kind: EndpointKind;
+  itemId: string;
+  fingerprint: string;
+}
 export interface Change extends Receipt {
   frameChanges?: FrameChange[];
   cardLifecycleChanges?: { before: Card | null; after: Card | null }[];
@@ -307,8 +313,8 @@ export interface Change extends Receipt {
   tagChanges?: TagChange[];
   assetChanges?: AssetChange[];
   cardChanges?: { before: Card; after: Card }[];
-  // 剪切时冻结的外线外端版本；首次搬动据此判定并发修改，缺失即视为状态不可判定。
-  cutOuterVersions?: Record<string, string>;
+  // 本次之前的剪切回执没有该字段，粘贴时按状态不可判定拒绝（CUT_OUTER_UNKNOWN）。
+  cutOuterEnds?: CutOuterEnd[];
   before: Project | Card | null;
   after: Project | Card | null;
   actor: { id: string; type: 'human' | 'agent' | 'system' };

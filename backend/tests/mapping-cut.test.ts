@@ -130,6 +130,52 @@ it('外端版本未变化时首次粘贴仍恢复外线', () => {
   expect(f.state().connectors!.map(line => line.id)).toEqual(['line']);
 });
 
+it('外端是组合时成员被移动也判为并发修改，首次粘贴拒绝', () => {
+  const f = groupFixture();
+  const a = f.card('a'), b = f.card('b'), c = f.card('c');
+  const group = f.group([b.item.id, c.item.id]);
+  f.execute({ type: 'connector.create', expected: null, payload: { id: 'line',
+    start: { kind: 'bound', itemId: a.item.id, side: 'right' },
+    end: { kind: 'bound', targetKind: 'group', itemId: group.itemId, side: 'left' }, path: 'straight' } });
+  cut(f, 'cut-1', [a.item.id]);
+  const before = f.state();
+  f.execute({ type: 'card.edit', expected: { body: before.cards.find(card => card.id === 'b')!.body.versionId,
+    pose: before.cards.find(card => card.id === 'b')!.item.versionId }, payload: { id: 'b', text: '原始正文', x: 700, y: 520 } });
+  const after = f.state();
+  // 组合轮廓由成员 pose 派生，组合版本本身没变；只比组合版本会漏掉这种改动。
+  expect(after.groups!.find(value => value.id === 'g')!.versionId).toBe(before.groups!.find(value => value.id === 'g')!.versionId);
+  expect(() => pasteCut(f, 'cut-1')).toThrowError(expect.objectContaining({ code: 'CUT_OUTER_CHANGED' }));
+  expect(f.state()).toEqual(after);
+});
+
+it('挂在被剪切组合上的外线，另一端被移动仍判为并发修改', () => {
+  const f = groupFixture();
+  const a = f.card('a'), x = f.card('x'), y = f.card('y');
+  const group = f.group([x.item.id, y.item.id]);
+  f.execute({ type: 'connector.create', expected: null, payload: { id: 'line',
+    start: { kind: 'bound', targetKind: 'group', itemId: group.itemId, side: 'right' },
+    end: { kind: 'bound', itemId: a.item.id, side: 'left' }, path: 'straight' } });
+  cut(f, 'cut-1', [group.itemId]);
+  const moved = f.state().cards.find(card => card.id === 'a')!;
+  f.execute({ type: 'card.edit', expected: { body: moved.body.versionId, pose: moved.item.versionId },
+    payload: { id: 'a', text: '原始正文', x: 700, y: 520 } });
+  expect(() => pasteCut(f, 'cut-1')).toThrowError(expect.objectContaining({ code: 'CUT_OUTER_CHANGED' }));
+});
+
+it('缺少外端冻结的旧剪切回执按状态不可判定拒绝', () => {
+  const f = groupFixture();
+  const a = f.card('a'), b = f.card('b');
+  link(f, 'line', a.item.id, b.item.id);
+  cut(f, 'cut-1', [a.item.id]);
+  const db = new Database(join(f.directory, 'workspace.sqlite'));
+  db.prepare("UPDATE mapping_changes SET receipt=json_remove(receipt,'$.cutOuterEnds') WHERE project_id='p' AND revision=?")
+    .run(cutState(f, 'cut-1').sourceRevision);
+  db.close();
+  const before = f.state();
+  expect(() => pasteCut(f, 'cut-1')).toThrowError(expect.objectContaining({ code: 'CUT_OUTER_UNKNOWN' }));
+  expect(f.state()).toEqual(before);
+});
+
 it('剪切整组子树后首次粘贴恢复内部归属与连接', () => {
   const f = groupFixture();
   const a = f.card('a'), b = f.card('b');

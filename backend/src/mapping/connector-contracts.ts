@@ -27,8 +27,12 @@ const BoundEndpoint = z.object({
 }).strict();
 const Endpoint = z.discriminatedUnion('kind', [FreeEndpoint, BoundEndpoint]);
 export type ConnectorEndpoint = z.infer<typeof Endpoint>;
+export type EndpointKind = 'item' | 'group' | 'frame';
+export function endpointKind(endpoint: Extract<ConnectorEndpoint, { kind: 'bound' }>): EndpointKind {
+  return endpoint.targetKind ?? 'item';
+}
 export function endpointKey(endpoint: Extract<ConnectorEndpoint, { kind: 'bound' }>) {
-  return `${endpoint.targetKind ?? 'item'}:${endpoint.itemId}`;
+  return `${endpointKind(endpoint)}:${endpoint.itemId}`;
 }
 export const ConnectorCreateCommand = z.object({
   commandId: Id,

@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { CanvasConnector, ConnectorEndpoint } from './connector-contracts.js';
+import type { CanvasConnector, ConnectorEndpoint, EndpointKind } from './connector-contracts.js';
 import { endpointKey } from './connector-contracts.js';
 import type { CanvasGroup, Containment } from './group-contracts.js';
 import type { CanvasFrame } from './frame-contracts.js';
@@ -29,14 +29,32 @@ export type EndpointState = {
   cards: { item: { id: string; versionId: string; pose: Box } }[];
   texts?: EndpointState['cards']; shapes?: EndpointState['cards']; images?: EndpointState['cards']; strokes?: EndpointState['cards'];
 };
+function ownedItems(state: EndpointState) {
+  return [...state.cards, ...(state.texts ?? []), ...(state.shapes ?? []), ...(state.images ?? []), ...(state.strokes ?? [])];
+}
 export function endpointBounds(state: EndpointState, endpoint: Extract<ConnectorEndpoint, { kind: 'bound' }>): Box | null {
   if (endpoint.targetKind === 'frame') return state.frames?.find(frame => frame.id === endpoint.itemId)?.pose ?? null;
-  const items = [...state.cards, ...(state.texts ?? []), ...(state.shapes ?? []), ...(state.images ?? []), ...(state.strokes ?? [])];
+  const items = ownedItems(state);
   if (endpoint.targetKind === 'group') {
     const group = state.groups?.find(group => group.itemId === endpoint.itemId);
     return group ? groupOutlineBounds(items.filter(value => group.memberItemIds.includes(value.item.id)).map(value => value.item.pose)) : null;
   }
   return items.find(value => value.item.id === endpoint.itemId)?.item.pose ?? null;
+}
+// 外端内容指纹：判定「冻结之后这个外端有没有被改动」。组合轮廓由成员 pose 派生
+// （见 groupOutlineBounds），成员移动不会换组合版本，因此组合必须把成员 pose 版本一并纳入。
+// 与 captureContainerEndpoints 并存：后者校验单次命令自带的期望值（含被删连线版本），
+// 本函数只取存续端点、可跨任意时间比对，两者口径不同不能合并。
+export function endpointFingerprint(state: EndpointState, targetKind: EndpointKind, itemId: string): string | null {
+  if (targetKind === 'frame') return state.frames?.find(frame => frame.id === itemId)?.versionId ?? null;
+  const items = ownedItems(state);
+  if (targetKind === 'group') {
+    const group = state.groups?.find(value => value.itemId === itemId);
+    if (!group) return null;
+    const memberPoses = group.memberItemIds.map(id => `${id}:${items.find(value => value.item.id === id)?.item.versionId ?? '-'}`).sort();
+    return [group.versionId, ...memberPoses].join('|');
+  }
+  return items.find(value => value.item.id === itemId)?.item.versionId ?? null;
 }
 
 // The same captured dependency vocabulary is used by UI commands and the transaction planner.
@@ -48,7 +66,7 @@ export function captureContainerEndpoints(state: EndpointState, keys: string[]):
   const frames = (state.frames ?? []).filter(frame => used.has(`frame:${frame.id}`));
   const memberIds = new Set(groups.flatMap(group => group.memberItemIds));
   const membershipIds = new Set([...memberIds, ...groups.map(group => group.itemId), ...frames.flatMap(frame => frame.memberItemIds)]);
-  const items = [...state.cards, ...(state.texts ?? []), ...(state.shapes ?? []), ...(state.images ?? []), ...(state.strokes ?? [])];
+  const items = ownedItems(state);
   return {
     connectors: Object.fromEntries(lines.map(line => [line.id, line.versionId])),
     groups: Object.fromEntries(groups.map(group => [group.id, group.versionId])),

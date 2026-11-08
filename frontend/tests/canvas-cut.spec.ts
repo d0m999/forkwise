@@ -80,7 +80,7 @@ async function runCutFlow(page: Page, workspace: Workspace, system: boolean) {
   expect(afterDenied.connectors!.map(line => line.id)).toEqual(['line']);
   const deniedHistory = await (await page.request.get(`${workspace.origin}/api/mapping/projects/${projectId}/history`)).json();
   expect(deniedHistory.undo.some((action: { label: string }) => action.label === 'canvas.cut')).toBe(false);
-  checks.clipboardDenied = { status: 'EXECUTED', via: 'navigator.clipboard.write 被拒绝后 read(project) 仍为两张卡与一条线' };
+  checks.clipboardDenied = { status: 'NOT_RUN', via: 'navigator.clipboard.write 打桩拒绝：只证明 AC1 的失败分支逻辑（read(project) 仍为两张卡与一条线），真实剪贴板写入失败未构造，不计 PASS' };
 
   await page.reload();
   await expect(page.getByRole('status')).toHaveText('已保存到本机');
@@ -190,7 +190,7 @@ async function runCutFlow(page: Page, workspace: Workspace, system: boolean) {
   await expect(copyMenu).toBeHidden();
   await expect(copyTrigger).toBeFocused();
   checks.menuKeyboard = { status: 'EXECUTED', via: '真实键盘 Esc 关闭并归还焦点，菜单首项自动聚焦；合成 Esc 对照确认事件可达处理器' };
-  checks.menuImeGuard = { status: 'EXECUTED', via: '合成 KeyboardEvent(isComposing) 验证组合期间 Esc 不关闭；属 DOM 事件，不替代真实 OS IME 证据' };
+  checks.menuImeGuard = { status: 'NOT_RUN', via: '只有合成 KeyboardEvent(isComposing) 的守卫断言；真实 OS IME 组合输入未构造，按规格不计 PASS' };
 
   // AC4：替换剪贴板不复活原件，撤销剪切仍可用。
   await page.getByRole('button', { name: '乙', exact: true }).click();
@@ -291,6 +291,45 @@ test.describe('跨项目剪切包边界', () => {
     const target = await (await page.request.get(`${workspace.origin}/api/mapping/projects/${targetId}`)).json();
     expect(target.cards).toHaveLength(0);
     expect(target.connectors ?? []).toHaveLength(0);
+  });
+});
+
+test.describe('外端在剪切后被修改', () => {
+  test.skip(systemClipboard, '系统剪贴板验收只跑主流程');
+  test('首次粘贴前外端被移动时经真实入口拒绝，画布与剪切资格不变', async ({ page, workspace }) => {
+    test.setTimeout(180000);
+    await workspace.open(page);
+    const projectId = (await workspace.state()).project.id;
+    const execute = (type: string, payload: unknown, expected: unknown = null) =>
+      workspace.execute(page, { commandId: crypto.randomUUID(), projectId, type, expected, payload });
+    await execute('thought.create', { id: 'a', title: '甲', text: '甲的正文', x: 120, y: 160 });
+    await execute('thought.create', { id: 'b', title: '乙', text: '乙的正文', x: 620, y: 160 });
+    const seeded = await workspace.state();
+    const a = seeded.cards.find(card => card.id === 'a')!, b = seeded.cards.find(card => card.id === 'b')!;
+    await execute('connector.create', { id: 'line', start: { kind: 'bound', itemId: a.item.id, side: 'right' },
+      end: { kind: 'bound', itemId: b.item.id, side: 'left' }, path: 'straight' });
+    await page.reload();
+    await expect(page.getByRole('status')).toHaveText('已保存到本机');
+    await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
+    await page.getByRole('button', { name: '甲', exact: true }).click();
+    await page.locator('.canvas').press('Meta+x');
+    await expect.poll(async () => (await workspace.state()).cards.map(card => card.id)).toEqual(['b']);
+    const envelope = JSON.parse(await page.evaluate(async () => {
+      const item = (await navigator.clipboard.read()).find(value => value.types.includes('web application/x-forkwise-canvas'));
+      return item ? await (await item.getType('web application/x-forkwise-canvas')).text() : '';
+    }));
+    // 外端在剪切之后被移动：首次粘贴必须经真实 UI 拒绝，而不是按当前几何静默恢复连线。
+    const moved = (await workspace.state()).cards.find(card => card.id === 'b')!;
+    await execute('card.edit', { id: 'b', text: '乙的新正文，长度明显增加以触发增高', x: 640, y: 480 },
+      { body: moved.body.versionId, pose: moved.item.versionId });
+    await page.locator('.react-flow__pane').click({ position: { x: 20, y: 20 } });
+    await page.locator('.canvas').press('Meta+v');
+    await expect(page.getByRole('alert')).toContainText('剪切后外部连线端点已变化');
+    const after = await workspace.state();
+    expect(after.cards.map(card => card.id)).toEqual(['b']);
+    expect(after.connectors ?? []).toEqual([]);
+    const state = await (await page.request.get(`${workspace.origin}/api/mapping/projects/${projectId}/cuts/${envelope.cut.cutId}`)).json();
+    expect(state).toMatchObject({ state: 'eligible', revision: 0 });
   });
 });
 
