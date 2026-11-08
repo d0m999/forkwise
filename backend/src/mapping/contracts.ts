@@ -307,6 +307,8 @@ export interface Change extends Receipt {
   tagChanges?: TagChange[];
   assetChanges?: AssetChange[];
   cardChanges?: { before: Card; after: Card }[];
+  // 剪切时冻结的外线外端版本；首次搬动据此判定并发修改，缺失即视为状态不可判定。
+  cutOuterVersions?: Record<string, string>;
   before: Project | Card | null;
   after: Project | Card | null;
   actor: { id: string; type: 'human' | 'agent' | 'system' };

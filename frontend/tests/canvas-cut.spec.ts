@@ -174,6 +174,24 @@ async function runCutFlow(page: Page, workspace: Workspace, system: boolean) {
   expect((await cutState(envelope.cut.cutId)).body).toMatchObject({ state: 'consumed' });
   checks.redo = { status: 'EXECUTED', via: '重做按逆序恢复剪切(eligible)→首次搬动(consumed)，再撤销/重做仍同步' };
 
+  // 菜单入口的可访问性：首项自动聚焦、Esc 关闭并归还焦点、IME 组合期间的 Esc 不误关。
+  const copyTrigger = page.getByRole('button', { name: '复制', exact: true });
+  const copyMenu = page.getByRole('menu', { name: '复制操作' });
+  await copyTrigger.click();
+  await expect(copyMenu).toBeVisible();
+  await expect(copyMenu.getByRole('menuitem').first()).toBeFocused();
+  // 对照：不带组合状态的合成 Esc 确实能到达处理器并关闭菜单，排除「事件没派发到」的假阳性。
+  await page.evaluate(() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })));
+  await expect(copyMenu).toBeHidden();
+  await copyTrigger.click();
+  await page.evaluate(() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, isComposing: true })));
+  await expect(copyMenu).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(copyMenu).toBeHidden();
+  await expect(copyTrigger).toBeFocused();
+  checks.menuKeyboard = { status: 'EXECUTED', via: '真实键盘 Esc 关闭并归还焦点，菜单首项自动聚焦；合成 Esc 对照确认事件可达处理器' };
+  checks.menuImeGuard = { status: 'EXECUTED', via: '合成 KeyboardEvent(isComposing) 验证组合期间 Esc 不关闭；属 DOM 事件，不替代真实 OS IME 证据' };
+
   // AC4：替换剪贴板不复活原件，撤销剪切仍可用。
   await page.getByRole('button', { name: '乙', exact: true }).click();
   await page.getByRole('button', { name: '复制', exact: true }).click();
@@ -182,10 +200,14 @@ async function runCutFlow(page: Page, workspace: Workspace, system: boolean) {
   await page.getByRole('button', { name: '甲', exact: true }).click();
   await page.locator('.canvas').press('Meta+c');
   await expect.poll(async () => (await read()).cards.some(card => card.id === 'b')).toBe(false);
+  // 替换后粘贴必须走普通副本路径，不能把乙的原件复活成新副本。
+  await page.locator('.canvas').press('Meta+v');
+  await expect.poll(async () => (await read()).cards.some(card => card.id === 'b')).toBe(false);
+  await travel('撤销');
   await travel('撤销');
   await expect.poll(async () => (await read()).cards.some(card => card.id === 'b')).toBe(true);
   checks.menu = { status: 'EXECUTED', via: '菜单「剪切到剪贴板」走同一 canvas.cut 命令' };
-  checks.replaceClipboard = { status: 'EXECUTED', via: '剪切乙后复制甲：乙保持移除，撤销仍恢复乙' };
+  checks.replaceClipboard = { status: 'EXECUTED', via: '剪切乙后复制甲并 Meta+v：乙不复活，副本可撤销，源历史撤销仍恢复乙' };
 
   await workspace.restart();
   await page.reload();
@@ -207,7 +229,9 @@ async function runCutFlow(page: Page, workspace: Workspace, system: boolean) {
     checks,
     unverified: [
       '写入期间源版本变化的浏览器侧失败时序未单独构造（后端真实 SQLite 的 VERSION_CONFLICT 已覆盖）',
-      '网络丢 ACK 后的 journal 重放未在浏览器内构造（幂等由既有 receipt 测试与后端用例覆盖）',
+      '真实系统剪贴板写入失败未单独构造：headless 用 navigator.clipboard.write 打桩覆盖 AC1 逻辑，headed 只验证写入成功后 NSPasteboard 读回',
+      '真实 OS IME 组合输入未构造：IME 守卫只用合成 KeyboardEvent(isComposing) 验证，已与真实键盘证据分开记录',
+      '丢 ACK 用 route.fetch + 503 构造（服务端已提交、客户端响应失败）；真实网络分区与进程被杀未构造',
       '40/41 步裁剪由后端真实 SQLite 用例覆盖，浏览器未重复',
     ],
     sources: { browserClipboard: artifactRef('browser-clipboard-cut.json') } };
@@ -267,5 +291,51 @@ test.describe('跨项目剪切包边界', () => {
     const target = await (await page.request.get(`${workspace.origin}/api/mapping/projects/${targetId}`)).json();
     expect(target.cards).toHaveLength(0);
     expect(target.connectors ?? []).toHaveLength(0);
+  });
+});
+
+test.describe('剪切 ACK 丢失后的 journal 重放', () => {
+  test.skip(systemClipboard, '系统剪贴板验收只跑主流程');
+  test('丢 ACK 后重开按原请求重放剪切，不重复删除也不降级剪贴板', async ({ page, workspace }) => {
+    test.setTimeout(180000);
+    await workspace.open(page);
+    await expect(page.getByRole('button', { name: '复制', exact: true })).toBeVisible();
+    const projectId = (await workspace.state()).project.id;
+    await workspace.execute(page, { commandId: crypto.randomUUID(), projectId, type: 'thought.create',
+      expected: null, payload: { id: 'replay', title: '待重放', text: '正文', x: 160, y: 200 } });
+    await page.reload();
+    await expect(page.getByRole('status')).toHaveText('已保存到本机');
+    await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
+    let dropped = true;
+    await page.route('**/api/mapping/execute', async route => {
+      if (dropped && route.request().postDataJSON().type === 'canvas.cut') {
+        // 请求真正到达服务端并提交，再把响应换成失败：构造「服务端已执行、客户端丢 ACK」。
+        await route.fetch();
+        await route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: 'ACK lost' }) });
+      } else await route.continue();
+    });
+    await page.getByRole('button', { name: '待重放', exact: true }).click();
+    await page.locator('.canvas').press('Meta+x');
+    await expect(page.getByRole('alert')).toBeVisible();
+    // 服务端已提交：原件已移除、剪切记录已建立；客户端因丢 ACK 保留原 commandId 的 journal。
+    await expect.poll(async () => (await workspace.state()).cards.map(card => card.id)).toEqual([]);
+    const raw = await page.evaluate(async () => {
+      const item = (await navigator.clipboard.read()).find(value => value.types.includes('web application/x-forkwise-canvas'));
+      return item ? await (await item.getType('web application/x-forkwise-canvas')).text() : '';
+    });
+    const envelope = JSON.parse(raw);
+    expect(envelope.cut).toMatchObject({ sourceProjectId: projectId });
+    expect(await page.evaluate(() => localStorage.getItem('forkwise.cut-pending.v1'))).toContain(envelope.cut.cutId);
+    dropped = false;
+    await page.unroute('**/api/mapping/execute');
+    await page.reload();
+    await expect(page.getByRole('status')).toHaveText('已保存到本机');
+    // 重放同一 commandId：后端 receipt 幂等，不重复删除、不重复推进资格、不重复写历史。
+    await expect.poll(async () => (await workspace.state()).cards.map(card => card.id)).toEqual([]);
+    const cut = await page.request.get(`${workspace.origin}/api/mapping/projects/${projectId}/cuts/${envelope.cut.cutId}`);
+    expect(await cut.json()).toMatchObject({ state: 'eligible', revision: 0 });
+    const history = await (await page.request.get(`${workspace.origin}/api/mapping/projects/${projectId}/history`)).json();
+    expect(history.undo.filter((action: { label: string }) => action.label === 'canvas.cut')).toHaveLength(1);
+    expect(await page.evaluate(() => localStorage.getItem('forkwise.cut-pending.v1'))).toBeNull();
   });
 });

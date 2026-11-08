@@ -1777,7 +1777,7 @@ function Workspace() {
         pending.onSettled?.();
       }
       if (!executed && e instanceof MappingError &&
-        ((['connector.reconnect', 'connector.path', 'connector.move', 'connector.delete', 'connector.style', 'connector.reverse', 'connector.label', 'canvas.layer', 'canvas.duplicate', 'canvas.paste', 'canvas.cut', 'canvas.paste-cut'].includes(command.type) && ['VERSION_CONFLICT', 'NOT_FOUND', 'ID_CONFLICT', 'CUT_STATE_CONFLICT', 'CUT_NOT_FOUND', 'CUT_RESTORE_MISSING'].includes(e.code)) ||
+        ((['connector.reconnect', 'connector.path', 'connector.move', 'connector.delete', 'connector.style', 'connector.reverse', 'connector.label', 'canvas.layer', 'canvas.duplicate', 'canvas.paste', 'canvas.cut', 'canvas.paste-cut'].includes(command.type) && ['VERSION_CONFLICT', 'NOT_FOUND', 'ID_CONFLICT', 'CUT_STATE_CONFLICT', 'CUT_NOT_FOUND', 'CUT_RESTORE_MISSING', 'CUT_OUTER_CHANGED'].includes(e.code)) ||
           (command.type === 'connector.reconnect' && e.code === 'INVALID_ENDPOINT'))) {
         pendingAction.current = null;
         onDone?.();

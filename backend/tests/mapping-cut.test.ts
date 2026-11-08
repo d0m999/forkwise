@@ -96,7 +96,9 @@ it('首次粘贴恢复外线，另一端已删除时只恢复卡片', () => {
   link(f, 'drop', a.item.id, c.item.id);
   cut(f, 'cut-1', [a.item.id]);
   f.execute({ type: 'thought.delete', expected: { thought: c.versionId, body: c.body.versionId, pose: c.item.versionId, appearance: null, cardTags: null, connectors: {} }, payload: { id: 'c' } });
-  pasteCut(f, 'cut-1');
+  // 外端删除按 AC2 跳过该线，不能被 P1 的版本比对误判成并发修改而整体拒绝。
+  const receipt = pasteCut(f, 'cut-1');
+  expect(receipt.cut).toMatchObject({ state: 'consumed' });
   const state = f.state();
   expect(state.cards.map(card => card.id).sort()).toEqual(['a', 'b']);
   expect(state.connectors!.map(line => line.id)).toEqual(['keep']);
@@ -104,7 +106,7 @@ it('首次粘贴恢复外线，另一端已删除时只恢复卡片', () => {
   expect(state.connectors![0]!.end).toMatchObject({ kind: 'bound', itemId: b.item.id });
 });
 
-it('外端移动或增高后首次粘贴按当前几何恢复，不判为连线竞争', () => {
+it('外端在剪切后被修改时首次粘贴明确拒绝，原对象与历史不变', () => {
   const f = groupFixture();
   const a = f.card('a'), b = f.card('b');
   link(f, 'line', a.item.id, b.item.id);
@@ -112,12 +114,20 @@ it('外端移动或增高后首次粘贴按当前几何恢复，不判为连线�
   const moved = f.state().cards.find(card => card.id === 'b')!;
   f.execute({ type: 'card.edit', expected: { body: moved.body.versionId, pose: moved.item.versionId },
     payload: { id: 'b', text: '另一张卡片的新正文，长度明显增加以触发增高', x: 640, y: 480 } });
+  const before = f.state();
+  expect(() => pasteCut(f, 'cut-1')).toThrowError(expect.objectContaining({ code: 'CUT_OUTER_CHANGED' }));
+  expect(f.state()).toEqual(before);
+  expect(cutState(f, 'cut-1')).toMatchObject({ state: 'eligible', revision: 0 });
+  expect(f.history().undo.every(action => action.label !== 'canvas.paste-cut')).toBe(true);
+});
+
+it('外端版本未变化时首次粘贴仍恢复外线', () => {
+  const f = groupFixture();
+  const a = f.card('a'), b = f.card('b');
+  link(f, 'line', a.item.id, b.item.id);
+  cut(f, 'cut-1', [a.item.id]);
   pasteCut(f, 'cut-1');
-  const state = f.state();
-  const line = state.connectors![0]!;
-  expect(line.id).toBe('line');
-  expect(line.start).toMatchObject({ kind: 'bound', itemId: a.item.id });
-  expect(line.end).toMatchObject({ kind: 'bound', itemId: b.item.id });
+  expect(f.state().connectors!.map(line => line.id)).toEqual(['line']);
 });
 
 it('剪切整组子树后首次粘贴恢复内部归属与连接', () => {

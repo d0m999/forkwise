@@ -339,6 +339,7 @@ export class Mapping {
         let shapeChanges: Change['shapeChanges'];
         let textChanges: Change['textChanges'];
         let cut: CutStateView | undefined;
+        let cutOuterVersions: Record<string, string> | undefined;
         let travel: ReturnType<typeof travelHistory> | undefined;
         let revision: number;
         let changedIds: string[];
@@ -376,7 +377,7 @@ export class Mapping {
         } else if (command.type === 'group.delete' || command.type === 'canvas.delete-selection' || command.type === 'canvas.cut') {
           const project = this.project(command.projectId);
           if (command.type === 'canvas.cut') {
-            ({ frameChanges, groupChanges, containmentChanges, cardLifecycleChanges, textChanges, shapeChanges, imageChanges, strokeChanges, connectorChanges, changedIds } = cutCanvas(this.db, command));
+            ({ frameChanges, groupChanges, containmentChanges, cardLifecycleChanges, textChanges, shapeChanges, imageChanges, strokeChanges, connectorChanges, changedIds, cutOuterVersions } = cutCanvas(this.db, command));
             // 剪切记录与对象移除、版本、历史、changefeed 同事务提交。
             cut = recordCut(this.db, command.projectId, command.payload.cutId, project.revision + 1);
           } else
@@ -925,6 +926,7 @@ export class Mapping {
           ...(textChanges ? { textChanges } : {}),
           ...(cardChanges ? { cardChanges } : {}),
           ...(cardLifecycleChanges ? { cardLifecycleChanges } : {}),
+          ...(cutOuterVersions ? { cutOuterVersions } : {}),
           actor: actor.actor,
           writtenAt: new Date().toISOString(),
         };
