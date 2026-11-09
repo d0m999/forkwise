@@ -13,3 +13,9 @@ export function snapshotScope(state: SpatialState, selected: string[]) {
   for (const id of roots) visit(id);
   return { roots, ids };
 }
+
+// 成员全部离开的组合不再有可绑定轮廓：删除计划与剪切捕获必须共用这一判定，
+// 否则捕获到存活父容器的端点依赖、事务内却不会移除它，合法命令会被判成 VERSION_CONFLICT。
+export function emptiedGroupIds(groups: { id: string; memberItemIds: string[] }[], removed: Set<string>) {
+  return groups.filter(group => group.memberItemIds.every(id => removed.has(id))).map(group => group.id);
+}

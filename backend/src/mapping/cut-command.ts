@@ -1,4 +1,5 @@
 import { captureOptionalContainerEndpoints } from './container-endpoints.js';
+import { emptiedGroupIds } from './snapshot-tree.js';
 import type { CanvasConnector } from './connector-contracts.js';
 import type { Card } from './contracts.js';
 import type { CanvasFrame } from './frame-contracts.js';
@@ -71,9 +72,13 @@ export function captureCutCommand(state: ScopeState, input: CutScopeInput): Canv
     throw new Error('剪切目标的容器归属已变化，请重新读取');
   const incident = connectors.filter(line => [line.start, line.end].some(end =>
     end.kind === 'bound' && (end.targetKind ?? 'item') === 'item' && items.has(end.itemId)));
+  // 端点依赖只覆盖本次真正移除的容器：存活父容器上的外线不随本次剪切变化，
+  // 若把它算入 captured，事务内的移除计划不会包含它，合法剪切会被整体判成 VERSION_CONFLICT。
+  // 父容器与归属的必要版本校验仍由 expected.groups / frames / containment 承担。
+  const removedGroups = new Set([...input.groupIds, ...emptiedGroupIds(groups, items)]);
   const containerKeys = [...new Set([
-    ...groups.filter(group => affectedGroups.has(group.id)).map(group => `group:${group.itemId}`),
-    ...[...affectedFrames].map(id => `frame:${id}`),
+    ...groups.filter(group => removedGroups.has(group.id)).map(group => `group:${group.itemId}`),
+    ...[...explicitFrames].map(id => `frame:${id}`),
   ])];
   const endpoints = captureOptionalContainerEndpoints({ ...state, connectors }, containerKeys);
   return {

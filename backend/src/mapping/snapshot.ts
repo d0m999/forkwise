@@ -4,9 +4,9 @@ import { readGroups, readContainment, writeGroup, writeContainment } from './gro
 import { readFrames } from './frame.js';
 import { frameCandidate } from './frame-spatial.js';
 import type Database from 'better-sqlite3';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { requireThat } from '../domain/errors.js';
-import type { Block, Card, Change } from './contracts.js';
+import type { Block, Card, Change, MediaAsset } from './contracts.js';
 import type { CanvasConnector, ConnectorEndpoint } from './connector-contracts.js';
 import type { CanvasImage } from './image-contracts.js';
 import type { CanvasShape } from './shape-contracts.js';
@@ -180,12 +180,24 @@ function adoptLibrary(db: Database.Database, projectId: string, payload: Paste['
     ...payload.objects.flatMap(value => value.kind === 'card' ? imageAssetIds(value.blocks as Block[]) : []),
   ])];
   for (const id of referencedAssetIds) {
-    if (db.prepare('SELECT 1 FROM mapping_assets WHERE project_id=? AND id=?').get(projectId, id)) {
-      assetMap.set(id, id);
+    const row = db.prepare('SELECT value FROM mapping_assets WHERE project_id=? AND id=?').get(projectId, id) as { value: string } | undefined;
+    const entry = library.assets.find(asset => asset.id === id);
+    // 没有冻结内容可比对：目标已有就沿用，否则保留原引用，由 requireAssets 明确报告缺失。
+    if (!entry) {
+      if (row) assetMap.set(id, id);
       continue;
     }
-    const entry = library.assets.find(asset => asset.id === id);
-    if (!entry) continue;
+    // 两个项目各自合法保存同一资源 ID 时，只有冻结内容与目标值一致才复用；
+    // 内容不同必须新建目标资源，保留目标项目原图（资源内容不可变，写回同 ID 会被拒绝）。
+    if (row) {
+      const stored = JSON.parse(row.value) as MediaAsset;
+      const same = stored.name === entry.name && stored.mime === entry.mime &&
+        stored.hash === createHash('sha256').update(Buffer.from(entry.base64, 'base64')).digest('hex');
+      if (same) {
+        assetMap.set(id, id);
+        continue;
+      }
+    }
     const nextId = randomUUID();
     saveAsset(db, { commandId: nextId, projectId, type: 'asset.save', expected: null, payload: { id: nextId, name: entry.name, mime: entry.mime, base64: entry.base64 } });
     assetMap.set(id, nextId);

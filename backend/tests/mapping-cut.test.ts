@@ -389,6 +389,14 @@ it('只剪切组合成员时不复活未选组合，首次粘贴落在顶层并�
   expect(state.containment!.find(value => value.id === a.item.id)?.parent ?? null).toBeNull();
   expect(state.groups![0]!.memberItemIds).toEqual([b.item.id]);
   expect(state.connectors!.map(line => line.id)).toEqual(['outer']);
+  // undo/redo 只改搬运对象与资格，存活组合的成员归属保持 [b]。
+  f.travel('history.undo');
+  expect(f.state().cards.map(card => card.id).sort()).toEqual(['b', 'outside']);
+  expect(f.state().groups![0]!.memberItemIds).toEqual([b.item.id]);
+  f.travel('history.redo');
+  expect(f.state().cards.map(card => card.id).sort()).toEqual(['a', 'b', 'outside']);
+  expect(f.state().containment!.find(value => value.id === a.item.id)?.parent ?? null).toBeNull();
+  expect(f.state().groups![0]!.memberItemIds).toEqual([b.item.id]);
   void group;
 });
 
@@ -424,4 +432,60 @@ it('剪切嵌套分区（分区套分区）后首次粘贴恢复自身归属校�
   expect(state.cards.map(card => card.id)).toEqual(['a']);
   expect(state.frames!.find(value => value.id === 'inner')!.memberItemIds).toEqual([before.cards[0]!.item.id]);
   expect(state.containment!.find(value => value.id === 'inner')?.parent ?? null).toBeNull();
+});
+
+it('只剪切组合成员时，存活组合上的外线不参与本次容器端点校验', () => {
+  const f = groupFixture();
+  const a = f.card('a'), b = f.card('b'), c = f.card('c');
+  const group = f.group([b.item.id, c.item.id]);
+  f.execute({ type: 'connector.create', expected: null, payload: { id: 'outer',
+    start: { kind: 'bound', targetKind: 'group', itemId: group.itemId, side: 'right' },
+    end: { kind: 'bound', itemId: a.item.id, side: 'left' }, path: 'straight' } });
+  // 组合仍有 c，属于存活父容器；捕获端点时不能把它算进“本次移除的容器”。
+  cut(f, 'cut-1', [b.item.id]);
+  const state = f.state();
+  expect(state.cards.map(card => card.id).sort()).toEqual(['a', 'c']);
+  expect(state.connectors!.map(line => line.id)).toEqual(['outer']);
+  expect(state.connectors![0]!.start).toMatchObject({ kind: 'bound', targetKind: 'group', itemId: group.itemId });
+  expect(state.groups!.find(value => value.id === 'g')!.memberItemIds).toEqual([c.item.id]);
+});
+
+it('只剪切分区成员时，存活分区上的外线不参与本次容器端点校验', () => {
+  const f = groupFixture();
+  f.execute({ type: 'frame.create', expected: { frame: null, groups: {}, containment: {}, poses: {} },
+    payload: { id: 'frame', itemIds: [], pose: { x: 0, y: 0, width: 600, height: 400 } } });
+  f.execute({ type: 'thought.create', expected: null, payload: { id: 'inside', title: '内', text: '', x: 20, y: 20 } });
+  f.execute({ type: 'thought.create', expected: null, payload: { id: 'outside', title: '外', text: '', x: 900, y: 700 } });
+  const state = f.state();
+  const inside = state.cards.find(card => card.id === 'inside')!;
+  const outside = state.cards.find(card => card.id === 'outside')!;
+  f.execute({ type: 'connector.create', expected: null, payload: { id: 'outer',
+    start: { kind: 'bound', targetKind: 'frame', itemId: 'frame', side: 'right' },
+    end: { kind: 'bound', itemId: outside.item.id, side: 'left' }, path: 'straight' } });
+  cut(f, 'cut-1', [inside.item.id]);
+  const after = f.state();
+  expect(after.cards.map(card => card.id)).toEqual(['outside']);
+  expect(after.frames!.map(frame => frame.id)).toEqual(['frame']);
+  expect(after.connectors!.map(line => line.id)).toEqual(['outer']);
+  expect(after.connectors![0]!.start).toMatchObject({ kind: 'bound', targetKind: 'frame', itemId: 'frame' });
+});
+
+it('存活父容器在捕获后被修改时仍按版本校验拒绝剪切', () => {
+  const f = groupFixture();
+  const a = f.card('a'), b = f.card('b'), c = f.card('c');
+  const group = f.group([b.item.id, c.item.id]);
+  f.execute({ type: 'connector.create', expected: null, payload: { id: 'outer',
+    start: { kind: 'bound', targetKind: 'group', itemId: group.itemId, side: 'right' },
+    end: { kind: 'bound', itemId: a.item.id, side: 'left' }, path: 'straight' } });
+  const state = f.state();
+  const command = captureCutCommand(state, { commandId: crypto.randomUUID(), projectId: 'p', cutId: 'cut-1',
+    itemIds: [b.item.id], groupIds: [], frameIds: [] });
+  // 移除另一个成员会换组合版本：存活父容器的版本校验必须仍然生效。
+  const structure = f.structure('g');
+  const membership = f.membership(c.item.id)!;
+  f.execute({ type: 'group.remove-member', expected: { group: structure.group,
+    ...(structure.parentContainment ? { parentContainment: structure.parentContainment } : {}),
+    containment: membership.containment }, payload: { id: 'g', itemId: c.item.id } });
+  expect(() => f.execute(command)).toThrowError(expect.objectContaining({ code: 'VERSION_CONFLICT' }));
+  expect(f.state().cards.map(card => card.id).sort()).toEqual(['a', 'b', 'c']);
 });

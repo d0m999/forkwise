@@ -455,3 +455,73 @@ it('跨项目粘贴经真实 HTTP 进入同一执行，无目标授权则拒绝�
     mapping.close();
   }
 });
+
+it('目标项目同 id 资源内容不同时新建目标资源，正文图与独立图片一致重映射且保留目标原图', () => {
+  const f = groupFixture();
+  f.mapping.execute({ commandId: 'project-q', projectId: 'q', type: 'project.create', expected: null, payload: { name: '目标' } }, f.human);
+  const sourceBytes = createCanvas(2, 3).toBuffer('image/png').toString('base64');
+  const targetBytes = createCanvas(3, 2).toBuffer('image/png').toString('base64');
+  f.execute({ type: 'asset.save', expected: null, payload: { id: 'shared', name: '图.png', mime: 'image/png', base64: sourceBytes } });
+  f.mapping.execute({ commandId: 'target-asset', projectId: 'q', type: 'asset.save', expected: null,
+    payload: { id: 'shared', name: '图.png', mime: 'image/png', base64: targetBytes } }, f.human);
+  f.execute({ type: 'thought.create', expected: null, payload: { id: 'source-card', title: '带图卡片', text: '', x: 10, y: 20 } });
+  const source = f.state().cards.find(card => card.id === 'source-card')!;
+  f.execute({ type: 'body.edit', expected: source.body.versionId, payload: { id: 'source-card', blocks: [
+    { id: 'pic', type: 'image', assetId: 'shared', name: '图.png', mime: 'image/png', naturalWidth: 2, naturalHeight: 3 },
+  ] } });
+  f.execute({ type: 'image.create', expected: null, payload: { id: 'standalone',
+    content: { assetId: 'shared', crop: { x: 0, y: 0, width: 1, height: 1 } }, pose: { x: 400, y: 20, width: 40, height: 60, rotation: 0 } } });
+  const frozen = f.state();
+  const card = frozen.cards.find(value => value.id === 'source-card')!;
+  f.mapping.execute({
+    commandId: 'paste-shared-asset', projectId: 'q', type: 'canvas.paste', expected: null,
+    payload: {
+      translation: { x: 30, y: 40 },
+      library: { tags: [], assets: [{ id: 'shared', name: '图.png', mime: 'image/png', base64: sourceBytes }] },
+      objects: [
+        { kind: 'card', copyId: 'pasted-card', stack: card.item.createdOrder ?? 0, title: card.title,
+          blocks: card.body.blocks, tagIds: null, appearance: null, pose: card.item.pose },
+        { kind: 'image', copyId: 'pasted-image', stack: 1,
+          content: { assetId: 'shared', crop: { x: 0, y: 0, width: 1, height: 1 } }, pose: { x: 400, y: 20, width: 40, height: 60, rotation: 0 } },
+      ],
+      connectors: [],
+    },
+  }, f.human);
+  const target = f.mapping.read({ type: 'project', projectId: 'q' }, f.human);
+  const pasted = target.cards.find(value => value.id === 'pasted-card')!;
+  const pastedBlock = pasted.body.blocks.find(block => block.type === 'image')!;
+  const pastedImage = target.images!.find(value => value.id === 'pasted-image')!;
+  expect(pastedBlock.assetId).not.toBe('shared');
+  expect(pastedImage.content.assetId).toBe(pastedBlock.assetId);
+  expect(f.mapping.read({ type: 'asset', projectId: 'q', id: String(pastedBlock.assetId) }, f.human))
+    .toMatchObject({ name: '图.png', mime: 'image/png', base64: sourceBytes });
+  // 目标项目原有同名资源不能被覆盖，后续仍按原字节读取。
+  expect(f.mapping.read({ type: 'asset', projectId: 'q', id: 'shared' }, f.human)).toMatchObject({ base64: targetBytes });
+  expect(f.mapping.read({ type: 'project', projectId: 'p' }, f.human)).toEqual(frozen);
+});
+
+it('目标项目同 id 资源内容相同时复用原资源，不新建也不覆盖', () => {
+  const f = groupFixture();
+  f.mapping.execute({ commandId: 'project-q', projectId: 'q', type: 'project.create', expected: null, payload: { name: '目标' } }, f.human);
+  const base64 = createCanvas(2, 3).toBuffer('image/png').toString('base64');
+  f.execute({ type: 'asset.save', expected: null, payload: { id: 'shared', name: '图.png', mime: 'image/png', base64 } });
+  f.mapping.execute({ commandId: 'target-asset', projectId: 'q', type: 'asset.save', expected: null,
+    payload: { id: 'shared', name: '图.png', mime: 'image/png', base64 } }, f.human);
+  f.execute({ type: 'thought.create', expected: null, payload: { id: 'source-card', title: '带图卡片', text: '', x: 10, y: 20 } });
+  const card = f.state().cards.find(value => value.id === 'source-card')!;
+  f.mapping.execute({
+    commandId: 'paste-same-asset', projectId: 'q', type: 'canvas.paste', expected: null,
+    payload: {
+      translation: { x: 30, y: 40 },
+      library: { tags: [], assets: [{ id: 'shared', name: '图.png', mime: 'image/png', base64 }] },
+      objects: [{ kind: 'card', copyId: 'pasted-card', stack: card.item.createdOrder ?? 0, title: card.title,
+        blocks: [{ id: 'pic', type: 'image', assetId: 'shared', name: '图.png', mime: 'image/png', naturalWidth: 2, naturalHeight: 3 }],
+        tagIds: null, appearance: null, pose: card.item.pose }],
+      connectors: [],
+    },
+  }, f.human);
+  const target = f.mapping.read({ type: 'project', projectId: 'q' }, f.human);
+  const pasted = target.cards.find(value => value.id === 'pasted-card')!;
+  expect(pasted.body.blocks.find(block => block.type === 'image')!.assetId).toBe('shared');
+  expect(f.mapping.read({ type: 'asset', projectId: 'q', id: 'shared' }, f.human)).toMatchObject({ base64 });
+});

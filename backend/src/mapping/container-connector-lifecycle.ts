@@ -8,6 +8,7 @@ import { readConnectors, saveConnector } from './connector.js';
 import { groupItems, readContainment, readGroups } from './group.js';
 import { readFrames } from './frame.js';
 import { captureContainerEndpoints, endpointBounds, sidePoint, type ContainerEndpointDependencies } from './container-endpoints.js';
+import { emptiedGroupIds } from './snapshot-tree.js';
 
 // Plan from the transaction's before snapshot, including containers emptied indirectly.
 export function planContainerConnectorRemoval(db: Database.Database, command: Command): ConnectorChange[] {
@@ -50,8 +51,10 @@ export function planContainerConnectorRemoval(db: Database.Database, command: Co
     const item = items.find(value => value.value.id === id && (kind === 'thought' ? value.kind === 'card' : value.kind === kind));
     if (item) deletedItems.add(item.value.item.id);
   }
-  for (const group of groups) if (group.memberItemIds.every(id => deletedItems.has(id)) && !removed.has(`group:${group.itemId}`))
-    removed.set(`group:${group.itemId}`, 'freeze');
+  for (const id of emptiedGroupIds(groups, deletedItems)) {
+    const group = groups.find(value => value.id === id)!;
+    if (!removed.has(`group:${group.itemId}`)) removed.set(`group:${group.itemId}`, 'freeze');
+  }
   const expected = command.expected as { endpoints?: ContainerEndpointDependencies; membership?: { endpoints?: ContainerEndpointDependencies }; connectors?: Record<string, string> };
   const actual = captureContainerEndpoints(state, [...removed.keys()]), captured = expected.endpoints ?? expected.membership?.endpoints;
   const same = (a: Record<string, unknown>, b: Record<string, unknown>) => Object.keys(a).length === Object.keys(b).length && Object.entries(a).every(([id, value]) => b[id] === value);
