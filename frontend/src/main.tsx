@@ -3,6 +3,7 @@ import { canvasPlainText } from "./canvas-paste";
 import { CANVAS_CLIPBOARD_TYPE, canCopySelection, canCutSelection, captureClipboard, clipboardAssetIds, clipboardCenter, clipboardLibrary, copiedSelection, duplicatePlan, parseClipboard, pastePlan, restoredCopyRefs } from "./canvas-snapshot";
 import { captureCutCommand } from "../../backend/src/mapping/cut-command";
 import { cutJournal } from "./cut-recovery";
+import { pasteJournal, pasteNotCommitted } from "./paste-recovery";
 import type { CopyRef } from "./canvas-snapshot";
 import { nextPaste, pasteTranslation, type PasteSequence } from "./canvas-snapshot-geometry";
 import { SnapshotMenu } from "./snapshot-menu";
@@ -104,6 +105,9 @@ import type { Tag } from "../../backend/src/mapping/contracts";
 // 结构类命令的读已过期失败靠一次刷新收敛：命令集与错误码集中在这里，新增错误码不必改条件里的长行。
 const STALE_READ_COMMANDS = new Set(['connector.reconnect', 'connector.path', 'connector.move', 'connector.delete', 'connector.style', 'connector.reverse', 'connector.label', 'canvas.layer', 'canvas.duplicate', 'canvas.paste', 'canvas.cut', 'canvas.paste-cut']);
 const STALE_READ_CODES = new Set(['VERSION_CONFLICT', 'NOT_FOUND', 'ID_CONFLICT', 'CUT_STATE_CONFLICT', 'CUT_NOT_FOUND', 'CUT_RESTORE_MISSING', 'CUT_OUTER_CHANGED', 'CUT_OUTER_UNKNOWN']);
+// 粘贴恢复：persist 必须在真正发送前落盘最终命令；落盘失败则不提交。
+// 重试同一请求时必须沿用同一份 options，否则成功回执不会清理恢复记录。
+type ActionOptions = { persist?: (command: Command) => void; onCommitted?: () => void; onRejected?: (error: unknown) => void };
 
 type CardData = {
   cardOnlySelection: boolean;
@@ -535,6 +539,7 @@ function Workspace() {
     selectionIntent?: SelectionIntent;
     receipt?: Awaited<ReturnType<typeof api.execute>>;
     rejected?: string;
+    options?: ActionOptions;
   } | null>(null);
   const cardDeletion = useRef<ReturnType<typeof captureCardDeletion>>(null);
   const selectionDeletion = useRef<ReturnType<typeof captureSelectionDeletion>>(null);
@@ -1694,7 +1699,7 @@ function Workspace() {
       resolving.current = false;
     }
   }
-  async function action(command: Command, onDone?: () => void, beforeSubmit?: () => boolean, onSettled?: () => void) {
+  async function action(command: Command, onDone?: () => void, beforeSubmit?: () => boolean, onSettled?: () => void, options?: ActionOptions) {
     if (connectorCreate.hasPending()) return false;
     if (['thought.create', 'shape.create', 'stroke.create', 'canvas.duplicate', 'canvas.paste'].includes(command.type) && !('placement' in command && command.placement) && authority.current?.project.id === command.projectId)
       Object.assign(command, { placement: { expected: captureSpatial(authority.current) } });
@@ -1740,7 +1745,15 @@ function Workspace() {
       }
       if (beforeSubmit && !beforeSubmit()) return false;
     }
-    const pending: NonNullable<typeof pendingAction.current> = pendingAction.current ?? { command, ...(onDone ? { onDone } : {}), ...(onSettled ? { onSettled } : {}),
+    // 落盘发生在发送之前：保存失败就中止，目标不产生任何写入，源内容仍可由源历史恢复。
+    if (options?.persist && !pendingAction.current?.receipt) {
+      try { options.persist(command); }
+      catch (error) {
+        fail(error instanceof Error ? error : new Error("无法保存粘贴恢复记录，未提交本次粘贴"));
+        return false;
+      }
+    }
+    const pending: NonNullable<typeof pendingAction.current> = pendingAction.current ?? { command, ...(onDone ? { onDone } : {}), ...(onSettled ? { onSettled } : {}), ...(options ? { options } : {}),
       ...(structural
         ? { selectionIntent: { projectId: command.projectId, generation: canvasSelection.generation() } } : {}) };
     pendingAction.current = pending;
@@ -1756,6 +1769,8 @@ function Workspace() {
       if (command.type === "stroke.create") { strokeJournal.write(command); scanStrokeRecoveries(); }
       if (!executed) {
         const receipt = await api.execute(command);
+        // 服务端已受理：先清恢复记录；随后画面读取失败只需重读，不再重放请求。
+        try { options?.onCommitted?.(); } catch { /* 清理失败时保留记录，下次按原 commandId 幂等重放 */ }
         if (structural) pending.receipt = receipt;
         executed = true;
       }
@@ -1774,6 +1789,8 @@ function Workspace() {
         canvasSelection.generation() === pending.selectionIntent.generation) pending.onDone?.();
       return true;
     } catch (e) {
+      // 只有“还没拿到回执”的拒绝才是提交侧结果；之后的读取失败已经不代表没提交。
+      if (!executed) options?.onRejected?.(e);
       if ((structural || ['thought.create', 'shape.create', 'stroke.create'].includes(command.type)) && !executed && !pending.rejected && e instanceof MappingError &&
         ['VERSION_CONFLICT', 'NOT_FOUND', 'UNAUTHORIZED', 'PROJECT_FORBIDDEN', 'UNTRUSTED_PRINCIPAL'].includes(e.code)) {
         pending.rejected = e.message;
@@ -2444,6 +2461,11 @@ function Workspace() {
     if (!(await prepareSnapshot())) return;
     const current = authority.current;
     if (!current) return;
+    // 上一次目标请求还没确认时不生成新请求：否则同一份剪贴板会被粘贴两次。
+    if (pasteJournal.read(current.project.id)) {
+      fail(new Error("上一次粘贴尚未确认，请刷新页面确认后再粘贴"));
+      return;
+    }
     let document: ReturnType<typeof parseClipboard>;
     try { document = parseClipboard(raw); }
     catch (error) { fail(error instanceof Error ? error : new Error("无法读取这份画布剪贴板，原内容未改变")); return; }
@@ -2451,29 +2473,38 @@ function Workspace() {
     const step = nextPaste(pasteSequence.current, { clipboard: raw, drop: target.dropKey, viewport: target.viewportKey });
     pasteSequence.current = step.sequence;
     const translation = pasteTranslation(clipboardCenter(document), target.drop, step.index);
-    if (document.cut) {
-      if (document.cut.sourceProjectId !== current.project.id) {
-        fail(new Error("跨项目剪切尚未支持；原画布未改变"));
-        return;
-      }
+    const cut = document.cut;
+    // 只有来自剪切信封的粘贴才需要持久恢复：普通副本没有跨项目搬动的未知结果问题。
+    const recovery = (command: Command): ActionOptions => ({
+      persist: (value: Command) => pasteJournal.write(current.project.id, value),
+      onCommitted: () => pasteJournal.clear(current.project.id, command.commandId),
+      onRejected: (error: unknown) => { if (pasteNotCommitted(error, 'first')) pasteJournal.clear(current.project.id, command.commandId); },
+    });
+    if (cut) {
+      // 跨项目剪切只读取源项目的持久资格，不写源项目：同项目 eligible 仍走首次搬动；
+      // 其余合法状态（含异项目）按普通粘贴生成目标项目自己的身份与资源。
       let view: { state: string; revision: number };
-      try { view = await api.cutState(current.project.id, document.cut.cutId); }
+      try { view = await api.cutState(cut.sourceProjectId, cut.cutId); }
       catch (error) {
         fail(error instanceof MappingError && error.code === 'CUT_NOT_FOUND'
-          ? new Error("剪切记录已不可用，未粘贴任何内容") : error instanceof Error ? error : new Error("无法确认剪切资格"));
+          ? new Error("剪切记录已不可用，未粘贴任何内容")
+          : error instanceof MappingError && ['PROJECT_FORBIDDEN', 'UNAUTHORIZED', 'UNTRUSTED_PRINCIPAL'].includes(error.code)
+            ? new Error("无法访问剪切来源项目，未粘贴任何内容")
+            : error instanceof Error ? error : new Error("无法确认剪切资格"));
         return;
       }
-      // 只有服务端仍判定“可首次搬动”才恢复原身份；已消费或已撤销时按普通复制生成副本。
-      if (view.state === 'eligible') {
+      // 只有源项目就是当前项目且服务端仍判定“可首次搬动”才恢复原身份。
+      if (cut.sourceProjectId === current.project.id && view.state === 'eligible') {
         const command = { commandId: crypto.randomUUID(), projectId: current.project.id, type: "canvas.paste-cut",
-          expected: { cut: document.cut.cutId, cutRevision: view.revision },
-          payload: { cutId: document.cut.cutId, translation } } as Command;
-        await action(command, () => selectCopies(current.project.id, restoredCopyRefs(document), []));
+          expected: { cut: cut.cutId, cutRevision: view.revision },
+          payload: { cutId: cut.cutId, translation } } as Command;
+        await action(command, () => selectCopies(current.project.id, restoredCopyRefs(document), []), undefined, undefined, recovery(command));
         return;
       }
     }
     const plan = pastePlan(current.project.id, document, translation);
-    await action(plan.command, () => selectCopies(current.project.id, plan.objectCopyIds, plan.connectorCopyIds));
+    await action(plan.command, () => selectCopies(current.project.id, plan.objectCopyIds, plan.connectorCopyIds),
+      undefined, undefined, cut ? recovery(plan.command) : undefined);
   }
   async function pastePlainText(text: string) {
     const current = authority.current;
@@ -2552,6 +2583,34 @@ function Workspace() {
     void (async () => {
       const done = await action(pending.command);
       if (done || pendingAction.current?.command.commandId !== pending.command.commandId) cutJournal.clear();
+    })();
+  }, [state?.project.id]);
+  // 目标粘贴的结果未知时，刷新后按原 commandId 与原载荷重放；只有交易内的拒绝才结束尝试。
+  const pasteRecovery = useRef<string | null>(null);
+  useEffect(() => {
+    const id = state?.project.id;
+    if (!id) return;
+    const pending = pasteJournal.read(id);
+    if (!pending || pasteRecovery.current === pending.command.commandId || pendingAction.current) return;
+    pasteRecovery.current = pending.command.commandId;
+    void (async () => {
+      setBusy(true);
+      setStatus("正在确认未完成的粘贴…");
+      try {
+        await api.execute(pending.command);
+        // 已确认提交：先清记录；后面只是重新读取画面。
+        pasteJournal.clear(id, pending.command.commandId);
+        try { await refresh(id); setStatus("已保存到本机"); setError(""); }
+        catch (error) { fail(error); }
+      } catch (error) {
+        if (pasteNotCommitted(error, 'replay')) {
+          pasteJournal.clear(id, pending.command.commandId);
+          try { await refresh(id); } catch { /* 拒绝已明确，画面读取失败不改变结论 */ }
+        }
+        fail(error);
+      } finally {
+        setBusy(false);
+      }
     })();
   }, [state?.project.id]);
   const canvasMove = useCanvasMove(state, canvasSelection.value, (prepare, done, intent, discard) => texts.enqueueGeometry(async () => {
@@ -3656,7 +3715,7 @@ function Workspace() {
                   return;
                 }
                 const pending = pendingAction.current;
-                if (pending) void action(pending.command, pending.onDone);
+                if (pending) void action(pending.command, pending.onDone, undefined, undefined, pending.options);
                 else if (Object.keys(drafts.current).length) void flush();
                 else location.reload();
               }}

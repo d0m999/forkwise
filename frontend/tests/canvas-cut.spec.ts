@@ -77,31 +77,35 @@ async function runCutFlow(page: Page, workspace: Workspace, system: boolean) {
   await expect(page.getByRole('status')).toHaveText('已保存到本机');
   mkdirSync(artifacts, { recursive: true });
 
-  // AC1：浏览器权限层真实拒绝 clipboard.write（CDP Browser.setPermission=denied），不改写
-  // navigator.clipboard.write、不靠 JS 打桩；denied/granted 双向 probe 证明拒绝来自权限层而非环境。
+  // AC1 写失败分支：CDP 在浏览器级上下文上真实拒绝 clipboard.write，不改写 navigator.clipboard.write、
+  // 不靠 JS 打桩。denied/granted 双向 probe 证明拒绝来自权限层，而不是「环境本来写不进去」。
+  // 必须在浏览器级 CDP 上开并显式带本 page 的 browserContextId：Playwright 的 context 不是默认浏览器
+  // 上下文，缺 browserContextId 时拒绝不生效——headless 会因「基线本来就写不进」而假通过。
+  const browserCdp = await page.context().browser()!.newBrowserCDPSession();
+  const pageTarget = (await browserCdp.send('Target.getTargets')).targetInfos
+    .find(target => target.type === 'page' && target.url.startsWith(workspace.origin))!;
+  const browserContextId = pageTarget.browserContextId!;
+  const clipboardPermission = { name: 'clipboard-write' };
+  const setClipboardPermission = (setting: 'denied' | 'granted') => browserCdp.send('Browser.setPermission',
+    { permission: clipboardPermission, setting, origin: workspace.origin, browserContextId });
+  const probeWrite = () => page.evaluate(async () => {
+    try {
+      await navigator.clipboard.write([new ClipboardItem({ 'text/plain': new Blob(['probe'], { type: 'text/plain' }) })]);
+      return true;
+    } catch { return false; }
+  });
+  await setClipboardPermission('denied');
+  expect(await probeWrite()).toBe(false);
+  await setClipboardPermission('granted');
+  expect(await probeWrite()).toBe(true);
   if (system) {
-    // 实测：headed 下带用户激活的 clipboard.write 不受该权限拒绝约束，denied 后 Meta+x 仍写成功。
-    // 该失败分支只能在 headless 权限层构造，headed 记 NOT_RUN，不记 PASS。
-    checks.clipboardDenied = { status: 'NOT_RUN', via: 'headed 下用户激活的 navigator.clipboard.write 不受 CDP clipboard-write=denied 约束（实测 Meta+x 仍写成功），AC1 写失败分支只在 headless 权限层构造' };
+    // headed 实测：拒绝生效的前提下，⌘X 没有进入应用（页面只收到 Meta 的 keydown，没有 x）；
+    // 改用菜单「剪切到剪贴板」的慢点击（down→300ms→up）后，剪切照样完成并提交 canvas.cut，
+    // 说明拒绝状态下用户激活的写入仍然 resolve。写失败分支在真实窗口不可达，按「未运行不记 PASS」记 NOT_RUN。
+    checks.clipboardDenied = { status: 'NOT_RUN', via: 'headed 下权限拒绝确实生效（denied/granted 双向 probe 对照），但写失败分支不可达：拒绝状态下 ⌘X 未进入应用（只观测到 Meta keydown、无 x），菜单「剪切到剪贴板」慢点击仍完成写入并提交 canvas.cut；不计 PASS' };
   } else {
-    // 必须在浏览器级 CDP 上开，并显式带上本 page 的 browserContextId：Playwright 的 context 不是默认
-    // 浏览器上下文，缺 browserContextId 时拒绝不会生效。
-    const browserCdp = await page.context().browser()!.newBrowserCDPSession();
-    const pageTarget = (await browserCdp.send('Target.getTargets')).targetInfos
-      .find(target => target.type === 'page' && target.url.startsWith(workspace.origin))!;
-    const browserContextId = pageTarget.browserContextId!;
-    const clipboardPermission = { name: 'clipboard-write' };
-    const setClipboardPermission = (setting: 'denied' | 'granted') => browserCdp.send('Browser.setPermission',
-      { permission: clipboardPermission, setting, origin: workspace.origin, browserContextId });
-    const probeWrite = () => page.evaluate(async () => {
-      try {
-        await navigator.clipboard.write([new ClipboardItem({ 'text/plain': new Blob(['probe'], { type: 'text/plain' }) })]);
-        return true;
-      } catch { return false; }
-    });
+    // headless 无系统剪贴板：这段只证明浏览器侧 write 失败会走「原对象未改变」，不充当 AC1 的系统剪贴板证据。
     await setClipboardPermission('denied');
-    // 拒绝必须真的来自权限层：同一 probe 在 denied 下失败、在 granted 下成功，才排除「环境本来写不进去」。
-    expect(await probeWrite()).toBe(false);
     await page.getByRole('button', { name: '甲', exact: true }).click();
     await page.locator('.canvas').press('Meta+x');
     await expect(page.getByRole('alert')).toContainText('无法写入剪贴板');
@@ -110,11 +114,9 @@ async function runCutFlow(page: Page, workspace: Workspace, system: boolean) {
     expect(afterDenied.connectors!.map(line => line.id)).toEqual(['line']);
     const deniedHistory = await (await page.request.get(`${workspace.origin}/api/mapping/projects/${projectId}/history`)).json();
     expect(deniedHistory.undo.some((action: { label: string }) => action.label === 'canvas.cut')).toBe(false);
-    checks.clipboardDenied = { status: 'EXECUTED', via: 'CDP Browser.setPermission(clipboard-write=denied, 带 browserContextId) 让真实 navigator.clipboard.write reject（denied/granted 双向 probe 对照），Meta+x 后对象/连线/历史不变；OS 层 NSPasteboard 写入失败仍未构造' };
-    await setClipboardPermission('granted');
-    expect(await probeWrite()).toBe(true);
-    await browserCdp.detach();
+    checks.clipboardDenied = { status: 'EXECUTED', via: 'headless：CDP Browser.setPermission(clipboard-write=denied, 带 browserContextId) 让真实 navigator.clipboard.write reject（denied/granted 双向 probe 对照），Meta+x 后对象/连线/历史不变；headless 无系统剪贴板，不计入 AC1' };
   }
+  await browserCdp.detach();
   await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
 
   await page.reload();
@@ -260,9 +262,10 @@ async function runCutFlow(page: Page, workspace: Workspace, system: boolean) {
   expect((await cutState(envelope.cut.cutId)).body).toMatchObject({ state: 'consumed' });
   checks.reopen = { status: 'EXECUTED', via: 'workspace.restart() + reload 后对象、连线与资格一致' };
 
-  // ac 只登记本次 run 真正跑过的检查：headless 没有系统剪贴板，systemClipboard 不得进 ac。
+  // ac 只登记本次 run 真正跑过、且能覆盖该条款的检查：AC1 的写失败分支是系统剪贴板条款，
+  // headless 没有系统剪贴板（clipboardDenied 在那里只是浏览器侧回归），headed 又不可达，故两处都不登记。
   const ac: Record<string, string[]> = {
-    AC1: [...(system ? [] : ['clipboardDenied']), 'remove'],
+    AC1: ['remove'],
     AC2: ['firstMove'],
     AC3: ['firstMove', 'secondPaste', 'undoCut', 'redo'],
     AC4: ['replaceClipboard', 'menu'],
@@ -275,7 +278,7 @@ async function runCutFlow(page: Page, workspace: Workspace, system: boolean) {
     checks,
     unverified: [
       '写入期间源版本变化的浏览器侧失败时序未单独构造（后端真实 SQLite 的 VERSION_CONFLICT 已覆盖）',
-      'OS 层系统剪贴板写入失败未构造：浏览器侧 write 失败用 headless 的 CDP 权限拒绝覆盖（双向 probe 对照），headed 下该拒绝对用户激活的写入不生效、记 NOT_RUN',
+      'AC1 写失败分支未构造：headed 下权限拒绝确实生效（denied/granted 双向 probe），但拒绝状态下 ⌘X 未进入应用，菜单「剪切到剪贴板」慢点击仍完成写入并提交 canvas.cut（写 promise 仍 resolve）；headless 的同类拒绝没有系统剪贴板，不计入 AC1。NSPasteboard 自身写入失败需 OS 级故障注入',
       '真实 OS IME 组合输入未构造：自动化只能派发 CDP/DOM 合成事件，守卫证据已与真实键盘证据分开记录',
       '辅助技术（屏幕阅读器/语音控制）未接入：菜单与画布的可访问性只有键盘、焦点与角色断言，无真实 AT 证据',
       '丢 ACK 用 route.fetch + 503 构造（服务端已提交、客户端响应失败）；真实网络分区与进程被杀未构造',
@@ -315,7 +318,7 @@ test.describe('AC5 系统剪贴板剪切验收', () => {
 
 test.describe('跨项目剪切包边界', () => {
   test.skip(systemClipboard, '系统剪贴板验收只跑主流程');
-  test('异项目剪切包明确拒绝，目标项目不写入', async ({ page, workspace }) => {
+  test('源剪切记录不可用的异项目剪切包明确拒绝，目标项目不写入', async ({ page, workspace }) => {
     test.setTimeout(180000);
     await workspace.open(page);
     const sourceId = (await workspace.state()).project.id;
@@ -327,6 +330,19 @@ test.describe('跨项目剪切包边界', () => {
     await page.getByRole('button', { name: '待搬动', exact: true }).click();
     await page.locator('.canvas').press('Meta+x');
     await expect.poll(async () => (await workspace.state()).cards.length).toBe(0);
+    // 保留同一份 schema 合法信封，只把 cutId 换成来源项目没有提交过的编号：
+    // 跨项目粘贴改为读源记录后，旧的“异项目一律拒绝”边界换成“源记录缺失即拒绝”。
+    const envelope = await page.evaluate(async () => {
+      const item = (await navigator.clipboard.read()).find(value => value.types.includes('web application/x-forkwise-canvas'));
+      return JSON.parse(await (await item!.getType('web application/x-forkwise-canvas')).text());
+    });
+    envelope.cut = { ...envelope.cut, cutId: crypto.randomUUID() };
+    await page.evaluate(async value => {
+      await navigator.clipboard.write([new ClipboardItem({
+        'text/plain': new Blob(['待搬动'], { type: 'text/plain' }),
+        'web application/x-forkwise-canvas': new Blob([JSON.stringify(value)], { type: 'web application/x-forkwise-canvas' }),
+      })]);
+    }, envelope);
     const listProjects = async () => (await page.request.get(`${workspace.origin}/api/mapping/projects`)).json() as Promise<{ id: string }[]>;
     const before = await listProjects();
     await page.getByRole('button', { name: '新建研究', exact: true }).click();
@@ -337,7 +353,7 @@ test.describe('跨项目剪切包边界', () => {
     await page.mouse.move(pane.x + 420, pane.y + 300);
     await page.locator('.react-flow__pane').click({ position: { x: 20, y: 20 } });
     await page.locator('.canvas').press('Meta+v');
-    await expect(page.getByRole('alert')).toContainText('跨项目剪切尚未支持');
+    await expect(page.getByRole('alert')).toContainText('剪切记录已不可用');
     const target = await (await page.request.get(`${workspace.origin}/api/mapping/projects/${targetId}`)).json();
     expect(target.cards).toHaveLength(0);
     expect(target.connectors ?? []).toHaveLength(0);
