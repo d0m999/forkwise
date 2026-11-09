@@ -16,6 +16,11 @@ export function snapshotScope(state: SpatialState, selected: string[]) {
 
 // 成员全部离开的组合不再有可绑定轮廓：删除计划与剪切捕获必须共用这一判定，
 // 否则捕获到存活父容器的端点依赖、事务内却不会移除它，合法命令会被判成 VERSION_CONFLICT。
-export function emptiedGroupIds(groups: { id: string; memberItemIds: string[] }[], removed: Set<string>) {
-  return groups.filter(group => group.memberItemIds.every(id => removed.has(id))).map(group => group.id);
+export function emptiedGroups<T extends { memberItemIds: string[] }>(groups: T[], removed: Set<string>): T[] {
+  return groups.filter(group => group.memberItemIds.every(id => removed.has(id)));
+}
+
+// 容器端点的键同时是捕获与移除计划使用的身份；直接返回键，调用方无需再用 id 反查 group。
+export function emptiedGroupKeys(groups: { itemId: string; memberItemIds: string[] }[], removed: Set<string>): string[] {
+  return emptiedGroups(groups, removed).map(group => `group:${group.itemId}`);
 }

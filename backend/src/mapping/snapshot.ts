@@ -4,7 +4,7 @@ import { readGroups, readContainment, writeGroup, writeContainment } from './gro
 import { readFrames } from './frame.js';
 import { frameCandidate } from './frame-spatial.js';
 import type Database from 'better-sqlite3';
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { requireThat } from '../domain/errors.js';
 import type { Block, Card, Change, MediaAsset } from './contracts.js';
 import type { CanvasConnector, ConnectorEndpoint } from './connector-contracts.js';
@@ -16,7 +16,7 @@ import { readImages } from './image.js';
 import { readShapes } from './shape.js';
 import { readStrokes } from './stroke.js';
 import { readTexts } from './text.js';
-import { readAsset, saveAsset } from './media.js';
+import { assetHash, readAsset, saveAsset } from './media.js';
 import { readTags, saveTag } from './tags.js';
 import type { Tag } from './contracts.js';
 import { retainCardVersions } from './versions.js';
@@ -190,9 +190,12 @@ function adoptLibrary(db: Database.Database, projectId: string, payload: Paste['
     // 两个项目各自合法保存同一资源 ID 时，只有冻结内容与目标值一致才复用；
     // 内容不同必须新建目标资源，保留目标项目原图（资源内容不可变，写回同 ID 会被拒绝）。
     if (row) {
-      const stored = JSON.parse(row.value) as MediaAsset;
-      const same = stored.name === entry.name && stored.mime === entry.mime &&
-        stored.hash === createHash('sha256').update(Buffer.from(entry.base64, 'base64')).digest('hex');
+      // 持久行来自本机 SQLite，但内容形状仍在这一个读取边界校验一次；
+      // 没有可信 hash 就当作不可复用，走新建分支，不覆盖目标项目已有资源。
+      const stored = JSON.parse(row.value) as MediaAsset | null;
+      const same = typeof stored?.hash === 'string' &&
+        stored.name === entry.name && stored.mime === entry.mime &&
+        stored.hash === assetHash(Buffer.from(entry.base64, 'base64'));
       if (same) {
         assetMap.set(id, id);
         continue;

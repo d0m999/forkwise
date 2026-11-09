@@ -54,39 +54,30 @@ function freeze(state: State, options: { ids: string[]; connectors?: string[]; p
   const stack = (order?: number) => order ?? 0;
   const remapBlock = (block: Record<string, unknown>) => block.type === 'image' && options.assets?.[String(block.assetId)]
     ? { ...block, assetId: options.assets[String(block.assetId)] } : block;
-  for (const card of state.cards) if (wanted.has(card.item.id)) {
-    copyOf.set(card.item.id, prefix + card.id);
-    objects.push({ kind: 'card', copyId: prefix + card.id, stack: stack(card.item.createdOrder), title: card.title,
-      blocks: card.body.blocks.map(remapBlock),
-      tagIds: card.cardTags ? [...card.cardTags.tagIds] : null,
-      appearance: card.appearance ? { titleColor: card.appearance.titleColor, showPreview: card.appearance.showPreview } : null,
-      pose: card.item.pose });
-  }
-  for (const text of state.texts ?? []) if (wanted.has(text.item.id)) {
-    copyOf.set(text.item.id, prefix + text.id);
-    objects.push({ kind: 'text', copyId: prefix + text.id, stack: stack(text.item.createdOrder), content: text.content, pose: text.item.pose });
-  }
-  for (const shape of state.shapes ?? []) if (wanted.has(shape.item.id)) {
-    copyOf.set(shape.item.id, prefix + shape.id);
-    objects.push({ kind: 'shape', copyId: prefix + shape.id, stack: stack(shape.item.createdOrder), content: shape.content, pose: shape.item.pose });
-  }
-  for (const image of state.images ?? []) if (wanted.has(image.item.id)) {
-    copyOf.set(image.item.id, prefix + image.id);
-    objects.push({ kind: 'image', copyId: prefix + image.id, stack: stack(image.item.createdOrder),
+  // 各类对象只有内容字段不同；copyId 登记与入栈顺序在同一处完成。
+  const push = (kind: string, sourceId: string, itemId: string, order: number | undefined, content: Record<string, unknown>) => {
+    const copyId = prefix + sourceId;
+    copyOf.set(itemId, copyId);
+    objects.push({ kind, copyId, stack: stack(order), ...content });
+  };
+  for (const card of state.cards) if (wanted.has(card.item.id)) push('card', card.id, card.item.id, card.item.createdOrder, {
+    title: card.title, blocks: card.body.blocks.map(remapBlock),
+    tagIds: card.cardTags ? [...card.cardTags.tagIds] : null,
+    appearance: card.appearance ? { titleColor: card.appearance.titleColor, showPreview: card.appearance.showPreview } : null,
+    pose: card.item.pose });
+  for (const text of state.texts ?? []) if (wanted.has(text.item.id))
+    push('text', text.id, text.item.id, text.item.createdOrder, { content: text.content, pose: text.item.pose });
+  for (const shape of state.shapes ?? []) if (wanted.has(shape.item.id))
+    push('shape', shape.id, shape.item.id, shape.item.createdOrder, { content: shape.content, pose: shape.item.pose });
+  for (const image of state.images ?? []) if (wanted.has(image.item.id))
+    push('image', image.id, image.item.id, image.item.createdOrder, {
       content: { ...image.content, assetId: options.assets?.[image.content.assetId] ?? image.content.assetId }, pose: image.item.pose });
-  }
-  for (const stroke of state.strokes ?? []) if (wanted.has(stroke.item.id)) {
-    copyOf.set(stroke.item.id, prefix + stroke.id);
-    objects.push({ kind: 'stroke', copyId: prefix + stroke.id, stack: stack(stroke.item.createdOrder), content: stroke.content, pose: stroke.item.pose });
-  }
-  for (const group of state.groups ?? []) if (wanted.has(group.itemId)) {
-    copyOf.set(group.itemId, prefix + group.id);
-    objects.push({ kind: 'group', copyId: prefix + group.id, stack: stack(group.createdOrder), pose: group.bounds });
-  }
-  for (const frame of state.frames ?? []) if (wanted.has(frame.id)) {
-    copyOf.set(frame.id, prefix + frame.id);
-    objects.push({ kind: 'frame', copyId: prefix + frame.id, stack: 0, name: frame.name, background: frame.background, pose: frame.pose });
-  }
+  for (const stroke of state.strokes ?? []) if (wanted.has(stroke.item.id))
+    push('stroke', stroke.id, stroke.item.id, stroke.item.createdOrder, { content: stroke.content, pose: stroke.item.pose });
+  for (const group of state.groups ?? []) if (wanted.has(group.itemId))
+    push('group', group.id, group.itemId, group.createdOrder, { pose: group.bounds });
+  for (const frame of state.frames ?? []) if (wanted.has(frame.id))
+    push('frame', frame.id, frame.id, undefined, { name: frame.name, background: frame.background, pose: frame.pose });
   const wantedConnectors = new Set(options.connectors ?? []);
   const end = (value: { kind: string; itemId?: string; side?: string; targetKind?: string; point?: unknown }) => {
     if (value.kind !== 'bound') return { kind: 'free', point: value.point };

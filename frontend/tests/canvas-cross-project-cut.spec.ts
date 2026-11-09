@@ -86,6 +86,25 @@ async function pasteInto(page: Page, targetId: string) {
   await page.locator('.canvas').press('Meta+v');
 }
 
+// 让第一次 canvas.paste 在服务端提交后丢掉回执：刷新重放与页面内重试共用同一构造。
+async function dropFirstPasteAck(page: Page) {
+  const route = '**/api/mapping/execute';
+  let dropped = false;
+  await page.route(route, async handler => {
+    const body = handler.request().postDataJSON() as { type?: string } | null;
+    if (!dropped && body?.type === 'canvas.paste') {
+      dropped = true;
+      await handler.fetch();
+      await handler.fulfill({ status: 503, contentType: 'application/json',
+        body: JSON.stringify({ code: 'UNAVAILABLE', message: '模拟响应丢失' }) });
+      return;
+    }
+    await handler.continue();
+  });
+  return route;
+}
+const pasteRecordKey = (projectId: string) => `forkwise.paste-pending.v1:${projectId}`;
+
 const pasteboardReader = `import Cocoa
 let pasteboard = NSPasteboard.general
 print("changeCount \\(pasteboard.changeCount)")
@@ -216,24 +235,12 @@ test.describe('目标请求丢 ACK 后的恢复', () => {
     const { sourceId } = await seed(page, workspace);
     const cut = await cutMoved(page, workspace, sourceId);
     const targetId = await createProject(page, sourceId);
-    let dropped = false;
-    const route = '**/api/mapping/execute';
-    await page.route(route, async handler => {
-      const body = handler.request().postDataJSON() as { type?: string } | null;
-      if (!dropped && body?.type === 'canvas.paste') {
-        dropped = true;
-        await handler.fetch();
-        await handler.fulfill({ status: 503, contentType: 'application/json',
-          body: JSON.stringify({ code: 'UNAVAILABLE', message: '模拟响应丢失' }) });
-        return;
-      }
-      await handler.continue();
-    });
+    const route = await dropFirstPasteAck(page);
     await pasteInto(page, targetId);
     await expect(page.getByRole('alert')).toContainText('模拟响应丢失');
     // 服务端已提交：目标已有一张卡，客户端保留恢复记录。
     await expect.poll(async () => (await read(page, workspace, targetId)).cards.length).toBe(1);
-    const recordKey = `forkwise.paste-pending.v1:${targetId}`;
+    const recordKey = pasteRecordKey(targetId);
     expect(await page.evaluate(key => localStorage.getItem(key), recordKey)).not.toBeNull();
     await page.unroute(route);
     await page.reload();
@@ -257,22 +264,11 @@ test.describe('丢 ACK 后页面内重试', () => {
     const { sourceId } = await seed(page, workspace);
     await cutMoved(page, workspace, sourceId);
     const targetId = await createProject(page, sourceId);
-    let dropped = false;
-    await page.route('**/api/mapping/execute', async handler => {
-      const body = handler.request().postDataJSON() as { type?: string } | null;
-      if (!dropped && body?.type === 'canvas.paste') {
-        dropped = true;
-        await handler.fetch();
-        await handler.fulfill({ status: 503, contentType: 'application/json',
-          body: JSON.stringify({ code: 'UNAVAILABLE', message: '模拟响应丢失' }) });
-        return;
-      }
-      await handler.continue();
-    });
+    const route = await dropFirstPasteAck(page);
     await pasteInto(page, targetId);
     await expect(page.getByRole('alert')).toContainText('模拟响应丢失');
-    await page.unroute('**/api/mapping/execute');
-    const recordKey = `forkwise.paste-pending.v1:${targetId}`;
+    await page.unroute(route);
+    const recordKey = pasteRecordKey(targetId);
     expect(await page.evaluate(key => localStorage.getItem(key), recordKey)).not.toBeNull();
     // 页面内重试必须带原 options：否则回执成功也不会清记录，后续粘贴被永久挡住。
     await page.getByRole('button', { name: '重试保存', exact: true }).click();
@@ -281,6 +277,26 @@ test.describe('丢 ACK 后页面内重试', () => {
     const targetHistory = await history(page, workspace, targetId);
     expect(targetHistory.undo.filter(action => action.label === 'canvas.paste')).toHaveLength(1);
     expect(await page.evaluate(key => localStorage.getItem(key), recordKey)).toBeNull();
+  });
+
+  test('丢 ACK 后页面内重试遇权限回收时保留恢复记录，不按首次拒绝清理', async ({ page, workspace }) => {
+    test.setTimeout(180000);
+    const { sourceId } = await seed(page, workspace);
+    await cutMoved(page, workspace, sourceId);
+    const targetId = await createProject(page, sourceId);
+    const route = await dropFirstPasteAck(page);
+    await pasteInto(page, targetId);
+    await expect(page.getByRole('alert')).toContainText('模拟响应丢失');
+    await page.unroute(route);
+    const recordKey = pasteRecordKey(targetId);
+    expect(await page.evaluate(key => localStorage.getItem(key), recordKey)).not.toBeNull();
+    // 重试沿用同一 commandId；403 在幂等回执查询之前，不能证明首次请求未提交（D467）。
+    await page.route('**/api/mapping/execute', handler => handler.fulfill({ status: 403, contentType: 'application/json',
+      body: JSON.stringify({ code: 'PROJECT_FORBIDDEN', message: '模拟权限回收' }) }));
+    await page.getByRole('button', { name: '重试保存', exact: true }).click();
+    await expect(page.getByRole('alert')).toContainText('模拟权限回收');
+    expect(await page.evaluate(key => localStorage.getItem(key), recordKey)).not.toBeNull();
+    await page.unroute('**/api/mapping/execute');
   });
 });
 
@@ -333,7 +349,7 @@ test.describe('提交成功但读取失败', () => {
     await pasteInto(page, targetId);
     await expect(page.getByRole('alert')).toContainText(/读取|无法|失败|本机服务/);
     expect((await read(page, workspace, targetId)).cards).toHaveLength(1);
-    const recordKey = `forkwise.paste-pending.v1:${targetId}`;
+    const recordKey = pasteRecordKey(targetId);
     expect(await page.evaluate(key => localStorage.getItem(key), recordKey)).toBeNull();
     await page.unroute(route);
     await page.reload();

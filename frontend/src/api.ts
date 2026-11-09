@@ -14,6 +14,7 @@ import {
   syncCompactMap,
   type WorkspaceProjection,
 } from "./compact-map";
+import { TRANSPORT_FALLBACK_CODE } from '../../backend/src/mapping/recovery-contract';
 export type ProjectState = WorkspaceProjection;
 export type {
   Card,
@@ -25,6 +26,7 @@ export class MappingError extends Error {
     readonly code: string,
     message: string,
     readonly details?: unknown,
+    readonly status?: number,
   ) {
     super(message);
   }
@@ -44,9 +46,10 @@ async function request<T>(path: string, body?: unknown, keepalive = false): Prom
   const result = await response.json();
   if (!response.ok)
     throw new MappingError(
-      result.code ?? "UNAVAILABLE",
+      result.code ?? TRANSPORT_FALLBACK_CODE,
       result.message ?? "本机服务暂时不可用",
       result.details,
+      response.status,
     );
   return result as T;
 }

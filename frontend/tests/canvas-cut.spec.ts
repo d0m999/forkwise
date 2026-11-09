@@ -318,7 +318,7 @@ test.describe('AC5 系统剪贴板剪切验收', () => {
 
 test.describe('跨项目剪切包边界', () => {
   test.skip(systemClipboard, '系统剪贴板验收只跑主流程');
-  test('源剪切记录不可用的异项目剪切包明确拒绝，目标项目不写入', async ({ page, workspace }) => {
+  test('源剪切记录不可用时，异项目粘贴仍按冻结快照写入目标并使用独立身份', async ({ page, workspace }) => {
     test.setTimeout(180000);
     await workspace.open(page);
     const sourceId = (await workspace.state()).project.id;
@@ -331,7 +331,7 @@ test.describe('跨项目剪切包边界', () => {
     await page.locator('.canvas').press('Meta+x');
     await expect.poll(async () => (await workspace.state()).cards.length).toBe(0);
     // 保留同一份 schema 合法信封，只把 cutId 换成来源项目没有提交过的编号：
-    // 跨项目粘贴改为读源记录后，旧的“异项目一律拒绝”边界换成“源记录缺失即拒绝”。
+    // AC1／AC3 要求目标动作与源项目状态独立，源记录缺失或无权访问不得阻止目标粘贴。
     const envelope = await page.evaluate(async () => {
       const item = (await navigator.clipboard.read()).find(value => value.types.includes('web application/x-forkwise-canvas'));
       return JSON.parse(await (await item!.getType('web application/x-forkwise-canvas')).text());
@@ -353,9 +353,11 @@ test.describe('跨项目剪切包边界', () => {
     await page.mouse.move(pane.x + 420, pane.y + 300);
     await page.locator('.react-flow__pane').click({ position: { x: 20, y: 20 } });
     await page.locator('.canvas').press('Meta+v');
-    await expect(page.getByRole('alert')).toContainText('剪切记录已不可用');
+    await expect(page.getByRole('status')).toHaveText('已保存到本机');
+    await expect.poll(async () => (await (await page.request.get(`${workspace.origin}/api/mapping/projects/${targetId}`)).json()).cards.length).toBe(1);
     const target = await (await page.request.get(`${workspace.origin}/api/mapping/projects/${targetId}`)).json();
-    expect(target.cards).toHaveLength(0);
+    expect(target.cards[0].id).not.toBe('moved');
+    expect(target.cards[0].title).toBe('待搬动');
     expect(target.connectors ?? []).toHaveLength(0);
   });
 });

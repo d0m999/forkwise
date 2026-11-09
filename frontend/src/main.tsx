@@ -3,7 +3,7 @@ import { canvasPlainText } from "./canvas-paste";
 import { CANVAS_CLIPBOARD_TYPE, canCopySelection, canCutSelection, captureClipboard, clipboardAssetIds, clipboardCenter, clipboardLibrary, copiedSelection, duplicatePlan, parseClipboard, pastePlan, restoredCopyRefs } from "./canvas-snapshot";
 import { captureCutCommand } from "../../backend/src/mapping/cut-command";
 import { cutJournal } from "./cut-recovery";
-import { pasteJournal, pasteNotCommitted } from "./paste-recovery";
+import { pasteJournal, pasteNotCommitted, type PasteAttempt } from "./paste-recovery";
 import type { CopyRef } from "./canvas-snapshot";
 import { nextPaste, pasteTranslation, type PasteSequence } from "./canvas-snapshot-geometry";
 import { SnapshotMenu } from "./snapshot-menu";
@@ -105,9 +105,15 @@ import type { Tag } from "../../backend/src/mapping/contracts";
 // 结构类命令的读已过期失败靠一次刷新收敛：命令集与错误码集中在这里，新增错误码不必改条件里的长行。
 const STALE_READ_COMMANDS = new Set(['connector.reconnect', 'connector.path', 'connector.move', 'connector.delete', 'connector.style', 'connector.reverse', 'connector.label', 'canvas.layer', 'canvas.duplicate', 'canvas.paste', 'canvas.cut', 'canvas.paste-cut']);
 const STALE_READ_CODES = new Set(['VERSION_CONFLICT', 'NOT_FOUND', 'ID_CONFLICT', 'CUT_STATE_CONFLICT', 'CUT_NOT_FOUND', 'CUT_RESTORE_MISSING', 'CUT_OUTER_CHANGED', 'CUT_OUTER_UNKNOWN']);
-// 粘贴恢复：persist 必须在真正发送前落盘最终命令；落盘失败则不提交。
-// 重试同一请求时必须沿用同一份 options，否则成功回执不会清理恢复记录。
-type ActionOptions = { persist?: (command: Command) => void; onCommitted?: () => void; onRejected?: (error: unknown) => void };
+// 一次提交的附加回调集中在具名选项里，避免位置参数与 undefined 占位。
+// persist 必须在真正发送前落盘最终命令；重试同一请求时沿用同一份 options，否则成功回执不会清理恢复记录。
+type ActionOptions = {
+  beforeSubmit?: () => boolean;
+  onSettled?: () => void;
+  persist?: (command: Command) => void;
+  onCommitted?: () => void;
+  onRejected?: (error: unknown, attempt: PasteAttempt) => void;
+};
 
 type CardData = {
   cardOnlySelection: boolean;
@@ -1080,7 +1086,7 @@ function Workspace() {
     resolve: connectorTargets.resolve,
     commit: async (command, done) => {
       let submitted = false, confirmed = false;
-      try { confirmed = (await action(command, done, () => { submitted = true; return true; })) === true; }
+      try { confirmed = (await action(command, done, { beforeSubmit: () => { submitted = true; return true; } })) === true; }
       catch (error) { fail(error); }
       return { submitted, confirmed };
     },
@@ -1699,7 +1705,9 @@ function Workspace() {
       resolving.current = false;
     }
   }
-  async function action(command: Command, onDone?: () => void, beforeSubmit?: () => boolean, onSettled?: () => void, options?: ActionOptions) {
+  async function action(command: Command, onDone?: () => void, options: ActionOptions = {}) {
+    // 同一 commandId 的页面内重试不是首次发送：权限类拒绝仍须按结果未知保留恢复记录（D467）。
+    const retrying = !!pendingAction.current;
     if (connectorCreate.hasPending()) return false;
     if (['thought.create', 'shape.create', 'stroke.create', 'canvas.duplicate', 'canvas.paste'].includes(command.type) && !('placement' in command && command.placement) && authority.current?.project.id === command.projectId)
       Object.assign(command, { placement: { expected: captureSpatial(authority.current) } });
@@ -1743,7 +1751,7 @@ function Workspace() {
       if (command.type === "stroke.create" && command.projectId !== authority.current?.project.id) {
         fail(new Error("笔迹所属项目已变化，请在原项目明确恢复")); return false;
       }
-      if (beforeSubmit && !beforeSubmit()) return false;
+      if (options.beforeSubmit && !options.beforeSubmit()) return false;
     }
     // 落盘发生在发送之前：保存失败就中止，目标不产生任何写入，源内容仍可由源历史恢复。
     if (options?.persist && !pendingAction.current?.receipt) {
@@ -1753,7 +1761,7 @@ function Workspace() {
         return false;
       }
     }
-    const pending: NonNullable<typeof pendingAction.current> = pendingAction.current ?? { command, ...(onDone ? { onDone } : {}), ...(onSettled ? { onSettled } : {}), ...(options ? { options } : {}),
+    const pending: NonNullable<typeof pendingAction.current> = pendingAction.current ?? { command, ...(onDone ? { onDone } : {}), ...(options.onSettled ? { onSettled: options.onSettled } : {}), options,
       ...(structural
         ? { selectionIntent: { projectId: command.projectId, generation: canvasSelection.generation() } } : {}) };
     pendingAction.current = pending;
@@ -1790,7 +1798,7 @@ function Workspace() {
       return true;
     } catch (e) {
       // 只有“还没拿到回执”的拒绝才是提交侧结果；之后的读取失败已经不代表没提交。
-      if (!executed) options?.onRejected?.(e);
+      if (!executed) options?.onRejected?.(e, retrying ? 'replay' : 'first');
       if ((structural || ['thought.create', 'shape.create', 'stroke.create'].includes(command.type)) && !executed && !pending.rejected && e instanceof MappingError &&
         ['VERSION_CONFLICT', 'NOT_FOUND', 'UNAUTHORIZED', 'PROJECT_FORBIDDEN', 'UNTRUSTED_PRINCIPAL'].includes(e.code)) {
         pending.rejected = e.message;
@@ -1956,14 +1964,14 @@ function Workspace() {
         !(await appearance.flush()) || !(await cardLayout.flush()) || !(await pose.flush()) || !(await flush())) return;
       if (cardDeletion.current !== intent || authority.current?.project.id !== intent.projectId ||
         !authority.current.cards.some(card => card.id === id && card.item.id === intent.itemId)) return;
-      await action(intent.command(), undefined, () => {
+      await action(intent.command(), undefined, { beforeSubmit: () => {
         if (cardDeletion.current !== intent || pendingAction.current || historyLock.current || historyCommand.current ||
           authority.current?.project.id !== intent.projectId ||
           !authority.current.cards.some(card => card.id === id && card.item.id === intent.itemId)) return false;
         if (intent.seal()) return true;
         fail(new Error('本次删除的自身保存依据未能确认，请重新明确删除'));
         return false;
-      });
+      } });
     } finally {
       if (cardDeletion.current === intent) cardDeletion.current = null;
     }
@@ -2461,50 +2469,52 @@ function Workspace() {
     if (!(await prepareSnapshot())) return;
     const current = authority.current;
     if (!current) return;
-    // 上一次目标请求还没确认时不生成新请求：否则同一份剪贴板会被粘贴两次。
-    if (pasteJournal.read(current.project.id)) {
-      fail(new Error("上一次粘贴尚未确认，请刷新页面确认后再粘贴"));
-      return;
-    }
     let document: ReturnType<typeof parseClipboard>;
     try { document = parseClipboard(raw); }
     catch (error) { fail(error instanceof Error ? error : new Error("无法读取这份画布剪贴板，原内容未改变")); return; }
+    const cut = document.cut;
+    // D467 的恢复口径只覆盖跨项目剪切的目标粘贴；普通副本与回源项目的粘贴不写恢复记录。
+    const crossProjectCut = !!cut && cut.sourceProjectId !== current.project.id;
+    // 按请求类别阻断：未确认的跨项目粘贴不能生成第二个请求，普通粘贴不受影响。
+    if (crossProjectCut && pasteJournal.read(current.project.id)) {
+      fail(new Error("上一次跨项目粘贴尚未确认，请刷新页面确认后再粘贴"));
+      return;
+    }
     const target = pasteDrop();
     const step = nextPaste(pasteSequence.current, { clipboard: raw, drop: target.dropKey, viewport: target.viewportKey });
     pasteSequence.current = step.sequence;
     const translation = pasteTranslation(clipboardCenter(document), target.drop, step.index);
-    const cut = document.cut;
-    // 只有来自剪切信封的粘贴才需要持久恢复：普通副本没有跨项目搬动的未知结果问题。
-    const recovery = (command: Command): ActionOptions => ({
-      persist: (value: Command) => pasteJournal.write(current.project.id, value),
-      onCommitted: () => pasteJournal.clear(current.project.id, command.commandId),
-      onRejected: (error: unknown) => { if (pasteNotCommitted(error, 'first')) pasteJournal.clear(current.project.id, command.commandId); },
-    });
-    if (cut) {
-      // 跨项目剪切只读取源项目的持久资格，不写源项目：同项目 eligible 仍走首次搬动；
-      // 其余合法状态（含异项目）按普通粘贴生成目标项目自己的身份与资源。
+    if (cut && cut.sourceProjectId === current.project.id) {
+      // 同项目按 D466 读取本项目的剪切资格；仍可首次搬动时恢复原对象身份与有效外线。
       let view: { state: string; revision: number };
-      try { view = await api.cutState(cut.sourceProjectId, cut.cutId); }
+      try { view = await api.cutState(current.project.id, cut.cutId); }
       catch (error) {
         fail(error instanceof MappingError && error.code === 'CUT_NOT_FOUND'
           ? new Error("剪切记录已不可用，未粘贴任何内容")
           : error instanceof MappingError && ['PROJECT_FORBIDDEN', 'UNAUTHORIZED', 'UNTRUSTED_PRINCIPAL'].includes(error.code)
-            ? new Error("无法访问剪切来源项目，未粘贴任何内容")
+            ? new Error("无法确认剪切资格，未粘贴任何内容")
             : error instanceof Error ? error : new Error("无法确认剪切资格"));
         return;
       }
-      // 只有源项目就是当前项目且服务端仍判定“可首次搬动”才恢复原身份。
-      if (cut.sourceProjectId === current.project.id && view.state === 'eligible') {
+      if (view.state === 'eligible') {
         const command = { commandId: crypto.randomUUID(), projectId: current.project.id, type: "canvas.paste-cut",
           expected: { cut: cut.cutId, cutRevision: view.revision },
           payload: { cutId: cut.cutId, translation } } as Command;
-        await action(command, () => selectCopies(current.project.id, restoredCopyRefs(document), []), undefined, undefined, recovery(command));
+        await action(command, () => selectCopies(current.project.id, restoredCopyRefs(document), []));
         return;
       }
     }
+    // 异项目粘贴只读冻结快照，不查询源项目状态：AC1／AC3 要求目标动作与源项目各自独立。
+    // 源记录缺失或无权访问都不阻止目标写入；权限由目标项目的 execute 承担。
     const plan = pastePlan(current.project.id, document, translation);
     await action(plan.command, () => selectCopies(current.project.id, plan.objectCopyIds, plan.connectorCopyIds),
-      undefined, undefined, cut ? recovery(plan.command) : undefined);
+      crossProjectCut ? {
+        persist: (value: Command) => pasteJournal.write(current.project.id, value),
+        onCommitted: () => pasteJournal.clear(current.project.id, plan.command.commandId),
+        onRejected: (error: unknown, attempt: PasteAttempt) => {
+          if (pasteNotCommitted(error, attempt)) pasteJournal.clear(current.project.id, plan.command.commandId);
+        },
+      } : undefined);
   }
   async function pastePlainText(text: string) {
     const current = authority.current;
@@ -2620,7 +2630,7 @@ function Workspace() {
   const frameMove = useFrameMove({ state, blocked: busy || historyBlocked || composition.current || !!pendingAction.current,
     point: client => flow.screenToFlowPosition(client, { snapToGrid: false }),
     execute: async (command, done) => {
-      const confirmed = await action(command, undefined, undefined, done);
+      const confirmed = await action(command, undefined, { onSettled: done });
       if (!confirmed && pendingAction.current?.command.commandId !== command.commandId) done();
     } });
   const groupGeometry = useGroupGeometry({ state, selection: canvasSelection.value, current: () => authority.current,
@@ -2629,7 +2639,7 @@ function Workspace() {
       shapeMove.dragging || imageGeometry.dragging || imageGeometry.hasPending(state?.project.id) || texts.hasMove() || !!shapeText.session || !!connectorLabel.session,
     flush: async () => await shapeMove.flush() && await connectorLabel.finish() && await shapeText.finish() && await texts.finish() &&
       await appearance.flush() && await cardLayout.flush() && await pose.flush() && await flush(),
-    execute: action });
+    execute: (command, done, guard) => action(command, done, { beforeSubmit: guard }) });
   function canvasDragPoint(event: MouseEvent | TouchEvent) {
     const pointer = 'touches' in event ? event.touches[0] ?? event.changedTouches[0] : event;
     return pointer ? flow.screenToFlowPosition({ x: pointer.clientX, y: pointer.clientY }, { snapToGrid: false }) : undefined;
@@ -2652,8 +2662,7 @@ function Workspace() {
     await action(intent, () => {
       canvasSelection.set({ targets: [{ kind: 'group', id: intent.payload.id }], enteredGroupId: null });
       clearConnectorSelection();
-    },
-      () => authority.current?.project.id === intent.projectId && canvasSelection.generation() === generation);
+    }, { beforeSubmit: () => authority.current?.project.id === intent.projectId && canvasSelection.generation() === generation });
   }
   async function ungroupSelectedGroups() {
     const snapshot = authority.current;
@@ -2662,7 +2671,7 @@ function Workspace() {
     const command = ungroupSelectionCommand(snapshot, selected), generation = canvasSelection.generation();
     if (!command) return;
     await action(command, () => canvasSelection.set({ targets: members.map(itemId => ({ kind: 'item', itemId })), enteredGroupId: null }),
-      () => authority.current?.project.id === command.projectId && canvasSelection.generation() === generation);
+      { beforeSubmit: () => authority.current?.project.id === command.projectId && canvasSelection.generation() === generation });
   }
   async function createSelectedFrame() {
     const snapshot = authority.current;
@@ -2671,7 +2680,7 @@ function Workspace() {
     if (!command) return;
     const generation = canvasSelection.generation();
     await action(command, () => { chooseFrame(command.payload.id); setFrameTool(false); },
-      () => authority.current?.project.id === command.projectId && canvasSelection.generation() === generation);
+      { beforeSubmit: () => authority.current?.project.id === command.projectId && canvasSelection.generation() === generation });
   }
   async function deleteSelectedCanvas(groupId?: string) {
     const snapshot = authority.current;
@@ -2686,11 +2695,11 @@ function Workspace() {
         containment: Object.fromEntries(Object.entries(intent.command.expected.containment).filter(([id]) => snapshot.groups!.find(group => group.id === groupId)!.memberItemIds.includes(id)).map(([id, version]) => [id, version!])),
         endpoints: intent.command.expected.endpoints, items: intent.command.expected.items, connectors: intent.command.expected.connectors } } : intent.command;
     try {
-      await action(command, undefined, () => {
+      await action(command, undefined, { beforeSubmit: () => {
         if (selectionDeletion.current !== intent || authority.current?.project.id !== intent.command.projectId || canvasSelection.generation() !== generation) return false;
         if (!intent.seal()) { fail(new Error('删除依据缺少确切保存确认，请重新明确删除选区')); return false; }
         return true;
-      });
+      } });
     } finally { if (selectionDeletion.current === intent) selectionDeletion.current = null; }
   }
   async function applyLayer(operation: LayerOperation) {
@@ -2712,7 +2721,7 @@ function Workspace() {
     // 属性容器：闭包写入须在 await 之后仍按声明类型读取。
     const before = { ids: undefined as string[] | undefined };
     setLayerHold(hold);
-    const applied = await action(command, undefined, () => {
+    const applied = await action(command, undefined, { beforeSubmit: () => {
       const current = authority.current;
       if (!current || current.project.id !== command.projectId || canvasSelection.generation() !== generation) return false;
       const fresh = layerItems(current),
@@ -2721,7 +2730,7 @@ function Workspace() {
       command.expected = Object.fromEntries(fresh.map(value => [value.itemId, value.item.versionId]));
       before.ids = fresh.map(value => value.itemId);
       return true;
-    });
+    } });
     const current = authority.current,
       after = applied && current ? layerItems(current).map(value => value.itemId) : null,
       beforeIds = before.ids;
@@ -2743,12 +2752,12 @@ function Workspace() {
       expected: { text: text.versionId, pose: text.item.versionId, ...facts }, payload: { id } };
     selectionDeletion.current = intent;
     try {
-      await action(command, undefined, () => {
+      await action(command, undefined, { beforeSubmit: () => {
         if (selectionDeletion.current !== intent || authority.current?.project.id !== command.projectId || canvasSelection.generation() !== generation || !intent.seal()) return false;
         const expected = intent.command.expected.items[text.item.id]!;
         if (expected.kind !== 'text') return false;
         command.expected.text = expected.text; command.expected.pose = expected.pose; return true;
-      });
+      } });
     } finally { if (selectionDeletion.current === intent) selectionDeletion.current = null; }
   }
   function memberAction(itemId: string) {
@@ -2759,7 +2768,7 @@ function Workspace() {
     const snapshot = authority.current, selected = canvasSelection.current(), target = selected.targets[0];
     if (!snapshot || selected.targets.length !== 1 || target?.kind !== 'item' || target.itemId !== itemId) return;
     const command = removeMemberCommand(snapshot, itemId), generation = canvasSelection.generation();
-    if (command) await action(command, undefined, () => authority.current?.project.id === command.projectId && canvasSelection.generation() === generation);
+    if (command) await action(command, undefined, { beforeSubmit: () => authority.current?.project.id === command.projectId && canvasSelection.generation() === generation });
   }
   async function ungroupSelected(id: string) {
     const snapshot = authority.current, selected = canvasSelection.current(), target = selected.targets[0];
@@ -2767,7 +2776,7 @@ function Workspace() {
     const command = ungroupCommand(snapshot, id), members = snapshot.groups!.find(group => group.id === id)!.memberItemIds;
     const generation = canvasSelection.generation();
     if (command) await action(command, () => canvasSelection.set({ targets: members.map(itemId => ({ kind: 'item', itemId })), enteredGroupId: null }),
-      () => authority.current?.project.id === command.projectId && canvasSelection.generation() === generation);
+      { beforeSubmit: () => authority.current?.project.id === command.projectId && canvasSelection.generation() === generation });
   }
   useEffect(() => {
     const groupShortcut = (event: KeyboardEvent) => {
@@ -3258,9 +3267,9 @@ function Workspace() {
                 focusId={frameEditorFocus.current?.projectId === state.project.id ? frameEditorFocus.current.id : null}
                 onFocusRestored={id => { if (frameEditorFocus.current?.projectId === state.project.id && frameEditorFocus.current.id === id) frameEditorFocus.current = null; }}
                 blocked={busy || historyBlocked || !!pendingAction.current}
-                execute={(command, done, endEditing) => void action(command, done, undefined, () => {
+                execute={(command, done, endEditing) => void action(command, done, { onSettled: () => {
                   if (!pendingAction.current && authority.current?.project.id === command.projectId) endEditing?.();
-                })} move={frameMove} />
+                } })} move={frameMove} />
               <CanvasGroups state={state} selection={canvasSelection.value} positions={{ ...canvasMove.positions, ...frameMove.positions, ...groupGeometry.poses }} geometry={groupGeometry}
                 blocked={busy || historyBlocked || !!pendingAction.current || texts.hasPending()}
                 create={() => void createSelectedGroup()}
@@ -3715,7 +3724,7 @@ function Workspace() {
                   return;
                 }
                 const pending = pendingAction.current;
-                if (pending) void action(pending.command, pending.onDone, undefined, undefined, pending.options);
+                if (pending) void action(pending.command, pending.onDone, pending.options);
                 else if (Object.keys(drafts.current).length) void flush();
                 else location.reload();
               }}

@@ -13,7 +13,7 @@
 - Body 是有序 Block 列表。Block 有稳定 ID；重排保留 ID，复制生成新 ID，删除再撤销恢复原 ID。普通文本、标题、列表、图片、附件、引用等是呈现结构，不强制观点或假设分类。参考实现实现 text/heading/listItem/asset/reference/opaque 联合类型；只有 listItem 可形成块内父子，未知内容用 opaque 原样保留。
 - CanvasItem 表达可定位的画布身份，以 kind 区分 Thought、Shape、Text、Image、Stroke、Group、Frame；MaterialCard 保留为提案类型。各 kind 通过独立内容记录承载自己的能力，不把形状、文字、图片包装成带写字板的 Thought。Pose 保存位置、尺寸与允许的旋转，独立版本化；StackOrder 保存 D310 四类内容对象的共同持久顺序。正文写入不得覆盖 Pose 或 StackOrder，拖动不得覆盖正文。
 - Material 是项目中可复用的资料身份，拥有可变 source 元数据与不可变 MaterialVersion。MaterialCard 是本包仅用于解释资料摆放的产品建议，不是已确认的新 UX 类型。每个建议中的 MaterialCard 捕获一个具体 MaterialVersion；更新 source 不悄悄改变已有卡片，更新快照必须显式执行。重复使用同一资料产生新卡片，重复复制 Thought 产生新 Thought/Body/Block，已有 Asset 可复用。
-- Asset 是不可变内容身份及媒体元数据，不是独立图片的画布身份。不同文件字节使用新 Asset；这不提供“替换图片”操作，D382 永久排除该入口，独立图片更新内容须删除旧对象再添加新对象。删除节点不立即删除 Asset；只有所有当前与保留历史引用都释放后才具备回收资格，本包不执行物理回收。跨项目粘贴时，同一 Asset ID 只有在目标项目已存在且字节、名称与媒体类型完全一致时才复用；否则在目标项目新建 Asset 并改写引用，不覆盖目标项目已有内容（2026-11-09，#45）。
+- Asset 是不可变内容身份及媒体元数据，不是独立图片的画布身份。不同文件字节使用新 Asset；这不提供“替换图片”操作，D382 永久排除该入口，独立图片更新内容须删除旧对象再添加新对象。删除节点不立即删除 Asset；只有所有当前与保留历史引用都释放后才具备回收资格，本包不执行物理回收。
 - Reference 是正文内指向 Thought 或特定 MaterialVersion 的引用，不等于屏幕连线。引用身份在本参考模型中就是其来源 Block ID；目标删除变为 broken，保留可解释的目标身份，不级联删除正文。
 - Connector 是用户画出的普通连线，可有用户文字标签 label，与卡片的 Tag 不同。不自动解释因果、支持、反对、出处或推理。允许环；禁止两端绑定同一个对象。端点可绑定同项目的 Thought、Shape、Text、Image、Group、Frame 对应 CanvasItem，或是世界坐标 free point；Stroke、其他 Connector 及未采纳的 MaterialCard 不自动成为绑定目标（D418、D419）。
 - Group 是一层集合，只含普通 CanvasItem，不含 Group/Frame；Frame 是单父、无环空间容器，可含 Frame。两者不等于 Reference/Connector。每个 item 至多一个直接父容器，类型为 group 或 frame。
@@ -96,6 +96,8 @@ observe(afterRevision) 返回顺序 delta：变化对象/写域和被删除 ID�
 建议已固定为本包测试前提：一节点一正文一摆放；资料快照引用；项目全体行动按时间撤销；frame 使用世界坐标规范化。真正需产品确认：资料原始文件永久删除/保留策略；跨项目资料共享是否要成为产品能力；超过40行动后的历史展示保留期。它们不阻塞本包，但不得以本包存在为由擅自上线。
 
 ## 6. 决策状态（不得合并）
+
+本包只登记参考模型的产品决定与工程表达状态，**不登记生产实现规则**。#45 跨项目剪切的资源按内容复用、目标请求持久恢复与拒绝分类等生产约束见 [ADR 0028](../../adr/0028-cross-project-paste-recovery.md) 与设计访谈 D466／D467；它们不进入下列四类状态，也不改写本包第 1 节的领域定义。
 
 - existingaccepted：D136/D65 最近40步；D283 保存与草稿规则；D279–282 正文块与媒体保护；D151/D262/D263 卡片标题及历史分组；D167、D185–D195、D327、D347/D348 标签；D245/D421 当前项目卡片搜索边界；D310、D313–D323 持久层级及 D303–D315 的临时显示边界；D355–D406 的独立对象与类型限制；D416 单父与分区保留内容；D418/D420 连线绑定及删除；D422/D423 首版范围；D425 普通卡片附件、固定原文件复用、浏览器打开/下载及批量拖入规则。
 - engineeringchoice：read/execute/observe、细域版本、不可变VersionId、幂等先于版本冲突、世界坐标规范化、快照分页、字节预算、JSON参考存储。本次补充的 title/Tag/CardTags、独立对象记录、StackOrder 写域与字段是待实现工程表达，不是新增产品选择或已通过测试的字段。

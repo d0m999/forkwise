@@ -1,5 +1,5 @@
 import { captureOptionalContainerEndpoints } from './container-endpoints.js';
-import { emptiedGroupIds } from './snapshot-tree.js';
+import { emptiedGroups, emptiedGroupKeys } from './snapshot-tree.js';
 import type { CanvasConnector } from './connector-contracts.js';
 import type { Card } from './contracts.js';
 import type { CanvasFrame } from './frame-contracts.js';
@@ -40,11 +40,11 @@ export function captureCutCommand(state: ScopeState, input: CutScopeInput): Canv
     if (!group) throw new Error('剪切目标组合已变化，请重新读取');
     for (const member of group.memberItemIds) items.add(member);
   }
-  const explicitFrames = new Set(input.frameIds);
-  for (const id of explicitFrames) if (!frames.some(frame => frame.id === id)) throw new Error('剪切目标分区已变化，请重新读取');
-  const affectedGroups = new Set(input.groupIds), affectedFrames = new Set(explicitFrames), membership = new Set(items);
+  const cutFrameIds = new Set(input.frameIds);
+  for (const id of cutFrameIds) if (!frames.some(frame => frame.id === id)) throw new Error('剪切目标分区已变化，请重新读取');
+  const affectedGroups = new Set(input.groupIds), affectedFrames = new Set(cutFrameIds), membership = new Set(items);
   // 嵌套分区自身也有归属行：删选会把 payload.frameIds 的行计入校验集合，这里必须同步。
-  for (const id of explicitFrames) if (containment.some(value => value.id === id)) membership.add(id);
+  for (const id of cutFrameIds) if (containment.some(value => value.id === id)) membership.add(id);
   for (const id of items) {
     const parent = containment.find(value => value.id === id)?.parent;
     if (!parent) continue;
@@ -53,7 +53,7 @@ export function captureCutCommand(state: ScopeState, input: CutScopeInput): Canv
     if (!group) throw new Error('剪切对象所属组合已变化，请重新读取');
     affectedGroups.add(group.id);
   }
-  for (const group of groups.filter(value => affectedGroups.has(value.id) && value.memberItemIds.every(id => items.has(id)))) {
+  for (const group of emptiedGroups(groups.filter(value => affectedGroups.has(value.id)), items)) {
     const own = containment.find(value => value.id === group.itemId);
     if (own) membership.add(group.itemId);
     if (own?.parent?.kind === 'frame') affectedFrames.add(own.parent.id);
@@ -75,10 +75,10 @@ export function captureCutCommand(state: ScopeState, input: CutScopeInput): Canv
   // 端点依赖只覆盖本次真正移除的容器：存活父容器上的外线不随本次剪切变化，
   // 若把它算入 captured，事务内的移除计划不会包含它，合法剪切会被整体判成 VERSION_CONFLICT。
   // 父容器与归属的必要版本校验仍由 expected.groups / frames / containment 承担。
-  const removedGroups = new Set([...input.groupIds, ...emptiedGroupIds(groups, items)]);
   const containerKeys = [...new Set([
-    ...groups.filter(group => removedGroups.has(group.id)).map(group => `group:${group.itemId}`),
-    ...[...explicitFrames].map(id => `frame:${id}`),
+    ...groups.filter(group => input.groupIds.includes(group.id)).map(group => `group:${group.itemId}`),
+    ...emptiedGroupKeys(groups, items),
+    ...[...cutFrameIds].map(id => `frame:${id}`),
   ])];
   const endpoints = captureOptionalContainerEndpoints({ ...state, connectors }, containerKeys);
   return {
@@ -97,7 +97,7 @@ export function captureCutCommand(state: ScopeState, input: CutScopeInput): Canv
       cutId: input.cutId,
       groupIds: [...input.groupIds],
       itemIds: [...items],
-      ...(explicitFrames.size ? { frameIds: [...explicitFrames] } : {}),
+      ...(cutFrameIds.size ? { frameIds: [...cutFrameIds] } : {}),
     },
   };
 }

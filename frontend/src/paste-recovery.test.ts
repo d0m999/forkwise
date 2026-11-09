@@ -65,20 +65,27 @@ describe('目标粘贴恢复记录', () => {
     expect(storage.getItem('forkwise.paste-pending.v1:b')).toBe('{broken');
   });
 
-  it('首次发送的权限拒绝可确认未提交；重放时的同一拒绝只能按结果未知保留', () => {
-    expect(pasteNotCommitted({ code: 'PROJECT_FORBIDDEN' }, 'first')).toBe(true);
-    expect(pasteNotCommitted({ code: 'UNAUTHORIZED' }, 'first')).toBe(true);
-    expect(pasteNotCommitted({ code: 'PROJECT_FORBIDDEN' }, 'replay')).toBe(false);
-    expect(pasteNotCommitted({ code: 'UNAUTHORIZED' }, 'replay')).toBe(false);
-    // 权限检查在幂等回执查询之前，重放被拒不能证明此前那次没提交。
-    expect(pasteNotCommitted({ code: 'VERSION_CONFLICT' }, 'replay')).toBe(true);
-    expect(pasteNotCommitted({ code: 'CUT_STATE_CONFLICT' }, 'replay')).toBe(true);
-    expect(pasteNotCommitted({ code: 'IDEMPOTENCY_MISMATCH' }, 'replay')).toBe(true);
-    // 503 与传输层故障可能发生在提交之后，两种阶段都按未知处理。
-    expect(pasteNotCommitted({ code: 'UNAVAILABLE' }, 'first')).toBe(false);
-    expect(pasteNotCommitted({ code: 'UNAVAILABLE' }, 'replay')).toBe(false);
-    expect(pasteNotCommitted({ code: 'SAVE_FAILED' }, 'first')).toBe(false);
-    expect(pasteNotCommitted({ code: 'SAVE_FAILED' }, 'replay')).toBe(false);
+  it('业务拒绝可确认未提交，兜底 503 与传输层故障按结果未知', () => {
+    // 首次发送：命令编号从未发出，所有真实业务拒绝都发生在事务回滚之后。
+    for (const [code, status] of [['INVALID_COMMAND', 400], ['NOT_FOUND', 404], ['VERSION_CONFLICT', 409],
+      ['INVALID_IMAGE', 413], ['EXPECTED_DOMAINS', 422], ['SNAPSHOT_UNAVAILABLE', 503]] as const)
+      expect(pasteNotCommitted({ code, status }, 'first')).toBe(true);
+    // 业务性 503（创建序位读取在事务前）确定未提交，不能与兜底 503 混为一类。
+    expect(pasteNotCommitted({ code: 'SNAPSHOT_UNAVAILABLE', status: 503 }, 'replay')).toBe(true);
+    // 权限拒绝在首次发送同样可确认未提交；重放时权限检查先于幂等回执查询，不能证明此前没提交。
+    expect(pasteNotCommitted({ code: 'PROJECT_FORBIDDEN', status: 403 }, 'first')).toBe(true);
+    expect(pasteNotCommitted({ code: 'PROJECT_FORBIDDEN', status: 403 }, 'replay')).toBe(false);
+    expect(pasteNotCommitted({ code: 'UNAUTHORIZED', status: 401 }, 'replay')).toBe(false);
+    // 解析与事务内校验：同一份持久化载荷的判定确定，重放可确认未提交。
+    expect(pasteNotCommitted({ code: 'INVALID_COMMAND', status: 400 }, 'replay')).toBe(true);
+    expect(pasteNotCommitted({ code: 'VERSION_CONFLICT', status: 409 }, 'replay')).toBe(true);
+    expect(pasteNotCommitted({ code: 'CUT_STATE_CONFLICT', status: 409 }, 'replay')).toBe(true);
+    expect(pasteNotCommitted({ code: 'IDEMPOTENCY_MISMATCH', status: 409 }, 'replay')).toBe(true);
+    // execute 的兜底 503 可能发生在事务提交之后，两种阶段都按未知处理。
+    expect(pasteNotCommitted({ code: 'SAVE_FAILED', status: 503 }, 'first')).toBe(false);
+    expect(pasteNotCommitted({ code: 'SAVE_FAILED', status: 503 }, 'replay')).toBe(false);
+    expect(pasteNotCommitted({ code: 'UNAVAILABLE', status: 503 }, 'first')).toBe(false);
+    // 传输层故障没有响应状态。
     expect(pasteNotCommitted(new TypeError('Failed to fetch'), 'first')).toBe(false);
     expect(pasteNotCommitted(new TypeError('Failed to fetch'), 'replay')).toBe(false);
   });

@@ -1,15 +1,14 @@
 import type { Command } from './api';
+import { UNKNOWN_RESULT_CODES } from '../../backend/src/mapping/recovery-contract';
 
-// 目标粘贴请求的持久恢复：提交前保存最终完整命令（含 action 补入的 placement、冻结资源、
-// 落点与全部目标 ID），刷新后按原 commandId 重放。与源项目的 cutJournal 分开存放，
-// 两者按各自的键定位，互不覆盖。
+// 跨项目剪切的目标粘贴请求的持久恢复：提交前保存最终完整命令（含 action 补入的 placement、
+// 冻结资源、落点与全部目标 ID），刷新后按原 commandId 重放。与源项目的 cutJournal 分开存放。
+// 这是本机临时恢复记录，不是项目领域数据：不进导出／备份／投影，也不做跨设备同步（D467）。
+// 工程口径与边界见 docs/adr/0028-cross-project-paste-recovery.md。
 const PREFIX = 'forkwise.paste-pending.v1:';
 const SCHEMA = 1;
 export type PendingPaste = { projectId: string; command: Command };
 
-function defaultStorage(): Storage | null {
-  try { return window.localStorage; } catch { return null; }
-}
 function key(projectId: string) {
   return PREFIX + projectId;
 }
@@ -26,7 +25,10 @@ function parse(raw: string, projectId: string): PendingPaste | null {
 }
 
 export class PasteRecovery {
-  constructor(private readonly source: () => Storage | null = defaultStorage) {}
+  // 注入存储只为让写入失败与损坏记录可在单测中构造；默认源就是当前窗口的 localStorage。
+  constructor(private readonly source: () => Storage | null = () => {
+    try { return window.localStorage; } catch { return null; }
+  }) {}
 
   read(projectId: string): PendingPaste | null {
     const storage = this.source();
@@ -61,27 +63,22 @@ export class PasteRecovery {
 
 export const pasteJournal = new PasteRecovery();
 
-// 服务端在幂等回执查询之后抛出的拒绝才证明“重放没有命中已提交的回执”。
-// INVALID_COMMAND 虽然发生在查询之前，但持久化的是本机刚发送过的同一份对象，
-// 解析结果确定：首次发送若解析失败就从未进入事务，重放同样不会。
-// IDEMPOTENCY_MISMATCH 表示该 commandId 已存有“另一份请求”的回执：本载荷确实没有写入，
-// 与本次内容重复粘贴无关，按可确认未提交处理。
-const AFTER_RECEIPT_LOOKUP = new Set([
-  'VERSION_CONFLICT', 'NOT_FOUND', 'ID_CONFLICT', 'IDEMPOTENCY_MISMATCH',
-  'INVALID_COMMAND', 'INVALID_ENDPOINT', 'INVALID_TAGS', 'INVALID_IMAGE', 'INVALID_GROUP_MEMBER',
-  'EXPECTED_DOMAINS', 'MEDIA_NOT_PERSISTED', 'TAG_NAME_CONFLICT',
-  'CUT_NOT_FOUND', 'CUT_STATE_CONFLICT', 'CUT_RESTORE_MISSING', 'CUT_OUTER_CHANGED', 'CUT_OUTER_UNKNOWN',
-]);
-// 503/传输层故障可能发生在服务端提交之后：无论第几次尝试都只能按结果未知处理。
-// SAVE_FAILED 是 execute 未知异常的兜底 503，可能发生在事务提交之后，同样按未知处理。
-const POSSIBLY_COMMITTED = new Set(['UNAVAILABLE', 'SAVE_FAILED', 'INTERNAL']);
+// 分类不手抄业务错误码清单：execute 只有两个「结果未知」出口——未知异常的兜底
+// 503 SAVE_FAILED，以及无响应码的传输层故障（API 层补 UNAVAILABLE）。其余响应都是
+// DomainError 业务拒绝，事务已回滚、确定未提交；其中包括 SNAPSHOT_UNAVAILABLE 这类
+// 503（创建序位读取发生在事务持久化之前），不能与兜底 503 混为一类。
+// 服务端新增或改名业务拒绝码自动落进正确分支，无需两端同步清单。
 export type PasteAttempt = 'first' | 'replay';
 
 export function pasteNotCommitted(error: unknown, attempt: PasteAttempt): boolean {
+  const status = (error as { status?: unknown } | null)?.status;
   const code = (error as { code?: unknown } | null)?.code;
-  if (typeof code !== 'string' || POSSIBLY_COMMITTED.has(code)) return false;
-  // 第一次发送：命令编号此前从未发出，服务端拒绝（含权限类）发生在提交之前，事务已回滚。
+  // 传输层故障没有响应状态，兜底 503 可能发生在提交之后，两者都只能按结果未知处理。
+  if (typeof status !== 'number' || status < 400) return false;
+  if (typeof code === 'string' && UNKNOWN_RESULT_CODES.includes(code)) return false;
+  // 第一次发送：命令编号此前从未发出，业务拒绝都发生在事务回滚之后。
   if (attempt === 'first') return true;
-  // 重放：权限检查在幂等回执查询之前，不能证明此前一次没提交；只有查询之后的拒绝才算。
-  return AFTER_RECEIPT_LOOKUP.has(code);
+  // 重放：解析类拒绝在回执查询之前，但对同一份本机持久化载荷结果确定，能证明从未进入事务；
+  // 事务内校验发生在回执查询之后，同样能证明。只有权限类（401/403）在查询之前且不确定。
+  return status !== 401 && status !== 403;
 }

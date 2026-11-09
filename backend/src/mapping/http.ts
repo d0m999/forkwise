@@ -8,6 +8,7 @@ import { DomainError, requireThat } from '../domain/errors.js';
 import { CompactQuerySchema } from './compact-contracts.js';
 import { ObserveQuerySchema } from './observe-contracts.js';
 import { SearchQuerySchema } from './search-contracts.js';
+import { EXECUTE_FALLBACK_CODE } from './recovery-contract.js';
 
 export function createWorkspaceApp(
   mapping: Mapping,
@@ -193,7 +194,7 @@ export function createWorkspaceApp(
         ? c.json({ code: 'INVALID_QUERY', message: '地图读取请求格式无效' }, 400)
         : c.json({ code: 'INVALID_COMMAND', message: '保存请求格式无效；原内容未修改' }, 400);
     return searching ? c.json({ code: 'SEARCH_FAILED', message: '搜索暂时不可用，请保留当前条件并重试' }, 503)
-      : c.json({ code: 'SAVE_FAILED', message: '保存失败，请保留当前输入并重试' }, 503);
+      : c.json({ code: EXECUTE_FALLBACK_CODE, message: '保存失败，请保留当前输入并重试' }, 503);
   });
   return app;
 }

@@ -8,6 +8,12 @@ import { requireThat } from '../domain/errors.js';
 import { rasterImage } from '../services/raster-image.js';
 import type { AssetChange, Command, MediaAsset } from './contracts.js';
 export type { MediaAsset };
+
+// 资源内容指纹的唯一算式：写入时计算，跨项目复用时按同一算式比对冻结内容。
+export function assetHash(bytes: Buffer): string {
+  return createHash('sha256').update(bytes).digest('hex');
+}
+
 export function initializeMedia(db: Database.Database) {
   db.exec(
     'CREATE TABLE IF NOT EXISTS mapping_assets(project_id TEXT NOT NULL REFERENCES mapping_projects(id), id TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY(project_id,id))',
@@ -64,7 +70,7 @@ export function saveAsset(
     ...p,
     width,
     height,
-    hash: createHash('sha256').update(bytes).digest('hex'),
+    hash: assetHash(bytes),
   };
   writeAssetRow(db, command.projectId, value);
 }
