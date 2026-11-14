@@ -290,6 +290,8 @@ export function pasteCut(db: Database.Database, command: CanvasPasteCut): CutWri
     writeContainment(db, projectId, after);
     containmentChanges.push({ before: null, after });
   }
+  // 附着先恢复：下面的分区候选要按「这次真的带回了附着」判断，漏掉顺序会把同一批注既写进分区又挂回卡片。
+  const attachmentChanges = restorePastedAttachments(db, projectId, change.attachmentChanges, itemIds, new Set(plan.cards.map(value => value.item.id)));
   const scene = readSnapshotScene(db, projectId).state;
   const boundsOf = (id: string) => endpointBounds(scene, {
     kind: 'bound', itemId: id, side: 'top',
@@ -321,7 +323,6 @@ export function pasteCut(db: Database.Database, command: CanvasPasteCut): CutWri
     saveConnector(db, projectId, after);
     connectorChanges.push({ before: null, after });
   }
-  const attachmentChanges = restorePastedAttachments(db, projectId, change.attachmentChanges, itemIds, new Set(plan.cards.map(value => value.item.id)));
   const written = { cardLifecycleChanges, textChanges, shapeChanges, imageChanges, strokeChanges,
     connectorChanges, groupChanges, frameChanges, containmentChanges, ...(attachmentChanges.length ? { attachmentChanges } : {}) };
   return {

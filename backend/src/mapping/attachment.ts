@@ -93,6 +93,25 @@ export function rejectAttachedMembers(db: Database.Database, projectId: string, 
 
 export interface CardMotion { itemId: string; dx: number; dy: number }
 
+export interface MovingMember { kind: AnnotationKind | 'card'; value: { item: { id: string } } }
+
+// 整体平移的成员集合：卡片进 motions，其余进 moving（不能再作为随动）。
+export function followMemberMotions(
+  db: Database.Database,
+  projectId: string,
+  commandId: string,
+  members: readonly MovingMember[],
+  dx: number,
+  dy: number,
+  followers: readonly FollowerPose[] | undefined,
+  expectedFollowers: Record<string, string> | undefined,
+) {
+  const still = dx === 0 && dy === 0;
+  const motions = still ? [] : members.flatMap(member => member.kind === 'card' ? [{ itemId: member.value.item.id, dx, dy }] : []);
+  const moving = new Map(still ? [] : members.flatMap(member => member.kind === 'card' ? [] : [[member.value.item.id, { dx, dy }] as const]));
+  return followCardMotions(db, projectId, commandId, motions, moving, followers, expectedFollowers);
+}
+
 export function followCardMotions(
   db: Database.Database,
   projectId: string,

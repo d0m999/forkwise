@@ -338,3 +338,89 @@ it('已附着批注不能再放进组合', () => {
   expect(rejected).toMatchObject({ status: 400 });
   expect(f.state().groups ?? []).toEqual([]);
 });
+
+it('回源粘贴把已附着批注放回分区范围时不再获得分区归属', () => {
+  const f = fixture();
+  const card = f.state().cards[0]!;
+  const text = f.state().texts![0]!;
+  attach(f, text.item.id);
+  const before = f.state();
+  f.run(captureCutCommand(before, { commandId: randomUUID(), projectId: 'p', cutId: 'cut-frame', itemIds: [card.item.id, text.item.id], groupIds: [], frameIds: [] }) as unknown as Record<string, unknown>);
+  expect(f.state().attachments ?? []).toEqual([]);
+  // 剪切后先建一个覆盖回源落点的分区，让分区归属与附着两条写入路径撞在同一个批注上。
+  f.run({ type: 'frame.create', expected: { frame: null, groups: {}, containment: {}, poses: {} }, payload: { id: 'frame', itemIds: [], pose: { x: 2000, y: 2000, width: 400, height: 300 } } });
+  f.run({ type: 'canvas.paste-cut', expected: { cut: 'cut-frame', cutRevision: 0 }, payload: { cutId: 'cut-frame', translation: { x: 2000, y: 2000 } } });
+  const restored = f.state().texts!.find(value => value.id === text.id)!;
+  expect(f.state().attachments?.find(value => value.id === restored.item.id)?.target?.itemId).toBe(card.item.id);
+  expect(f.state().containment?.find(value => value.id === restored.item.id)?.parent ?? null).toBeNull();
+  expect(f.state().containment?.find(value => value.id === card.item.id)?.parent).toMatchObject({ kind: 'frame' });
+});
+
+it('canvas.move-selection 与 group.move 缺随动批注同样拒绝，带齐后只平移一次', () => {
+  const f = fixture();
+  const card = f.state().cards[0]!;
+  const text = f.state().texts![0]!;
+  const shape = f.state().shapes![0]!;
+  f.run({ type: 'group.create', expected: { groups: { g: null }, containment: { [card.item.id]: null, [shape.item.id]: null } }, payload: { id: 'g', itemIds: [card.item.id, shape.item.id] } });
+  attach(f, text.item.id);
+  const selectionExpected = () => {
+    const state = f.state();
+    return { groups: {}, containment: { [card.item.id]: state.containment?.find(value => value.id === card.item.id)?.versionId ?? null }, poses: { [card.item.id]: state.cards[0]!.item.versionId } };
+  };
+  const start = f.state();
+  const selection = f.fail({ type: 'canvas.move-selection', expected: selectionExpected(), payload: { groupIds: [], directItemIds: [card.item.id], dx: 11, dy: 0 } });
+  expect(selection).toMatchObject({ code: 'ATTACHMENT_NOT_MOVED', status: 400 });
+  expect(f.state().cards[0]!.item.pose.x).toBe(start.cards[0]!.item.pose.x);
+  f.run({ type: 'canvas.move-selection', ...followersFor(f, card.item.id, 11, 0), expected: selectionExpected(), payload: { groupIds: [], directItemIds: [card.item.id], dx: 11, dy: 0 } });
+  expect(f.state().texts![0]!.item.pose.x).toBe(start.texts![0]!.item.pose.x + 11);
+  const current = f.state();
+  const memberIds = current.groups![0]!.memberItemIds;
+  const groupExpected = () => {
+    const state = f.state();
+    return {
+      group: state.groups![0]!.versionId,
+      containment: Object.fromEntries(state.containment!.filter(value => memberIds.includes(value.id)).map(value => [value.id, value.versionId])),
+      poses: Object.fromEntries([...state.cards, ...state.shapes!].map(value => [value.item.id, value.item.versionId])),
+    };
+  };
+  const grouped = f.fail({ type: 'group.move', expected: groupExpected(), payload: { id: 'g', dx: 5, dy: 0 } });
+  expect(grouped).toMatchObject({ code: 'ATTACHMENT_NOT_MOVED', status: 400 });
+  f.run({ type: 'group.move', ...followersFor(f, current.cards[0]!.item.id, 5, 0), expected: groupExpected(), payload: { id: 'g', dx: 5, dy: 0 } });
+  expect(f.state().cards[0]!.item.pose.x).toBe(current.cards[0]!.item.pose.x + 5);
+  expect(f.state().texts![0]!.item.pose.x).toBe(current.texts![0]!.item.pose.x + 5);
+});
+
+it('服务重开后附着与批注位置在同一 revision 下一致', () => {
+  const f = fixture();
+  const text = f.state().texts![0]!;
+  attach(f, text.item.id);
+  const before = f.state();
+  f.restart();
+  const human = f.mapping.access.authenticate(f.mapping.access.issue('human', ['*']));
+  const reopened = f.mapping.read({ type: 'project', projectId: 'p' }, human) as ReturnType<typeof f.state>;
+  expect(reopened.project.revision).toBe(before.project.revision);
+  expect(reopened.attachments).toEqual(before.attachments);
+  expect(reopened.texts!.find(value => value.id === text.id)!.item.pose).toEqual(before.texts!.find(value => value.id === text.id)!.item.pose);
+});
+
+it('附着目标只能是卡片，且批注已有归属时须先移出', () => {
+  const f = fixture();
+  const text = f.state().texts![0]!;
+  f.run({ type: 'frame.create', expected: { frame: null, groups: {}, containment: {}, poses: {} }, payload: { id: 'frame', itemIds: [], pose: { x: 1000, y: 1000, width: 200, height: 200 } } });
+  const byFrame = f.fail({ type: 'attachment.attach', expected: { attachment: null, target: { itemId: 'frame', versionId: f.state().frames![0]!.versionId }, containment: null }, payload: { itemId: text.item.id, targetItemId: 'frame' } });
+  expect(byFrame).toMatchObject({ code: 'INVALID_COMMAND', status: 400 });
+  expect(byFrame.message).toContain('只支持卡片');
+  const card = f.state().cards[0]!;
+  const byNonAnnotation = f.fail({ type: 'attachment.attach', expected: { attachment: null, target: { itemId: card.item.id, versionId: card.item.versionId }, containment: null }, payload: { itemId: card.item.id, targetItemId: card.item.id } });
+  expect(byNonAnnotation).toMatchObject({ code: 'INVALID_COMMAND', status: 400 });
+  expect(byNonAnnotation.message).toContain('只有绘图内容');
+  const loose = f.state().texts![0]!;
+  f.run({ type: 'canvas.move', expected: { [loose.item.id]: loose.item.versionId }, payload: { targets: [{ kind: 'text', id: loose.id, itemId: loose.item.id, x: 1040, y: 1060 }] } });
+  const contained = f.state();
+  expect(contained.containment?.find(value => value.id === loose.item.id)?.parent).toMatchObject({ kind: 'frame' });
+  const card2 = contained.cards[0]!;
+  const byContainment = f.fail({ type: 'attachment.attach', expected: { attachment: null, target: { itemId: card2.item.id, versionId: card2.item.versionId }, containment: contained.containment!.find(value => value.id === loose.item.id)!.versionId }, payload: { itemId: loose.item.id, targetItemId: card2.item.id } });
+  expect(byContainment).toMatchObject({ code: 'INVALID_COMMAND', status: 400 });
+  expect(byContainment.message).toContain('需先移出');
+  expect(f.state().attachments ?? []).toEqual([]);
+});

@@ -18,6 +18,9 @@ import { bodyContentUnchanged } from './body.js';
 import { restoreTag, restoreTagCards } from './tags.js';
 import { restoreAsset } from './media.js';
 import { travelCutState } from './cut.js';
+import { restoreAttachments } from './attachment.js';
+import type { CutStateView } from './cut-contracts.js';
+
 function foldPoseChange<T extends { before: { id: string } | null; after: { id: string } | null }>(previous: T[] | undefined, incoming: T[] | undefined) {
   if (!incoming?.length) return previous;
   const merged = [...(previous ?? [])];
@@ -29,8 +32,6 @@ function foldPoseChange<T extends { before: { id: string } | null; after: { id: 
   }
   return merged;
 }
-import { restoreAttachments } from './attachment.js';
-import type { CutStateView } from './cut-contracts.js';
 
 interface StoredAction extends HistoryAction {
   frameChanges?: Change['frameChanges'];

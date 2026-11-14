@@ -8,7 +8,7 @@ import { readShapes } from './shape.js';
 import { readImages } from './image.js';
 import { readStrokes } from './stroke.js';
 import { moveCanvas } from './canvas-move.js';
-import { followCardMotions, rejectAttachedMembers } from './attachment.js';
+import { followMemberMotions, rejectAttachedMembers } from './attachment.js';
 
 export function initializeGroups(db: Database.Database) {
   db.exec(`CREATE TABLE IF NOT EXISTS mapping_groups(id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES mapping_projects(id), value TEXT NOT NULL);
@@ -164,9 +164,7 @@ export function moveGroup(db: Database.Database, command: Extract<GroupCommand, 
   const ids = new Set(memberships.map(value => value.id));
   const members = groupItems(db, projectId).filter(value => ids.has(value.value.item.id));
   const { dx, dy } = payload;
-  const motions = dx === 0 && dy === 0 ? [] : members.flatMap(member => member.kind === 'card' ? [{ itemId: member.value.item.id, dx, dy }] : []);
-  const moving = new Map(dx === 0 && dy === 0 ? [] : members.flatMap(member => member.kind === 'card' ? [] : [[member.value.item.id, { dx, dy }] as const]));
-  const followed = followCardMotions(db, projectId, command.commandId, motions, moving, command.followers, command.expectedFollowers);
+  const followed = followMemberMotions(db, projectId, command.commandId, members, dx, dy, command.followers, command.expectedFollowers);
   const moved = moveCanvas(db, { commandId: command.commandId, projectId, type: 'canvas.move', expected: expected.poses,
     payload: { targets: members.map(({ kind, value }) => ({ kind, id: value.id, itemId: value.item.id, x: value.item.pose.x + dx, y: value.item.pose.y + dy })) } });
   return { ...moved, textChanges: [...moved.textChanges, ...followed.textChanges], shapeChanges: [...moved.shapeChanges, ...followed.shapeChanges], imageChanges: [...moved.imageChanges, ...followed.imageChanges], strokeChanges: [...moved.strokeChanges, ...followed.strokeChanges], changedIds: [...new Set([...moved.changedIds, ...followed.changedIds])] };
@@ -175,9 +173,7 @@ export function moveGroup(db: Database.Database, command: Extract<GroupCommand, 
 export function moveSelection(db: Database.Database, command: Extract<GroupCommand, { type: 'canvas.move-selection' }>) {
   const members = selectionMembers(db, command.projectId, command.payload, command.expected);
   const { dx, dy } = command.payload;
-  const motions = dx === 0 && dy === 0 ? [] : members.flatMap(member => member.kind === 'card' ? [{ itemId: member.value.item.id, dx, dy }] : []);
-  const moving = new Map(dx === 0 && dy === 0 ? [] : members.flatMap(member => member.kind === 'card' ? [] : [[member.value.item.id, { dx, dy }] as const]));
-  const followed = followCardMotions(db, command.projectId, command.commandId, motions, moving, command.followers, command.expectedFollowers);
+  const followed = followMemberMotions(db, command.projectId, command.commandId, members, dx, dy, command.followers, command.expectedFollowers);
   const moved = moveCanvas(db, { commandId: command.commandId, projectId: command.projectId, type: 'canvas.move', expected: command.expected.poses,
     payload: { targets: members.map(({ kind, value }) => ({ kind, id: value.id, itemId: value.item.id, x: value.item.pose.x + dx, y: value.item.pose.y + dy })) } });
   return { ...moved, textChanges: [...moved.textChanges, ...followed.textChanges], shapeChanges: [...moved.shapeChanges, ...followed.shapeChanges], imageChanges: [...moved.imageChanges, ...followed.imageChanges], strokeChanges: [...moved.strokeChanges, ...followed.strokeChanges], changedIds: [...new Set([...moved.changedIds, ...followed.changedIds])] };

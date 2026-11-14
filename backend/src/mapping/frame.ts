@@ -6,7 +6,7 @@ import type { CanvasFrame, FrameChange, FrameCommand, FrameRecord } from './fram
 import type { Containment, ContainmentChange } from './group-contracts.js';
 import { groupItems, readContainment, readGroupRecords, readGroups, writeContainment } from './group.js';
 import { moveCanvas } from './canvas-move.js';
-import { followCardMotions, rejectAttachedMembers } from './attachment.js';
+import { followMemberMotions, rejectAttachedMembers } from './attachment.js';
 
 export function initializeFrames(db: Database.Database) {
   db.exec(`CREATE TABLE IF NOT EXISTS mapping_frames(id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES mapping_projects(id), value TEXT NOT NULL);
@@ -126,9 +126,7 @@ export function moveFrame(db: Database.Database, command: Extract<FrameCommand, 
   const ordinary = groupItems(db, projectId).filter(({ value }) => ordinaryIds.has(value.item.id));
   requireThat(ordinary.length === ordinaryIds.size, 'NOT_FOUND', '分区成员不存在于当前项目', 404);
   const { dx, dy } = payload;
-  const motions = dx === 0 && dy === 0 ? [] : ordinary.flatMap(member => member.kind === 'card' ? [{ itemId: member.value.item.id, dx, dy }] : []);
-  const moving = new Map(dx === 0 && dy === 0 ? [] : ordinary.flatMap(member => member.kind === 'card' ? [] : [[member.value.item.id, { dx, dy }] as const]));
-  const followed = followCardMotions(db, projectId, command.commandId, motions, moving, command.followers, command.expectedFollowers);
+  const followed = followMemberMotions(db, projectId, command.commandId, ordinary, dx, dy, command.followers, command.expectedFollowers);
   const moved = moveCanvas(db, { commandId: command.commandId, projectId, type: 'canvas.move', expected: expected.poses,
     payload: { targets: ordinary.map(({ kind, value }) => ({ kind, id: value.id, itemId: value.item.id,
       x: value.item.pose.x + payload.dx, y: value.item.pose.y + payload.dy })) } });
