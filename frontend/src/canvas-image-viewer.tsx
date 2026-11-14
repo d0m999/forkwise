@@ -1,17 +1,16 @@
 import { useState } from 'react';
 import type { CanvasImage } from '../../backend/src/mapping/image-contracts';
-import type { MediaAsset } from '../../backend/src/mapping/media';
+import type { ImageAsset } from '../../backend/src/mapping/media';
 import { ImageSurface } from './image-surface';
 import { ImageViewerFrame } from './image-viewer-frame';
 import { GifToggle } from './gif-toggle';
 export function CanvasImageViewer({ projectId, value, asset, onClose, playbackPreferences }: {
-  projectId: string; value: CanvasImage; asset: MediaAsset; onClose: () => void; playbackPreferences: Map<string, boolean>;
+  projectId: string; value: CanvasImage; asset: ImageAsset; onClose: () => void; playbackPreferences: Map<string, boolean>;
 }) {
   const [original, setOriginal] = useState(false), [failure, setFailure] = useState(false);
   const odd = value.item.pose.rotation === 90 || value.item.pose.rotation === 270;
   const poseWidth = odd ? value.item.pose.height : value.item.pose.width;
   const poseHeight = odd ? value.item.pose.width : value.item.pose.height;
-  if (asset.width === undefined || asset.height === undefined) return <p role="alert">图片原件缺少尺寸</p>;
   const naturalWidth = asset.width, naturalHeight = asset.height;
   // 100% uses original cropped pixels across the horizontal source axis.
   // The effect keeps the unrotated Pose aspect, then applies its quarter turn.

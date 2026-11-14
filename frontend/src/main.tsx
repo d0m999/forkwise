@@ -8,7 +8,7 @@ import type { CopyRef } from "./canvas-snapshot";
 import { nextPaste, pasteTranslation, type PasteSequence } from "./canvas-snapshot-geometry";
 import { SnapshotMenu } from "./snapshot-menu";
 import { useCanvasImageInput } from "./canvas-image-input";
-import { droppedFilePlan, fileAssetPayload } from "./canvas-drop";
+import { droppedFilePlan, fileAssetPayload, runDroppedFiles } from "./canvas-drop";
 import { openCardAttachment } from "./card-attachments";
 import { CardAttachmentList } from "./card-attachment-list";
 import { ImageWriteRejected, useImageGeometry } from "./image-geometry";
@@ -2907,7 +2907,9 @@ function Workspace() {
       onOpenAttachment: (assetId) => {
         const projectId = authority.current?.project.id;
         if (!projectId) return;
-        void openCardAttachment({ origin: location.origin, projectId, assetId }).then(result => {
+        // 空白标签必须在这次点击里打开。等预检返回再 window.open，无头浏览器会丢掉句柄，却仍然弹出一个空页。
+        const opened = window.open('', '_blank');
+        void openCardAttachment({ origin: location.origin, projectId, assetId, opened }).then(result => {
           if (!result.ok) setStatus(result.message);
         });
       },
@@ -3101,42 +3103,36 @@ function Workspace() {
           if (!(event.target as Element).closest('.react-flow__pane') || busy || historyBlocked || !state) return;
           const point = flow.screenToFlowPosition({ x: event.clientX, y: event.clientY });
           const plan = droppedFilePlan(files, point);
+          const projectId = state.project.id;
           void (async () => {
-            const failures: string[] = [];
-            const projectId = state.project.id;
+            let failures: string[] = [];
             setBusy(true);
             try {
-              if (!(await flush())) return;
-              for (const [index, item] of plan.documents.entries()) {
-                const file = files.filter(value => !value.type.startsWith('image/'))[index];
-                if (!file) continue;
-                const label = file.name || '未命名文件';
-                try {
+              failures = await runDroppedFiles(plan, {
+                claimDraft: flush,
+                saveFile: async (file) => {
                   const payload = await fileAssetPayload(file);
                   const assetId = crypto.randomUUID();
                   await api.execute({ commandId: crypto.randomUUID(), projectId, type: 'asset.save', expected: null, payload: { id: assetId, ...payload, kind: 'file' } });
+                  return { assetId, name: payload.name };
+                },
+                createCard: async ({ title, x, y }) => {
                   const cardId = crypto.randomUUID();
-                  const created = await api.execute({ commandId: crypto.randomUUID(), projectId, type: 'thought.create', expected: null, payload: { id: cardId, title: item.title, text: '', x: item.x, y: item.y } });
-                  try {
-                    await api.execute({ commandId: crypto.randomUUID(), projectId, type: 'card.attachment.add', expected: { attachments: null }, payload: { id: cardId, assetId, name: payload.name } });
-                  } catch (error) {
-                    try {
-                      await api.execute({ commandId: crypto.randomUUID(), projectId, type: 'history.undo', expected: created.revision, payload: {} });
-                    } catch {
-                      failures.push(`${label}：附件没有挂上，新建卡片也未能撤回`);
-                      continue;
-                    }
-                    throw error;
-                  }
-                } catch (error) {
-                  failures.push(`${label}：${error instanceof Error ? error.message : '未能挂上附件'}`);
-                }
-              }
+                  const created = await api.execute({ commandId: crypto.randomUUID(), projectId, type: 'thought.create', expected: null, payload: { id: cardId, title, text: '', x, y } });
+                  return { cardId, revision: created.revision };
+                },
+                attach: async ({ cardId, assetId, name }) => {
+                  await api.execute({ commandId: crypto.randomUUID(), projectId, type: 'card.attachment.add', expected: { attachments: null }, payload: { id: cardId, assetId, name } });
+                },
+                retractCard: async (_cardId, revision) => {
+                  await api.execute({ commandId: crypto.randomUUID(), projectId, type: 'history.undo', expected: revision, payload: {} });
+                },
+                importImage: async (file) => { await imageInput.begin(file); },
+              });
+              try { await refresh(projectId); } catch (error) { failures.push(error instanceof Error ? error.message : '拖入后未能重新读取'); }
             } finally {
               setBusy(false);
             }
-            for (const file of files.filter(value => value.type.startsWith('image/'))) await imageInput.begin(file);
-            try { await refresh(projectId); } catch (error) { failures.push(error instanceof Error ? error.message : '拖入后未能重新读取'); }
             setStatus(failures.length ? failures.join('；') : '已保存到本机');
             setError('');
           })();

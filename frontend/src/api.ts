@@ -1,5 +1,5 @@
 import type { SearchQuery, SearchResult, SearchStateView } from '../../backend/src/mapping/search-contracts';
-import type { MediaAsset } from '../../backend/src/mapping/media';
+import type { MediaAsset, ImageAsset } from '../../backend/src/mapping/media';
 import type { CutStateView } from '../../backend/src/mapping/cut-contracts';
 import type { CanvasShape } from '../../backend/src/mapping/shape-contracts';
 import type {
@@ -58,6 +58,12 @@ export const api = {
   search: (projectId: string, query: Omit<SearchQuery, "type" | "projectId">) =>
     request<SearchResult>(`/projects/${encodeURIComponent(projectId)}/search`, query),
   asset: (projectId:string,id:string)=>request<MediaAsset>(`/projects/${encodeURIComponent(projectId)}/assets/${encodeURIComponent(id)}`),
+  // 图片消费方只走这里：尺寸在读取边界判一次，调用方拿到的是有尺寸的原件视图。
+  imageAsset: async (projectId: string, id: string): Promise<ImageAsset> => {
+    const asset = await request<MediaAsset>(`/projects/${encodeURIComponent(projectId)}/assets/${encodeURIComponent(id)}`);
+    if (asset.width === undefined || asset.height === undefined) throw new Error('图片原件缺少尺寸');
+    return { ...asset, width: asset.width, height: asset.height };
+  },
   cardIdentity: (projectId: string, cardId: string) =>
     request<CardIdentity>(
       `/projects/${encodeURIComponent(projectId)}/cards/${encodeURIComponent(cardId)}/identity`,

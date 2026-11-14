@@ -3,7 +3,7 @@ import type { CanvasImage } from '../../backend/src/mapping/image-contracts';
 import { ImageSurface } from './image-surface';
 import { imageHandles } from './image-resize';
 import { GifToggle } from './gif-toggle';
-import type { MediaAsset } from '../../backend/src/mapping/media';
+import type { ImageAsset } from '../../backend/src/mapping/media';
 import { useViewport } from '@xyflow/react';
 type Crop = CanvasImage['content']['crop'];
 type Frame = { x: number; y: number; width: number; height: number };
@@ -16,7 +16,7 @@ function oriented(crop: Crop, rotation: number): Crop {
   return crop;
 }
 export function ImageCrop({ projectId, value, asset, playbackPreferences, blocked, complete, cancel }: {
-  projectId: string; value: CanvasImage; asset: MediaAsset; playbackPreferences: Map<string, boolean>; blocked: boolean; complete: (crop: Crop) => void; cancel: () => void;
+  projectId: string; value: CanvasImage; asset: ImageAsset; playbackPreferences: Map<string, boolean>; blocked: boolean; complete: (crop: Crop) => void; cancel: () => void;
 }) {
   const pose = value.item.pose, visible = oriented(value.content.crop, pose.rotation);
   const width = pose.width / visible.width, height = pose.height / visible.height;
@@ -115,7 +115,7 @@ export function ImageCrop({ projectId, value, asset, playbackPreferences, blocke
     }}>
     <div className="image-crop-source" role="img" aria-label="裁剪原图">
       <ImageSurface projectId={projectId} value={full} width={width} height={height}
-        animation={asset.mime === 'image/gif' && asset.width !== undefined && asset.height !== undefined ? { naturalWidth: asset.width, naturalHeight: asset.height, preferences: playbackPreferences, key: value.id } : undefined} />
+        animation={asset.mime === 'image/gif' ? { naturalWidth: asset.width, naturalHeight: asset.height, preferences: playbackPreferences, key: value.id } : undefined} />
       <div className="image-crop-mask" style={frameStyle} />
     </div>
     <div ref={frameElement} className="image-crop-frame" role="group" aria-label="裁剪范围" style={frameStyle}

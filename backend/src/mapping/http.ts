@@ -63,9 +63,11 @@ export function createWorkspaceApp(
   });
   const tooLarge = (c: { json: (body: { code: string; message: string }, status: 413) => Response }) =>
     c.json({ code: 'TOO_LARGE', message: '内容超过本次保存上限' }, 413);
+  const smallBody = bodyLimit({ maxSize: 1_000_000, onError: tooLarge });
+  const executeBody = bodyLimit({ maxSize: 48 * 1024 * 1024, onError: tooLarge });
   app.use('/api/*', async (c, next) => {
     if (c.req.method === 'POST' && c.req.path === '/api/mapping/execute') return next();
-    return bodyLimit({ maxSize: 1_000_000, onError: tooLarge })(c, next);
+    return smallBody(c, next);
   });
   app.post('/api/session', (c) => {
     mapping.access.human(c.get('principal'));
@@ -123,7 +125,7 @@ export function createWorkspaceApp(
       throw error;
     }
     const bytes = new Uint8Array(Buffer.from(asset.base64, 'base64'));
-    if (asset.width !== undefined) {
+    if (asset.kind !== 'file') {
       return new Response(bytes, { headers: { 'Content-Type': asset.mime, 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Content-Security-Policy': "default-src 'none'; sandbox; style-src 'none'; img-src 'none'" } });
     }
     const requested = c.req.query('disposition');
@@ -173,7 +175,7 @@ export function createWorkspaceApp(
         {
           type: 'version',
           projectId: c.req.param('id'),
-          domain: z.enum(['body', 'pose', 'appearance', 'tag', 'cardTags', 'shape', 'stroke', 'image', 'connector', 'group', 'containment']).parse(c.req.param('domain')),
+          domain: z.enum(['body', 'pose', 'appearance', 'tag', 'cardTags', 'attachments', 'shape', 'stroke', 'image', 'connector', 'group', 'containment']).parse(c.req.param('domain')),
           id: c.req.param('objectId'),
           versionId: c.req.param('versionId'),
         },
@@ -181,9 +183,21 @@ export function createWorkspaceApp(
       ),
     ),
   );
-  app.post('/api/mapping/execute', bodyLimit({ maxSize: 48 * 1024 * 1024, onError: tooLarge }), async (c) =>
-    c.json(mapping.execute(await c.req.json(), c.get('principal'))),
-  );
+  app.post('/api/mapping/execute', executeBody, async (c) => {
+    const raw = await c.req.text();
+    const oversized = Buffer.byteLength(raw) > 1_000_000;
+    let command: unknown;
+    try {
+      command = JSON.parse(raw);
+    } catch (error) {
+      if (oversized && error instanceof SyntaxError) return tooLarge(c);
+      throw error;
+    }
+    const type = command && typeof command === 'object' && 'type' in command ? command.type : undefined;
+    // 48 MiB 只留给原件和跨项目粘贴。普通命令仍在字段校验前按 1 MiB 拒绝。
+    if (oversized && type !== 'asset.save' && type !== 'canvas.paste') return tooLarge(c);
+    return c.json(mapping.execute(command, c.get('principal')));
+  });
   app.get('/', (c) => {
     requireThat(
       c.req.header('sec-fetch-mode') === 'navigate' &&

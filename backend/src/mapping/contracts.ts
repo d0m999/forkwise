@@ -297,6 +297,8 @@ export interface MediaAsset {
   hash: string;
   kind?: 'image' | 'file';
 }
+// 图片消费方在读取边界换成这个视图：尺寸由 asset.save 的图片分支保证存在，消费方不再逐处判空。
+export type ImageAsset = MediaAsset & { width: number; height: number };
 export type AssetChange = { before: { id: string } | null; after: MediaAsset };
 // 剪切结束时仍存在的外线外端及其内容指纹；首次搬动前逐项比对，判定期间是否被改动。
 export interface CutOuterEnd {

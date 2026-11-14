@@ -12,27 +12,57 @@ export async function openCardAttachment(input: {
   origin: string;
   projectId: string;
   assetId: string;
+  // 点击当时同步打开的空白标签。预检完成前不能再 window.open，否则句柄会丢。
+  opened?: Window | null;
   fetchImpl?: typeof fetch;
-  openImpl?: (url: string, target: string, features: string) => Window | null;
+  openImpl?: (url: string, target: string) => Window | null;
   downloadImpl?: (url: string) => void;
 }): Promise<AttachmentOpenResult> {
   const fetchImpl = input.fetchImpl ?? fetch;
   const inline = attachmentContentUrl(input.origin, input.projectId, input.assetId, 'inline');
+  const reserve = input.opened && !input.opened.closed ? input.opened : null;
+  const release = () => { if (reserve && !reserve.closed) reserve.close(); };
   let response: Response;
   try {
     response = await fetchImpl(inline, { credentials: 'same-origin' });
   } catch {
+    release();
     return { ok: false, reason: 'network', message: '无法连接本机服务，附件未打开' };
   }
-  if (response.status === 404) return { ok: false, reason: 'missing', message: '资产不存在或不属于本项目' };
-  if (response.status === 403) return { ok: false, reason: 'forbidden', message: '没有权限打开这个附件' };
-  if (response.status >= 500) return { ok: false, reason: 'server', message: '服务端暂时无法打开这个附件' };
-  if (!response.ok) return { ok: false, reason: 'rejected', message: `附件请求被拒绝（${response.status}）` };
-  const openImpl = input.openImpl ?? ((url, target, features) => window.open(url, target, features));
-  if (openImpl(inline, '_blank', 'noopener')) return { ok: true };
+  // 预检只为状态码和打开方式：正文不读，避免同一份原件为一次打开被下载两遍。
+  const forcedDownload = (response.headers?.get('content-disposition') ?? '').startsWith('attachment');
+  await response.body?.cancel().catch(() => {});
+  const rejected =
+    response.status === 404 ? { ok: false as const, reason: 'missing' as const, message: '资产不存在或不属于本项目' }
+    : response.status === 403 ? { ok: false as const, reason: 'forbidden' as const, message: '没有权限打开这个附件' }
+    : response.status >= 500 ? { ok: false as const, reason: 'server' as const, message: '服务端暂时无法打开这个附件' }
+    : !response.ok ? { ok: false as const, reason: 'rejected' as const, message: `附件请求被拒绝（${response.status}）` }
+    : null;
+  if (rejected) {
+    release();
+    return rejected;
+  }
   const download = attachmentContentUrl(input.origin, input.projectId, input.assetId, 'attachment');
-  (input.downloadImpl ?? downloadAttachment)(download);
+  const startDownload = input.downloadImpl ?? downloadAttachment;
+  // 服务端已经判定不能内联的类型直接下载，不为它留一个空标签。
+  if (forcedDownload) {
+    release();
+    startDownload(download);
+    return { ok: true };
+  }
+  if (reserve) return showInline(reserve, inline);
+  const openImpl = input.openImpl ?? ((url, target) => window.open(url, target));
+  // 不能带 noopener 特性：带它时 window.open 恒返回 null，"被拦截"就永远分不出来。先拿句柄再断开 opener。
+  const opened = openImpl(inline, '_blank');
+  if (opened) return showInline(opened);
+  startDownload(download);
   return { ok: false, reason: 'blocked', message: '弹窗被拦截，已改为下载' };
+}
+
+function showInline(opened: Window, url?: string): AttachmentOpenResult {
+  if (url) opened.location.href = url;
+  try { opened.opener = null; } catch { /* 导航已经断开 opener 时不必再写。 */ }
+  return { ok: true };
 }
 
 function downloadAttachment(url: string) {

@@ -48,6 +48,7 @@ it('附件命令拒绝多余字段、缺版本和重复资产，两张卡复用�
     const first = f.read().cards.find(card => card.id === 'a')!;
     expect(first.attachments?.items).toEqual([{ id: first.attachments!.items[0]!.id, assetId: 'file', name: '财报.pdf' }]);
     expect(first.attachments?.id).toBe('attachments:a');
+    expect(f.mapping.read({ type: 'version', projectId: 'p', domain: 'attachments', id: 'attachments:a', versionId: first.attachments!.versionId }, f.actor)).toEqual(first.attachments);
     expect(() => f.run('card.attachment.add', { id: 'a', assetId: 'file', name: '再来一份' }, { attachments: first.attachments!.versionId })).toThrow(/同一资产/);
     expect(() => f.run('card.attachment.add', { id: 'missing', assetId: 'file', name: '财报.pdf' }, { attachments: null })).toThrow(/卡片不存在/);
     expect(() => f.run('card.attachment.add', { id: 'b', assetId: 'gone', name: '财报.pdf' }, { attachments: null })).toThrow(/资产不存在/);

@@ -105,6 +105,8 @@ for (const kind of ['shape', 'image', 'stroke', 'text'] as const) test(`${kind}�
     const chooser = page.waitForEvent('filechooser'); await page.getByRole('button', { name: '图片', exact: true }).click();
     await (await chooser).setFiles({ name: '混选.svg', mimeType: 'image/svg+xml', buffer: Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="100" height="60"><rect width="100" height="60" fill="green"/></svg>') });
     await expect.poll(async () => (await workspace.state()).images!.length).toBe(1);
+    // 原件先落盘，恢复记录随后才确认。在确认前重开会把这次导入留在“图片处理中”。
+    await expect(page.getByRole('status')).toHaveText('已保存到本机');
   } else {
     const payload = kind === 'shape' ? { id: 'mixed-object', content: { shapeType: 'rectangle', shortText: '混选形状' }, pose: { x: 400, y: 180, width: 160, height: 80 } }
       : kind === 'stroke' ? { id: 'mixed-object', content: { penKind: 'pen', color: '#403b36', width: 4, opacity: 1, path: [{ x: 2, y: 2 }, { x: 158, y: 78 }] }, pose: { x: 400, y: 180, width: 160, height: 80 } }

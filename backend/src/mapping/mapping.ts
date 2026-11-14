@@ -114,6 +114,7 @@ export class Mapping {
   read(query: VersionQuery & { domain: 'appearance' }, actor: Principal): Card['appearance'];
   read(query: VersionQuery & { domain: 'tag' }, actor: Principal): Tag;
   read(query: VersionQuery & { domain: 'cardTags' }, actor: Principal): NonNullable<Card['cardTags']>;
+  read(query: VersionQuery & { domain: 'attachments' }, actor: Principal): NonNullable<Card['attachments']>;
   read(query: VersionQuery & { domain: 'shape' }, actor: Principal): ShapeVersion;
   read(query: VersionQuery & { domain: 'stroke' }, actor: Principal): StrokeVersion;
   read(query: VersionQuery & { domain: 'image' }, actor: Principal): ImageVersion;
@@ -121,7 +122,7 @@ export class Mapping {
   read(query: VersionQuery & { domain: 'group' }, actor: Principal): GroupRecord;
   read(query: VersionQuery & { domain: 'containment' }, actor: Principal): Containment;
   read(query: VersionQuery & { domain: 'frame' }, actor: Principal): FrameRecord;
-  read(query: VersionQuery, actor: Principal): Card['body'] | Card['item'] | Card['appearance'] | Tag | NonNullable<Card['cardTags']> | ShapeVersion | StrokeVersion | ImageVersion | CanvasConnector | GroupRecord | Containment | FrameRecord;
+  read(query: VersionQuery, actor: Principal): Card['body'] | Card['item'] | Card['appearance'] | Tag | NonNullable<Card['cardTags']> | NonNullable<Card['attachments']> | ShapeVersion | StrokeVersion | ImageVersion | CanvasConnector | GroupRecord | Containment | FrameRecord;
   read(
     query: ReadQuery,
     actor: Principal,
@@ -136,6 +137,7 @@ export class Mapping {
     | CompactPage
     | Tag
     | NonNullable<Card['cardTags']>
+    | NonNullable<Card['attachments']>
     | ShapeVersion
     | StrokeVersion
     | ImageVersion
@@ -193,7 +195,7 @@ export class Mapping {
           | { value: string }
           | undefined;
         requireThat(row, 'NOT_FOUND', '版本不存在于当前项目', 404);
-        return JSON.parse(row.value) as Card['body'] | Card['item'] | ShapeVersion | StrokeVersion | ImageVersion | CanvasConnector | GroupRecord | Containment | FrameRecord;
+        return JSON.parse(row.value) as Card['body'] | Card['item'] | NonNullable<Card['cardTags']> | NonNullable<Card['attachments']> | ShapeVersion | StrokeVersion | ImageVersion | CanvasConnector | GroupRecord | Containment | FrameRecord;
       }
       const project = this.project(query.projectId);
       if (query.type === 'history') return readHistory(this.db, project);

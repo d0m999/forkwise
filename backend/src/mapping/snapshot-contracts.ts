@@ -67,7 +67,7 @@ export const PasteObject = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('frame'), copyId: Id, stack: z.number().finite(), name: z.string().trim().min(1).max(240), background: z.string().nullable(), pose: TextPoseSchema }).strict(),
 ]);
 const Tree = { version: z.literal(2).optional(), roots: z.array(Id).max(200).optional(), containment: z.array(z.object({ copyId: Id, parentCopyId: Id }).strict()).max(200).optional() };
-// 数量不超过快照里已经允许的引用：200 个对象、每张卡 100 个标签、每张卡 5000 个块。
+// 标签与资产按快照对象的数量级设上限；卡片附件数组与卡片字段本身一致，不另设总数上限。
 export const PasteLibrary = z.object({
   tags: z.array(z.object({ id: Id, name: z.string().min(1).max(240), color: z.enum(TAG_COLORS) }).strict()).max(20_000),
   assets: z.array(z.object({ id: Id, name: z.string().min(1).max(4096), mime: z.string().max(100), base64: z.string().max(13981016), kind: z.enum(['image', 'file']).optional() }).strict()).max(1_000_000),

@@ -31,6 +31,7 @@ test("附着到卡片后拖动跟随，解除留在原地，Esc 取消附着，�
   await page.getByRole("button", { name: "移动卡片：方向键调整位置" }).focus();
   await page.keyboard.press("ArrowRight");
   await expect.poll(async () => (await workspace.state()).cards[0]!.item.pose.x).toBeGreaterThan(cardBefore.x);
+  await expect(page.getByRole("status")).toHaveText("已保存到本机");
   const moved = await workspace.state();
   expect(moved.texts![0]!.item.pose.x - textBefore.x).toBe(moved.cards[0]!.item.pose.x - cardBefore.x);
   expect(moved.texts![0]!.item.pose.y).toBe(textBefore.y);
@@ -40,6 +41,7 @@ test("附着到卡片后拖动跟随，解除留在原地，Esc 取消附着，�
   await page.mouse.move(box.x + box.width / 2 + 80, box.y + box.height + 30, { steps: 8 });
   await page.mouse.up();
   await expect.poll(async () => (await workspace.state()).cards[0]!.item.pose.x).toBeGreaterThan(moved.cards[0]!.item.pose.x);
+  await expect(page.getByRole("status")).toHaveText("已保存到本机");
   const dragged = await workspace.state();
   expect(dragged.texts![0]!.item.pose.x - moved.texts![0]!.item.pose.x).toBe(dragged.cards[0]!.item.pose.x - moved.cards[0]!.item.pose.x);
   expect(dragged.texts![0]!.item.pose.y - moved.texts![0]!.item.pose.y).toBe(dragged.cards[0]!.item.pose.y - moved.cards[0]!.item.pose.y);

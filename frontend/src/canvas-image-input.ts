@@ -30,9 +30,8 @@ export function useCanvasImageInput(context: () => ImagePlacement | null, commit
       journal.write(current);
       await api.execute(current.asset);
       if (task.current !== current) return;
-      const asset = await api.asset(current.placement.projectId, current.asset.payload.id);
+      const asset = await api.imageAsset(current.placement.projectId, current.asset.payload.id);
       if (task.current !== current) return;
-      if (asset.width === undefined || asset.height === undefined) throw new Error('图片原件缺少尺寸');
       const p = current.placement;
       if (!current.image) {
         const factor = Math.min(1, p.maxWidth / asset.width, p.maxHeight / asset.height);

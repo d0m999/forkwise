@@ -12,15 +12,23 @@
 
 `card.attachment.add` 与 `card.attachment.remove` 是独立命令，不进入 `card.edit`。`expected` 只比较附件集合版本；卡片还没有集合时，添加用 `null`。同一张卡不能重复关联同一个 `assetId`，返回 400 `INVALID_ATTACHMENT`。卡片、资产或附件条目不存在返回 404。无变化走与 `card.tags` 相同的早退。
 
-历史复用动作上的整卡 `before` / `after`，不新增 `cardAttachmentChanges`，也不写入 `cardChanges`。`cardChanges` 的撤销只回写几何，不能把附件集合写回去。撤销和重做按当时的快照写回 `attachments`，不重新分配 `attachments.versionId`。
+历史复用动作上的整卡 `before` / `after`，不新增 `cardAttachmentChanges`，也不写入 `cardChanges`。`cardChanges` 的撤销只回写几何，不能把附件集合写回去。撤销和重做按当时的快照写回 `attachments`，不重新分配 `attachments.versionId`。附件集合与其他卡片子域一样写入 `mapping_versions`，`mapping.read` 的 `version` 可按 `attachments` 域读回当时那一版。
 
 ## 原件
 
 `asset.save` 增加可选 `kind`。缺省仍是图片，图片校验保持原样。`kind: 'file'` 只检查 base64 往返、10 MiB 上限和 `type/subtype` 形状，不写宽高，错误码为 `INVALID_FILE`。`text/html`、`application/xhtml+xml`、`image/svg+xml` 允许存成文件；下载响应强制 `attachment`。`MediaAsset.width` / `height` 改为可选，图片消费方仍只读带尺寸的原件。
 
-`/api/mapping/execute` 的请求上限放到 48 MiB，以便一次粘贴携带最多三个达上限的文件。其余 Mapping 路由仍是 1 MiB。图片响应保持原来的沙箱 CSP。可内联的 PDF、纯文本和图片类型去掉 `sandbox`；HTML、SVG、XML、脚本和未知类型强制下载。
+`/api/mapping/execute` 的绝对上限是 48 MiB，以便 `asset.save` 和 `canvas.paste` 一次携带最多三个达上限的文件。其余命令和其余 Mapping 路由仍是 1 MiB，超出返回 413 `TOO_LARGE`，不进入字段校验。图片响应保持原来的沙箱 CSP。可内联的 PDF、纯文本和图片类型去掉 `sandbox`；HTML、SVG、XML、脚本和未知类型强制下载。
 
 解除附件和删除卡片都不删除 `mapping_assets` 行。不引入引用计数或回收。`asset.save` 仍不进入研究历史、不推进 revision。
+
+## 拖入空白画布
+
+非图片文件逐个建卡，卡片标题取文件名去掉最后一段扩展名；没有可用名称时保留原名。图片仍走既有图片导入，不建卡。每个文件是独立动作，单个失败不影响其余文件；只有「建卡成功、挂附件失败」撤回这张新卡，已成功的其他文件不回滚。草稿未保存时整批取消，一张卡也不建。
+
+## 打开
+
+点击时同步 `window.open('')` 拿到空白标签，再向 `/content?disposition=inline` 取一次状态码与 `Content-Disposition`。预检不读正文，避免同一份原件为一次打开下载两遍。服务端已判定为 `attachment`，或预检失败时，关掉这个空白标签；不能内联的类型改为下载。其余类型把空白标签导航到内联地址，再把 `opener` 置空。`window.open` 不带 `noopener` 特性——带它时按规范恒返回 `null`，「被拦截」就分不出来。点击当时没有拿到句柄，才算被拦截，改用 `?disposition=attachment` 下载。
 
 ## 复制与投影
 

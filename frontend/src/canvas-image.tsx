@@ -8,7 +8,7 @@ import { ImageSurface } from './image-surface';
 import { ImageActions } from './image-actions';
 import { ImageCrop } from './image-crop';
 import { CanvasImageViewer } from './canvas-image-viewer';
-import type { MediaAsset } from '../../backend/src/mapping/media';
+import type { ImageAsset } from '../../backend/src/mapping/media';
 import { GifToggle } from './gif-toggle';
 import type { LayerMenuProps } from './layer-menu';
 
@@ -18,7 +18,7 @@ export function CanvasImageNode({ data, selected }: NodeProps<Node<ImageData>>) 
   const anchor = useRef<HTMLDivElement>(null);
   const resize = useImageResize(data.value, anchor, data.geometry, data.blocked || data.geometry.pending);
   const [name, setName] = useState('独立图片');
-  const [asset, setAsset] = useState<MediaAsset | null>(null), [viewer, setViewer] = useState<CanvasImage | null>(null);
+  const [asset, setAsset] = useState<ImageAsset | null>(null), [viewer, setViewer] = useState<CanvasImage | null>(null);
   const [playbackPreferences] = useState(() => new Map<string, boolean>()), wasViewing = useRef(false);
   useLayoutEffect(() => {
     if (!viewer && wasViewing.current) anchor.current?.focus({ preventScroll: true });
@@ -26,7 +26,7 @@ export function CanvasImageNode({ data, selected }: NodeProps<Node<ImageData>>) 
   }, [viewer]);
   useEffect(() => {
     let active = true;
-    void api.asset(data.projectId, data.value.content.assetId).then(asset => { if (active) { setName(asset.name); setAsset(asset); } }).catch(() => {});
+    void api.imageAsset(data.projectId, data.value.content.assetId).then(asset => { if (active) { setName(asset.name); setAsset(asset); } }).catch(() => {});
     return () => { active = false; };
   }, [data.projectId, data.value.content.assetId]);
   const cropping = data.geometry.cropping?.projectId === data.projectId && data.geometry.cropping.value.id === data.value.id ? data.geometry.cropping : null;
@@ -49,7 +49,7 @@ export function CanvasImageNode({ data, selected }: NodeProps<Node<ImageData>>) 
     }}
     style={{ width: '100%', height: '100%', outline: selected ? 'var(--body-focus-outline-width) solid var(--canvas-selection-color)' : undefined, outlineOffset: 'var(--image-selection-offset)' }}>
     {asset && <ImageSurface projectId={data.projectId} value={data.value} width={data.value.item.pose.width} height={data.value.item.pose.height}
-      animation={asset.mime === 'image/gif' && asset.width !== undefined && asset.height !== undefined ? { naturalWidth: asset.width, naturalHeight: asset.height, preferences: playbackPreferences, key: data.value.id, inactive: !!viewer || !!cropping } : undefined} />}
+      animation={asset.mime === 'image/gif' ? { naturalWidth: asset.width, naturalHeight: asset.height, preferences: playbackPreferences, key: data.value.id, inactive: !!viewer || !!cropping } : undefined} />}
   </div>{asset?.mime === 'image/gif' && <GifToggle className="canvas-gif-control nodrag nopan" />}</div>
   {selected && data.resizable && !cropping && Object.entries(imageHandles).map(([handle, label]) => <button key={handle}
     className="nodrag nopan" aria-label={'调整图片尺寸：' + label} aria-disabled={data.blocked || data.geometry.pending}

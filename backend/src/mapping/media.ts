@@ -7,7 +7,7 @@ import { createHash } from 'node:crypto';
 import { requireThat } from '../domain/errors.js';
 import { rasterImage } from '../services/raster-image.js';
 import type { AssetChange, Command, MediaAsset } from './contracts.js';
-export type { MediaAsset };
+export type { MediaAsset, ImageAsset } from './contracts.js';
 
 // 资源内容指纹的唯一算式：写入时计算，跨项目复用时按同一算式比对冻结内容。
 export function assetHash(bytes: Buffer): string {

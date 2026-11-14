@@ -1,5 +1,6 @@
 import type { Block } from '../../backend/src/mapping/contracts';
 import { PENDING_IMAGE_MAX_BYTES } from '../../backend/src/mapping/pending-image';
+import { bytesToBase64 } from './base64';
 export function mediaTask(block: Block): Block {
   if (block.type !== 'pendingImage') return block;
   const { status, ...payload } = block;
@@ -21,16 +22,13 @@ export async function mediaFiles(files: File[]): Promise<Block[]> {
     files.map(async (file) => {
       const bytes = new Uint8Array(await file.arrayBuffer());
       if (!bytes.length) throw new Error(`${file.name}：文件为空，原内容保留`);
-      let raw = '';
-      for (let at = 0; at < bytes.length; at += 8192)
-        raw += String.fromCharCode(...bytes.subarray(at, at + 8192));
       return {
         id: crypto.randomUUID(),
         type: 'imageTask',
         ticket: crypto.randomUUID(),
         name: file.name || '图片',
         mime: file.type || 'application/octet-stream',
-        base64: btoa(raw),
+        base64: bytesToBase64(bytes),
         byteLength: bytes.length,
         width: 320,
         height: 180,
