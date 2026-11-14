@@ -59,7 +59,7 @@ it('预检只取状态码，不读取整份原件', async () => {
   expect(result).toEqual({ ok: false, reason: 'blocked', message: '弹窗被拦截，已改为下载' });
 });
 
-it('点击时拿到的空白标签用来显示内联原件，不能内联时关掉', async () => {
+it('点击时拿到的空白标签用来显示内联原件，不能内联时在该标签下载', async () => {
   const downloads: string[] = [];
   const inlineWindow = { closed: false, opener: {} as Window | null, location: { href: '' }, close() { this.closed = true; } };
   const inline = await openCardAttachment({
@@ -72,7 +72,7 @@ it('点击时拿到的空白标签用来显示内联原件，不能内联时关�
   expect(inlineWindow.location.href).toContain('disposition=inline');
   expect(inlineWindow.opener).toBeNull();
   expect(inlineWindow.closed).toBe(false);
-  const blank = { closed: false, opener: {}, location: { href: '' }, close() { this.closed = true; } };
+  const blank = { closed: false, opener: {} as Window | null, location: { href: '' }, close() { this.closed = true; } };
   const downloaded = await openCardAttachment({
     origin, projectId: 'p', assetId: 'a', opened: blank as unknown as Window,
     fetchImpl: async () => response(200, { disposition: 'attachment; filename="a.html"' }),
@@ -80,8 +80,32 @@ it('点击时拿到的空白标签用来显示内联原件，不能内联时关�
     downloadImpl: (value) => { downloads.push(value); },
   });
   expect(downloaded).toEqual({ ok: true });
+  expect(blank.closed).toBe(false);
+  expect(blank.location.href).toBe(attachmentContentUrl(origin, 'p', 'a', 'attachment'));
+  expect(blank.opener).toBeNull();
+  expect(downloads).toEqual([]);
+});
+
+it('下载动作失败时报告下载失败，不报成已打开', async () => {
+  const failed = await openCardAttachment({
+    origin, projectId: 'p', assetId: 'a',
+    fetchImpl: async () => response(200, { disposition: 'attachment' }),
+    downloadImpl: () => { throw new Error('下载被拒绝'); },
+  });
+  expect(failed).toEqual({ ok: false, reason: 'download', message: '附件未能下载' });
+  const blank = {
+    closed: false,
+    opener: {} as Window | null,
+    location: { set href(_value: string) { throw new Error('导航失败'); }, get href() { return ''; } },
+    close() { this.closed = true; },
+  };
+  const navigated = await openCardAttachment({
+    origin, projectId: 'p', assetId: 'a', opened: blank as unknown as Window,
+    fetchImpl: async () => response(200, { disposition: 'attachment' }),
+    downloadImpl: () => { throw new Error('不应再点'); },
+  });
+  expect(navigated).toEqual({ ok: false, reason: 'download', message: '附件未能下载' });
   expect(blank.closed).toBe(true);
-  expect(downloads).toEqual([attachmentContentUrl(origin, 'p', 'a', 'attachment')]);
 });
 
 it('服务端判定不能内联时直接下载，不为它开新标签', async () => {

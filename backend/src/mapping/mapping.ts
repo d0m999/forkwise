@@ -678,6 +678,13 @@ export class Mapping {
             '身份已使用，请重新创建',
             409,
           );
+          if (p.attachment)
+            requireThat(
+              this.db.prepare('SELECT 1 FROM mapping_assets WHERE project_id=? AND id=?').get(project.id, p.attachment.assetId),
+              'NOT_FOUND',
+              '资产不存在于当前项目',
+              404,
+            );
           const card: Card = {
             id: p.id,
             title: p.title,
@@ -698,6 +705,15 @@ export class Mapping {
                 previewFloor: p.text.length ? DEFAULT_PREVIEW_HEIGHT : 0,
               },
             },
+            ...(p.attachment
+              ? {
+                  attachments: {
+                    id: `attachments:${p.id}`,
+                    versionId: randomUUID(),
+                    items: [{ id: randomUUID(), assetId: p.attachment.assetId, name: p.attachment.name }],
+                  },
+                }
+              : {}),
           };
           this.db.prepare('INSERT INTO mapping_card_ids VALUES(?,?)').run(card.id, project.id);
           this.db
@@ -707,7 +723,7 @@ export class Mapping {
           this.db
             .prepare('UPDATE mapping_projects SET revision=? WHERE id=?')
             .run(revision, project.id);
-          changedIds = [card.id, card.body.id, card.item.id];
+          changedIds = [card.id, card.body.id, card.item.id, ...(card.attachments ? [card.attachments.id] : [])];
           after = card;
         } else {
           const project = this.project(command.projectId);

@@ -40,13 +40,11 @@ export async function fileAssetPayload(file: File) {
 export type DropHost = {
   claimDraft: () => Promise<boolean>;
   saveFile: (file: File) => Promise<{ assetId: string; name: string }>;
-  createCard: (input: { title: string; x: number; y: number }) => Promise<{ cardId: string; revision: number }>;
-  attach: (input: { cardId: string; assetId: string; name: string }) => Promise<void>;
-  retractCard: (cardId: string, revision: number) => Promise<void>;
+  createCard: (input: { title: string; x: number; y: number; assetId: string; name: string }) => Promise<void>;
   importImage: (file: File) => Promise<void>;
 };
 
-// 每个文件是独立动作：单个失败不拦其余文件，已成功的不回滚；只有“建卡成功、挂附件失败”撤回那张新卡。
+// 每个文件是独立动作：单个失败不拦其余文件，已成功的不回滚。卡片和附件由同一次写入完成。
 export async function runDroppedFiles(plan: { images: File[]; documents: DroppedDocument[] }, host: DropHost): Promise<string[]> {
   const failures: string[] = [];
   if (!(await host.claimDraft())) return ['草稿未保存，拖入已取消'];
@@ -55,18 +53,7 @@ export async function runDroppedFiles(plan: { images: File[]; documents: Dropped
     const label = item.file.name || '未命名文件';
     try {
       const saved = await host.saveFile(item.file);
-      const card = await host.createCard({ title: item.title, x: item.x, y: item.y });
-      try {
-        await host.attach({ cardId: card.cardId, assetId: saved.assetId, name: saved.name });
-      } catch (error) {
-        try {
-          await host.retractCard(card.cardId, card.revision);
-        } catch {
-          failures.push(`${label}：附件没有挂上，新建卡片也未能撤回`);
-          continue;
-        }
-        throw error;
-      }
+      await host.createCard({ title: item.title, x: item.x, y: item.y, assetId: saved.assetId, name: saved.name });
     } catch (error) {
       failures.push(`${label}：${reason(error)}`);
     }

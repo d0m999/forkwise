@@ -6,7 +6,7 @@ export function attachmentContentUrl(origin: string, projectId: string, assetId:
 
 export type AttachmentOpenResult =
   | { ok: true }
-  | { ok: false; reason: 'missing' | 'forbidden' | 'server' | 'blocked' | 'rejected' | 'network'; message: string };
+  | { ok: false; reason: 'missing' | 'forbidden' | 'server' | 'blocked' | 'rejected' | 'network' | 'download'; message: string };
 
 export async function openCardAttachment(input: {
   origin: string;
@@ -44,10 +44,24 @@ export async function openCardAttachment(input: {
   }
   const download = attachmentContentUrl(input.origin, input.projectId, input.assetId, 'attachment');
   const startDownload = input.downloadImpl ?? downloadAttachment;
-  // 服务端已经判定不能内联的类型直接下载，不为它留一个空标签。
+  const downloadFailed = { ok: false as const, reason: 'download' as const, message: '附件未能下载' };
+  // 不能内联时沿用点击当时的空白标签导航到下载地址。预检返回后再脚本点击，这次点击的用户激活已经用完。
   if (forcedDownload) {
-    release();
-    startDownload(download);
+    if (reserve) {
+      try {
+        reserve.location.href = download;
+        try { reserve.opener = null; } catch { /* 导航已经断开 opener 时不必再写。 */ }
+      } catch {
+        release();
+        return downloadFailed;
+      }
+      return { ok: true };
+    }
+    try {
+      startDownload(download);
+    } catch {
+      return downloadFailed;
+    }
     return { ok: true };
   }
   if (reserve) return showInline(reserve, inline);

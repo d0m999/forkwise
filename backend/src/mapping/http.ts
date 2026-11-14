@@ -9,6 +9,7 @@ import { CompactQuerySchema } from './compact-contracts.js';
 import { ObserveQuerySchema } from './observe-contracts.js';
 import { SearchQuerySchema } from './search-contracts.js';
 import { EXECUTE_FALLBACK_CODE } from './recovery-contract.js';
+import { versionDomains } from './read-contracts.js';
 
 export function createWorkspaceApp(
   mapping: Mapping,
@@ -175,7 +176,7 @@ export function createWorkspaceApp(
         {
           type: 'version',
           projectId: c.req.param('id'),
-          domain: z.enum(['body', 'pose', 'appearance', 'tag', 'cardTags', 'attachments', 'shape', 'stroke', 'image', 'connector', 'group', 'containment']).parse(c.req.param('domain')),
+          domain: z.enum(versionDomains).parse(c.req.param('domain')),
           id: c.req.param('objectId'),
           versionId: c.req.param('versionId'),
         },

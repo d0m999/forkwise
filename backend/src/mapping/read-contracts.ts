@@ -2,10 +2,12 @@ import type { Card } from './contracts.js';
 import type { CompactQuery } from './compact-contracts.js';
 import type { SearchQuery, SearchStateQuery } from './search-contracts.js';
 
+export const versionDomains = ['body', 'pose', 'appearance', 'tag', 'cardTags', 'attachments', 'shape', 'stroke', 'image', 'connector', 'group', 'containment', 'frame'] as const;
+
 export type VersionQuery = {
   type: 'version';
   projectId: string;
-  domain: 'body' | 'pose' | 'appearance' | 'tag' | 'cardTags' | 'attachments' | 'shape' | 'stroke' | 'image' | 'connector' | 'group' | 'containment' | 'frame';
+  domain: (typeof versionDomains)[number];
   id: string;
   versionId: string;
 };

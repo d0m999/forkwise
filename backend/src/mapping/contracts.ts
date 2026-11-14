@@ -218,6 +218,7 @@ export const MappingCommand = z.discriminatedUnion('type', [
           text: z.string().max(200000),
           x: z.number().finite(),
           y: z.number().finite(),
+          attachment: z.object({ assetId: Id, name: z.string().min(1).max(4096) }).strict().optional(),
         })
         .strict(),
     })

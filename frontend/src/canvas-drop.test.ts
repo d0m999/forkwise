@@ -30,9 +30,7 @@ function host(overrides: Partial<DropHost> = {}) {
   const base: DropHost = {
     claimDraft: async () => { calls.push('claimDraft'); return true; },
     saveFile: async (item) => { calls.push(`save:${item.name}`); return { assetId: `asset:${item.name}`, name: item.name }; },
-    createCard: async (input) => { calls.push(`card:${input.title}`); return { cardId: `card:${input.title}`, revision: 7 }; },
-    attach: async (input) => { calls.push(`attach:${input.cardId}`); },
-    retractCard: async (cardId) => { calls.push(`retract:${cardId}`); },
+    createCard: async (input) => { calls.push(`card:${input.title}:${input.assetId}:${input.name}`); },
     importImage: async (item) => { calls.push(`image:${item.name}`); },
     ...overrides,
   };
@@ -46,11 +44,11 @@ it('草稿没能保存时整批拖入取消，不建卡也不导入图片', asyn
   expect(calls).toEqual(['claimDraft']);
 });
 
-it('单个文件挂附件失败只撤回那张新卡，其余文件和图片照常处理', async () => {
+it('单个文件建卡失败不留下后续步骤，其余文件和图片照常处理', async () => {
   const { calls, host: deps } = host({
-    attach: async (input) => {
-      calls.push(`attach:${input.cardId}`);
-      if (input.cardId === 'card:甲') throw new Error('附件失败');
+    createCard: async (input) => {
+      calls.push(`card:${input.title}:${input.assetId}:${input.name}`);
+      if (input.title === '甲') throw new Error('附件失败');
     },
   });
   const failures = await runDroppedFiles(droppedFilePlan([
@@ -61,20 +59,10 @@ it('单个文件挂附件失败只撤回那张新卡，其余文件和图片照�
   expect(failures).toEqual(['甲.pdf：附件失败']);
   expect(calls).toEqual([
     'claimDraft',
-    'save:甲.pdf', 'card:甲', 'attach:card:甲', 'retract:card:甲',
-    'save:乙.pdf', 'card:乙', 'attach:card:乙',
+    'save:甲.pdf', 'card:甲:asset:甲.pdf:甲.pdf',
+    'save:乙.pdf', 'card:乙:asset:乙.pdf:乙.pdf',
     'image:图.png',
   ]);
-});
-
-it('撤回新卡也失败时如实报出，后续文件不受影响', async () => {
-  const { calls, host: deps } = host({
-    attach: async () => { throw new Error('附件失败'); },
-    retractCard: async () => { throw new Error('撤销失败'); },
-  });
-  const failures = await runDroppedFiles(droppedFilePlan([file('甲.pdf', 'application/pdf'), file('乙.pdf', 'application/pdf')], { x: 0, y: 0 }), deps);
-  expect(failures).toEqual(['甲.pdf：附件没有挂上，新建卡片也未能撤回', '乙.pdf：附件没有挂上，新建卡片也未能撤回']);
-  expect(calls.filter(call => call.startsWith('card:'))).toEqual(['card:甲', 'card:乙']);
 });
 
 it('图片导入失败单独记录，不影响已建好的卡片', async () => {
@@ -86,5 +74,5 @@ it('图片导入失败单独记录，不影响已建好的卡片', async () => {
   });
   const failures = await runDroppedFiles(droppedFilePlan([file('甲.pdf', 'application/pdf'), file('图.png', 'image/png')], { x: 0, y: 0 }), deps);
   expect(failures).toEqual(['图.png：图片读取失败']);
-  expect(calls).toEqual(['claimDraft', 'save:甲.pdf', 'card:甲', 'attach:card:甲', 'image:图.png']);
+  expect(calls).toEqual(['claimDraft', 'save:甲.pdf', 'card:甲:asset:甲.pdf:甲.pdf', 'image:图.png']);
 });

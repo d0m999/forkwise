@@ -10,7 +10,7 @@
 
 附件是 `Card.attachments`，不是正文块，也不新增 file 块。集合身份固定为 `attachments:{cardId}`，条目只有 `id`、`assetId`、`name`。MIME、大小和内容指纹只放在 `mapping_assets`。
 
-`card.attachment.add` 与 `card.attachment.remove` 是独立命令，不进入 `card.edit`。`expected` 只比较附件集合版本；卡片还没有集合时，添加用 `null`。同一张卡不能重复关联同一个 `assetId`，返回 400 `INVALID_ATTACHMENT`。卡片、资产或附件条目不存在返回 404。无变化走与 `card.tags` 相同的早退。
+`card.attachment.add` 与 `card.attachment.remove` 是独立命令，不进入 `card.edit`。`expected` 只比较附件集合版本；卡片还没有集合时，添加用 `null`。同一张卡不能重复关联同一个 `assetId`，返回 400 `INVALID_ATTACHMENT`。卡片、资产或附件条目不存在返回 404。无变化走与 `card.tags` 相同的早退。拖入空白画布建卡时，`thought.create` 可以带可选 `attachment`（`assetId`、`name`），卡片和这份附件同一次写入；资产不存在则整次失败，不留下没有附件的卡。已有卡片追加或解除附件仍只走上面两条命令。
 
 历史复用动作上的整卡 `before` / `after`，不新增 `cardAttachmentChanges`，也不写入 `cardChanges`。`cardChanges` 的撤销只回写几何，不能把附件集合写回去。撤销和重做按当时的快照写回 `attachments`，不重新分配 `attachments.versionId`。附件集合与其他卡片子域一样写入 `mapping_versions`，`mapping.read` 的 `version` 可按 `attachments` 域读回当时那一版。
 
@@ -24,11 +24,11 @@
 
 ## 拖入空白画布
 
-非图片文件逐个建卡，卡片标题取文件名去掉最后一段扩展名；没有可用名称时保留原名。图片仍走既有图片导入，不建卡。每个文件是独立动作，单个失败不影响其余文件；只有「建卡成功、挂附件失败」撤回这张新卡，已成功的其他文件不回滚。草稿未保存时整批取消，一张卡也不建。
+非图片文件逐个建卡，卡片标题取文件名去掉最后一段扩展名；没有可用名称时保留原名。图片仍走既有图片导入，不建卡。每个文件是独立动作：先保存原件，再以一次 `thought.create` 写下卡片和附件。这一次失败则这张卡不出现，已成功的其他文件不回滚。草稿未保存时整批取消，一张卡也不建。
 
 ## 打开
 
-点击时同步 `window.open('')` 拿到空白标签，再向 `/content?disposition=inline` 取一次状态码与 `Content-Disposition`。预检不读正文，避免同一份原件为一次打开下载两遍。服务端已判定为 `attachment`，或预检失败时，关掉这个空白标签；不能内联的类型改为下载。其余类型把空白标签导航到内联地址，再把 `opener` 置空。`window.open` 不带 `noopener` 特性——带它时按规范恒返回 `null`，「被拦截」就分不出来。点击当时没有拿到句柄，才算被拦截，改用 `?disposition=attachment` 下载。
+点击时同步 `window.open('')` 拿到空白标签，再向 `/content?disposition=inline` 取一次状态码与 `Content-Disposition`。预检不读正文，避免同一份原件为一次打开下载两遍。预检失败则关掉空白标签，并按不可访问、无权限、服务端错误、其他拒绝和网络失败分别说明。服务端判定为 `attachment` 时，把这次点击拿到的空白标签导航到 `?disposition=attachment`，不在预检返回后再用脚本点击另起下载；导航抛错则关掉标签并报告下载失败。当时没有拿到标签时直接下载，下载动作抛错同样报告失败，不把失败报成已打开。其余类型把空白标签导航到内联地址，再把 `opener` 置空。`window.open` 不带 `noopener` 特性——带它时按规范恒返回 `null`，「被拦截」就分不出来。点击当时没有拿到句柄且仍需内联时，才算被拦截，改用 `?disposition=attachment` 下载，并说明弹窗被拦截。
 
 ## 复制与投影
 

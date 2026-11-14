@@ -76,6 +76,31 @@ it('附件命令拒绝多余字段、缺版本和重复资产，两张卡复用�
   } finally { f.close(); }
 });
 
+it('拖入建卡和附件同一次写入，缺资产不留下卡片，撤销只去掉卡片', () => {
+  expect(MappingCommand.safeParse({ commandId: 'c', projectId: 'p', type: 'thought.create', expected: null, payload: { id: 'card', title: '甲', text: '', x: 0, y: 0, attachment: { assetId: 'a', name: 'a.pdf', extra: true } } }).success).toBe(false);
+  const f = open();
+  try {
+    f.run('project.create', { name: '项目' });
+    f.run('asset.save', { id: 'file', name: '财报.pdf', mime: 'application/pdf', base64: pdf, kind: 'file' });
+    const before = f.read();
+    expect(() => f.run('thought.create', { id: 'missing-file', title: '空', text: '', x: 0, y: 0, attachment: { assetId: 'gone', name: '财报.pdf' } })).toThrow(/资产不存在/);
+    expect(f.read().cards).toEqual(before.cards);
+    expect(f.read().project.revision).toBe(before.project.revision);
+    f.run('thought.create', { id: 'card', title: '财报', text: '', x: 8, y: 12, attachment: { assetId: 'file', name: '财报.pdf' } });
+    const created = f.read();
+    const card = created.cards[0]!;
+    expect(card.attachments?.items.map(item => ({ assetId: item.assetId, name: item.name }))).toEqual([{ assetId: 'file', name: '财报.pdf' }]);
+    expect(card.attachments?.id).toBe('attachments:card');
+    expect(created.project.revision).toBe(before.project.revision + 1);
+    expect(f.mapping.read({ type: 'version', projectId: 'p', domain: 'attachments', id: card.attachments!.id, versionId: card.attachments!.versionId }, f.actor)).toEqual(card.attachments);
+    const count = f.assets();
+    f.run('history.undo', {}, created.project.revision);
+    expect(f.read().cards).toEqual([]);
+    expect(f.assets()).toBe(count);
+    expect(f.mapping.read({ type: 'asset', projectId: 'p', id: 'file' }, f.actor).base64).toBe(pdf);
+  } finally { f.close(); }
+});
+
 it('撤销把附件版本写回之前的值，重做写回当时的值，删卡不删原件', () => {
   const f = open();
   try {

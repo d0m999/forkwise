@@ -53,15 +53,22 @@ async function request<T>(path: string, body?: unknown, keepalive = false): Prom
     );
   return result as T;
 }
+const MISSING_IMAGE_SIZE = '图片原件缺少尺寸';
+export function missingImageSizeMessage(error: unknown): string | null {
+  return error instanceof Error && error.message === MISSING_IMAGE_SIZE ? error.message : null;
+}
+function readMediaAsset(projectId: string, id: string) {
+  return request<MediaAsset>(`/projects/${encodeURIComponent(projectId)}/assets/${encodeURIComponent(id)}`);
+}
 export const api = {
   searchState: (projectId: string) => request<SearchStateView>(`/projects/${encodeURIComponent(projectId)}/search-state`),
   search: (projectId: string, query: Omit<SearchQuery, "type" | "projectId">) =>
     request<SearchResult>(`/projects/${encodeURIComponent(projectId)}/search`, query),
-  asset: (projectId:string,id:string)=>request<MediaAsset>(`/projects/${encodeURIComponent(projectId)}/assets/${encodeURIComponent(id)}`),
+  asset: readMediaAsset,
   // 图片消费方只走这里：尺寸在读取边界判一次，调用方拿到的是有尺寸的原件视图。
   imageAsset: async (projectId: string, id: string): Promise<ImageAsset> => {
-    const asset = await request<MediaAsset>(`/projects/${encodeURIComponent(projectId)}/assets/${encodeURIComponent(id)}`);
-    if (asset.width === undefined || asset.height === undefined) throw new Error('图片原件缺少尺寸');
+    const asset = await readMediaAsset(projectId, id);
+    if (asset.width === undefined || asset.height === undefined) throw new Error(MISSING_IMAGE_SIZE);
     return { ...asset, width: asset.width, height: asset.height };
   },
   cardIdentity: (projectId: string, cardId: string) =>

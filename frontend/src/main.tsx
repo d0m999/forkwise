@@ -3116,16 +3116,9 @@ function Workspace() {
                   await api.execute({ commandId: crypto.randomUUID(), projectId, type: 'asset.save', expected: null, payload: { id: assetId, ...payload, kind: 'file' } });
                   return { assetId, name: payload.name };
                 },
-                createCard: async ({ title, x, y }) => {
+                createCard: async ({ title, x, y, assetId, name }) => {
                   const cardId = crypto.randomUUID();
-                  const created = await api.execute({ commandId: crypto.randomUUID(), projectId, type: 'thought.create', expected: null, payload: { id: cardId, title, text: '', x, y } });
-                  return { cardId, revision: created.revision };
-                },
-                attach: async ({ cardId, assetId, name }) => {
-                  await api.execute({ commandId: crypto.randomUUID(), projectId, type: 'card.attachment.add', expected: { attachments: null }, payload: { id: cardId, assetId, name } });
-                },
-                retractCard: async (_cardId, revision) => {
-                  await api.execute({ commandId: crypto.randomUUID(), projectId, type: 'history.undo', expected: revision, payload: {} });
+                  await api.execute({ commandId: crypto.randomUUID(), projectId, type: 'thought.create', expected: null, payload: { id: cardId, title, text: '', x, y, attachment: { assetId, name } } });
                 },
                 importImage: async (file) => { await imageInput.begin(file); },
               });

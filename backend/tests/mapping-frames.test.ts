@@ -1,7 +1,23 @@
 import { afterEach, expect, it } from 'vitest';
 import { closeGroupFixtures, groupDeleteExpected, groupFixture } from './group-fixture.js';
+import { groupHttp } from './group-protocol-fixture.js';
 
 afterEach(closeGroupFixtures);
+
+it('HTTP 用与版本类型相同的域名单读回分区版本', async () => {
+  const f = groupFixture();
+  f.execute({ type: 'frame.create',
+    expected: { frame: null, groups: {}, containment: {}, poses: {} },
+    payload: { id: 'frame', itemIds: [], pose: { x: 40, y: 50, width: 300, height: 200 } } });
+  const frame = f.state().frames![0]!;
+  const http = groupHttp(f);
+  try {
+    await http.start();
+    const response = await http.get(`/api/mapping/projects/p/versions/frame/${frame.id}/${frame.versionId}`);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ id: 'frame', versionId: frame.versionId, name: '分区1' });
+  } finally { await http.close(); }
+});
 
 it('空分区创建、改名和背景经 undo/redo 与重开保持，默认无正文且版本可独立读取', () => {
   const f = groupFixture();

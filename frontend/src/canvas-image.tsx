@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { Node, NodeProps } from '@xyflow/react';
 import type { CanvasImage } from '../../backend/src/mapping/image-contracts';
-import { api } from './api';
+import { api, missingImageSizeMessage } from './api';
 import { imageHandles, useImageResize } from './image-resize';
 import type { ImageGeometry } from './image-geometry';
 import { ImageSurface } from './image-surface';
@@ -18,7 +18,7 @@ export function CanvasImageNode({ data, selected }: NodeProps<Node<ImageData>>) 
   const anchor = useRef<HTMLDivElement>(null);
   const resize = useImageResize(data.value, anchor, data.geometry, data.blocked || data.geometry.pending);
   const [name, setName] = useState('独立图片');
-  const [asset, setAsset] = useState<ImageAsset | null>(null), [viewer, setViewer] = useState<CanvasImage | null>(null);
+  const [asset, setAsset] = useState<ImageAsset | null>(null), [assetError, setAssetError] = useState<string | null>(null), [viewer, setViewer] = useState<CanvasImage | null>(null);
   const [playbackPreferences] = useState(() => new Map<string, boolean>()), wasViewing = useRef(false);
   useLayoutEffect(() => {
     if (!viewer && wasViewing.current) anchor.current?.focus({ preventScroll: true });
@@ -26,7 +26,7 @@ export function CanvasImageNode({ data, selected }: NodeProps<Node<ImageData>>) 
   }, [viewer]);
   useEffect(() => {
     let active = true;
-    void api.imageAsset(data.projectId, data.value.content.assetId).then(asset => { if (active) { setName(asset.name); setAsset(asset); } }).catch(() => {});
+    void api.imageAsset(data.projectId, data.value.content.assetId).then(asset => { if (active) { setName(asset.name); setAsset(asset); setAssetError(null); } }).catch((error: unknown) => { if (active) setAssetError(missingImageSizeMessage(error)); });
     return () => { active = false; };
   }, [data.projectId, data.value.content.assetId]);
   const cropping = data.geometry.cropping?.projectId === data.projectId && data.geometry.cropping.value.id === data.value.id ? data.geometry.cropping : null;
@@ -50,7 +50,7 @@ export function CanvasImageNode({ data, selected }: NodeProps<Node<ImageData>>) 
     style={{ width: '100%', height: '100%', outline: selected ? 'var(--body-focus-outline-width) solid var(--canvas-selection-color)' : undefined, outlineOffset: 'var(--image-selection-offset)' }}>
     {asset && <ImageSurface projectId={data.projectId} value={data.value} width={data.value.item.pose.width} height={data.value.item.pose.height}
       animation={asset.mime === 'image/gif' ? { naturalWidth: asset.width, naturalHeight: asset.height, preferences: playbackPreferences, key: data.value.id, inactive: !!viewer || !!cropping } : undefined} />}
-  </div>{asset?.mime === 'image/gif' && <GifToggle className="canvas-gif-control nodrag nopan" />}</div>
+  </div>{assetError && <p role="alert">{assetError}</p>}{asset?.mime === 'image/gif' && <GifToggle className="canvas-gif-control nodrag nopan" />}</div>
   {selected && data.resizable && !cropping && Object.entries(imageHandles).map(([handle, label]) => <button key={handle}
     className="nodrag nopan" aria-label={'调整图片尺寸：' + label} aria-disabled={data.blocked || data.geometry.pending}
     onPointerDown={event => resize.begin(event, handle as keyof typeof imageHandles)} onKeyDown={event => resize.key(event, handle as keyof typeof imageHandles)}
