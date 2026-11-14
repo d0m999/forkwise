@@ -1,4 +1,5 @@
 import type Database from 'better-sqlite3';
+import { readAttachments, restorePastedAttachments } from './attachment.js';
 import { randomUUID } from 'node:crypto';
 import { requireThat } from '../domain/errors.js';
 import type { Card, Change, CutOuterEnd } from './contracts.js';
@@ -42,6 +43,7 @@ export type CutWrite = {
   groupChanges: NonNullable<Change['groupChanges']>;
   frameChanges: NonNullable<Change['frameChanges']>;
   containmentChanges: NonNullable<Change['containmentChanges']>;
+  attachmentChanges?: Change['attachmentChanges'];
   changedIds: string[];
   cut: CutStateView;
 };
@@ -293,7 +295,9 @@ export function pasteCut(db: Database.Database, command: CanvasPasteCut): CutWri
     kind: 'bound', itemId: id, side: 'top',
     ...(plan.groups.some(value => value.itemId === id) ? { targetKind: 'group' as const } : plan.frames.some(value => value.id === id) ? { targetKind: 'frame' as const } : {}),
   });
+  const attached = new Set(readAttachments(db, projectId).map(value => value.id));
   for (const id of roots) {
+    if (attached.has(id)) continue;
     const pose = boundsOf(id);
     if (!pose) continue;
     // 恢复的分区不能落进自己或自己的子分区；成员归属已在上面按原样恢复。
@@ -317,8 +321,9 @@ export function pasteCut(db: Database.Database, command: CanvasPasteCut): CutWri
     saveConnector(db, projectId, after);
     connectorChanges.push({ before: null, after });
   }
+  const attachmentChanges = restorePastedAttachments(db, projectId, change.attachmentChanges, itemIds, new Set(plan.cards.map(value => value.item.id)));
   const written = { cardLifecycleChanges, textChanges, shapeChanges, imageChanges, strokeChanges,
-    connectorChanges, groupChanges, frameChanges, containmentChanges };
+    connectorChanges, groupChanges, frameChanges, containmentChanges, ...(attachmentChanges.length ? { attachmentChanges } : {}) };
   return {
     ...written,
     changedIds: groupOutcome(written).changedIds,

@@ -7,6 +7,7 @@ import {
   type Command,
   type ProjectState,
 } from "./api";
+import { followerFields } from "./attachment-follow";
 
 type LayoutCommand = Extract<Command, { type: "card.layout" }>;
 export function useCardLayoutSave(
@@ -96,10 +97,12 @@ export function useCardLayoutSave(
       return;
     const key = JSON.stringify([state.project.id, card.id]);
     if (commands.current.has(key)) return;
+    const nextHeight = Math.max(necessaryHeight, floor);
     commands.current.set(key, {
       commandId: crypto.randomUUID(),
       projectId: state.project.id,
       type: "card.layout",
+      ...followerFields(state, [{ itemId: card.item.id, dx: 0, dy: (nextHeight - card.item.pose.height) / 2 }], new Set()),
       expected: {
         thought: card.versionId,
         body: card.body.versionId,

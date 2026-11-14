@@ -13,7 +13,7 @@ import { createWorkspaceApp } from '../src/mapping/http.js';
 import type { CompactPage, CompactItem, CardIndex, TextIndex, ShapeIndex, StrokeIndex, ImageIndex, ConnectorIndex, FrameIndex, DetailChunk } from '../src/mapping/compact-contracts.js';
 import type { ObservePage } from '../src/mapping/observe-contracts.js';
 
-it('真实 MCP 固定混合地图变化终点，预算错误与过旧游标仅凭协议恢复信息完整重建十种视图', async () => {
+it('真实 MCP 固定混合地图变化终点，预算错误与过旧游标仅凭协议恢复信息完整重建十一种视图', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'forkwise-stroke-mcp-recovery-'));
   const mapping = openMapping(directory, { observe: { retentionRevisions: 2 } });
   let http: ReturnType<typeof serve> | undefined;
@@ -156,6 +156,7 @@ it('真实 MCP 固定混合地图变化终点，预算错误与过旧游标仅�
       const groups = await pages(snapshot, revision, 'group-index');
       const containment = await pages(snapshot, revision, 'containment');
       const frameIndex = await pages(snapshot, revision, 'frame-index') as FrameIndex[];
+      const attachmentIndex = await pages(snapshot, revision, 'attachment-index') as { id: string; versionId: string; targetItemId: string }[];
       const frames = frameIndex.map(({ type: _, memberCount, ...value }) => ({ ...value, kind: 'frame',
         memberItemIds: containment.flatMap(item => 'parent' in item && item.parent?.kind === 'frame' && item.parent.id === value.id ? [item.id] : []) }));
       const connectors = await Promise.all(connectorIndex.map(async value => {
@@ -177,7 +178,7 @@ it('真实 MCP 固定混合地图变化终点，预算错误与过旧游标仅�
         if (kind === 'stroke') expect(full.content.path).toHaveLength((value as StrokeIndex).content.pointCount);
         return { kind, ...full, item: value.item };
       }));
-      return { project: base.project, cards, tags, connectors, frames, groups, containment, texts: await expand(texts, 'text'), shapes: await expand(shapes, 'shape'), strokes: await expand(strokes, 'stroke'), images: await expand(images, 'image') };
+      return { project: base.project, cards, tags, connectors, frames, groups, containment, attachments: attachmentIndex.map(value => ({ id: value.id, versionId: value.versionId, target: { itemId: value.targetItemId } })), texts: await expand(texts, 'text'), shapes: await expand(shapes, 'shape'), strokes: await expand(strokes, 'stroke'), images: await expand(images, 'image') };
     };
     expect(await rebuild(first.snapshot, r2.project.revision)).toEqual(r2);
     expect(await rebuild(recoveryR3, r3.project.revision)).toEqual(r3);

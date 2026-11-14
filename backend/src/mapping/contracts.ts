@@ -1,4 +1,5 @@
 import { FramePlacement } from './frame-spatial.js';
+import { AttachmentCommands, FollowerFields, type Attachment, type AttachmentChange } from './attachment-contracts.js';
 import { FrameCommands, type CanvasFrame, type FrameChange } from './frame-contracts.js';
 import { MembershipExpected } from './containment-contracts.js';
 import { GroupGeometryCommands } from './group-geometry-contracts.js';
@@ -33,6 +34,7 @@ const BodyInput = {
 };
 export { TagCommandSchema } from './tag-contracts.js';
 export const MappingCommand = z.discriminatedUnion('type', [
+  ...AttachmentCommands.options,
   ...FrameCommands.options,
   ...GroupGeometryCommands.options,
   ...GroupCommands.options,
@@ -72,6 +74,7 @@ export const MappingCommand = z.discriminatedUnion('type', [
     .object({
       ...Envelope,
       type: z.literal('card.layout'),
+      ...FollowerFields,
       expected: z.object({ thought: Id, body: Id, pose: Id, appearance: Id.nullable(), cardTags: Id.nullable().optional() }).strict(),
       payload: z.object({ id: Id, necessaryHeight: z.number().finite().positive() }).strict(),
     })
@@ -86,11 +89,12 @@ export const MappingCommand = z.discriminatedUnion('type', [
         .strict(),
     })
     .strict(),
-  z.object({ ...Envelope, type: z.literal('canvas.move'), expected: z.record(Id, Id), payload: z.object({ targets: z.array(z.object({ kind: z.enum(['card', 'text', 'shape', 'image', 'stroke']), id: Id, itemId: Id, x: z.number().finite(), y: z.number().finite() }).strict()).min(1) }).strict() }).strict(),
+  z.object({ ...Envelope, ...FollowerFields, type: z.literal('canvas.move'), expected: z.record(Id, Id), payload: z.object({ targets: z.array(z.object({ kind: z.enum(['card', 'text', 'shape', 'image', 'stroke']), id: Id, itemId: Id, x: z.number().finite(), y: z.number().finite() }).strict()).min(1) }).strict() }).strict(),
   z
     .object({
       ...Envelope,
       type: z.literal('pose.batch'),
+      ...FollowerFields,
       expected: z.record(Id, Id),
       payload: z
         .object({
@@ -257,6 +261,7 @@ export interface ProjectState {
   texts?: CanvasText[];
   shapes?: CanvasShape[];
   strokes?: CanvasStroke[];
+  attachments?: Attachment[];
 }
 export interface Receipt {
   // 剪切资格随回执返回，前端据此确认首次搬动是否被服务端接受。
@@ -313,6 +318,7 @@ export interface Change extends Receipt {
   tagChanges?: TagChange[];
   assetChanges?: AssetChange[];
   cardChanges?: { before: Card; after: Card }[];
+  attachmentChanges?: AttachmentChange[];
   // 84af656c 及更早的剪切回执没有该字段（旧字段 cutOuterVersions 只有 id→version，缺 kind 与
   // 组合成员 pose，无法重建指纹）；粘贴时按状态不可判定拒绝（CUT_OUTER_UNKNOWN），不猜测性迁移。
   cutOuterEnds?: CutOuterEnd[];

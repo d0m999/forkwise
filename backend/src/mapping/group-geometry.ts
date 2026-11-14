@@ -7,6 +7,7 @@ import { writeGeometry } from './geometry.js';
 import { writeText } from './text.js';
 import { transformShape } from './shape.js';
 import { transformImage, writeImagePose } from './image.js';
+import { followCardMotions } from './attachment.js';
 
 export function scaleGroup(db: Database.Database, command: Extract<GroupGeometryCommand, { type: 'group.scale' }>) {
   const { projectId, payload, expected, commandId } = command;
@@ -28,6 +29,14 @@ export function scaleGroup(db: Database.Database, command: Extract<GroupGeometry
   const anchor = { x: east ? right : left, y: south ? bottom : top }, scale = payload.scale;
   const cardChanges: NonNullable<Change['cardChanges']> = [], textChanges: NonNullable<Change['textChanges']> = [];
   const shapeChanges: NonNullable<Change['shapeChanges']> = [], imageChanges: NonNullable<Change['imageChanges']> = [];
+  const motions = scale === 1 ? [] : members.flatMap(member => {
+    if (member.kind !== 'card') return [];
+    const p = member.value.item.pose;
+    const nx = anchor.x + scale * (p.x - anchor.x), ny = anchor.y + scale * (p.y - anchor.y);
+    const dx = nx + p.width * scale / 2 - (p.x + p.width / 2), dy = ny + p.height * scale / 2 - (p.y + p.height / 2);
+    return dx === 0 && dy === 0 ? [] : [{ itemId: member.value.item.id, dx, dy }];
+  });
+  const followed = followCardMotions(db, projectId, commandId, motions, new Map(), command.followers, command.expectedFollowers);
   for (const member of members) {
     const { item } = member.value, p = item.pose, e = expected.items[item.id]!;
     const pose = { x: scale === 1 ? p.x : anchor.x + scale * (p.x - anchor.x), y: scale === 1 ? p.y : anchor.y + scale * (p.y - anchor.y), width: p.width * scale, height: p.height * scale };
@@ -58,11 +67,12 @@ export function scaleGroup(db: Database.Database, command: Extract<GroupGeometry
       if (change) imageChanges.push(change);
     }
   }
-  return { cardChanges, textChanges, shapeChanges, imageChanges, changedIds: [
+  return { cardChanges, textChanges: [...textChanges, ...followed.textChanges], shapeChanges: [...shapeChanges, ...followed.shapeChanges], imageChanges: [...imageChanges, ...followed.imageChanges], strokeChanges: followed.strokeChanges, changedIds: [...new Set([
     ...cardChanges.map(c => c.after.item.id),
     ...textChanges.flatMap(c => [...(c.before!.versionId !== c.after!.versionId ? [c.after!.id] : []), ...(c.before!.item.versionId !== c.after!.item.versionId ? [c.after!.item.id] : [])]),
     ...shapeChanges.map(c => c.after!.item.id), ...imageChanges.map(c => c.after!.item.id),
-  ] };
+    ...followed.changedIds,
+  ])] };
 }
 
 export function rotateGroup(db: Database.Database, command: Extract<GroupGeometryCommand, { type: 'group.rotate90' }>) {

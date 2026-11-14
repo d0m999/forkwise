@@ -30,6 +30,7 @@ import { captureMemberDeletion, ungroupSelectionCommand, createGroupCommand, rem
 import { CanvasGroups } from './canvas-groups';
 import { CanvasFrames, useFrameMove } from './canvas-frames';
 import { createFrameCommand, createFrameSelectionCommand, deleteFrameCommand, frameItemsInRect, type FrameRect } from './canvas-frame-commands';
+import { attachmentPreviewPositions } from './attachment-follow';
 import { useGroupGeometry } from './group-geometry';
 import { CanvasTextNode } from './canvas-text';
 import { CanvasShapeNode, shapeNodes } from './canvas-shape';
@@ -273,6 +274,19 @@ function draftKey(projectId: string, cardId: string, field: Draft["field"]) {
 }
 function Workspace() {
   const [state, setState] = useState<ProjectState | null>(null);
+  const [attachTarget, setAttachTarget] = useState<string | null>(null);
+  useEffect(() => {
+    if (!attachTarget) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.isComposing || event.key === 'Process') return;
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      event.stopPropagation();
+      setAttachTarget(null);
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [attachTarget]);
   const canvasSelection = useCanvasSelection(state);
   const selection = canvasSelection.directItemIds, setSelection = canvasSelection.setItems;
   const flowSelection = canvasSelection.flowSelectedItemIds;
@@ -1021,7 +1035,8 @@ function Workspace() {
     };
   }, [state?.project.id]);
   const pose = usePoseSave(refresh,
-    (command, receipt) => { cardDeletion.current?.acknowledge(command, receipt); selectionDeletion.current?.acknowledge(command, receipt); });
+    (command, receipt) => { cardDeletion.current?.acknowledge(command, receipt); selectionDeletion.current?.acknowledge(command, receipt); },
+    () => authority.current);
   const cardLayout = useCardLayoutSave(refresh, () => authority.current,
     (command, receipt) => { cardDeletion.current?.acknowledge(command, receipt); selectionDeletion.current?.acknowledge(command, receipt); });
   const appearance = useAppearanceSave(
@@ -2808,6 +2823,7 @@ function Workspace() {
       !!connectorLabel.session || !!imageGeometry.cropping || texts.hasPending(),
     apply: (operation: LayerOperation) => { void applyLayer(operation); },
   } : undefined;
+  const attachmentPreview = state ? attachmentPreviewPositions(state, { pose: pose.positions, canvas: canvasMove.positions, frame: frameMove.positions, geometry: groupGeometry.poses }) : {};
   const textNodes = texts.nodes.map((node) => ({
     ...node,
     data: {
@@ -3171,8 +3187,19 @@ function Workspace() {
               "controls.zoomOut.ariaLabel": "缩小",
               "controls.fitView.ariaLabel": "适应画布",
             }}
-            nodes={orderCanvas([...nodes, ...textNodes, ...imageNodes(state.images ?? [], state.project.id, selection, (id, extend) => void chooseCanvasItem(id, extend), busy || historyBlocked || composition.current || !!pendingAction.current || placing || !!shapePreset || texts.placing || panTool || !!strokeDraw.mode || !!shapeText.session || texts.geometryBlocked, imageGeometry, (value, dx, dy) => { if (canvasMove.start(value.item.id)) canvasMove.finish({ x: value.item.pose.x + dx, y: value.item.pose.y + dy }); }, singleItemId, memberAction, layerProps), ...shapeNodes(state.shapes ?? [], selection, (id, extend) => void chooseCanvasItem(id, extend), busy || historyBlocked || placing || !!shapePreset || texts.placing || panTool, id => void beginShapeText(id), !!shapeText.session, (id, trigger) => void beginShapeAppearance(id, trigger), value => void removeShape(value), shapeMove.positions, shapeMove, composition.current || !!pendingAction.current || pose.pending || pose.dragging || canvasMove.dragging || texts.hasPending() || appearance.pending || cardLayout.pending, singleItemId, memberAction, layerProps), ...strokeNodes(state.strokes ?? [], selection, (id, extend) => void chooseStrokeItem(id, extend), value => void removeStroke(value), busy || historyBlocked || !!pendingAction.current || placing || !!shapePreset || texts.placing || panTool || !!strokeDraw.mode, singleItemId, memberAction, itemId => !!state.groups?.some(group => group.memberItemIds.includes(itemId)) || (flowSelection.includes(itemId) && flowSelection.length > 1))].map(node => groupGeometry.project({ ...node, selected: flowSelection.includes(node.id), position: frameMove.positions[node.id] ?? canvasMove.positions[node.id] ?? shapeMove.positions[node.id] ?? node.position, draggable: node.draggable !== false && !groupGeometry.active && !strokeDraw.mode && !busy && !historyBlocked && !panTool && !placing && !shapePreset && !texts.placing && !texts.geometryBlocked && !shapeText.session && !connectorLabel.session && !shapeMove.pending })), state, selection, { temporaryRaise: pureCardSelection && !layerHoldActive })}
+            nodes={orderCanvas([...nodes, ...textNodes, ...imageNodes(state.images ?? [], state.project.id, selection, (id, extend) => void chooseCanvasItem(id, extend), busy || historyBlocked || composition.current || !!pendingAction.current || placing || !!shapePreset || texts.placing || panTool || !!strokeDraw.mode || !!shapeText.session || texts.geometryBlocked, imageGeometry, (value, dx, dy) => { if (canvasMove.start(value.item.id)) canvasMove.finish({ x: value.item.pose.x + dx, y: value.item.pose.y + dy }); }, singleItemId, memberAction, layerProps), ...shapeNodes(state.shapes ?? [], selection, (id, extend) => void chooseCanvasItem(id, extend), busy || historyBlocked || placing || !!shapePreset || texts.placing || panTool, id => void beginShapeText(id), !!shapeText.session, (id, trigger) => void beginShapeAppearance(id, trigger), value => void removeShape(value), shapeMove.positions, shapeMove, composition.current || !!pendingAction.current || pose.pending || pose.dragging || canvasMove.dragging || texts.hasPending() || appearance.pending || cardLayout.pending, singleItemId, memberAction, layerProps), ...strokeNodes(state.strokes ?? [], selection, (id, extend) => void chooseStrokeItem(id, extend), value => void removeStroke(value), busy || historyBlocked || !!pendingAction.current || placing || !!shapePreset || texts.placing || panTool || !!strokeDraw.mode, singleItemId, memberAction, itemId => !!state.groups?.some(group => group.memberItemIds.includes(itemId)) || (flowSelection.includes(itemId) && flowSelection.length > 1))].map(node => groupGeometry.project({ ...node, selected: flowSelection.includes(node.id), position: frameMove.positions[node.id] ?? canvasMove.positions[node.id] ?? shapeMove.positions[node.id] ?? attachmentPreview[node.id] ?? node.position, draggable: node.draggable !== false && !groupGeometry.active && !strokeDraw.mode && !busy && !historyBlocked && !panTool && !placing && !shapePreset && !texts.placing && !texts.geometryBlocked && !shapeText.session && !connectorLabel.session && !shapeMove.pending })), state, selection, { temporaryRaise: pureCardSelection && !layerHoldActive })}
             onNodeClick={(event, node) => {
+              if (attachTarget && state.cards.some(card => card.item.id === node.id)) {
+                const card = state.cards.find(value => value.item.id === node.id)!;
+                const itemId = attachTarget;
+                setAttachTarget(null);
+                void action({ commandId: crypto.randomUUID(), projectId: state.project.id, type: 'attachment.attach',
+                  expected: { attachment: state.attachments?.find(row => row.id === itemId)?.versionId ?? null,
+                    target: { itemId: card.item.id, versionId: card.item.versionId },
+                    containment: state.containment?.find(row => row.id === itemId)?.versionId ?? null },
+                  payload: { itemId, targetItemId: card.item.id } });
+                return;
+              }
               awaitBodySelection.current = false;
               clearConnectorSelection(event.shiftKey);
               canvasSelection.choose(node.id, event.shiftKey);
@@ -3707,6 +3734,28 @@ function Workspace() {
             )}
           </>
         )}
+        {state && singleItemId && !state.cards.some(card => card.item.id === singleItemId) && (
+          state.attachments?.some(row => row.id === singleItemId) ? (
+            <button onClick={() => {
+              const row = state.attachments!.find(value => value.id === singleItemId)!;
+              const card = state.cards.find(value => value.item.id === row.target?.itemId);
+              if (!row.target || !card) return;
+              void action({ commandId: crypto.randomUUID(), projectId: state.project.id, type: 'attachment.detach',
+                expected: { attachment: row.versionId, target: { itemId: row.target.itemId, versionId: card.item.versionId } },
+                payload: { itemId: row.id } });
+            }}>解除附着</button>
+          ) : (
+            <button onClick={() => {
+              if (state.containment?.find(row => row.id === singleItemId)?.parent) {
+                setError('该批注在框架或组合内，需先移出');
+                return;
+              }
+              setError('');
+              setAttachTarget(singleItemId);
+            }}>附着到卡片</button>
+          )
+        )}
+        {attachTarget && <span>点击要附着的卡片</span>}
         {(error || pose.error) && (
           <>
             <span role="alert">

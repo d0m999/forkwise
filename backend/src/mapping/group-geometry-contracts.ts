@@ -1,3 +1,4 @@
+import { FollowerFields } from './attachment-contracts.js';
 import { z } from 'zod';
 
 const Id = z.string().min(1).max(160);
@@ -13,7 +14,7 @@ const Selection = { groupIds: z.array(Id).min(1), directItemIds: z.array(Id) };
 export const GroupGeometryCommands = z.discriminatedUnion('type', [
   z.object({ commandId: Id, projectId: Id, type: z.literal('group.rotate90'), expected: Expected,
     payload: z.object({ ...Selection, direction: z.enum(['left', 'right']) }).strict() }).strict(),
-  z.object({ commandId: Id, projectId: Id, type: z.literal('group.scale'), expected: Expected,
+  z.object({ commandId: Id, projectId: Id, ...FollowerFields, type: z.literal('group.scale'), expected: Expected,
     payload: z.object({ ...Selection, anchorCorner: z.enum(['nw', 'ne', 'sw', 'se']), scale: Positive,
       measurements: z.object({ cards: z.record(Id, z.object({ forWidth: Positive, necessaryHeight: Positive }).strict()),
         texts: z.record(Id, z.object({ width: Positive, height: Positive }).strict()) }).strict() }).strict() }).strict(),

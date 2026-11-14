@@ -6,6 +6,7 @@ import type { Containment, ContainmentChange } from './group-contracts.js';
 import { writeContainment } from './group.js';
 import { readSpatialScene } from './frame-membership.js';
 import { frameResizePlan } from './frame-spatial.js';
+import { readAttachments } from './attachment.js';
 
 export function resizeFrame(db: Database.Database, command: Extract<FrameCommand, { type: 'frame.resize' }>) {
   const scene = readSpatialScene(db, command.projectId), before = scene.frames!.find(v => v.id === command.payload.id);
@@ -14,7 +15,9 @@ export function resizeFrame(db: Database.Database, command: Extract<FrameCommand
   const pose = command.payload.pose;
   if (Object.entries(pose).every(([key, value]) => before.pose[key as keyof typeof pose] === value)) return null;
   const plan = frameResizePlan(scene, before.id, pose), containmentChanges: ContainmentChange[] = [];
+  const attached = new Set(readAttachments(db, command.projectId).map(value => value.id));
   for (const id of [...plan.attach, ...plan.release]) {
+    if (plan.attach.includes(id) && attached.has(id)) continue;
     const previous = scene.containment!.find(v => v.id === id) ?? null;
     const parent = plan.attach.includes(id) ? { kind: 'frame' as const, id: before.id } : null;
     if ((previous?.parent?.id ?? null) === (parent?.id ?? null)) continue;

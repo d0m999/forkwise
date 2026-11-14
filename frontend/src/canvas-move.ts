@@ -2,6 +2,7 @@ import { captureSpatial } from '../../backend/src/mapping/frame-spatial';
 import { useRef, useState } from "react";
 import type { Command, ProjectState } from "./api";
 import { canvasItems, selectedItemIds, type CanvasSelection } from './canvas-selection';
+import { followerFields } from './attachment-follow';
 import type { CanvasMoveIntent } from './canvas-move-conflict';
 type Point = { x: number; y: number };
 type Target = {
@@ -21,6 +22,7 @@ export function useCanvasMove(
     targets: Target[];
     spatial: ReturnType<typeof captureSpatial>;
     anchor: Target;
+    snapshot: ProjectState;
     command: Extract<Command, { type: 'canvas.move-selection' }> | null;
   } | null>(null);
   const [dragging, setDragging] = useState(false);
@@ -74,7 +76,7 @@ export function useCanvasMove(
           poses: Object.fromEntries(targets.map(t => [t.item.id, t.item.versionId])) },
         payload: { groupIds: selected.targets.flatMap(t => t.kind === 'group' ? [t.id] : []), directItemIds: selected.targets.flatMap(t => t.kind === 'item' ? [t.itemId] : []), dx: 0, dy: 0 } }
       : null;
-    gesture.current = { projectId: snapshot.project.id, targets, anchor, command, spatial: captureSpatial(snapshot) };
+    gesture.current = { projectId: snapshot.project.id, targets, anchor, command, snapshot, spatial: captureSpatial(snapshot) };
     setDragging(true);
     return true;
   }
@@ -104,6 +106,9 @@ export function useCanvasMove(
     const current = gesture.current;
     if (!current) return ended.current.size > 0;
     const dx = point.x - current.anchor.item.pose.x, dy = point.y - current.anchor.item.pose.y;
+    const motions = current.targets.flatMap(value => value.kind === 'card' && (dx !== 0 || dy !== 0) ? [{ itemId: value.item.id, dx, dy }] : []);
+    const moving = new Set(current.targets.flatMap(value => value.kind === 'card' ? [] : [value.item.id]));
+    const followed = followerFields(current.snapshot, motions, moving);
     ended.current = new Set(current.targets.map(value => value.item.id));
     gesture.current = null;
     setDragging(false);
@@ -112,11 +117,12 @@ export function useCanvasMove(
       return true;
     }
     enqueue(
-      async () => current.command ? { ...current.command, placement: { expected: current.spatial, ...(pointer ? { point: pointer } : {}) }, payload: { ...current.command.payload, dx, dy } } : ({
+      async () => current.command ? { ...current.command, ...followed, placement: { expected: current.spatial, ...(pointer ? { point: pointer } : {}) }, payload: { ...current.command.payload, dx, dy } } : ({
         commandId: crypto.randomUUID(),
         projectId: current.projectId,
         type: "canvas.move",
         placement: { expected: current.spatial, ...(pointer ? { point: pointer } : {}) },
+        ...followed,
         expected: Object.fromEntries(
           current.targets.map((value) => [value.item.id, value.item.versionId]),
         ),

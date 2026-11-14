@@ -5,6 +5,7 @@ import { readGroupRecords, readContainment, groupItems } from './group.js';
 import { deleteGroupItems, releaseMembers, groupOutcome, ungroup } from './group-lifecycle.js';
 import { readConnectors, prepareIncidentConnectorDeletion } from './connector.js';
 import { readFrames, deleteFrame } from './frame.js';
+import { releaseAttachments } from './attachment.js';
 import type { FrameChange } from './frame-contracts.js';
 
 function exactIds(expected: Record<string, unknown>, ids: Set<string>) {
@@ -74,6 +75,7 @@ export function deleteSelection(db: Database.Database, command: Extract<GroupCom
   });
   requireThat(exactIds(expected.connectors, new Set([...incident.map(change => change.before!.id), ...explicit])), 'VERSION_CONFLICT', '删除连线范围已变化，请重新读取', 409);
   // The outer Mapping immediate transaction rolls back all primitives if a later domain conflicts.
+  const attachmentChanges = releaseAttachments(db, projectId, ids);
   const content = deleteGroupItems(db, command, members, expected.items, incident);
   const groupChanges: GroupChange[] = [], containmentChanges: ContainmentChange[] = [];
   for (const group of groups.filter(value => affectedGroups.has(value.id))) {
@@ -110,6 +112,6 @@ export function deleteSelection(db: Database.Database, command: Extract<GroupCom
     for (const value of values) { const id = (value.after ?? value.before!).id, previous = result.get(id); result.set(id, previous ? { ...value, before: previous.before } : value); }
     return [...result.values()];
   };
-  const changes = { ...content, frameChanges, groupChanges: coalesce(groupChanges), containmentChanges: coalesce(containmentChanges) };
+  const changes = { ...content, frameChanges, groupChanges: coalesce(groupChanges), containmentChanges: coalesce(containmentChanges), ...(attachmentChanges.length ? { attachmentChanges } : {}) };
   return { ...changes, ...groupOutcome(changes) };
 }

@@ -5,6 +5,7 @@ import type { Command, ProjectState } from './api';
 import type { CanvasText } from '../../backend/src/mapping/text-contracts';
 import type { GeometryMemberExpected } from '../../backend/src/mapping/group-geometry-contracts';
 import { canvasItems, selectedItemIds, type CanvasSelection } from './canvas-selection';
+import { followerFields } from './attachment-follow';
 import { captureGroupCards } from './group-card-measure';
 
 type Item = ReturnType<typeof canvasItems>[number];
@@ -58,7 +59,7 @@ export function useGroupGeometry(options: Options) {
       else throw new Error('含笔迹的选择暂不支持整体缩放或旋转');
     }
     const groupIds = selection.targets.flatMap(t => t.kind === 'group' ? [t.id] : []);
-    return { own, targets, expected: { items,
+    return { own, snapshot, targets, expected: { items,
       groups: Object.fromEntries(groupIds.map(id => [id, snapshot.groups!.find(g => g.id === id)!.versionId])),
       containment: Object.fromEntries(ids.map(id => [id, snapshot.containment?.find(c => c.id === id)?.versionId ?? null])) },
       payload: { groupIds, directItemIds: selection.targets.flatMap(t => t.kind === 'item' ? [t.itemId] : []) } };
@@ -153,7 +154,16 @@ export function useGroupGeometry(options: Options) {
         if (performance.now() > deadline) throw new Error('组合尺寸测量超时，本次未保存，请重新调整');
         cards?.dispose(); captured.own.submitted = true; latest.current.lock(false);
         const own = captured.own;
+        const motions = captured.targets.flatMap(value => {
+          if (!('body' in value)) return [];
+          const p = value.item.pose;
+          const nx = anchor.x + solved.scale * (p.x - anchor.x), ny = anchor.y + solved.scale * (p.y - anchor.y);
+          const dx = nx + p.width * solved.scale / 2 - (p.x + p.width / 2);
+          const dy = ny + p.height * solved.scale / 2 - (p.y + p.height / 2);
+          return dx === 0 && dy === 0 ? [] : [{ itemId: value.item.id, dx, dy }];
+        });
         await latest.current.execute({ commandId: crypto.randomUUID(), projectId: own.projectId, type: 'group.scale', expected: captured.expected,
+          ...followerFields(captured.snapshot, motions, new Set()),
           payload: { ...captured.payload, anchorCorner, scale: solved.scale, measurements: { cards: solved.cards, texts } } },
         () => { if (session.current === own) clear(); }, () => session.current === own);
       } catch (failure) { if (!cancelled && session.current === captured.own) { clear(); latest.current.fail(failure); } }

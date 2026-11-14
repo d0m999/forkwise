@@ -1,5 +1,6 @@
 import { initializeFrames } from './frame.js';
 import { initializeGroups } from './group.js';
+import { initializeAttachments } from './attachment.js';
 import { initializeConnectors } from './connector.js';
 import { initializeImages } from './image.js';
 import { initializeText } from './text.js';
@@ -108,6 +109,7 @@ export function openMapping(directory: string, options: CommitOptions = {}): Map
     initializeImages(db);
     initializeConnectors(db);
     initializeGroups(db);
+    initializeAttachments(db);
     initializeFrames(db);
     initializeCuts(db);
     return new Mapping(db, options);

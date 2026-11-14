@@ -19,6 +19,7 @@ export const CompactQuerySchema = z.discriminatedUnion('view', [
   z.object({ ...common, view: z.literal('frame-index') }).strict(),
   z.object({ ...common, view: z.literal('group-index') }).strict(),
   z.object({ ...common, view: z.literal('containment') }).strict(),
+  z.object({ ...common, view: z.literal('attachment-index') }).strict(),
   z.object({ ...common, view: z.literal('connector-index') }).strict(),
   z.object({ ...common, view: z.literal('connector-detail'), connectorId: z.string().min(1).max(160), snapshot: z.string().uuid() }).strict(),
   z.object({ ...common, view: z.literal('image-index') }).strict(),
@@ -80,9 +81,10 @@ export type ConnectorIndex = Omit<CanvasConnector, 'kind' | 'label'> & { type: '
   label?: (Omit<ConnectorLabel, 'text'> & { availability: 'not_fetched'; textCodePoints: number; textJsonSha256: string }) | null };
 export type GroupIndex = Omit<CanvasGroup, 'kind' | 'memberItemIds'> & { type: 'group'; memberCount: number };
 export type FrameIndex = Omit<CanvasFrame, 'kind' | 'memberItemIds'> & { type: 'frame'; memberCount: number };
-export type CompactItem = FrameIndex | GroupIndex | Containment | ConnectorIndex | ImageIndex | StrokeIndex | ShapeIndex | TextIndex | CardIndex | BodySlice | DetailChunk | Tag;
+export interface AttachmentIndex { id: string; versionId: string; targetItemId: string }
+export type CompactItem = FrameIndex | GroupIndex | Containment | AttachmentIndex | ConnectorIndex | ImageIndex | StrokeIndex | ShapeIndex | TextIndex | CardIndex | BodySlice | DetailChunk | Tag;
 export interface CompactPage<T = CompactItem> {
-  scope: { types: ('thought' | 'text' | 'shape' | 'stroke' | 'image' | 'connector' | 'group' | 'frame')[]; relations: 'not_implemented' | 'connectors' | 'containment'; order: 'creation_ordinal' };
+  scope: { types: ('thought' | 'text' | 'shape' | 'stroke' | 'image' | 'connector' | 'group' | 'frame')[]; relations: 'not_implemented' | 'connectors' | 'containment' | 'attachments'; order: 'creation_ordinal' };
   project: Project;
   snapshot: string;
   revision: number;
@@ -91,7 +93,7 @@ export interface CompactPage<T = CompactItem> {
   bytes: number;
   totalItems: number;
   coverage: { start: number; end: number; complete: boolean };
-  fidelity: 'frame-index' | 'group-index' | 'containment' | 'index' | 'partial_body' | 'lossless_json_chunks' | 'tags' | 'text-index' | 'shape-index' | 'stroke-index' | 'image-index' | 'connector-index';
+  fidelity: 'frame-index' | 'group-index' | 'containment' | 'attachment-index' | 'index' | 'partial_body' | 'lossless_json_chunks' | 'tags' | 'text-index' | 'shape-index' | 'stroke-index' | 'image-index' | 'connector-index';
   availability: 'available' | 'deleted' | 'not_found';
   target?: { connectorId: string; versionId?: string } | { imageId: string; versionId?: string } | { cardId: string; bodyId?: string; versionId?: string } | { shapeId: string; versionId?: string } | { strokeId: string; versionId?: string };
   summary: null;

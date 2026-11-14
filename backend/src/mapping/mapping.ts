@@ -24,6 +24,7 @@ import { createShape, deleteShape, editShape, moveShape, readShapes, transformSh
 import type { ShapeVersion } from './shape-contracts.js';
 import type { StrokeVersion } from './stroke-contracts.js';
 import { readTexts, writeText } from './text.js';
+import { attachAnnotation, detachAnnotation, followCardMotions, readAttachments, rejectAttachedPoseMove, releaseAttachments } from './attachment.js';
 import { reconcileMediaTasks, completeMediaTask } from './media-tasks.js';
 import { completeMediaHistory } from './history.js';
 import { readAsset, saveAsset, validateImageAssets } from './media.js';
@@ -202,7 +203,7 @@ export class Mapping {
           )
           .all(query.projectId) as { value: string }[]
       ).map((row) => JSON.parse(row.value) as Card);
-      return { project, cards, frames: readFrames(this.db, project.id), groups: readGroups(this.db, project.id), containment: readContainment(this.db, project.id), connectors: readConnectors(this.db, project.id), images: readImages(this.db, project.id), tags: readTags(this.db, project.id), texts: readTexts(this.db, project.id), shapes: readShapes(this.db, project.id), strokes: readStrokes(this.db, project.id) };
+      return { project, cards, frames: readFrames(this.db, project.id), groups: readGroups(this.db, project.id), containment: readContainment(this.db, project.id), attachments: readAttachments(this.db, project.id), connectors: readConnectors(this.db, project.id), images: readImages(this.db, project.id), tags: readTags(this.db, project.id), texts: readTexts(this.db, project.id), shapes: readShapes(this.db, project.id), strokes: readStrokes(this.db, project.id) };
     })();
   }
 
@@ -338,6 +339,7 @@ export class Mapping {
         let imageChanges: Change['imageChanges'];
         let shapeChanges: Change['shapeChanges'];
         let textChanges: Change['textChanges'];
+        let attachmentChanges: Change['attachmentChanges'];
         let cut: CutStateView | undefined;
         let cutOuterEnds: Change['cutOuterEnds'];
         let travel: ReturnType<typeof travelHistory> | undefined;
@@ -377,11 +379,11 @@ export class Mapping {
         } else if (command.type === 'group.delete' || command.type === 'canvas.delete-selection' || command.type === 'canvas.cut') {
           const project = this.project(command.projectId);
           if (command.type === 'canvas.cut') {
-            ({ frameChanges, groupChanges, containmentChanges, cardLifecycleChanges, textChanges, shapeChanges, imageChanges, strokeChanges, connectorChanges, changedIds } = cutCanvas(this.db, command));
+            ({ frameChanges, groupChanges, containmentChanges, cardLifecycleChanges, textChanges, shapeChanges, imageChanges, strokeChanges, connectorChanges, attachmentChanges, changedIds } = cutCanvas(this.db, command));
             // 剪切记录与对象移除、版本、历史、changefeed 同事务提交。
             cut = recordCut(this.db, command.projectId, command.payload.cutId, project.revision + 1);
           } else
-            ({ frameChanges, groupChanges, containmentChanges, cardLifecycleChanges, textChanges, shapeChanges, imageChanges, strokeChanges, connectorChanges, changedIds } = command.type === 'canvas.delete-selection' ? deleteSelection(this.db, command) : deleteGroup(this.db, command));
+            ({ frameChanges, groupChanges, containmentChanges, cardLifecycleChanges, textChanges, shapeChanges, imageChanges, strokeChanges, connectorChanges, attachmentChanges, changedIds } = command.type === 'canvas.delete-selection' ? deleteSelection(this.db, command) : deleteGroup(this.db, command));
           after = null; revision = project.revision + 1;
           this.db.prepare('UPDATE mapping_projects SET revision=? WHERE id=?').run(revision, project.id);
         } else if (command.type === 'group.create' || command.type === 'group.remove-member' || command.type === 'group.ungroup') {
@@ -427,14 +429,35 @@ export class Mapping {
           this.db.prepare('UPDATE mapping_projects SET revision=? WHERE id=?').run(revision, project.id);
         } else if (command.type === 'group.scale' || command.type === 'group.rotate90') {
           const project = this.project(command.projectId);
-          if (command.type === 'group.scale') ({ cardChanges, textChanges, shapeChanges, imageChanges, changedIds } = scaleGroup(this.db, command));
+          if (command.type === 'group.scale') ({ cardChanges, textChanges, shapeChanges, imageChanges, strokeChanges, changedIds } = scaleGroup(this.db, command));
           else ({ imageChanges, changedIds } = rotateGroup(this.db, command));
           if (!changedIds.length) return unchanged(project.revision);
           after = null; revision = project.revision + 1;
           this.db.prepare('UPDATE mapping_projects SET revision=? WHERE id=?').run(revision, project.id);
         } else if (command.type === 'canvas.move' || command.type === 'group.move' || command.type === 'canvas.move-selection') {
           const project = this.project(command.projectId);
-          ({ cardChanges, textChanges, shapeChanges, imageChanges, strokeChanges, changedIds } = command.type === 'canvas.move-selection' ? moveSelection(this.db, command) : command.type === 'group.move' ? moveGroup(this.db, command) : moveCanvas(this.db, command));
+          if (command.type === 'canvas.move') {
+            const motions: { itemId: string; dx: number; dy: number }[] = [];
+            const moving = new Map<string, { dx: number; dy: number }>();
+            for (const target of command.payload.targets) {
+              const table = target.kind === 'card' ? 'mapping_cards' : target.kind === 'text' ? 'mapping_texts' : target.kind === 'shape' ? 'mapping_shapes' : target.kind === 'image' ? 'mapping_images' : 'mapping_strokes';
+              const row = this.db.prepare(`SELECT value FROM ${table} WHERE id=? AND project_id=?`).get(target.id, command.projectId) as { value: string } | undefined;
+              if (!row) continue;
+              const value = JSON.parse(row.value) as { item: { pose: { x: number; y: number } } };
+              const dx = target.x - value.item.pose.x, dy = target.y - value.item.pose.y;
+              if (dx === 0 && dy === 0) continue;
+              if (target.kind === 'card') motions.push({ itemId: target.itemId, dx, dy });
+              else moving.set(target.itemId, { dx, dy });
+            }
+            const followed = followCardMotions(this.db, command.projectId, command.commandId, motions, moving, command.followers, command.expectedFollowers);
+            ({ cardChanges, textChanges, shapeChanges, imageChanges, strokeChanges, changedIds } = moveCanvas(this.db, command));
+            if (followed.textChanges.length) textChanges = [...(textChanges ?? []), ...followed.textChanges];
+            if (followed.shapeChanges.length) shapeChanges = [...(shapeChanges ?? []), ...followed.shapeChanges];
+            if (followed.imageChanges.length) imageChanges = [...(imageChanges ?? []), ...followed.imageChanges];
+            if (followed.strokeChanges.length) strokeChanges = [...(strokeChanges ?? []), ...followed.strokeChanges];
+            changedIds = [...new Set([...changedIds, ...followed.changedIds])];
+          } else
+            ({ cardChanges, textChanges, shapeChanges, imageChanges, strokeChanges, changedIds } = command.type === 'canvas.move-selection' ? moveSelection(this.db, command) : moveGroup(this.db, command));
           if (!changedIds.length) return unchanged(project.revision);
           after = null; revision = project.revision + 1;
           this.db.prepare('UPDATE mapping_projects SET revision=? WHERE id=?').run(revision, project.id);
@@ -448,7 +471,7 @@ export class Mapping {
           const project = this.project(command.projectId);
           if (command.type === 'canvas.paste-cut') {
             const restored = pasteCut(this.db, command);
-            ({ cardLifecycleChanges, textChanges, shapeChanges, imageChanges, strokeChanges, connectorChanges, groupChanges, frameChanges, containmentChanges, changedIds } = restored);
+            ({ cardLifecycleChanges, textChanges, shapeChanges, imageChanges, strokeChanges, connectorChanges, groupChanges, frameChanges, containmentChanges, attachmentChanges, changedIds } = restored);
             cut = restored.cut;
           } else
             ({ cardLifecycleChanges, textChanges, shapeChanges, imageChanges, strokeChanges, connectorChanges, groupChanges, frameChanges, containmentChanges, changedIds, tagChanges, assetChanges } = command.type === 'canvas.duplicate' ? duplicateCanvas(this.db, command) : pasteCanvas(this.db, command));
@@ -575,6 +598,14 @@ export class Mapping {
           this.db.prepare('UPDATE mapping_cards SET value=? WHERE id=? AND project_id=?').run(JSON.stringify(card),card.id,project.id);
           this.db.prepare('UPDATE mapping_projects SET revision=? WHERE id=?').run(revision,project.id);
           completeMediaHistory(this.db,project.id,card.id,command.expected,replacement,revision);
+        } else if (command.type === 'attachment.attach' || command.type === 'attachment.detach') {
+          const project = this.project(command.projectId);
+          const result = command.type === 'attachment.attach' ? attachAnnotation(this.db, command) : detachAnnotation(this.db, command);
+          attachmentChanges = result.attachmentChanges;
+          changedIds = result.changedIds;
+          after = null;
+          revision = project.revision + 1;
+          this.db.prepare('UPDATE mapping_projects SET revision=? WHERE id=?').run(revision, project.id);
         } else if (command.type === 'thought.delete') {
           const project = this.project(command.projectId);
           const row = this.db.prepare('SELECT value FROM mapping_cards WHERE id=? AND project_id=?').get(command.payload.id, project.id) as { value: string } | undefined;
@@ -589,7 +620,25 @@ export class Mapping {
           this.db.prepare('UPDATE mapping_projects SET revision=? WHERE id=?').run(revision, project.id);
         } else if (command.type === 'pose.batch') {
           const project = this.project(command.projectId);
+          const motions: { itemId: string; dx: number; dy: number }[] = [];
+          for (const pose of command.payload.poses) {
+            const row = this.db.prepare('SELECT value FROM mapping_cards WHERE id=? AND project_id=?').get(pose.id, command.projectId) as { value: string } | undefined;
+            if (!row) continue;
+            const card = JSON.parse(row.value) as Card;
+            const current = card.item.pose;
+            if (pose.x === current.x && pose.y === current.y && pose.width === current.width && pose.height === current.height) continue;
+            const height = Math.max(pose.height, card.item.heightPolicy?.necessaryHeight ?? 0);
+            const dx = pose.x + pose.width / 2 - (current.x + current.width / 2);
+            const dy = pose.y + height / 2 - (current.y + current.height / 2);
+            if (dx !== 0 || dy !== 0) motions.push({ itemId: card.item.id, dx, dy });
+          }
+          const followed = followCardMotions(this.db, command.projectId, command.commandId, motions, new Map(), command.followers, command.expectedFollowers);
           ({ cardChanges, changedIds } = writeGeometry(this.db, command));
+          if (followed.textChanges.length) textChanges = followed.textChanges;
+          if (followed.shapeChanges.length) shapeChanges = followed.shapeChanges;
+          if (followed.imageChanges.length) imageChanges = followed.imageChanges;
+          if (followed.strokeChanges.length) strokeChanges = followed.strokeChanges;
+          changedIds = [...new Set([...changedIds, ...followed.changedIds])];
           if (!changedIds.length) return unchanged(project.revision);
           before = cardChanges[0]!.before;
           after = cardChanges[0]!.after;
@@ -704,6 +753,12 @@ export class Mapping {
                 card.item.pose.height === height
               )
                 return unchanged(project.revision);
+              const layoutDy = (height - card.item.pose.height) / 2;
+              const followed = followCardMotions(this.db, project.id, command.commandId, layoutDy === 0 ? [] : [{ itemId: card.item.id, dx: 0, dy: layoutDy }], new Map(), command.followers, command.expectedFollowers);
+              if (followed.textChanges.length) textChanges = followed.textChanges;
+              if (followed.shapeChanges.length) shapeChanges = followed.shapeChanges;
+              if (followed.imageChanges.length) imageChanges = followed.imageChanges;
+              if (followed.strokeChanges.length) strokeChanges = followed.strokeChanges;
               card.item = {
                 ...card.item,
                 versionId: randomUUID(),
@@ -714,7 +769,7 @@ export class Mapping {
                 },
                 pose: { ...card.item.pose, height },
               };
-              changedIds = [card.item.id];
+              changedIds = [card.item.id, ...(textChanges ?? []).map(change => change.after!.item.id), ...(shapeChanges ?? []).map(change => change.after!.item.id), ...(imageChanges ?? []).map(change => change.after!.item.id), ...(strokeChanges ?? []).map(change => change.after!.item.id)];
             } else if (command.type === 'card.appearance') {
               requireThat(
                 command.expected === (card.appearance?.versionId ?? null),
@@ -785,6 +840,7 @@ export class Mapping {
                 command.type !== 'body.edit' &&
                 (command.payload.x !== card.item.pose.x || command.payload.y !== card.item.pose.y)
               ) {
+                if (command.type === 'pose.move') rejectAttachedPoseMove(this.db, project.id, card.item.id);
                 card.item.pose.x = command.payload.x;
                 card.item.pose.y = command.payload.y;
                 card.item.versionId = randomUUID();
@@ -839,6 +895,8 @@ export class Mapping {
           const itemId = before && 'body' in before ? before.item.id : (textChange?.before ?? shapeChange?.before ?? imageChange?.before ?? strokeChange?.before)!.item.id;
           const released = removeDeletedMember(this.db, command.projectId, itemId, command.expected.membership);
           groupChanges = released.groupChanges; containmentChanges = released.containmentChanges;
+          const unbound = releaseAttachments(this.db, command.projectId, new Set([itemId]));
+          if (unbound.length) attachmentChanges = [...(attachmentChanges ?? []), ...unbound];
           changedIds = [...new Set([...changedIds, ...(released.changedIds ?? [])])];
         }
         if (containerConnectorPlan.length) {
@@ -928,6 +986,7 @@ export class Mapping {
           ...(textChanges ? { textChanges } : {}),
           ...(cardChanges ? { cardChanges } : {}),
           ...(cardLifecycleChanges ? { cardLifecycleChanges } : {}),
+          ...(attachmentChanges?.length ? { attachmentChanges } : {}),
           ...(cutOuterEnds ? { cutOuterEnds } : {}),
           actor: actor.actor,
           writtenAt: new Date().toISOString(),

@@ -1,3 +1,4 @@
+import { FollowerFields } from './attachment-contracts.js';
 import { FramePlacement } from './frame-spatial.js';
 import { ContainerEndpointExpected } from './container-endpoints.js';
 import { z } from 'zod';
@@ -17,7 +18,7 @@ export const GroupCommands = z.discriminatedUnion('type', [
     payload: z.object({ groupIds: z.array(Id), directItemIds: z.array(Id), ungroupIds: z.array(Id).optional(), frameIds: z.array(Id).optional(), connectorIds: z.array(Id).optional() }).strict()
       .refine(value => value.groupIds.length + value.directItemIds.length + (value.ungroupIds?.length ?? 0) + (value.frameIds?.length ?? 0) + (value.connectorIds?.length ?? 0) > 0, '至少选择一个删除目标')
       .refine(value => [value.ungroupIds ?? [], value.frameIds ?? [], value.connectorIds ?? []].every(ids => new Set(ids).size === ids.length) && !(value.ungroupIds ?? []).some(id => value.groupIds.includes(id)), '删除目标重复或语义冲突') }).strict(),
-  z.object({ commandId: Id, projectId: Id, placement: FramePlacement.optional(), type: z.literal('canvas.move-selection'),
+  z.object({ commandId: Id, projectId: Id, placement: FramePlacement.optional(), ...FollowerFields, type: z.literal('canvas.move-selection'),
     expected: z.object({ groups: z.record(Id, Id), containment: z.record(Id, Id.nullable()), poses: z.record(Id, Id) }).strict(),
     payload: z.object({ groupIds: z.array(Id), directItemIds: z.array(Id), dx: z.number().finite(), dy: z.number().finite() })
       .strict().refine(value => value.groupIds.length + value.directItemIds.length > 0, '至少选择一个移动目标') }).strict(),
@@ -36,7 +37,7 @@ export const GroupCommands = z.discriminatedUnion('type', [
     payload: z.object({ id: Id, itemIds: z.array(Id).min(2).refine(ids => new Set(ids).size === ids.length) }).strict(),
   }).strict(),
   z.object({
-    commandId: Id, projectId: Id, placement: FramePlacement.optional(), type: z.literal('group.move'),
+    commandId: Id, projectId: Id, placement: FramePlacement.optional(), ...FollowerFields, type: z.literal('group.move'),
     expected: z.object({ group: Id, containment: z.record(Id, Id), poses: z.record(Id, Id) }).strict(),
     payload: z.object({ id: Id, dx: z.number().finite(), dy: z.number().finite() }).strict(),
   }).strict(),

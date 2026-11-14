@@ -12,6 +12,7 @@ import { deleteShape } from './shape.js';
 import { deleteImage } from './image.js';
 import { deleteStroke } from './stroke.js';
 import { prepareIncidentConnectorDeletion, applyIncidentConnectorDeletion } from './connector.js';
+import { releaseAttachments } from './attachment.js';
 
 export function releaseMembers(db: Database.Database, projectId: string, id: string, itemIds: string[], expected: Extract<GroupCommand, { type: 'group.ungroup' }>['expected'], deleted = false) {
   const group = readGroupRecords(db, projectId).find(value => value.id === id);
@@ -149,8 +150,9 @@ export function deleteGroup(db: Database.Database, command: Extract<GroupCommand
   const ids = new Set(membership.map(value => value.id)), members = groupItems(db, projectId).filter(value => ids.has(value.value.item.id));
   requireThat(Object.keys(expected.items).length === members.length && members.every(value => expected.items[value.value.item.id]?.kind === value.kind), 'VERSION_CONFLICT', '删除成员范围已更新，请重新读取', 409);
   const connectorChanges = prepareIncidentConnectorDeletion(db, projectId, [...ids], expected.connectors);
+  const attachmentChanges = releaseAttachments(db, projectId, ids);
   const changes = deleteGroupItems(db, command, members, expected.items, connectorChanges);
   const structural = releaseMembers(db, projectId, group.id, [...ids], expected, true);
-  const result = { ...changes, ...structural };
+  const result = { ...changes, ...structural, ...(attachmentChanges.length ? { attachmentChanges } : {}) };
   return { ...result, frameChanges: [], ...groupOutcome(result) };
 }

@@ -7,6 +7,7 @@ import type { Command } from './contracts.js';
 import type { Containment, ContainmentChange } from './group-contracts.js';
 import { groupItems, readContainment, readGroups, writeContainment } from './group.js';
 import { readFrames } from './frame.js';
+import { readAttachments } from './attachment.js';
 
 export function readSpatialScene(db: Database.Database, projectId: string): SpatialState {
   return { frames: readFrames(db, projectId), groups: readGroups(db, projectId), containment: readContainment(db, projectId),
@@ -45,7 +46,9 @@ export function validateSpatial(db: Database.Database, command: Command, expecte
 export function updateFrameParents(db: Database.Database, projectId: string,
   targets: { id: string; point: { x: number; y: number } }[], scene = readSpatialScene(db, projectId)): ContainmentChange[] {
   const changes: ContainmentChange[] = [];
+  const attached = new Set(readAttachments(db, projectId).map(value => value.id));
   for (const target of targets) {
+    if (attached.has(target.id)) continue;
     const before = scene.containment?.find(v => v.id === target.id) ?? null;
     if (before?.parent?.kind === 'group') continue;
     const frame = frameCandidate(scene, target.point, (scene.frames ?? []).some(v => v.id === target.id) ? [target.id] : []);

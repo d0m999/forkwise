@@ -8,6 +8,7 @@ import { readShapes } from './shape.js';
 import { readImages } from './image.js';
 import { readStrokes } from './stroke.js';
 import { moveCanvas } from './canvas-move.js';
+import { followCardMotions, rejectAttachedMembers } from './attachment.js';
 
 export function initializeGroups(db: Database.Database) {
   db.exec(`CREATE TABLE IF NOT EXISTS mapping_groups(id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES mapping_projects(id), value TEXT NOT NULL);
@@ -79,6 +80,7 @@ export function createGroup(db: Database.Database, command: Extract<GroupCommand
     }
   }
   requireThat(selected.size >= 2, 'INVALID_GROUP_MEMBER', '新组合至少需要两个普通画布项', 400);
+  rejectAttachedMembers(db, projectId, selected);
   const affected = groups.filter(group => memberships.some(value => selected.has(value.id) && value.parent?.kind === 'group' && value.parent.id === group.itemId));
   const expectedMembershipIds = new Set(selected);
   for (const group of affected) {
@@ -161,14 +163,24 @@ export function moveGroup(db: Database.Database, command: Extract<GroupCommand, 
     'VERSION_CONFLICT', '组合成员已更新，请重新读取', 409);
   const ids = new Set(memberships.map(value => value.id));
   const members = groupItems(db, projectId).filter(value => ids.has(value.value.item.id));
-  return moveCanvas(db, { commandId: command.commandId, projectId, type: 'canvas.move', expected: expected.poses,
-    payload: { targets: members.map(({ kind, value }) => ({ kind, id: value.id, itemId: value.item.id, x: value.item.pose.x + payload.dx, y: value.item.pose.y + payload.dy })) } });
+  const { dx, dy } = payload;
+  const motions = dx === 0 && dy === 0 ? [] : members.flatMap(member => member.kind === 'card' ? [{ itemId: member.value.item.id, dx, dy }] : []);
+  const moving = new Map(dx === 0 && dy === 0 ? [] : members.flatMap(member => member.kind === 'card' ? [] : [[member.value.item.id, { dx, dy }] as const]));
+  const followed = followCardMotions(db, projectId, command.commandId, motions, moving, command.followers, command.expectedFollowers);
+  const moved = moveCanvas(db, { commandId: command.commandId, projectId, type: 'canvas.move', expected: expected.poses,
+    payload: { targets: members.map(({ kind, value }) => ({ kind, id: value.id, itemId: value.item.id, x: value.item.pose.x + dx, y: value.item.pose.y + dy })) } });
+  return { ...moved, textChanges: [...moved.textChanges, ...followed.textChanges], shapeChanges: [...moved.shapeChanges, ...followed.shapeChanges], imageChanges: [...moved.imageChanges, ...followed.imageChanges], strokeChanges: [...moved.strokeChanges, ...followed.strokeChanges], changedIds: [...new Set([...moved.changedIds, ...followed.changedIds])] };
 }
 
 export function moveSelection(db: Database.Database, command: Extract<GroupCommand, { type: 'canvas.move-selection' }>) {
   const members = selectionMembers(db, command.projectId, command.payload, command.expected);
-  return moveCanvas(db, { commandId: command.commandId, projectId: command.projectId, type: 'canvas.move', expected: command.expected.poses,
-    payload: { targets: members.map(({ kind, value }) => ({ kind, id: value.id, itemId: value.item.id, x: value.item.pose.x + command.payload.dx, y: value.item.pose.y + command.payload.dy })) } });
+  const { dx, dy } = command.payload;
+  const motions = dx === 0 && dy === 0 ? [] : members.flatMap(member => member.kind === 'card' ? [{ itemId: member.value.item.id, dx, dy }] : []);
+  const moving = new Map(dx === 0 && dy === 0 ? [] : members.flatMap(member => member.kind === 'card' ? [] : [[member.value.item.id, { dx, dy }] as const]));
+  const followed = followCardMotions(db, command.projectId, command.commandId, motions, moving, command.followers, command.expectedFollowers);
+  const moved = moveCanvas(db, { commandId: command.commandId, projectId: command.projectId, type: 'canvas.move', expected: command.expected.poses,
+    payload: { targets: members.map(({ kind, value }) => ({ kind, id: value.id, itemId: value.item.id, x: value.item.pose.x + dx, y: value.item.pose.y + dy })) } });
+  return { ...moved, textChanges: [...moved.textChanges, ...followed.textChanges], shapeChanges: [...moved.shapeChanges, ...followed.shapeChanges], imageChanges: [...moved.imageChanges, ...followed.imageChanges], strokeChanges: [...moved.strokeChanges, ...followed.strokeChanges], changedIds: [...new Set([...moved.changedIds, ...followed.changedIds])] };
 }
 
 export function selectionMembers(db: Database.Database, projectId: string,

@@ -1,3 +1,4 @@
+import { FollowerFields } from './attachment-contracts.js';
 import { FramePlacement } from './frame-spatial.js';
 import { ContainerEndpointExpected } from './container-endpoints.js';
 import { z } from 'zod';
@@ -29,6 +30,7 @@ export const FrameCommands = z.discriminatedUnion('type', [
     commandId: Id,
     projectId: Id,
     placement: FramePlacement.optional(),
+    ...FollowerFields,
     type: z.literal('frame.move'),
     expected: z.object({
       frame: Id,

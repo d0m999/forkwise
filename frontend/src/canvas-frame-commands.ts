@@ -3,6 +3,7 @@ import { captureOptionalContainerEndpoints } from '../../backend/src/mapping/con
 import type { Command, ProjectState } from './api';
 import type { CanvasFrame } from '../../backend/src/mapping/frame-contracts';
 import { canvasItems, selectedItemIds, type CanvasSelection } from './canvas-selection';
+import { followerFields } from './attachment-follow';
 
 export type FrameRect = { x: number; y: number; width: number; height: number };
 
@@ -57,8 +58,10 @@ export function moveFrameCommand(state: ProjectState, frame: CanvasFrame, dx: nu
   const groups = state.groups?.filter(group => directIds.includes(group.itemId)) ?? [];
   const ordinaryIds = frameMovingItemIds(state, frame);
   const affectedMemberships = new Set([...directIds, ...ordinaryIds]);
+  const moving = new Set(ordinaryIds.filter(id => !state.cards.some(card => card.item.id === id)));
   return {
     commandId: crypto.randomUUID(), projectId: state.project.id, type: 'frame.move',
+    ...(dx === 0 && dy === 0 ? {} : followerFields(state, ordinaryIds.flatMap(id => state.cards.some(card => card.item.id === id) ? [{ itemId: id, dx, dy }] : []), moving)),
     expected: {
       frame: frame.versionId,
       groups: Object.fromEntries(groups.map(group => [group.id, group.versionId])),

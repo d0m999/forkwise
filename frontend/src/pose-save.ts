@@ -8,6 +8,7 @@ import {
   type Command,
   type ProjectState,
 } from "./api";
+import { batchMotions, followerFields } from "./attachment-follow";
 
 type Position = { x: number; y: number };
 type Pose = Card["item"]["pose"];
@@ -21,12 +22,14 @@ interface Pending {
   cards: Card[];
   command: GeometryCommand;
   order?: MoveOrder;
+  followState: ProjectState | null;
 }
 
 // One completed gesture owns one command. Body ACKs cannot clear its preview.
 export function usePoseSave(
   refresh: (projectId: string) => Promise<ProjectState>,
   acknowledged?: (command: GeometryCommand, receipt: Receipt) => void,
+  readState?: () => ProjectState | null,
 ) {
   const [positions, setPositions] = useState<Record<string, Pose>>({});
   const previewPoses = useRef<Record<string, Pose>>({});
@@ -114,12 +117,15 @@ export function usePoseSave(
     const cards = Array.isArray(input) ? input : [input];
     const card = cards[0];
     if (!card) return false;
+    const followState = readState?.() ?? null;
+    const attached = !!followState?.attachments?.some(row => row.target && cards.some(value => value.item.id === row.target!.itemId));
     const common = { commandId: crypto.randomUUID(), projectId, ...(!fullGeometry && order?.placement ? { placement: { expected: order.placement } } : {}) };
     gesture.current = {
       cards,
+      followState,
       ...(order ? { order } : {}),
       command:
-        cards.length === 1 && !fullGeometry
+        cards.length === 1 && !fullGeometry && !attached
           ? {
               ...common,
               type: "pose.move",
@@ -191,11 +197,13 @@ export function usePoseSave(
         x: final.x,
         y: final.y,
       };
-    else
+    else {
       current.command.payload.poses = current.cards.map((c, i) => ({
         id: c.id,
         ...poses[i]!,
       }));
+      if (current.followState) Object.assign(current.command, followerFields(current.followState, batchMotions(current.cards, poses), new Set()));
+    }
     command.current = current;
     setPositions((previous) => ({
       ...previous,

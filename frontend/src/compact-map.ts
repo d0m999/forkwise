@@ -12,6 +12,7 @@ import type { ShapeIndex } from '../../backend/src/mapping/compact-contracts';
 import type { TextIndex } from '../../backend/src/mapping/compact-contracts';
 import type { Card, ProjectState, Tag } from "../../backend/src/mapping/contracts";
 import type {
+  AttachmentIndex,
   CardIndex,
   CompactPage,
   DetailChunk,
@@ -213,6 +214,9 @@ export async function readCompactMap(
   }
   const groupPage = await collect<GroupIndex>({ view: 'group-index', snapshot: index.first.snapshot });
   const containmentPage = await collect<Containment>({ view: 'containment', snapshot: index.first.snapshot });
+  const attachmentPage = await collect<AttachmentIndex>({ view: 'attachment-index', snapshot: index.first.snapshot });
+  if (attachmentPage.first.revision !== index.first.revision || attachmentPage.first.snapshot !== index.first.snapshot)
+    throw new Error('附着索引与地图快照不一致，请重新读取');
   const items = [...cards, ...texts, ...shapes, ...images, ...strokes];
   const framePage = await collect<FrameIndex>({ view: 'frame-index', snapshot: index.first.snapshot });
   const grouping = groupProjection(index.first, groupPage, containmentPage, items, new Set(framePage.items.map(v => v.id)));
@@ -228,6 +232,7 @@ export async function readCompactMap(
     strokes,
     images,
     connectors,
+    attachments: attachmentPage.items.map(item => ({ id: item.id, versionId: item.versionId, target: { itemId: item.targetItemId } })),
     ...grouping,
     ...framing,
     snapshot: index.first.snapshot,
