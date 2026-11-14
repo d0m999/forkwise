@@ -22,6 +22,10 @@ export function restoreCard(db: Database.Database, projectId: string, change: { 
         if (before.cardTags) after.cardTags = before.cardTags;
         else delete after.cardTags;
       }
+      if (!changedIds.includes(`attachments:${after.id}`)) {
+        if (before.attachments) after.attachments = before.attachments;
+        else delete after.attachments;
+      }
       if (!changedIds.includes(`appearance:${after.id}`)) {
         if (before.appearance) after.appearance = before.appearance;
         else delete after.appearance;

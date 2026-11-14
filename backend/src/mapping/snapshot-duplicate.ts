@@ -86,7 +86,8 @@ export function duplicateCanvas(db: Database.Database, command: Duplicate): Snap
       const base = { copyId: copyIds.get(source.item.id)!, stack: source.item.createdOrder ?? 0, pose: structuredClone(source.item.pose) };
       if ('body' in source) return { ...base, kind: 'card' as const, title: source.title, blocks: source.body.blocks,
         tagIds: source.cardTags?.tagIds ?? null, appearance: source.appearance ? { titleColor: source.appearance.titleColor, showPreview: source.appearance.showPreview } : null,
-        ...(source.item.heightPolicy ? { heightPolicy: source.item.heightPolicy } : {}) };
+        ...(source.item.heightPolicy ? { heightPolicy: source.item.heightPolicy } : {}),
+        ...(source.attachments?.items.length ? { attachments: source.attachments.items.map(item => ({ id: item.id, assetId: item.assetId, name: item.name })) } : {}) };
       return { ...base, kind, content: source.content } as Paste['payload']['objects'][number];
     }),
     ...groups.map(v => ({ kind: 'group' as const, copyId: copyIds.get(v.itemId)!, stack: v.createdOrder, pose: v.bounds })),

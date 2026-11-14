@@ -5,6 +5,27 @@ import { clipboardLibrary, parseClipboard, pastePlan, restoredCopyRefs } from '.
 const pose = { x: 10, y: 20, width: 280, height: 160 };
 const imagePose = { x: 320, y: 20, width: 60, height: 40, rotation: 0 as const };
 
+it('剪贴板带上卡片附件引用的文件，旧包没有附件字段仍能读入', () => {
+  const document = parseClipboard(JSON.stringify({
+    kind: 'forkwise-canvas-snapshot', version: 1,
+    objects: [{
+      kind: 'card', sourceId: 'source-card', itemId: 'item-1', stack: 1, title: '资料',
+      blocks: [{ id: 'words', type: 'text', text: '笔记' }], tagIds: null, appearance: null, pose,
+      attachments: [{ id: 'item', assetId: 'src-file', name: '财报.pdf' }],
+    }],
+    connectors: [],
+  }));
+  const state = { tags: [] } as unknown as ProjectState;
+  const library = clipboardLibrary(state, document, [{ id: 'src-file', name: '财报.pdf', mime: 'application/pdf', base64: 'aaaa', kind: 'file' }]);
+  expect(library?.assets).toEqual([{ id: 'src-file', name: '财报.pdf', mime: 'application/pdf', base64: 'aaaa', kind: 'file' }]);
+  const old = parseClipboard(JSON.stringify({
+    kind: 'forkwise-canvas-snapshot', version: 1,
+    objects: [{ kind: 'card', sourceId: 'source-card', itemId: 'item-1', stack: 1, title: '旧', blocks: [{ id: 'w', type: 'text', text: '正文' }], tagIds: null, appearance: null, pose }],
+    connectors: [],
+  }));
+  expect(old.objects[0] && old.objects[0].kind === 'card' ? old.objects[0].attachments : []).toBeUndefined();
+});
+
 it('剪贴板带上卡片和图片引用的标签与媒体，粘贴命令把这份材料交给目标项目', () => {
   const document = parseClipboard(JSON.stringify({
     kind: 'forkwise-canvas-snapshot', version: 1,

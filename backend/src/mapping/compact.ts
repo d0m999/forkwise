@@ -113,6 +113,7 @@ export class CompactMaps {
             item: card.item,
             ...(card.cardTags ? { cardTags: card.cardTags } : {}),
             ...(card.appearance ? { appearance: card.appearance } : {}),
+            ...(card.attachments ? { attachments: card.attachments } : {}),
             body: {
               id: card.body.id,
               versionId: card.body.versionId,
@@ -175,6 +176,7 @@ export class CompactMaps {
         item: card.item,
         ...(card.cardTags ? { cardTags: card.cardTags } : {}),
         ...(card.appearance ? { appearance: card.appearance } : {}),
+        ...(card.attachments ? { attachments: { count: card.attachments.items.length, id: card.attachments.id, versionId: card.attachments.versionId, items: card.attachments.items } } : {}),
       }))
       .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
     let fidelity: CompactPage['fidelity'] = 'index';

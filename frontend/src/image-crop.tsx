@@ -115,7 +115,7 @@ export function ImageCrop({ projectId, value, asset, playbackPreferences, blocke
     }}>
     <div className="image-crop-source" role="img" aria-label="裁剪原图">
       <ImageSurface projectId={projectId} value={full} width={width} height={height}
-        animation={asset.mime === 'image/gif' ? { naturalWidth: asset.width, naturalHeight: asset.height, preferences: playbackPreferences, key: value.id } : undefined} />
+        animation={asset.mime === 'image/gif' && asset.width !== undefined && asset.height !== undefined ? { naturalWidth: asset.width, naturalHeight: asset.height, preferences: playbackPreferences, key: value.id } : undefined} />
       <div className="image-crop-mask" style={frameStyle} />
     </div>
     <div ref={frameElement} className="image-crop-frame" role="group" aria-label="裁剪范围" style={frameStyle}

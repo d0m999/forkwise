@@ -177,7 +177,7 @@ function adoptLibrary(db: Database.Database, projectId: string, payload: Paste['
   const assetMap = new Map<string, string>();
   const referencedAssetIds = [...new Set([
     ...payload.objects.flatMap(value => value.kind === 'image' ? [value.content.assetId] : []),
-    ...payload.objects.flatMap(value => value.kind === 'card' ? imageAssetIds(value.blocks as Block[]) : []),
+    ...payload.objects.flatMap(value => value.kind === 'card' ? [...imageAssetIds(value.blocks as Block[]), ...(value.attachments?.map(item => item.assetId) ?? [])] : []),
   ])];
   for (const id of referencedAssetIds) {
     const row = db.prepare('SELECT value FROM mapping_assets WHERE project_id=? AND id=?').get(projectId, id) as { value: string } | undefined;
@@ -202,7 +202,7 @@ function adoptLibrary(db: Database.Database, projectId: string, payload: Paste['
       }
     }
     const nextId = randomUUID();
-    saveAsset(db, { commandId: nextId, projectId, type: 'asset.save', expected: null, payload: { id: nextId, name: entry.name, mime: entry.mime, base64: entry.base64 } });
+    saveAsset(db, { commandId: nextId, projectId, type: 'asset.save', expected: null, payload: { id: nextId, name: entry.name, mime: entry.mime, base64: entry.base64, ...(entry.kind === 'file' ? { kind: 'file' as const } : {}) } });
     assetMap.set(id, nextId);
     assetChanges.push({ before: null, after: readAsset(db, projectId, nextId) });
   }
@@ -212,6 +212,10 @@ function adoptLibrary(db: Database.Database, projectId: string, payload: Paste['
       if (value.tagIds) value.tagIds = value.tagIds.map(id => tagMap.get(id) ?? id);
       for (const block of value.blocks) {
         if (block.type === 'image' && typeof block.assetId === 'string' && assetMap.has(block.assetId)) block.assetId = assetMap.get(block.assetId);
+      }
+      if (value.attachments) for (const item of value.attachments) {
+        const nextId = assetMap.get(item.assetId);
+        if (nextId) item.assetId = nextId;
       }
     } else if (value.kind === 'image') {
       const nextId = assetMap.get(value.content.assetId);
@@ -234,7 +238,7 @@ export function pasteCanvas(db: Database.Database, command: Paste): SnapshotWrit
   requireTags(db, projectId, tagIds);
   requireAssets(db, projectId, [
     ...payload.objects.flatMap(value => value.kind === 'image' ? [value.content.assetId] : []),
-    ...payload.objects.flatMap(value => value.kind === 'card' ? imageAssetIds(value.blocks as Block[]) : []),
+    ...payload.objects.flatMap(value => value.kind === 'card' ? [...imageAssetIds(value.blocks as Block[]), ...(value.attachments?.map(item => item.assetId) ?? [])] : []),
   ]);
   for (const value of payload.objects) if (value.kind === 'card')
     requireThat(bodyText({ blocks: value.blocks as Block[] }).length <= 200000, 'INVALID_COMMAND', '正文文字不能超过200000', 400);
@@ -259,6 +263,7 @@ export function pasteCanvas(db: Database.Database, command: Paste): SnapshotWrit
       };
       if (value.appearance) after.appearance = { id: `appearance:${value.copyId}`, versionId: randomUUID(), ...value.appearance };
       if (value.tagIds) after.cardTags = { id: `cardTags:${value.copyId}`, versionId: randomUUID(), tagIds: [...value.tagIds] };
+      if (value.attachments?.length) after.attachments = { id: `attachments:${value.copyId}`, versionId: randomUUID(), items: value.attachments.map(item => ({ id: randomUUID(), assetId: item.assetId, name: item.name })) };
       itemIds.set(value.copyId, after.item.id);
       cardLifecycleChanges.push({ before: null, after });
     } else if (value.kind === 'text') {

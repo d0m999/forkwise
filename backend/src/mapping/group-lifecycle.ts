@@ -100,8 +100,9 @@ export function groupOutcome(change: Partial<Change>) {
       if (c.before.item.versionId !== c.after.item.versionId) changed.add(value.item.id);
       if (c.before.appearance?.versionId !== c.after.appearance?.versionId) changed.add((c.after.appearance ?? c.before.appearance)!.id);
       if (c.before.cardTags?.versionId !== c.after.cardTags?.versionId) changed.add((c.after.cardTags ?? c.before.cardTags)!.id);
+      if (c.before.attachments?.versionId !== c.after.attachments?.versionId) changed.add((c.after.attachments ?? c.before.attachments)!.id);
     } else {
-      const ids = [value.id, value.body.id, value.item.id, value.appearance?.id, value.cardTags?.id].filter((id): id is string => !!id);
+      const ids = [value.id, value.body.id, value.item.id, value.appearance?.id, value.cardTags?.id, value.attachments?.id].filter((id): id is string => !!id);
       for (const id of ids) changed.add(id);
       if (!c.after) for (const id of ids) deleted.add(id);
     }

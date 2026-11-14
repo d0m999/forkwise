@@ -28,6 +28,10 @@ export function saveAsset(
   db: Database.Database,
   command: Extract<Command, { type: 'asset.save' }>,
 ) {
+  if (command.payload.kind === 'file') {
+    saveFileAsset(db, command);
+    return;
+  }
   const p = command.payload,
     bytes = Buffer.from(p.base64, 'base64');
   requireThat(
@@ -67,11 +71,28 @@ export function saveAsset(
     '图片解码尺寸不一致',
   );
   const value: MediaAsset = {
-    ...p,
+    id: p.id,
+    name: p.name,
+    mime: p.mime,
+    base64: p.base64,
     width,
     height,
     hash: assetHash(bytes),
   };
+  writeAssetRow(db, command.projectId, value);
+}
+
+function saveFileAsset(db: Database.Database, command: Extract<Command, { type: 'asset.save' }>) {
+  const p = command.payload;
+  const bytes = Buffer.from(p.base64, 'base64');
+  requireThat(
+    bytes.length > 0 && bytes.length <= 10 * 1024 * 1024 && bytes.toString('base64') === p.base64,
+    'INVALID_FILE',
+    '文件须为有效字节且不超过10 MiB',
+    413,
+  );
+  requireThat(/^[a-z0-9.+-]+\/[a-z0-9.+-]+$/.test(p.mime), 'INVALID_FILE', '文件类型格式无效', 400);
+  const value: MediaAsset = { id: p.id, name: p.name, mime: p.mime, base64: p.base64, hash: assetHash(bytes), kind: 'file' };
   writeAssetRow(db, command.projectId, value);
 }
 

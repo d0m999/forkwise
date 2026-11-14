@@ -47,6 +47,7 @@ import { canonical } from '../domain/canonical.js';
 import { editedBlocks, requireBlockOwnership, bodyContentUnchanged, originalCopySources } from './body.js';
 import { deleteCard } from './lifecycle.js';
 import { createTagSelection, readTags, updateTag, writeCardTags, deleteTag } from './tags.js';
+import { addCardAttachment, removeCardAttachment } from './card-attachment.js';
 import { randomUUID } from 'node:crypto';
 import { searchProject } from './search.js';
 import { SearchLibraries, type SearchAssetReader } from './search-language.js';
@@ -582,6 +583,13 @@ export class Mapping {
         } else if (command.type === 'card.tags') {
           const project = this.project(command.projectId);
           const result = writeCardTags(this.db, command);
+          if (!result) return unchanged(project.revision);
+          ({ before, after, changedIds } = result);
+          revision = project.revision + 1;
+          this.db.prepare('UPDATE mapping_projects SET revision=? WHERE id=?').run(revision, project.id);
+        } else if (command.type === 'card.attachment.add' || command.type === 'card.attachment.remove') {
+          const project = this.project(command.projectId);
+          const result = command.type === 'card.attachment.add' ? addCardAttachment(this.db, command) : removeCardAttachment(this.db, command);
           if (!result) return unchanged(project.revision);
           ({ before, after, changedIds } = result);
           revision = project.revision + 1;

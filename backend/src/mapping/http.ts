@@ -61,13 +61,12 @@ export function createWorkspaceApp(
     c.set('principal', mapping.access.authenticate(token));
     await next();
   });
-  app.use(
-    '/api/*',
-    bodyLimit({
-      maxSize: 1_000_000,
-      onError: (c) => c.json({ code: 'TOO_LARGE', message: '内容超过本次保存上限' }, 413),
-    }),
-  );
+  const tooLarge = (c: { json: (body: { code: string; message: string }, status: 413) => Response }) =>
+    c.json({ code: 'TOO_LARGE', message: '内容超过本次保存上限' }, 413);
+  app.use('/api/*', async (c, next) => {
+    if (c.req.method === 'POST' && c.req.path === '/api/mapping/execute') return next();
+    return bodyLimit({ maxSize: 1_000_000, onError: tooLarge })(c, next);
+  });
   app.post('/api/session', (c) => {
     mapping.access.human(c.get('principal'));
     const token = c.req.header('authorization')?.replace(/^Bearer /, '') ?? '';
@@ -115,8 +114,33 @@ export function createWorkspaceApp(
   app.get('/api/mapping/projects/:id/assets/:assetId', (c) =>
     c.json(mapping.read({type:'asset',projectId:c.req.param('id'),id:c.req.param('assetId')},c.get('principal'))));
   app.get('/api/mapping/projects/:id/assets/:assetId/content', (c) => {
-    const asset=mapping.read({type:'asset',projectId:c.req.param('id'),id:c.req.param('assetId')},c.get('principal'));
-    return new Response(new Uint8Array(Buffer.from(asset.base64,'base64')),{headers:{'Content-Type':asset.mime,'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Content-Security-Policy':"default-src 'none'; sandbox; style-src 'none'; img-src 'none'"}});
+    let asset;
+    try {
+      asset = mapping.read({ type: 'asset', projectId: c.req.param('id'), id: c.req.param('assetId') }, c.get('principal'));
+    } catch (error) {
+      if (error instanceof DomainError && error.code === 'MEDIA_NOT_PERSISTED')
+        throw new DomainError('NOT_FOUND', '资产不存在或不属于本项目', 404);
+      throw error;
+    }
+    const bytes = new Uint8Array(Buffer.from(asset.base64, 'base64'));
+    if (asset.width !== undefined) {
+      return new Response(bytes, { headers: { 'Content-Type': asset.mime, 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Content-Security-Policy': "default-src 'none'; sandbox; style-src 'none'; img-src 'none'" } });
+    }
+    const requested = c.req.query('disposition');
+    if (requested !== undefined && requested !== 'inline' && requested !== 'attachment')
+      throw new DomainError('INVALID_COMMAND', '打开方式只能是 inline 或 attachment', 400);
+    const mime = asset.mime;
+    const forced = mime === 'text/html' || mime === 'application/xhtml+xml' || mime === 'image/svg+xml' || mime === 'application/xml' || mime === 'text/xml' || mime.endsWith('+xml') || mime === 'application/javascript' || mime === 'text/javascript' || mime === 'application/ecmascript' || mime === 'text/ecmascript';
+    const inlineable = !forced && (mime === 'application/pdf' || mime === 'text/plain' || mime.startsWith('image/'));
+    const disposition = !inlineable || requested === 'attachment' ? 'attachment' : 'inline';
+    const encoded = encodeURIComponent(asset.name).replace(/[!'()*]/g, (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`);
+    return new Response(bytes, { headers: {
+      'Content-Type': mime,
+      'Cache-Control': 'no-store',
+      'X-Content-Type-Options': 'nosniff',
+      'Content-Security-Policy': disposition === 'inline' ? "default-src 'none'; style-src 'none'; img-src 'none'" : "default-src 'none'; sandbox; style-src 'none'; img-src 'none'",
+      'Content-Disposition': `${disposition}; filename*=UTF-8''${encoded}`,
+    } });
   });
   app.get('/api/mapping/projects/:id/history', (c) =>
     c.json(mapping.read({ type: 'history', projectId: c.req.param('id') }, c.get('principal'))),
@@ -157,7 +181,7 @@ export function createWorkspaceApp(
       ),
     ),
   );
-  app.post('/api/mapping/execute', async (c) =>
+  app.post('/api/mapping/execute', bodyLimit({ maxSize: 48 * 1024 * 1024, onError: tooLarge }), async (c) =>
     c.json(mapping.execute(await c.req.json(), c.get('principal'))),
   );
   app.get('/', (c) => {

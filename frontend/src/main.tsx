@@ -8,6 +8,9 @@ import type { CopyRef } from "./canvas-snapshot";
 import { nextPaste, pasteTranslation, type PasteSequence } from "./canvas-snapshot-geometry";
 import { SnapshotMenu } from "./snapshot-menu";
 import { useCanvasImageInput } from "./canvas-image-input";
+import { droppedFilePlan, fileAssetPayload } from "./canvas-drop";
+import { openCardAttachment } from "./card-attachments";
+import { CardAttachmentList } from "./card-attachment-list";
 import { ImageWriteRejected, useImageGeometry } from "./image-geometry";
 import { CanvasImageNode, imageNodes } from "./canvas-image";
 import { ShapeAppearanceRecovery } from "./shape-appearance-recovery";
@@ -127,6 +130,9 @@ type CardData = {
   onFinish: () => void;
   onEdit: () => void;
   onBody: () => void;
+  onOpenAttachment: (assetId: string) => void;
+  onRemoveAttachment: (attachmentId: string) => void;
+  onAddAttachment: (file: File) => void;
   onCanvasChoice: () => void;
   onDelete: () => void;
   onRemoveFromGroup?: (() => void) | undefined;
@@ -218,6 +224,7 @@ function ThoughtCard({ data, selected }: NodeProps<Node<CardData>>) {
           {data.title || "未命名卡片"}
         </button>
       )}
+      <CardAttachmentList card={data.card} blocked={data.historyBlocked} onOpen={data.onOpenAttachment} onRemove={data.onRemoveAttachment} onAdd={data.onAddAttachment} />
       <CardTagSummary card={data.card} tags={data.tags} onOpen={data.onBody} />
       {text && data.appearanceValue.showPreview && (
         <div
@@ -1827,7 +1834,7 @@ function Workspace() {
         onDone?.();
         try { await refresh(command.projectId); } catch { /* Retain the explicit rejection if the read also fails. */ }
       }
-      if ((command.type === "thought.delete" || command.type === "shape.delete" || command.type === "stroke.delete" || command.type.startsWith("tag.") || command.type === "card.tags") && e instanceof MappingError && ["VERSION_CONFLICT", "TAG_NAME_CONFLICT", "NOT_FOUND", "UNAUTHORIZED", "PROJECT_FORBIDDEN", "UNTRUSTED_PRINCIPAL"].includes(e.code)) {
+      if ((command.type === "thought.delete" || command.type === "shape.delete" || command.type === "stroke.delete" || command.type.startsWith("tag.") || command.type === "card.tags" || command.type === "card.attachment.add" || command.type === "card.attachment.remove") && e instanceof MappingError && ["VERSION_CONFLICT", "INVALID_ATTACHMENT", "TAG_NAME_CONFLICT", "NOT_FOUND", "UNAUTHORIZED", "PROJECT_FORBIDDEN", "UNTRUSTED_PRINCIPAL"].includes(e.code)) {
         pendingAction.current = null;
         try { await refresh(command.projectId); } catch { /* Keep the unconfirmed view; authorization polling owns retraction. */ }
       }
@@ -2897,6 +2904,38 @@ function Workspace() {
       },
       onEdit: () => void editCard(card.id, "title"),
       onBody: () => void editCard(card.id, "body"),
+      onOpenAttachment: (assetId) => {
+        const projectId = authority.current?.project.id;
+        if (!projectId) return;
+        void openCardAttachment({ origin: location.origin, projectId, assetId }).then(result => {
+          if (!result.ok) setStatus(result.message);
+        });
+      },
+      onRemoveAttachment: (attachmentId) => {
+        const current = authority.current;
+        const target = current?.cards.find(value => value.id === card.id);
+        if (!current || !target?.attachments) return;
+        void action({ commandId: crypto.randomUUID(), projectId: current.project.id, type: 'card.attachment.remove',
+          expected: { attachments: target.attachments.versionId },
+          payload: { id: target.id, attachmentId } });
+      },
+      onAddAttachment: (file) => {
+        const current = authority.current;
+        const target = current?.cards.find(value => value.id === card.id);
+        if (!current || !target?.attachments || busy || historyBlocked) return;
+        void (async () => {
+          try {
+            const payload = await fileAssetPayload(file);
+            const assetId = crypto.randomUUID();
+            await api.execute({ commandId: crypto.randomUUID(), projectId: current.project.id, type: 'asset.save', expected: null, payload: { id: assetId, ...payload, kind: 'file' } });
+            const latest = authority.current?.cards.find(value => value.id === card.id);
+            if (!latest?.attachments || authority.current?.project.id !== current.project.id) return;
+            await action({ commandId: crypto.randomUUID(), projectId: current.project.id, type: 'card.attachment.add',
+              expected: { attachments: latest.attachments.versionId },
+              payload: { id: latest.id, assetId, name: payload.name } });
+          } catch (error) { fail(error instanceof Error ? error : new Error('未能添加附件')); }
+        })();
+      },
       onCanvasChoice: () => { editorEpoch.current++; },
       onDelete: () => void removeCard(card.id),
       onRemoveFromGroup: memberAction(card.item.id),
@@ -3051,6 +3090,57 @@ function Workspace() {
       <main
         className={panelCard ? "canvas with-editor" : "canvas"}
         tabIndex={0}
+        onDragOver={event => {
+          if (!event.dataTransfer.types.includes('Files')) return;
+          event.preventDefault();
+        }}
+        onDrop={event => {
+          const files = Array.from(event.dataTransfer.files);
+          if (!files.length) return;
+          event.preventDefault();
+          if (!(event.target as Element).closest('.react-flow__pane') || busy || historyBlocked || !state) return;
+          const point = flow.screenToFlowPosition({ x: event.clientX, y: event.clientY });
+          const plan = droppedFilePlan(files, point);
+          void (async () => {
+            const failures: string[] = [];
+            const projectId = state.project.id;
+            setBusy(true);
+            try {
+              if (!(await flush())) return;
+              for (const [index, item] of plan.documents.entries()) {
+                const file = files.filter(value => !value.type.startsWith('image/'))[index];
+                if (!file) continue;
+                const label = file.name || '未命名文件';
+                try {
+                  const payload = await fileAssetPayload(file);
+                  const assetId = crypto.randomUUID();
+                  await api.execute({ commandId: crypto.randomUUID(), projectId, type: 'asset.save', expected: null, payload: { id: assetId, ...payload, kind: 'file' } });
+                  const cardId = crypto.randomUUID();
+                  const created = await api.execute({ commandId: crypto.randomUUID(), projectId, type: 'thought.create', expected: null, payload: { id: cardId, title: item.title, text: '', x: item.x, y: item.y } });
+                  try {
+                    await api.execute({ commandId: crypto.randomUUID(), projectId, type: 'card.attachment.add', expected: { attachments: null }, payload: { id: cardId, assetId, name: payload.name } });
+                  } catch (error) {
+                    try {
+                      await api.execute({ commandId: crypto.randomUUID(), projectId, type: 'history.undo', expected: created.revision, payload: {} });
+                    } catch {
+                      failures.push(`${label}：附件没有挂上，新建卡片也未能撤回`);
+                      continue;
+                    }
+                    throw error;
+                  }
+                } catch (error) {
+                  failures.push(`${label}：${error instanceof Error ? error.message : '未能挂上附件'}`);
+                }
+              }
+            } finally {
+              setBusy(false);
+            }
+            for (const file of files.filter(value => value.type.startsWith('image/'))) await imageInput.begin(file);
+            try { await refresh(projectId); } catch (error) { failures.push(error instanceof Error ? error.message : '拖入后未能重新读取'); }
+            setStatus(failures.length ? failures.join('；') : '已保存到本机');
+            setError('');
+          })();
+        }}
         onPaste={event => {
           if (busy || historyBlocked || composition.current || pendingAction.current || !state) return;
           if (imageInput.paste(event)) return;

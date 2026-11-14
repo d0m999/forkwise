@@ -110,6 +110,7 @@ export async function readCompactMap(
       item: item.item,
       ...(item.cardTags ? { cardTags: item.cardTags } : {}),
       ...(item.appearance ? { appearance: item.appearance } : {}),
+      ...(item.attachments ? { attachments: { id: item.attachments.id, versionId: item.attachments.versionId, items: item.attachments.items } } : {}),
       body,
     });
   }

@@ -118,6 +118,7 @@ export function completeMediaTask(
       '媒体结果不属于原请求',
       409,
     );
+    requireThat(asset.width !== undefined && asset.height !== undefined, 'INVALID_IMAGE', '图片原件缺少尺寸', 409);
     const { request, ...previous } = block;
     replacement = {
       ...(block.type === 'image'

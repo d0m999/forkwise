@@ -49,7 +49,7 @@ export function CanvasImageNode({ data, selected }: NodeProps<Node<ImageData>>) 
     }}
     style={{ width: '100%', height: '100%', outline: selected ? 'var(--body-focus-outline-width) solid var(--canvas-selection-color)' : undefined, outlineOffset: 'var(--image-selection-offset)' }}>
     {asset && <ImageSurface projectId={data.projectId} value={data.value} width={data.value.item.pose.width} height={data.value.item.pose.height}
-      animation={asset.mime === 'image/gif' ? { naturalWidth: asset.width, naturalHeight: asset.height, preferences: playbackPreferences, key: data.value.id, inactive: !!viewer || !!cropping } : undefined} />}
+      animation={asset.mime === 'image/gif' && asset.width !== undefined && asset.height !== undefined ? { naturalWidth: asset.width, naturalHeight: asset.height, preferences: playbackPreferences, key: data.value.id, inactive: !!viewer || !!cropping } : undefined} />}
   </div>{asset?.mime === 'image/gif' && <GifToggle className="canvas-gif-control nodrag nopan" />}</div>
   {selected && data.resizable && !cropping && Object.entries(imageHandles).map(([handle, label]) => <button key={handle}
     className="nodrag nopan" aria-label={'调整图片尺寸：' + label} aria-disabled={data.blocked || data.geometry.pending}

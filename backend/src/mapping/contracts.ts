@@ -10,6 +10,7 @@ import { CutCommands } from './cut-contracts.js';
 import { ConnectorCommands, type CanvasConnector, type ConnectorChange, type EndpointKind } from './connector-contracts.js';
 import { ImageCommands, type CanvasImage, type ImageChange } from './image-contracts.js';
 import { TagCommandSchema } from './tag-contracts.js';
+import { CardAttachmentCommands, type CardAttachmentSet } from './card-attachment-contracts.js';
 import { TextCommands, type CanvasText, type TextChange } from './text-contracts.js';
 import { StrokeCreateCommand, StrokeDeleteCommand, type CanvasStroke, type StrokeChange } from './stroke-contracts.js';
 import { ShapeCreateCommand, ShapeEditCommand, ShapeMoveCommand, ShapeDeleteCommand, ShapeTransformCommand, type CanvasShape, type ShapeChange } from './shape-contracts.js';
@@ -58,10 +59,11 @@ export const MappingCommand = z.discriminatedUnion('type', [
   z.object({ ...Envelope, type: z.literal('search.record'), expected: Id.nullable(), payload: z.object({ query: SearchConditionsSchema, intent: z.enum(['exit', 'open']), pending: z.array(z.record(z.string(), z.unknown())).max(200).optional() }).strict() }).strict(),
   z.object({ ...Envelope, type: z.literal('search.save'), expected: Id.nullable(), payload: z.object({ query: SearchConditionsSchema }).strict() }).strict(),
   ...TagCommandSchema.options,
+  ...CardAttachmentCommands.options,
   z.object({...Envelope,type:z.literal('media.retry'),expected:Id,payload:z.object({id:Id,blockId:Id,ticket:Id}).strict()}).strict(),
   z.object({...Envelope,type:z.literal('media.finish'),expected:Id,payload:z.object({id:Id,blockId:Id,assetId:Id}).strict()}).strict(),
   z.object({...Envelope,type:z.literal('media.fail'),expected:Id,payload:z.object({id:Id,blockId:Id,reason:z.string().min(1).max(2000)}).strict()}).strict(),
-  z.object({...Envelope,type:z.literal('asset.save'),expected:z.null(),payload:z.object({id:Id,name:z.string().min(1).max(4096),mime:z.string().max(100),base64:z.string().max(699052)}).strict()}).strict(),
+  z.object({...Envelope,type:z.literal('asset.save'),expected:z.null(),payload:z.object({id:Id,name:z.string().min(1).max(4096),mime:z.string().max(100),base64:z.string().max(13981016),kind:z.enum(['image','file']).optional()}).strict()}).strict(),
   z
     .object({
       ...Envelope,
@@ -230,6 +232,7 @@ export interface Project {
 }
 export interface Card {
   cardTags?: { id: string; versionId: string; tagIds: string[] };
+  attachments?: CardAttachmentSet;
   id: string;
   title: string;
   versionId: string;
@@ -289,9 +292,10 @@ export interface MediaAsset {
   name: string;
   mime: string;
   base64: string;
-  width: number;
-  height: number;
+  width?: number;
+  height?: number;
   hash: string;
+  kind?: 'image' | 'file';
 }
 export type AssetChange = { before: { id: string } | null; after: MediaAsset };
 // 剪切结束时仍存在的外线外端及其内容指纹；首次搬动前逐项比对，判定期间是否被改动。

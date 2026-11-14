@@ -11,5 +11,5 @@ export function deleteCard(db: Database.Database, command: Extract<Command, { ty
   // Identity, creation ordinal and immutable versions are retained. No asset or
   // legacy research data is touched; future relations extend this atomic set.
   db.prepare('DELETE FROM mapping_cards WHERE id=? AND project_id=?').run(card.id, command.projectId);
-  return { before: card, after: null, changedIds: [card.id, card.body.id, card.item.id, ...(card.appearance ? [card.appearance.id] : []), ...(card.cardTags ? [card.cardTags.id] : [])] };
+  return { before: card, after: null, changedIds: [card.id, card.body.id, card.item.id, ...(card.appearance ? [card.appearance.id] : []), ...(card.cardTags ? [card.cardTags.id] : []), ...(card.attachments ? [card.attachments.id] : [])] };
 }

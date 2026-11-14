@@ -474,7 +474,7 @@ export function travelHistory(
         (after && 'body' in after ? after.appearance?.id : undefined))
       : undefined;
   const changedIds = [
-    ...new Set([...action.changedIds, ...(lifecycleAppearance ? [lifecycleAppearance] : []), ...((!before || !after) && 'body' in identity ? [before && 'body' in before ? before.cardTags?.id : undefined, after && 'body' in after ? after.cardTags?.id : undefined].filter((id): id is string => !!id) : [])]),
+    ...new Set([...action.changedIds, ...(lifecycleAppearance ? [lifecycleAppearance] : []), ...((!before || !after) && 'body' in identity ? [before && 'body' in before ? before.cardTags?.id : undefined, after && 'body' in after ? after.cardTags?.id : undefined, before && 'body' in before ? before.attachments?.id : undefined, after && 'body' in after ? after.attachments?.id : undefined].filter((id): id is string => !!id) : [])]),
   ];
   return {
     before,

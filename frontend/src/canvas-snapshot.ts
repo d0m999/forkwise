@@ -89,7 +89,7 @@ export function duplicatePlan(state: ProjectState, selection: CanvasSelection, c
 }
 function freezeObject(value: Located): FrozenObject {
   const base = { sourceId: value.value.id, itemId: value.value.item.id, stack: value.value.item.createdOrder ?? 0, pose: structuredClone(value.value.item.pose) };
-  if (value.kind === 'card') return { ...base, kind: 'card', title: value.value.title, blocks: structuredClone(value.value.body.blocks), tagIds: value.value.cardTags ? [...value.value.cardTags.tagIds] : null, appearance: value.value.appearance ? { titleColor: value.value.appearance.titleColor, showPreview: value.value.appearance.showPreview } : null, ...(value.value.item.heightPolicy ? { heightPolicy: structuredClone(value.value.item.heightPolicy) } : {}) };
+  if (value.kind === 'card') return { ...base, kind: 'card', title: value.value.title, blocks: structuredClone(value.value.body.blocks), tagIds: value.value.cardTags ? [...value.value.cardTags.tagIds] : null, appearance: value.value.appearance ? { titleColor: value.value.appearance.titleColor, showPreview: value.value.appearance.showPreview } : null, ...(value.value.item.heightPolicy ? { heightPolicy: structuredClone(value.value.item.heightPolicy) } : {}), ...(value.value.attachments?.items.length ? { attachments: value.value.attachments.items.map(item => ({ id: item.id, assetId: item.assetId, name: item.name })) } : {}) };
   return { ...base, kind: value.kind, content: structuredClone(value.value.content) } as FrozenObject;
 }
 export function captureClipboard(state: ProjectState, selection: CanvasSelection, connectorIds: string[], frameIds: string[] = []) {
@@ -117,11 +117,11 @@ export function clipboardText(document: CanvasClipboardDocument) {
 export function clipboardAssetIds(document: CanvasClipboardDocument): string[] {
   return [...new Set(document.objects.flatMap(value => {
     if (value.kind === 'image') return [value.content.assetId];
-    if (value.kind === 'card') return value.blocks.flatMap(block => block.type === 'image' && typeof block.assetId === 'string' ? [block.assetId] : []);
+    if (value.kind === 'card') return [...value.blocks.flatMap(block => block.type === 'image' && typeof block.assetId === 'string' ? [block.assetId] : []), ...(value.attachments?.map(item => item.assetId) ?? [])];
     return [];
   }))];
 }
-export function clipboardLibrary(state: ProjectState, document: CanvasClipboardDocument, assets: { id: string; name: string; mime: string; base64: string }[]) {
+export function clipboardLibrary(state: ProjectState, document: CanvasClipboardDocument, assets: { id: string; name: string; mime: string; base64: string; kind?: 'image' | 'file' }[]) {
   const tagIds = [...new Set(document.objects.flatMap(value => value.kind === 'card' && value.tagIds ? value.tagIds : []))];
   const assetIds = clipboardAssetIds(document);
   if (!tagIds.length && !assetIds.length) return undefined;
@@ -134,7 +134,7 @@ export function clipboardLibrary(state: ProjectState, document: CanvasClipboardD
   const byId = new Map(assets.map(asset => [asset.id, asset]));
   const stored = assetIds.flatMap(id => {
     const asset = byId.get(id);
-    return asset ? [{ id: asset.id, name: asset.name, mime: asset.mime, base64: asset.base64 }] : [];
+    return asset ? [{ id: asset.id, name: asset.name, mime: asset.mime, base64: asset.base64, ...(asset.kind === 'file' ? { kind: 'file' as const } : {}) }] : [];
   });
   if (stored.length !== assetIds.length) throw new Error('所需媒体尚未持久保存，请完成或移除媒体后重试');
   return { tags, assets: stored };
