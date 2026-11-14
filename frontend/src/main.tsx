@@ -1980,7 +1980,9 @@ function Workspace() {
       if (cardDeletion.current !== intent || authority.current?.project.id !== intent.projectId ||
         !authority.current.cards.some(card => card.id === id && card.item.id === intent.itemId)) return;
       await action(intent.command(), undefined, { beforeSubmit: () => {
-        if (cardDeletion.current !== intent || pendingAction.current || historyLock.current || historyCommand.current ||
+        // 重试按钮直接重放同一个 pending；此时 cardDeletion 已在 finally 里清空，不能再拿它做前置。
+        // 别的未完成请求由 action 开头的 commandId 比较拦截，这里只确认删除依据仍然成立。
+        if (historyLock.current || historyCommand.current ||
           authority.current?.project.id !== intent.projectId ||
           !authority.current.cards.some(card => card.id === id && card.item.id === intent.itemId)) return false;
         if (intent.seal()) return true;
