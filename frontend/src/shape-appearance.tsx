@@ -4,7 +4,6 @@ import { api, MappingError, type Command, type ProjectState } from "./api";
 import { ShapeAppearanceRecovery, type ShapeAppearanceRecord, type ShapeAppearanceConflict, type ShapeAppearanceFields, type ShapeAppearanceCopy } from "./shape-appearance-recovery";
 import type { CanvasShape } from "../../backend/src/mapping/shape-contracts";
 import { readOwnShapeRecoveryTarget } from "./shape-recovery-target";
-import { exportIgnoreProps } from "./canvas-export";
 
 export type ShapeAppearanceBinding = { projectId: string; value: CanvasShape; trigger?: HTMLButtonElement; journal?: ShapeAppearanceRecovery; record?: ShapeAppearanceRecord };
 type Edit = Extract<Command, { type: "shape.edit" }>;
@@ -186,7 +185,7 @@ export function ShapeAppearance({ binding, publish, close }: {
     finally { running.current = false; setWorking(false); }
   }
   const preview = conflict && valid(fields) ? content(fields) : conflict?.local.content;
-  return createPortal(<dialog ref={dialog} aria-label="形状外观" className="shape-appearance-dialog" {...exportIgnoreProps}
+  return createPortal(<dialog ref={dialog} aria-label="形状外观" className="shape-appearance-dialog"
     onCancel={event => { event.preventDefault(); if (!composing.current) dismiss(); }}
     onKeyDown={event => event.stopPropagation()}
     onCompositionStart={() => { composing.current = true; }} onCompositionEnd={() => { composing.current = false; }}

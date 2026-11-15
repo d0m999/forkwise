@@ -6,7 +6,6 @@ import { textHandles, textMinimumWidth, useTextGeometry } from "./text-geometry"
 import type { Node, NodeProps } from "@xyflow/react";
 import type { CanvasText, TextContent } from "../../backend/src/mapping/text-contracts";
 import type { LayerMenuProps } from "./layer-menu";
-import { exportIgnoreProps } from "./canvas-export";
 export type TextData = {
   value: CanvasText;
   editing: boolean;
@@ -128,7 +127,6 @@ export function CanvasTextNode({ data, selected }: NodeProps<Node<TextData>>) {
           <button
             key={handle}
             className={`text-resize text-resize-${handle} nodrag nopan`}
-            {...exportIgnoreProps}
             aria-label={`调整文字尺寸：${label}`}
             title="方向键调整，Shift 加快"
             onKeyDown={(event) =>

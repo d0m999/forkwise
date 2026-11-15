@@ -1,6 +1,5 @@
 import { useRef, useState } from 'react';
 import type { Card } from './api';
-import { exportIgnoreProps } from './canvas-export';
 
 export function CardAttachmentList({ card, blocked, onOpen, onRemove, onAdd }: {
   card: Card;
@@ -18,7 +17,6 @@ export function CardAttachmentList({ card, blocked, onOpen, onRemove, onAdd }: {
   return (
     <div
       className="card-attachments nodrag nopan"
-      {...exportIgnoreProps}
       role="group"
       aria-label="卡片附件"
       onKeyDown={(event) => {

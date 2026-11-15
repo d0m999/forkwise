@@ -6,6 +6,14 @@ import { test, expect, place, type Workspace } from './writing-board-fixture';
 import { seedCanvasExportSample } from './canvas-export-fixture';
 import { EXPORT_CAPTURE_EVENT, EXPORT_CONTENT_SELECTOR, EXPORT_IGNORE_SELECTOR, EXPORT_PADDING } from '../src/canvas-export-markers';
 
+// 内容范围用 querySelectorAll 命中后代，这里用 matches 命中按钮自身。连线文字因此两边都有。
+const exportContentButtons = [
+  '.title-button',
+  '.canvas-frame-name',
+  '.connector-label',
+  '.card-attachments button[aria-label^="打开 "]',
+].join(',');
+
 test('同一导出入口在摘要生成失败时不显示下载成功，重试后真实下载且项目未改', async ({ page, workspace }) => {
   await place(page, '导出卡');
   const before = await workspace.state();
@@ -188,7 +196,10 @@ async function readExportLayout(page: Page) {
     const button = (label: string) => [...root.querySelectorAll('button')].find(element => element.getAttribute('aria-label') === label);
     const detach = button('解除 财报原件.pdf');
     const add = button('添加附件');
-    if (!annotation || !detach || !add) throw new Error('缺少批注或附件按钮');
+    const filename = button('打开 财报原件.pdf');
+    if (!annotation || !detach || !add || !filename) throw new Error('缺少批注或附件按钮');
+    if (!detach.closest(ignoreSelector) || !add.closest(ignoreSelector)) throw new Error('附件操作按钮未被导出忽略');
+    if (filename.closest(ignoreSelector)) throw new Error('附件文件名被导出忽略');
     return {
       left: Math.min(...boxes.map(rect => rect.x)),
       top: Math.min(...boxes.map(rect => rect.y)),
@@ -198,6 +209,7 @@ async function readExportLayout(page: Page) {
       annotation: boxOf(annotation),
       detach: boxOf(detach),
       add: boxOf(add),
+      filename: boxOf(filename),
     };
   }, { contentSelector: EXPORT_CONTENT_SELECTOR, ignoreSelector: EXPORT_IGNORE_SELECTOR });
 }
@@ -213,6 +225,20 @@ test('混合样本分别下载摘要与真实画布 PNG，遮挡和重启后的�
   expect(selectedBottomZ).toBeGreaterThan(selectedTopZ);
   await page.screenshot({ path: resolve('../backend/artifacts/issue37-20261115/downloads/selected-overlap.png') });
   const layout = await readExportLayout(page);
+  const overflow = bottomNode.locator('.tag-overflow');
+  await expect(overflow).toBeVisible();
+  const missedChrome = await page.evaluate(({ ignoreSelector, contentButtonSelector }) => {
+    const root = document.querySelector('.canvas .react-flow');
+    if (!root) throw new Error('画布尚未完成绘制');
+    const overflowButton = root.querySelector('.tag-overflow');
+    if (!(overflowButton instanceof HTMLButtonElement) || !overflowButton.closest(ignoreSelector))
+      throw new Error('标签溢出按钮未渲染或未被导出忽略');
+    return [...root.querySelectorAll('button')].flatMap(button => {
+      if (button.closest(ignoreSelector) || button.matches(contentButtonSelector)) return [];
+      return [(button.getAttribute('aria-label') || button.textContent?.trim() || button.className).slice(0, 80)];
+    });
+  }, { ignoreSelector: EXPORT_IGNORE_SELECTOR, contentButtonSelector: exportContentButtons });
+  expect(missedChrome, '画布按钮必须要么是导出内容，要么被忽略选择器盖住').toEqual([]);
   const origin = { left: layout.left, top: layout.top };
   const frames = [...layout.frames].sort((a, b) => a.width * a.height - b.width * b.height);
   expect(frames.length).toBeGreaterThanOrEqual(2);
@@ -255,6 +281,8 @@ test('混合样本分别下载摘要与真实画布 PNG，遮挡和重启后的�
   expect(inkPixels(first, toExportBox(origin, layout.annotation))).toBeGreaterThan(30);
   expect(colorShare(first, toExportBox(origin, layout.detach), '#f4f1ea', 12)).toBeLessThan(0.08);
   expect(colorShare(first, toExportBox(origin, layout.add), '#f4f1ea', 12)).toBeLessThan(0.08);
+  // 文件名按钮底是 #f4f1ea（通道和 719），字形 #243049 才落到 280 以下。整组被滤掉时这块没有墨迹。
+  expect(inkPixels(first, toExportBox(origin, layout.filename)), '附件文件名应留在图像里').toBeGreaterThan(30);
   expect((await workspace.state()).project.revision).toBe(revision);
   await info.attach('mixed-canvas-first', { path: firstPath, contentType: 'image/png' });
 
@@ -632,4 +660,37 @@ test('未确认保存时两个导出动作都禁用，保存完成后才恢复�
   await expect(markdown).toBeEnabled();
   await expect(image).toBeEnabled();
   expect((await workspace.state()).project.revision).toBe(before.project.revision + 1);
+});
+
+test('裁剪进行中不下载图像，取消后两个导出动作恢复', async ({ page, workspace }) => {
+  const projectId = (await workspace.state()).project.id;
+  const source = '<svg xmlns="http://www.w3.org/2000/svg" width="80" height="60"><rect width="80" height="60" fill="#22c55e"/></svg>';
+  await workspace.execute(page, { commandId: crypto.randomUUID(), projectId, type: 'asset.save', expected: null,
+    payload: { id: 'export-crop', name: '导出裁剪.svg', mime: 'image/svg+xml', base64: Buffer.from(source).toString('base64') } });
+  await workspace.execute(page, { commandId: crypto.randomUUID(), projectId, type: 'image.create', expected: null,
+    payload: { id: 'export-crop-image', content: { assetId: 'export-crop', crop: { x: 0, y: 0, width: 1, height: 1 } },
+      pose: { x: 120, y: 120, width: 160, height: 120, rotation: 0 } } });
+  await page.reload();
+  await expect(page.getByRole('status')).toHaveText('已保存到本机');
+  const revision = (await workspace.state()).project.revision;
+  await page.getByRole('img', { name: '导出裁剪.svg', exact: true }).click();
+  await page.getByRole('toolbar', { name: '图片操作', exact: true }).getByRole('button', { name: '裁剪', exact: true }).click();
+  await expect(page.getByRole('region', { name: '图片裁剪', exact: true })).toBeVisible();
+  const downloads: string[] = [];
+  page.on('download', download => downloads.push(download.suggestedFilename()));
+  await page.getByRole('button', { name: '导出', exact: true }).click();
+  const markdown = page.getByRole('menuitem', { name: '下载可读摘要（Markdown）', exact: true });
+  const image = page.getByRole('menuitem', { name: '下载画布图像（PNG）', exact: true });
+  await expect(page.getByRole('note')).toHaveText('当前有未保存内容，请先完成保存；导出只读取已保存状态。');
+  await expect(markdown).toBeDisabled();
+  await expect(image).toBeDisabled();
+  expect(downloads).toEqual([]);
+  expect((await workspace.state()).project.revision).toBe(revision);
+  await page.getByRole('toolbar', { name: '裁剪操作', exact: true }).getByRole('button', { name: '取消', exact: true }).click();
+  await expect(page.getByRole('region', { name: '图片裁剪', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('note')).toHaveCount(0);
+  await expect(markdown).toBeEnabled();
+  await expect(image).toBeEnabled();
+  expect(downloads).toEqual([]);
+  expect((await workspace.state()).project.revision).toBe(revision);
 });

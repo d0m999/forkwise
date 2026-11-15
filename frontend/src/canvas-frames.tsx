@@ -3,7 +3,6 @@ import { Fragment, useEffect, useRef, useState, type PointerEvent as ReactPointe
 import type { Command, ProjectState } from './api';
 import { deleteFrameCommand, frameMovingItemIds, moveFrameCommand, resizedFrameRect, frameHandleNames, type FrameRect } from './canvas-frame-commands';
 import type { CanvasFrame } from '../../backend/src/mapping/frame-contracts';
-import { exportIgnoreProps } from './canvas-export';
 
 type Point = { x: number; y: number };
 type FrameCommand = Extract<Command, { type: 'frame.edit' | 'frame.move' | 'frame.delete' | 'frame.resize' }>;
@@ -177,13 +176,13 @@ export function CanvasFrames({ state, preview, selectedId, selectedIds = [], cho
             onPointerDown={event => { choose(frame.id, event.shiftKey); move.start(event, frame); }}
             onClick={event => { if (!move.consumeClick(frame.id)) { choose(frame.id, event.shiftKey); event.currentTarget.focus({ preventScroll: true }); } }}
             onDoubleClick={() => begin(frame)}>{frame.name}</button>
-          {selectedId === frame.id && <div className="canvas-frame-actions nodrag nopan" {...exportIgnoreProps} role="toolbar" aria-label="分区操作">
+          {selectedId === frame.id && <div className="canvas-frame-actions nodrag nopan" role="toolbar" aria-label="分区操作">
             <button type="button" disabled={blocked} onClick={() => begin(frame)}>重命名分区</button>
             <button type="button" disabled={blocked} onClick={() => execute(deleteFrameCommand(state, frame), () => choose(null))}>删除分区</button>
           </div>}
         </div>}
       </div>
-      {selectedId === frame.id && <div className="frame-resize-overlay" {...exportIgnoreProps} style={{ left: position.x, top: position.y,
+      {selectedId === frame.id && <div className="frame-resize-overlay" style={{ left: position.x, top: position.y,
         width: move.positions[frame.id]?.width ?? frame.pose.width, height: move.positions[frame.id]?.height ?? frame.pose.height }}>
         {(['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'] as const).map(corner =>
           <button key={corner} ref={element => { handles.current[`${frame.id}:${corner}`] = element; }} type="button" className="frame-resize-handle nodrag nopan" data-corner={corner}

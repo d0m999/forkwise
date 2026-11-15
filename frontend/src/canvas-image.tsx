@@ -6,7 +6,6 @@ import { imageHandles, useImageResize } from './image-resize';
 import type { ImageGeometry } from './image-geometry';
 import { ImageSurface } from './image-surface';
 import { ImageActions } from './image-actions';
-import { exportIgnoreProps } from './canvas-export';
 import { ImageCrop } from './image-crop';
 import { CanvasImageViewer } from './canvas-image-viewer';
 import type { ImageAsset } from '../../backend/src/mapping/media';
@@ -53,7 +52,7 @@ export function CanvasImageNode({ data, selected }: NodeProps<Node<ImageData>>) 
       animation={asset.mime === 'image/gif' ? { naturalWidth: asset.width, naturalHeight: asset.height, preferences: playbackPreferences, key: data.value.id, inactive: !!viewer || !!cropping } : undefined} />}
   </div>{assetError && <p role="alert">{assetError}</p>}{asset?.mime === 'image/gif' && <GifToggle className="canvas-gif-control nodrag nopan" />}</div>
   {selected && data.resizable && !cropping && Object.entries(imageHandles).map(([handle, label]) => <button key={handle}
-    className="nodrag nopan" {...exportIgnoreProps} aria-label={'调整图片尺寸：' + label} aria-disabled={data.blocked || data.geometry.pending}
+    className="image-resize nodrag nopan" aria-label={'调整图片尺寸：' + label} aria-disabled={data.blocked || data.geometry.pending}
     onPointerDown={event => resize.begin(event, handle as keyof typeof imageHandles)} onKeyDown={event => resize.key(event, handle as keyof typeof imageHandles)}
     onMouseDown={event => event.stopPropagation()} onClick={event => event.stopPropagation()}
     style={{ position: 'absolute', left: handle.includes('w') ? 0 : handle.includes('e') ? '100%' : '50%', top: handle.includes('n') ? 0 : handle.includes('s') ? '100%' : '50%',

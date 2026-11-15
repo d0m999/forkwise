@@ -60,7 +60,7 @@ export function CanvasShapeNode({ data, selected }: NodeProps<Node<ShapeData>>) 
       <span style={{ position: "relative" }}>{content.shortText}</span>
     </div>
     {selected && data.resizable && Object.entries(shapeHandles).map(([handle, label]) => <button key={handle}
-      className="nodrag nopan" aria-label={"调整形状尺寸：" + label} aria-disabled={data.resizeBlocked}
+      className="shape-resize nodrag nopan" aria-label={"调整形状尺寸：" + label} aria-disabled={data.resizeBlocked}
       onPointerDown={event => resize.begin(event, handle as keyof typeof shapeHandles)}
       onKeyDown={event => resize.key(event, handle as keyof typeof shapeHandles)}
       onMouseDown={event => event.stopPropagation()} onClick={event => event.stopPropagation()}

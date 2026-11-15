@@ -26,7 +26,17 @@ export async function seedCanvasExportSample(page: Page, workspace: Workspace) {
     { id: 'body-image', type: 'image', assetId: 'export-image', name: '绿色媒体.png', mime: 'image/png', naturalWidth: 80, naturalHeight: 60, caption: '绿色媒体图注', alt: '绿色几何媒体' },
   ] } });
   await execute({ type: 'card.attachment.add', expected: { attachments: null }, payload: { id: bottom.id, assetId: 'export-file', name: '财报原件.pdf' } });
-  await execute({ type: 'tag.create', expected: { cardTags: null }, payload: { id: 'export-tag', name: '核心观察', cardId: bottom.id } });
+  let cardTagsVersion: string | null = null;
+  for (const [id, name] of [
+    ['export-tag', '核心观察'],
+    ['export-tag-capex', '卡面省略的资本开支标签'],
+    ['export-tag-margin', '卡面省略的毛利率标签'],
+    ['export-tag-inventory', '卡面省略的库存周期标签'],
+  ] as const) {
+    await execute({ type: 'tag.create', expected: { cardTags: cardTagsVersion }, payload: { id, name, cardId: bottom.id } });
+    state = await workspace.state();
+    cardTagsVersion = state.cards.find(card => card.id === bottom.id)!.cardTags!.versionId;
+  }
   await execute({ type: 'card.appearance', expected: bottom.appearance?.versionId ?? null, payload: { id: bottom.id, titleColor: '#f3dfe5', showPreview: true } });
   await execute({ type: 'card.appearance', expected: top.appearance?.versionId ?? null, payload: { id: top.id, titleColor: '#dceee2', showPreview: true } });
   await execute({ type: 'text.create', expected: null, payload: { id: 'export-annotation', content: { runs: [{ text: '附着批注' }], fontSize: 18, lineHeight: 1.5, align: 'left', widthMode: 'fixed', width: 150 }, pose: { x: 800, y: 130, width: 150, height: 54 } } });

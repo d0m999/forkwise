@@ -3,7 +3,6 @@ import { createPortal } from "react-dom";
 import { useViewport } from "@xyflow/react";
 import type { ShapeTextConflict, ShapeTextSession } from "./shape-text-save";
 import { LayerMenu, type LayerMenuProps } from "./layer-menu";
-import { exportIgnoreProps } from "./canvas-export";
 
 export function ShapeTextAction({ anchor, edit, appearance, remove, removeFromGroup, layer }: {
   anchor: RefObject<HTMLDivElement | null>; edit: () => void; appearance: (trigger: HTMLButtonElement) => void; remove: () => void;
@@ -25,7 +24,7 @@ export function ShapeTextAction({ anchor, edit, appearance, remove, removeFromGr
     window.addEventListener("scroll", measure, true);
     return () => { observer.disconnect(); window.removeEventListener("resize", measure); window.removeEventListener("scroll", measure, true); };
   }, [viewport.x, viewport.y, viewport.zoom]);
-  return createPortal(<div ref={element} className="shape-text-actions shape-text-actions--floating" {...exportIgnoreProps} role="toolbar" aria-label="形状操作"
+  return createPortal(<div ref={element} className="shape-text-actions shape-text-actions--floating" role="toolbar" aria-label="形状操作"
     style={point}>
     <button onClick={event => { event.stopPropagation(); edit(); }}>编辑形状文字</button>
     <button aria-haspopup="dialog" onClick={event => appearance(event.currentTarget)}>形状外观</button>
@@ -60,7 +59,7 @@ export function ShapeTextEditor({ session, locked, error, change, compose, finis
           event.preventDefault(); event.stopPropagation(); finish();
         }
       }} />
-    <div className="shape-text-actions shape-text-actions--editor" {...exportIgnoreProps}>
+    <div className="shape-text-actions shape-text-actions--editor">
       {error && <p role="alert">{error}；输入仍保留在原形状</p>}
       {conflict ? <section aria-label="形状文字保存冲突" onKeyDown={event => event.stopPropagation()}>
         <p>原形状保留已保存的版本；将我的完整内容和位置恢复为独立形状。</p>

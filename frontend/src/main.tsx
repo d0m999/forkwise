@@ -8,7 +8,7 @@ import type { CopyRef } from "./canvas-snapshot";
 import { nextPaste, pasteTranslation, type PasteSequence } from "./canvas-snapshot-geometry";
 import { SnapshotMenu } from "./snapshot-menu";
 import { ExportMenu } from "./export-menu";
-import { exportIgnoreProps, renderCanvasPng, type CanvasExportVisual } from "./canvas-export";
+import { renderCanvasPng, type CanvasExportVisual } from "./canvas-export";
 import { useCanvasImageInput } from "./canvas-image-input";
 import { droppedFilePlan, fileAssetPayload, runDroppedFiles } from "./canvas-drop";
 import { openCardAttachment } from "./card-attachments";
@@ -191,7 +191,6 @@ function ThoughtCard({ data, selected }: NodeProps<Node<CardData>>) {
       )}
       <button
         className="move-handle nodrag"
-        {...exportIgnoreProps}
         aria-label="移动卡片：方向键调整位置"
         disabled={data.movingDisabled}
         onKeyDown={(event) => {
@@ -246,7 +245,6 @@ function ThoughtCard({ data, selected }: NodeProps<Node<CardData>>) {
       )}
       <button
         className="body-button nodrag"
-        {...exportIgnoreProps}
         disabled={data.historyBlocked}
         onClick={data.onBody}
       >
@@ -266,7 +264,6 @@ function ThoughtCard({ data, selected }: NodeProps<Node<CardData>>) {
           <button
             key={direction}
             className={`card-resize ${direction} nodrag nopan`}
-            {...exportIgnoreProps}
             aria-label={`调整卡片尺寸：${label}`}
             disabled={data.movingDisabled}
             onPointerDown={(event) => data.onResize(event, direction)}
@@ -3000,25 +2997,21 @@ function Workspace() {
     deletedBody.card.id === bodyCard
       ? deletedBody.card
       : undefined);
-  function exportEditsOpen(projectId: string) {
-    return !!(pendingAction.current || saving.current || unconfirmed.current || closedDrafts.current.length || Object.keys(drafts.current).length || composition.current || frameDrag.current
-      || pose.hasPending() || pose.pending || pose.dragging
-      || shapeMove.hasPending() || shapeMove.pending || shapeMove.dragging
-      || texts.hasPending() || texts.hasMove()
-      || shapeText.hasPending() || shapeText.session
-      || appearance.hasPending() || appearance.pending
-      || cardLayout.hasPending() || cardLayout.pending
-      || canvasMove.hasPointerGesture() || canvasMove.dragging
-      || frameMove.hasGesture() || groupGeometry.hasGesture() || marqueeSelection.hasGesture()
-      || strokeDraw.hasPending() || connectorCreate.hasPending() || connectorEdit.hasPending() || connectorLabel.hasPending()
-      || frameDraft.current || frameDrafting || labelPositionPreview.current.size
-      || imageGeometry.hasPending(projectId) || imageInput.hasPending(projectId) || mediaQueue.hasUnconfirmed);
-  }
+  // 按钮禁用与捕获中止是两套条件。并集会让框选、草稿等额外禁用导出，这里保持分开。
   function exportCaptureIntact(snapshotId: string) {
     const current = authority.current;
-    return !!current && current.snapshot === snapshotId && !exportEditsOpen(current.project.id);
+    if (!current || current.snapshot !== snapshotId) return false;
+    if (pendingAction.current || saving.current || unconfirmed.current || closedDrafts.current.length || Object.keys(drafts.current).length || composition.current || frameDrag.current) return false;
+    if (pose.hasPending() || shapeMove.hasPending() || texts.hasPending() || texts.hasMove() || shapeText.hasPending()) return false;
+    if (appearance.hasPending() || cardLayout.hasPending() || canvasMove.hasPointerGesture() || frameMove.hasGesture() || groupGeometry.hasGesture() || marqueeSelection.hasGesture()) return false;
+    if (strokeDraw.hasPending() || connectorCreate.hasPending() || connectorEdit.hasPending() || connectorLabel.hasPending() || frameDraft.current || labelPositionPreview.current.size > 0) return false;
+    return !imageGeometry.hasPending(current.project.id) && !imageInput.hasPending(current.project.id) && imageGeometry.cropping?.projectId !== current.project.id;
   }
-  const exportBlocked = !state || busy || historyBlocked || saveStatus !== '已保存到本机' || exportEditsOpen(state.project.id);
+  const exportBlocked = !state || busy || historyBlocked || saveStatus !== '已保存到本机' || !!pendingAction.current ||
+    shapeMove.pending || shapeMove.dragging || !!shapeText.session || texts.hasPending() || pose.pending || pose.dragging ||
+    appearance.pending || cardLayout.pending || canvasMove.dragging || frameMove.hasGesture() || frameDrafting || strokeDraw.hasPending() ||
+    connectorCreate.hasPending() || connectorEdit.hasPending() || imageGeometry.hasPending(state.project.id) ||
+    imageInput.hasPending(state.project.id) || imageGeometry.cropping?.projectId === state.project.id || mediaQueue.hasUnconfirmed;
   const hasRecovery = recoveries.some(
     (r) => r.value.projectId === state?.project.id,
   );
@@ -3463,7 +3456,6 @@ function Workspace() {
                 <div
                   key={i}
                   className="alignment-guide"
-                  {...exportIgnoreProps}
                   data-axis={guide.axis}
                   style={
                     guide.axis === "x"

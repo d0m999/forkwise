@@ -10,7 +10,6 @@ import { useViewport } from "@xyflow/react";
 import { CardIcon } from "./card-icons";
 import type { Card } from "./api";
 import { LayerMenu, type LayerMenuProps } from "./layer-menu";
-import { exportIgnoreProps } from "./canvas-export";
 
 import { TITLE_COLORS } from "../../backend/src/mapping/presentation-values";
 export const cardColors = Object.entries(TITLE_COLORS);
@@ -162,7 +161,6 @@ export function CardMenu({
       <div
         ref={toolbar}
         className="card-actions card-floating nodrag nopan"
-        {...exportIgnoreProps}
         role="toolbar"
         aria-label="卡片操作"
         style={positions.toolbar}

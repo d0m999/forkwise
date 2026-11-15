@@ -3,7 +3,6 @@ import { createPortal } from 'react-dom';
 import { useViewport } from '@xyflow/react';
 import type { ImagePose } from './image-geometry';
 import { LayerMenu, type LayerMenuProps } from './layer-menu';
-import { exportIgnoreProps } from './canvas-export';
 export function ImageActions({ anchor, pose, blocked, rotate, remove, view, crop, restore, removeFromGroup, layer }: {
   anchor: RefObject<HTMLElement | null>; pose: ImagePose; blocked: boolean; rotate: (direction: 'left' | 'right') => void; remove: () => void; view: () => void; crop: () => void; restore?: (() => void) | undefined;
   removeFromGroup?: (() => void) | undefined; layer?: LayerMenuProps | undefined;
@@ -24,7 +23,7 @@ export function ImageActions({ anchor, pose, blocked, rotate, remove, view, crop
     window.addEventListener('resize', measure); window.addEventListener('scroll', measure, true);
     return () => { observer.disconnect(); window.removeEventListener('resize', measure); window.removeEventListener('scroll', measure, true); };
   }, [viewport.x, viewport.y, viewport.zoom, pose.x, pose.y, pose.width, pose.height]);
-  return createPortal(<div ref={toolbar} className="shape-text-actions shape-text-actions--floating" {...exportIgnoreProps} role="toolbar" aria-label="图片操作" style={point}>
+  return createPortal(<div ref={toolbar} className="shape-text-actions shape-text-actions--floating" role="toolbar" aria-label="图片操作" style={point}>
     <button disabled={blocked} onClick={view}>查看大图</button>
     <button disabled={blocked} onClick={crop}>裁剪</button>
     {restore && <button disabled={blocked} onClick={restore}>恢复完整图片</button>}

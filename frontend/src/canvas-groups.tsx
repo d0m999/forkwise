@@ -3,7 +3,6 @@ import type { ProjectState } from './api';
 import { canvasItems, selectedItemIds, type CanvasSelection } from './canvas-selection';
 import type { useGroupGeometry } from './group-geometry';
 import { LayerMenu, type LayerMenuProps } from './layer-menu';
-import { exportIgnoreProps } from './canvas-export';
 
 export function CanvasGroups({ state, selection, positions, geometry, blocked, create, createFrame, enter, ungroup, ungroupSelected, remove, layer }: {
   state: ProjectState; selection: CanvasSelection; positions: Record<string, { x: number; y: number; width?: number; height?: number }>;
@@ -26,12 +25,12 @@ export function CanvasGroups({ state, selection, positions, geometry, blocked, c
         style={{ left: x, top: y, width, height }} />;
     })}
     {geometry.scalable && (['nw', 'ne', 'sw', 'se'] as const).map(corner => <button key={corner}
-      className="card-resize nodrag nopan" {...exportIgnoreProps} aria-label={`调整组合尺寸：${({ nw: '左上', ne: '右上', sw: '左下', se: '右下' })[corner]}`}
+      className="card-resize nodrag nopan" aria-label={`调整组合尺寸：${({ nw: '左上', ne: '右上', sw: '左下', se: '右下' })[corner]}`}
       disabled={blocked || geometry.blocked} style={{ position: 'absolute', left: (corner.endsWith('w') ? left : right) - 5,
         top: (corner.startsWith('n') ? top : bottom) - 5, zIndex: 1001, pointerEvents: 'auto', cursor: corner === 'nw' || corner === 'se' ? 'nwse-resize' : 'nesw-resize' }}
       onPointerDown={event => geometry.start(event, corner)} />)}
     {selected.length > 0 && (selection.targets.length > 1 || groupId) && <div role="toolbar" aria-label="组合操作"
-      className="canvas-group-tools nodrag nopan" {...exportIgnoreProps} style={{ left,
+      className="canvas-group-tools nodrag nopan" style={{ left,
         top: selection.targets.length > 1 && selected.every(value => 'body' in value) ? bottom + 12 : top - 48 }}
       onPointerDown={e => e.stopPropagation()}>
       {selection.targets.length > 1 && <><button disabled={blocked} onClick={create}>组合所选对象</button><span>不含连线</span></>}

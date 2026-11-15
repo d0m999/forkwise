@@ -6,8 +6,6 @@ import {
   EXPORT_PADDING,
 } from './canvas-export-markers';
 
-export { exportIgnoreProps } from './canvas-export-markers';
-
 export type CanvasExportVisual = { transform: string; width: number; height: number };
 type Rect = { x: number; y: number; width: number; height: number };
 type ExportCaptureDetail = { hold: (paused: Promise<void>) => void };
