@@ -639,7 +639,7 @@ test('正文保存失败时松开标签，位置预览退出且正文保存后�
   }
 });
 
-test('未确认保存时两个导出动作都禁用，保存完成后才恢复且草稿未另写', async ({ page, workspace }) => {
+test('未确认保存时导出动作都禁用，保存完成后才恢复且草稿未另写', async ({ page, workspace }) => {
   await place(page, '草稿边界卡');
   const before = await workspace.state();
   let release: (() => void) | undefined;
@@ -654,18 +654,21 @@ test('未确认保存时两个导出动作都禁用，保存完成后才恢复�
   await page.getByRole('button', { name: '导出', exact: true }).click();
   const markdown = page.getByRole('menuitem', { name: '下载可读摘要（Markdown）', exact: true });
   const image = page.getByRole('menuitem', { name: '下载画布图像（PNG）', exact: true });
+  const fullPackage = page.getByRole('menuitem', { name: '下载完整项目包（ZIP）', exact: true });
   await expect(markdown).toBeDisabled();
   await expect(image).toBeDisabled();
+  await expect(fullPackage).toBeDisabled();
   await expect(page.getByRole('note')).toHaveText('当前有未保存内容，请先完成保存；导出只读取已保存状态。');
   expect((await workspace.state()).project.revision).toBe(before.project.revision);
   release!();
   await expect(page.getByRole('status')).toHaveText('已保存到本机');
   await expect(markdown).toBeEnabled();
   await expect(image).toBeEnabled();
+  await expect(fullPackage).toBeEnabled();
   expect((await workspace.state()).project.revision).toBe(before.project.revision + 1);
 });
 
-test('裁剪进行中不下载图像，取消后两个导出动作恢复', async ({ page, workspace }) => {
+test('裁剪进行中不下载图像，取消后导出动作恢复', async ({ page, workspace }) => {
   const projectId = (await workspace.state()).project.id;
   const source = '<svg xmlns="http://www.w3.org/2000/svg" width="80" height="60"><rect width="80" height="60" fill="#22c55e"/></svg>';
   await workspace.execute(page, { commandId: crypto.randomUUID(), projectId, type: 'asset.save', expected: null,
@@ -684,9 +687,11 @@ test('裁剪进行中不下载图像，取消后两个导出动作恢复', async
   await page.getByRole('button', { name: '导出', exact: true }).click();
   const markdown = page.getByRole('menuitem', { name: '下载可读摘要（Markdown）', exact: true });
   const image = page.getByRole('menuitem', { name: '下载画布图像（PNG）', exact: true });
+  const fullPackage = page.getByRole('menuitem', { name: '下载完整项目包（ZIP）', exact: true });
   await expect(page.getByRole('note')).toHaveText('当前有未保存内容，请先完成保存；导出只读取已保存状态。');
   await expect(markdown).toBeDisabled();
   await expect(image).toBeDisabled();
+  await expect(fullPackage).toBeDisabled();
   expect(downloads).toEqual([]);
   expect((await workspace.state()).project.revision).toBe(revision);
   await page.getByRole('toolbar', { name: '裁剪操作', exact: true }).getByRole('button', { name: '取消', exact: true }).click();
@@ -694,6 +699,7 @@ test('裁剪进行中不下载图像，取消后两个导出动作恢复', async
   await expect(page.getByRole('note')).toHaveCount(0);
   await expect(markdown).toBeEnabled();
   await expect(image).toBeEnabled();
+  await expect(fullPackage).toBeEnabled();
   expect(downloads).toEqual([]);
   expect((await workspace.state()).project.revision).toBe(revision);
 });

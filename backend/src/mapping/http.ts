@@ -159,6 +159,25 @@ export function createWorkspaceApp(
       headers: { 'Content-Type': 'text/markdown; charset=utf-8' },
     });
   });
+  app.get('/api/mapping/projects/:id/export.package', (c) => {
+    const expectedRevision = z.coerce.number().int().nonnegative().optional().parse(c.req.query('revision'));
+    const state = mapping.read({ type: 'project', projectId: c.req.param('id') }, c.get('principal'));
+    requireThat(
+      expectedRevision === undefined || state.project.revision === expectedRevision,
+      'EXPORT_REVISION_CHANGED',
+      '项目已保存状态已变化，请重新打开导出菜单',
+      409,
+    );
+    const bytes = new Uint8Array(mapping.fullPackage(state.project.id, c.get('principal'), new Date().toISOString()));
+    const safe = state.project.name.replace(/[\\/:*?"<>|]/g, '-').trim().slice(0, 80) || '见岔项目';
+    const filename = encodeURIComponent(`${safe}-r${state.project.revision}.zip`).replace(/[!'()*]/g, (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`);
+    return new Response(bytes, {
+      headers: {
+        'Content-Type': 'application/zip',
+        'Content-Disposition': `attachment; filename*=UTF-8''${filename}`,
+      },
+    });
+  });
   app.get('/api/mapping/projects/:id/history', (c) =>
     c.json(mapping.read({ type: 'history', projectId: c.req.param('id') }, c.get('principal'))),
   );
@@ -230,7 +249,8 @@ export function createWorkspaceApp(
   });
   app.onError((error, c) => {
     const searching = c.req.path.endsWith('/search');
-    const exporting = c.req.path.endsWith('/export.md');
+    const packageExport = c.req.path.endsWith('/export.package');
+    const exporting = packageExport || c.req.path.endsWith('/export.md');
     if (error instanceof DomainError)
       return c.json(
         {
@@ -248,7 +268,8 @@ export function createWorkspaceApp(
         : c.req.path.endsWith('/map') || c.req.path.endsWith('/changes')
         ? c.json({ code: 'INVALID_QUERY', message: '地图读取请求格式无效' }, 400)
         : c.json({ code: 'INVALID_COMMAND', message: '保存请求格式无效；原内容未修改' }, 400);
-    return exporting ? c.json({ code: 'EXPORT_FAILED', message: '摘要生成失败，请重试；项目未修改' }, 503)
+    return packageExport ? c.json({ code: 'EXPORT_FAILED', message: '完整项目包生成失败，请重试；项目未修改' }, 503)
+      : exporting ? c.json({ code: 'EXPORT_FAILED', message: '摘要生成失败，请重试；项目未修改' }, 503)
       : searching ? c.json({ code: 'SEARCH_FAILED', message: '搜索暂时不可用，请保留当前条件并重试' }, 503)
       : c.json({ code: EXECUTE_FALLBACK_CODE, message: '保存失败，请保留当前输入并重试' }, 503);
   });

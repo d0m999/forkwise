@@ -9,7 +9,7 @@ export function ExportMenu({ project, disabled, report, image }: {
   image: () => Promise<Blob>;
 }) {
   const [open, setOpen] = useState(false);
-  const [busy, setBusy] = useState<'markdown' | 'image' | null>(null);
+  const [busy, setBusy] = useState<'markdown' | 'image' | 'package' | null>(null);
   const root = useRef<HTMLDivElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
   const first = useRef<HTMLButtonElement>(null);
@@ -40,17 +40,17 @@ export function ExportMenu({ project, disabled, report, image }: {
     setOpen(false);
     trigger.current?.focus({ preventScroll: true });
   }
-  async function run(kind: 'markdown' | 'image') {
+  async function run(kind: 'markdown' | 'image' | 'package') {
     if (disabled || busy) return;
     const returnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     setBusy(kind);
-    report(kind === 'markdown' ? '正在生成可读摘要…' : '正在生成画布图像…');
+    report(kind === 'markdown' ? '正在生成可读摘要…' : kind === 'package' ? '正在生成完整项目包…' : '正在生成画布图像…');
     try {
-      const blob = kind === 'markdown' ? await api.readableSummary(project.id, project.revision) : await image();
-      downloadBlob(blob, exportFilename(project.name, project.revision, kind === 'markdown' ? 'md' : 'png'));
-      report(kind === 'markdown' ? '可读摘要下载已开始' : '画布图像下载已开始');
+      const blob = kind === 'markdown' ? await api.readableSummary(project.id, project.revision) : kind === 'package' ? await api.fullPackage(project.id, project.revision) : await image();
+      downloadBlob(blob, exportFilename(project.name, project.revision, kind === 'markdown' ? 'md' : kind === 'package' ? 'zip' : 'png'));
+      report(kind === 'markdown' ? '可读摘要下载已开始' : kind === 'package' ? '完整项目包下载已开始' : '画布图像下载已开始');
     } catch (error) {
-      report(error instanceof Error ? error.message : kind === 'markdown' ? '摘要生成失败，请重试；项目未修改' : '画布图像生成失败，请重试；项目未修改');
+      report(error instanceof Error ? error.message : kind === 'markdown' ? '摘要生成失败，请重试；项目未修改' : kind === 'package' ? '完整项目包生成失败，请重试；项目未修改' : '画布图像生成失败，请重试；项目未修改');
     } finally {
       setBusy(null);
       requestAnimationFrame(() => {
@@ -77,12 +77,16 @@ export function ExportMenu({ project, disabled, report, image }: {
     {open && <div className="export-popover" role="menu" aria-label="导出当前项目">
       <p>只导出当前已保存状态；未保存草稿不包含在内。</p>
       <p>摘要是可读文本，不含完整恢复数据或原件；图像呈现画布，不含完整正文，也不是备份。</p>
+      <p>完整项目包包含已保存的数据和资源文件，可离开本机读取；它不是加密备份，也不能在这里导入。</p>
       {disabled && <p role="note">当前有未保存内容，请先完成保存；导出只读取已保存状态。</p>}
       <button ref={first} type="button" role="menuitem" disabled={disabled || !!busy} onClick={() => void run('markdown')}>
         {busy === 'markdown' ? '正在生成可读摘要…' : '下载可读摘要（Markdown）'}
       </button>
       <button type="button" role="menuitem" disabled={disabled || !!busy} onClick={() => void run('image')}>
         {busy === 'image' ? '正在生成画布图像…' : '下载画布图像（PNG）'}
+      </button>
+      <button type="button" role="menuitem" disabled={disabled || !!busy} onClick={() => void run('package')}>
+        {busy === 'package' ? '正在生成完整项目包…' : '下载完整项目包（ZIP）'}
       </button>
     </div>}
   </div>;

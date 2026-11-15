@@ -1,4 +1,4 @@
-export function exportFilename(projectName: string, revision: number, extension: 'md' | 'png'): string {
+export function exportFilename(projectName: string, revision: number, extension: 'md' | 'png' | 'zip'): string {
   const safe = projectName.replace(/[\\/:*?"<>|]/g, '-').trim().slice(0, 80) || '见岔项目';
   return `${safe}-r${revision}.${extension}`;
 }

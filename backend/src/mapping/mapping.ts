@@ -28,6 +28,7 @@ import { attachAnnotation, detachAnnotation, followCardMotions, readAttachments,
 import { reconcileMediaTasks, completeMediaTask } from './media-tasks.js';
 import { completeMediaHistory } from './history.js';
 import { readAsset, saveAsset, validateImageAssets } from './media.js';
+import { buildFullPackage } from './full-package.js';
 import { DEFAULT_APPEARANCE, DEFAULT_PREVIEW_HEIGHT } from './presentation-values.js';
 import type Database from 'better-sqlite3';
 import { CompactMaps, type CompactOptions } from './compact.js';
@@ -207,6 +208,14 @@ export class Mapping {
           .all(query.projectId) as { value: string }[]
       ).map((row) => JSON.parse(row.value) as Card);
       return { project, cards, frames: readFrames(this.db, project.id), groups: readGroups(this.db, project.id), containment: readContainment(this.db, project.id), attachments: readAttachments(this.db, project.id), connectors: readConnectors(this.db, project.id), images: readImages(this.db, project.id), tags: readTags(this.db, project.id), texts: readTexts(this.db, project.id), shapes: readShapes(this.db, project.id), strokes: readStrokes(this.db, project.id) };
+    })();
+  }
+
+  fullPackage(projectId: string, actor: Principal, exportedAt: string, research: unknown = null): Buffer {
+    return this.db.transaction(() => {
+      this.access.validate(actor);
+      this.access.project(actor, projectId);
+      return buildFullPackage(this.db, projectId, exportedAt, research);
     })();
   }
 
