@@ -4,8 +4,9 @@ import { loadImage, createCanvas } from '../../backend/node_modules/@napi-rs/can
 import type { Page } from '@playwright/test';
 import { test, expect, place, type Workspace } from './writing-board-fixture';
 import { seedCanvasExportSample } from './canvas-export-fixture';
+import { EXPORT_CAPTURE_EVENT, EXPORT_CONTENT_SELECTOR, EXPORT_IGNORE_SELECTOR, EXPORT_PADDING } from '../src/canvas-export-markers';
 
-test('同一导出入口可读摘要失败不报错成功，重试后真实下载且项目未改', async ({ page, workspace }) => {
+test('同一导出入口在摘要生成失败时不显示下载成功，重试后真实下载且项目未改', async ({ page, workspace }) => {
   await place(page, '导出卡');
   const before = await workspace.state();
   const card = before.cards[0]!;
@@ -76,6 +77,131 @@ async function decodedPng(path: string) {
   return { width: image.width, height: image.height, data: Buffer.from(data), greenPixels };
 }
 
+type Box = { x: number; y: number; width: number; height: number };
+type Rgb = { r: number; g: number; b: number };
+
+function toExportBox(origin: { left: number; top: number }, box: Box): Box {
+  return { x: box.x - origin.left + EXPORT_PADDING, y: box.y - origin.top + EXPORT_PADDING, width: box.width, height: box.height };
+}
+
+function intersection(a: Box, b: Box): Box | null {
+  const x = Math.max(a.x, b.x);
+  const y = Math.max(a.y, b.y);
+  const right = Math.min(a.x + a.width, b.x + b.width);
+  const bottom = Math.min(a.y + a.height, b.y + b.height);
+  if (right - x < 4 || bottom - y < 4) return null;
+  return { x, y, width: right - x, height: bottom - y };
+}
+
+function containsBox(outer: Box, inner: Box) {
+  return inner.x >= outer.x - 2 && inner.y >= outer.y - 2
+    && inner.x + inner.width <= outer.x + outer.width + 2
+    && inner.y + inner.height <= outer.y + outer.height + 2;
+}
+
+function rgbAt(png: { data: Buffer; width: number; height: number }, x: number, y: number): Rgb | null {
+  const px = Math.round(x);
+  const py = Math.round(y);
+  if (px < 0 || py < 0 || px >= png.width || py >= png.height) return null;
+  const index = (py * png.width + px) * 4;
+  return { r: png.data[index]!, g: png.data[index + 1]!, b: png.data[index + 2]! };
+}
+
+function nearColor(color: Rgb, hex: string, tolerance: number) {
+  const r = Number.parseInt(hex.slice(1, 3), 16);
+  const g = Number.parseInt(hex.slice(3, 5), 16);
+  const b = Number.parseInt(hex.slice(5, 7), 16);
+  return Math.abs(color.r - r) <= tolerance && Math.abs(color.g - g) <= tolerance && Math.abs(color.b - b) <= tolerance;
+}
+
+function colorShare(png: { data: Buffer; width: number; height: number }, box: Box, hex: string, tolerance = 28) {
+  let total = 0;
+  let hits = 0;
+  for (let y = box.y; y < box.y + box.height; y += 2)
+    for (let x = box.x; x < box.x + box.width; x += 2) {
+      const color = rgbAt(png, x, y);
+      if (!color) continue;
+      total += 1;
+      if (nearColor(color, hex, tolerance)) hits += 1;
+    }
+  return total === 0 ? 0 : hits / total;
+}
+
+function borderHits(png: { data: Buffer; width: number; height: number }, box: Box) {
+  let hits = 0;
+  const x0 = Math.round(box.x);
+  const y0 = Math.round(box.y);
+  const x1 = Math.round(box.x + box.width);
+  const y1 = Math.round(box.y + box.height);
+  for (let x = x0; x <= x1; x += 1)
+    for (const y of [y0 - 1, y0, y0 + 1, y1 - 1, y1, y1 + 1]) {
+      const color = rgbAt(png, x, y);
+      if (color && nearColor(color, '#94a3b8', 36)) hits += 1;
+    }
+  for (let y = y0; y <= y1; y += 1)
+    for (const x of [x0 - 1, x0, x0 + 1, x1 - 1, x1, x1 + 1]) {
+      const color = rgbAt(png, x, y);
+      if (color && nearColor(color, '#94a3b8', 36)) hits += 1;
+    }
+  return hits;
+}
+
+function inkPixels(png: { data: Buffer; width: number; height: number }, box: Box) {
+  let ink = 0;
+  for (let y = box.y; y < box.y + box.height; y += 1)
+    for (let x = box.x; x < box.x + box.width; x += 1) {
+      const color = rgbAt(png, x, y);
+      if (color && color.r + color.g + color.b < 280) ink += 1;
+    }
+  return ink;
+}
+
+async function readExportLayout(page: Page) {
+  return page.evaluate(({ contentSelector, ignoreSelector }) => {
+    const root = document.querySelector<HTMLElement>('.canvas .react-flow');
+    const viewport = root?.querySelector<HTMLElement>('.react-flow__viewport');
+    if (!root || !viewport) throw new Error('画布尚未完成绘制');
+    const raw = getComputedStyle(viewport).transform;
+    const transform = new DOMMatrixReadOnly(raw === 'none' ? undefined : raw);
+    const rootRect = root.getBoundingClientRect();
+    const boxOf = (element: Element) => {
+      const rect = element.getBoundingClientRect();
+      return {
+        x: (rect.left - rootRect.left - transform.e) / transform.a,
+        y: (rect.top - rootRect.top - transform.f) / transform.d,
+        width: rect.width / transform.a,
+        height: rect.height / transform.d,
+      };
+    };
+    const boxes = [...root.querySelectorAll<HTMLElement>(contentSelector)]
+      .filter(element => !element.closest(ignoreSelector) && getComputedStyle(element).display !== 'none')
+      .map(boxOf)
+      .filter(rect => Number.isFinite(rect.x + rect.y + rect.width + rect.height) && rect.width > 0 && rect.height > 0);
+    if (!boxes.length) throw new Error('画布没有可导出内容');
+    const cardBox = (title: string) => {
+      const node = [...root.querySelectorAll<HTMLElement>('.react-flow__node')].find(element => element.querySelector('.title-button')?.textContent === title);
+      const titleButton = node?.querySelector('.title-button');
+      if (!node || !titleButton) throw new Error(`缺少卡片 ${title}`);
+      return { card: boxOf(node), title: boxOf(titleButton) };
+    };
+    const annotation = [...root.querySelectorAll<HTMLElement>('.react-flow__node')].find(element => element.textContent?.includes('附着批注'));
+    const button = (label: string) => [...root.querySelectorAll('button')].find(element => element.getAttribute('aria-label') === label);
+    const detach = button('解除 财报原件.pdf');
+    const add = button('添加附件');
+    if (!annotation || !detach || !add) throw new Error('缺少批注或附件按钮');
+    return {
+      left: Math.min(...boxes.map(rect => rect.x)),
+      top: Math.min(...boxes.map(rect => rect.y)),
+      frames: [...root.querySelectorAll('.canvas-frame')].map(boxOf),
+      bottom: cardBox('底层研究卡'),
+      topCard: cardBox('上层研究卡'),
+      annotation: boxOf(annotation),
+      detach: boxOf(detach),
+      add: boxOf(add),
+    };
+  }, { contentSelector: EXPORT_CONTENT_SELECTOR, ignoreSelector: EXPORT_IGNORE_SELECTOR });
+}
+
 test('混合样本分别下载摘要与真实画布 PNG，遮挡和重启后的像素一致', async ({ page, workspace }, info) => {
   const sample = await seedCanvasExportSample(page, workspace);
   const revision = sample.state.project.revision;
@@ -86,6 +212,15 @@ test('混合样本分别下载摘要与真实画布 PNG，遮挡和重启后的�
   const selectedTopZ = Number(await topNode.evaluate(element => getComputedStyle(element).zIndex));
   expect(selectedBottomZ).toBeGreaterThan(selectedTopZ);
   await page.screenshot({ path: resolve('../backend/artifacts/issue37-20261115/downloads/selected-overlap.png') });
+  const layout = await readExportLayout(page);
+  const origin = { left: layout.left, top: layout.top };
+  const frames = [...layout.frames].sort((a, b) => a.width * a.height - b.width * b.height);
+  expect(frames.length).toBeGreaterThanOrEqual(2);
+  const innerFrame = frames[0]!;
+  const outerFrame = frames[frames.length - 1]!;
+  expect(containsBox(outerFrame, innerFrame)).toBe(true);
+  const coveredTitle = intersection(layout.topCard.title, layout.bottom.card);
+  expect(coveredTitle, '上层标题应落在底层卡片范围内').not.toBeNull();
 
   await page.getByRole('button', { name: '导出', exact: true }).click();
   const markdownDownload = page.waitForEvent('download');
@@ -109,6 +244,17 @@ test('混合样本分别下载摘要与真实画布 PNG，遮挡和重启后的�
   expect(first.width).toBeGreaterThanOrEqual(764);
   expect(first.height).toBeGreaterThanOrEqual(584);
   expect(first.greenPixels).toBeGreaterThan(100);
+  const overlap = toExportBox(origin, coveredTitle!);
+  // #dceee2 与 #f3dfe5 最大通道差 23，二者与画布底 #f6f7f9 的差为 24 和 26。容差必须小于这些差值，否则底色会同时命中两种标题色。
+  const titleTolerance = 12;
+  expect(colorShare(first, overlap, '#dceee2', titleTolerance)).toBeGreaterThan(0.45);
+  expect(colorShare(first, overlap, '#f3dfe5', titleTolerance)).toBeLessThan(0.15);
+  expect(colorShare(first, toExportBox(origin, layout.bottom.title), '#f3dfe5', titleTolerance)).toBeGreaterThan(0.45);
+  expect(borderHits(first, toExportBox(origin, outerFrame))).toBeGreaterThan(40);
+  expect(borderHits(first, toExportBox(origin, innerFrame))).toBeGreaterThan(8);
+  expect(inkPixels(first, toExportBox(origin, layout.annotation))).toBeGreaterThan(30);
+  expect(colorShare(first, toExportBox(origin, layout.detach), '#f4f1ea', 12)).toBeLessThan(0.08);
+  expect(colorShare(first, toExportBox(origin, layout.add), '#f4f1ea', 12)).toBeLessThan(0.08);
   expect((await workspace.state()).project.revision).toBe(revision);
   await info.attach('mixed-canvas-first', { path: firstPath, contentType: 'image/png' });
 
@@ -169,18 +315,25 @@ test('画布光栅化失败不显示成功，同一已保存状态可重试下�
 });
 
 async function holdCanvasExport(page: Page) {
-  await page.evaluate(() => {
+  await page.evaluate((eventName) => {
+    const root = document.querySelector('.canvas .react-flow');
+    if (!root) throw new Error('画布尚未完成绘制');
     let release = () => undefined;
     const gate = new Promise<void>(resolve => { release = resolve; });
-    (window as unknown as { __forkwiseExportHold?: () => Promise<void> }).__forkwiseExportHold = () => gate;
-    (window as unknown as { __releaseExportHold?: () => void }).__releaseExportHold = release;
-  });
+    const listener = (event: Event) => {
+      (event as CustomEvent<{ hold: (paused: Promise<void>) => void }>).detail.hold(gate);
+    };
+    root.addEventListener(eventName, listener);
+    (window as unknown as { __releaseExportHold?: () => void }).__releaseExportHold = () => {
+      release();
+      root.removeEventListener(eventName, listener);
+    };
+  }, EXPORT_CAPTURE_EVENT);
 }
 
 async function releaseCanvasExport(page: Page) {
   await page.evaluate(() => {
     (window as unknown as { __releaseExportHold?: () => void }).__releaseExportHold?.();
-    delete (window as unknown as { __forkwiseExportHold?: unknown }).__forkwiseExportHold;
     delete (window as unknown as { __releaseExportHold?: unknown }).__releaseExportHold;
   });
 }

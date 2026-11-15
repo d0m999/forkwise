@@ -2,6 +2,7 @@ import { useEffect, useId, useLayoutEffect, useRef, useState, type PointerEvent 
 import type { CanvasConnector, ConnectorEndpoint, ConnectorLabel, ConnectorStyle } from '../../backend/src/mapping/connector-contracts';
 import { ConnectorAppearance } from './connector-appearance';
 import type { ConnectorPoint } from './connector-geometry';
+import { exportIgnoreProps } from './canvas-export';
 
 export function ConnectorHandles({ value, resolve, blocked, start, activate }: {
   value: CanvasConnector; resolve: (endpoint: ConnectorEndpoint) => ConnectorPoint | null; blocked: boolean;
@@ -11,7 +12,7 @@ export function ConnectorHandles({ value, resolve, blocked, start, activate }: {
   return <>{(['start', 'end'] as const).map(endpoint => {
     const point = resolve(value[endpoint]);
     return point && <button key={endpoint} type="button" aria-label={endpoint === 'start' ? '连线起点' : '连线终点'}
-      className="connector-endpoint nodrag nopan" disabled={blocked} style={{ left: point.x, top: point.y }}
+      className="connector-endpoint nodrag nopan" {...exportIgnoreProps} disabled={blocked} style={{ left: point.x, top: point.y }}
       onPointerDown={event => start(endpoint, event)}
       onClick={event => { if (event.detail === 0) activate(endpoint, event.currentTarget); }}
       onKeyDown={event => { if (event.nativeEvent.isComposing || event.keyCode === 229) { event.preventDefault(); event.stopPropagation(); } }} />;

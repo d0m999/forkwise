@@ -7,6 +7,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { useViewport } from "@xyflow/react";
+import { exportIgnoreProps } from "./canvas-export";
 function toolbarGap() {
   return Number.parseFloat(
     getComputedStyle(document.documentElement).getPropertyValue("--text-tool-anchor-gap"),
@@ -76,6 +77,7 @@ export function TextToolbar({
     <div
       ref={element}
       className="text-actions nodrag nopan nowheel"
+      {...exportIgnoreProps}
       role="toolbar"
       aria-label="独立文字样式"
       data-popup-side={position.above ? "top" : "bottom"}

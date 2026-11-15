@@ -5,6 +5,7 @@ import { imageHandles } from './image-resize';
 import { GifToggle } from './gif-toggle';
 import type { ImageAsset } from '../../backend/src/mapping/media';
 import { useViewport } from '@xyflow/react';
+import { exportIgnoreProps } from './canvas-export';
 type Crop = CanvasImage['content']['crop'];
 type Frame = { x: number; y: number; width: number; height: number };
 type Handle = keyof typeof imageHandles;
@@ -104,7 +105,7 @@ export function ImageCrop({ projectId, value, asset, playbackPreferences, blocke
   }
   const full = { ...value, content: { ...value.content, crop: { x: 0, y: 0, width: 1, height: 1 } } };
   const frameStyle = { left: frame.x, top: frame.y, width: frame.width, height: frame.height };
-  return <div ref={root} data-gif-scope="" className="image-crop nodrag nopan" role="region" aria-label="图片裁剪" tabIndex={-1}
+  return <div ref={root} data-gif-scope="" className="image-crop nodrag nopan" {...exportIgnoreProps} role="region" aria-label="图片裁剪" tabIndex={-1}
     style={{ left: -visible.x * width, top: -visible.y * height, width, height }}
     onPointerDown={event => event.stopPropagation()} onClick={event => event.stopPropagation()}
     onKeyDown={event => {

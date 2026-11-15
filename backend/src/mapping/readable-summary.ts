@@ -10,25 +10,33 @@ function stringField(value: unknown): string | undefined {
   return typeof value === 'string' ? value : undefined;
 }
 
+function joinedRuns(runs: { text: string }[]): string {
+  return runs.map((run) => run.text).join('');
+}
+
+function cardTitle(card: { title: string; id: string }): string {
+  return `${oneLine(card.title) || '未命名卡片'}（${card.id}）`;
+}
+
 function readableBlock(block: Block): string {
-  const text = blockPlainText(block).trim();
   if (block.type === 'image') {
     const label = oneLine(stringField(block.caption) ?? stringField(block.alt) ?? stringField(block.name) ?? stringField(block.assetId) ?? block.id);
     return `正文图片：${label}（${oneLine(stringField(block.name) ?? stringField(block.assetId) ?? block.id)}）`;
   }
+  const text = blockPlainText(block).trim();
   if (block.type === 'code') return text ? `代码（${oneLine(stringField(block.language) ?? '未标注')}）：\n${text}` : `代码（${oneLine(stringField(block.language) ?? '未标注')}）：（空代码块）`;
   if (text) return text;
   if (block.type === 'table') return '表格：（空表格）';
-  if (['text', 'heading', 'listItem', 'quote'].includes(block.type)) return '';
   if (block.type === 'divider') return '---';
+  if (block.type === 'text' || block.type === 'heading' || block.type === 'listItem' || block.type === 'quote') return '';
   return `未支持块 ${block.type}（${block.id}）：原始结构未展开`;
 }
 
 function itemLabel(state: ProjectState, itemId: string): string {
   const card = state.cards.find((value) => value.item.id === itemId);
-  if (card) return `${oneLine(card.title) || '未命名卡片'}（${card.id}）`;
+  if (card) return cardTitle(card);
   const text = state.texts?.find((value) => value.item.id === itemId);
-  if (text) return `${oneLine(text.content.runs.map((run) => run.text).join('')) || '独立文字'}（${text.id}/${itemId}）`;
+  if (text) return `${oneLine(joinedRuns(text.content.runs)) || '独立文字'}（${text.id}/${itemId}）`;
   const shape = state.shapes?.find((value) => value.item.id === itemId);
   if (shape) return `${oneLine(shape.content.shortText) || shape.content.shapeType}（${shape.id}/${itemId}）`;
   const image = state.images?.find((value) => value.item.id === itemId);
@@ -108,7 +116,7 @@ export function readableMarkdown(state: ProjectState, exportedAt: string): strin
     lines.push('## 随动批注', '');
     for (const attachment of state.attachments.filter((row) => row.target)) {
       const target = state.cards.find((card) => card.item.id === attachment.target!.itemId);
-      lines.push(`- ${itemLabel(state, attachment.id)} → ${target ? `${oneLine(target.title) || '未命名卡片'}（${target.id}）` : `未知卡片（${attachment.target!.itemId}）`}`);
+      lines.push(`- ${itemLabel(state, attachment.id)} → ${target ? cardTitle(target) : `未知卡片（${attachment.target!.itemId}）`}`);
     }
     lines.push('');
   }
@@ -116,7 +124,7 @@ export function readableMarkdown(state: ProjectState, exportedAt: string): strin
   if (state.texts?.length || state.shapes?.length || state.images?.length || state.strokes?.length) {
     lines.push('## 独立对象', '');
     for (const text of state.texts ?? [])
-      lines.push(`- 独立文字 ${text.id}：${text.content.runs.map((run) => run.text).join('') || '（无文字）'}（对象 ${text.item.id}）`);
+      lines.push(`- 独立文字 ${text.id}：${joinedRuns(text.content.runs) || '（无文字）'}（对象 ${text.item.id}）`);
     for (const shape of state.shapes ?? [])
       lines.push(`- 形状 ${shape.id}：${shape.content.shortText || shape.content.shapeType}（对象 ${shape.item.id}）`);
     for (const image of state.images ?? [])

@@ -1,20 +1,23 @@
 import { toBlob } from 'html-to-image';
+import {
+  EXPORT_CAPTURE_EVENT,
+  EXPORT_CONTENT_SELECTOR,
+  EXPORT_IGNORE_SELECTOR,
+  EXPORT_PADDING,
+} from './canvas-export-markers';
+
+export { exportIgnoreProps } from './canvas-export-markers';
 
 export type CanvasExportVisual = { transform: string; width: number; height: number };
 type Rect = { x: number; y: number; width: number; height: number };
+type ExportCaptureDetail = { hold: (paused: Promise<void>) => void };
 
-const PADDING = 32;
-const CONTENT_SELECTOR = '.react-flow__node, .canvas-frame, .canvas-frame-header, .canvas-group-outline, .canvas-connector, .connector-label';
-const INTERACTION_SELECTOR = [
-  '.react-flow__controls', '.react-flow__attribution', '.react-flow__selection', '.react-flow__nodesselection-rect',
-  '.card-actions', '.move-handle', '.card-resize', '.text-actions', '.text-resize', '.canvas-frame-actions',
-  '.frame-resize-overlay', '.canvas-group-tools', '.connector-endpoint', '.connector-entry', '.alignment-guide',
-  '.image-crop-actions', '.canvas-gif-control', '.shape-text-actions', '.shape-appearance-dialog',
-].join(',');
-
-async function waitForCapture() {
-  const hold = (globalThis as { __forkwiseExportHold?: () => Promise<void> }).__forkwiseExportHold;
-  if (hold) await hold();
+async function waitForCapture(root: HTMLElement) {
+  let paused = Promise.resolve();
+  root.dispatchEvent(new CustomEvent<ExportCaptureDetail>(EXPORT_CAPTURE_EVENT, {
+    detail: { hold(next) { paused = next; } },
+  }));
+  await paused;
   for (let frame = 0; frame < 2; frame++) await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
 }
 
@@ -23,8 +26,8 @@ function contentBounds(root: HTMLElement): Rect {
   if (!viewport) throw new Error('画布尚未完成绘制，无法导出');
   const transform = new DOMMatrixReadOnly(getComputedStyle(viewport).transform === 'none' ? undefined : getComputedStyle(viewport).transform);
   const rootRect = root.getBoundingClientRect();
-  const rectangles = [...root.querySelectorAll<HTMLElement>(CONTENT_SELECTOR)]
-    .filter(element => !element.closest(INTERACTION_SELECTOR) && getComputedStyle(element).display !== 'none')
+  const rectangles = [...root.querySelectorAll<HTMLElement>(EXPORT_CONTENT_SELECTOR)]
+    .filter(element => !element.closest(EXPORT_IGNORE_SELECTOR) && getComputedStyle(element).display !== 'none')
     .map(element => {
       const rect = element.getBoundingClientRect();
       const left = (rect.left - rootRect.left - transform.e) / transform.a;
@@ -42,19 +45,19 @@ function contentBounds(root: HTMLElement): Rect {
 
 export async function renderCanvasPng(
   root: HTMLElement,
-  prepare: (visual: CanvasExportVisual | null) => void,
+  setExportViewport: (visual: CanvasExportVisual | null) => void,
   isCurrent: () => boolean,
 ): Promise<Blob> {
   const bounds = contentBounds(root);
-  const width = Math.max(1, Math.ceil(bounds.width + PADDING * 2));
-  const height = Math.max(1, Math.ceil(bounds.height + PADDING * 2));
-  prepare({
+  const width = Math.max(1, Math.ceil(bounds.width + EXPORT_PADDING * 2));
+  const height = Math.max(1, Math.ceil(bounds.height + EXPORT_PADDING * 2));
+  setExportViewport({
     width,
     height,
-    transform: `translate(${PADDING - bounds.x}px, ${PADDING - bounds.y}px) scale(1)`,
+    transform: `translate(${EXPORT_PADDING - bounds.x}px, ${EXPORT_PADDING - bounds.y}px) scale(1)`,
   });
   try {
-    await waitForCapture();
+    await waitForCapture(root);
     if (!isCurrent()) throw new Error('导出时出现尚未保存的编辑或已保存状态已变化，已取消下载；请重新导出，项目未修改');
     const blob = await toBlob(root, {
       width,
@@ -65,7 +68,7 @@ export async function renderCanvasPng(
       skipFonts: true,
       includeQueryParams: true,
       fetchRequestInit: { credentials: 'same-origin' },
-      filter: node => !(node instanceof Element) || !node.closest(INTERACTION_SELECTOR),
+      filter: node => !(node instanceof Element) || !node.closest(EXPORT_IGNORE_SELECTOR),
     });
     if (!isCurrent()) throw new Error('导出时出现尚未保存的编辑或已保存状态已变化，已取消下载；请重新导出，项目未修改');
     if (!blob || blob.size < 8 || blob.type !== 'image/png') throw new Error('画布图像生成失败：浏览器未返回 PNG；请重试，项目未修改');
@@ -74,6 +77,6 @@ export async function renderCanvasPng(
     if (error instanceof Error && error.message.includes('项目')) throw error;
     throw new Error(`画布图像生成失败：${error instanceof Error ? error.message : '未知错误'}；请重试，项目未修改`, { cause: error });
   } finally {
-    prepare(null);
+    setExportViewport(null);
   }
 }

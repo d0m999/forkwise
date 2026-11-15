@@ -6,7 +6,7 @@ export function ExportMenu({ project, disabled, report, image }: {
   project: Project;
   disabled: boolean;
   report: (message: string) => void;
-  image?: () => Promise<Blob>;
+  image: () => Promise<Blob>;
 }) {
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState<'markdown' | 'image' | null>(null);
@@ -46,7 +46,7 @@ export function ExportMenu({ project, disabled, report, image }: {
     setBusy(kind);
     report(kind === 'markdown' ? '正在生成可读摘要…' : '正在生成画布图像…');
     try {
-      const blob = kind === 'markdown' ? await api.readableSummary(project.id, project.revision) : await image!();
+      const blob = kind === 'markdown' ? await api.readableSummary(project.id, project.revision) : await image();
       downloadBlob(blob, exportFilename(project.name, project.revision, kind === 'markdown' ? 'md' : 'png'));
       report(kind === 'markdown' ? '可读摘要下载已开始' : '画布图像下载已开始');
     } catch (error) {
@@ -81,9 +81,9 @@ export function ExportMenu({ project, disabled, report, image }: {
       <button ref={first} type="button" role="menuitem" disabled={disabled || !!busy} onClick={() => void run('markdown')}>
         {busy === 'markdown' ? '正在生成可读摘要…' : '下载可读摘要（Markdown）'}
       </button>
-      {image && <button type="button" role="menuitem" disabled={disabled || !!busy} onClick={() => void run('image')}>
+      <button type="button" role="menuitem" disabled={disabled || !!busy} onClick={() => void run('image')}>
         {busy === 'image' ? '正在生成画布图像…' : '下载画布图像（PNG）'}
-      </button>}
+      </button>
     </div>}
   </div>;
 }
