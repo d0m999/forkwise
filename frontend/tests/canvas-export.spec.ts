@@ -6,8 +6,9 @@ import { test, expect, place, type Workspace } from './writing-board-fixture';
 import { seedCanvasExportSample } from './canvas-export-fixture';
 import { EXPORT_CAPTURE_EVENT, EXPORT_CONTENT_SELECTOR, EXPORT_IGNORE_SELECTOR, EXPORT_PADDING } from '../src/canvas-export-markers';
 
-// 内容范围用 querySelectorAll 命中后代，这里用 matches 命中按钮自身。连线文字因此两边都有。
-const exportContentButtons = [
+// 内容范围用 querySelectorAll 命中后代，这里用 matches 命中控件自身。连线文字因此两边都有。
+// 内容只按控件自己判定：会话容器里的 textarea 祖先虽带 .connector-label，也不能算内容。
+const exportContentControls = [
   '.title-button',
   '.canvas-frame-name',
   '.connector-label',
@@ -227,18 +228,20 @@ test('混合样本分别下载摘要与真实画布 PNG，遮挡和重启后的�
   const layout = await readExportLayout(page);
   const overflow = bottomNode.locator('.tag-overflow');
   await expect(overflow).toBeVisible();
-  const missedChrome = await page.evaluate(({ ignoreSelector, contentButtonSelector }) => {
+  const missedChrome = await page.evaluate(({ ignoreSelector, contentSelector }) => {
     const root = document.querySelector('.canvas .react-flow');
     if (!root) throw new Error('画布尚未完成绘制');
     const overflowButton = root.querySelector('.tag-overflow');
     if (!(overflowButton instanceof HTMLButtonElement) || !overflowButton.closest(ignoreSelector))
       throw new Error('标签溢出按钮未渲染或未被导出忽略');
-    return [...root.querySelectorAll('button')].flatMap(button => {
-      if (button.closest(ignoreSelector) || button.matches(contentButtonSelector)) return [];
-      return [(button.getAttribute('aria-label') || button.textContent?.trim() || button.className).slice(0, 80)];
+    return [...root.querySelectorAll('button, textarea, input, select, [role="toolbar"], [role="dialog"]')].flatMap(control => {
+      if (!control.getClientRects().length) return [];
+      if (control.closest(ignoreSelector) || control.matches(contentSelector)) return [];
+      const label = control.getAttribute('aria-label') || control.textContent?.trim() || control.getAttribute('class') || control.tagName;
+      return [label.slice(0, 80)];
     });
-  }, { ignoreSelector: EXPORT_IGNORE_SELECTOR, contentButtonSelector: exportContentButtons });
-  expect(missedChrome, '画布按钮必须要么是导出内容，要么被忽略选择器盖住').toEqual([]);
+  }, { ignoreSelector: EXPORT_IGNORE_SELECTOR, contentSelector: exportContentControls });
+  expect(missedChrome, '画布交互控件必须要么是导出内容，要么被忽略选择器盖住').toEqual([]);
   const origin = { left: layout.left, top: layout.top };
   const frames = [...layout.frames].sort((a, b) => a.width * a.height - b.width * b.height);
   expect(frames.length).toBeGreaterThanOrEqual(2);
@@ -692,5 +695,30 @@ test('裁剪进行中不下载图像，取消后两个导出动作恢复', async
   await expect(markdown).toBeEnabled();
   await expect(image).toBeEnabled();
   expect(downloads).toEqual([]);
+  expect((await workspace.state()).project.revision).toBe(revision);
+});
+
+test('导出进行中打开连线文字编辑框但不输入时，不把编辑框下载为图像', async ({ page, workspace }) => {
+  const projectId = (await workspace.state()).project.id;
+  const created = await workspace.execute(page, { commandId: crypto.randomUUID(), projectId, type: 'connector.create', expected: null,
+    payload: { id: 'export-idle-label', start: { kind: 'free', point: { x: 220, y: 220 } }, end: { kind: 'free', point: { x: 620, y: 360 } } } });
+  await workspace.execute(page, { commandId: crypto.randomUUID(), projectId, type: 'connector.label', expected: created.connectorVersions['export-idle-label'],
+    payload: { id: 'export-idle-label', label: { text: '导出时的连线文字', position: 0.5, fontSize: 16, color: '#252933', bold: false } } });
+  await page.reload();
+  await expect(page.getByRole('status')).toHaveText('已保存到本机');
+  const revision = (await workspace.state()).project.revision;
+  const downloads: string[] = [];
+  page.on('download', download => downloads.push(download.suggestedFilename()));
+  await page.getByRole('button', { name: '导出', exact: true }).click();
+  await holdCanvasExport(page);
+  await page.getByRole('menuitem', { name: '下载画布图像（PNG）', exact: true }).click();
+  await expect(page.getByRole('status')).toHaveText('正在生成画布图像…');
+  await page.getByRole('button', { name: '连线文字', exact: true }).dblclick();
+  // 打开但未输入：hasPending() 为假，编辑框本身仍会被画进图像。
+  await expect(page.getByRole('textbox', { name: '连线文字', exact: true })).toHaveValue('导出时的连线文字');
+  await releaseCanvasExport(page);
+  expect(await page.locator('.workspace').getAttribute('data-revision')).toBe(String(revision));
+  expect(downloads).toEqual([]);
+  await expect(page.getByRole('status')).toHaveText(/尚未保存的编辑/);
   expect((await workspace.state()).project.revision).toBe(revision);
 });

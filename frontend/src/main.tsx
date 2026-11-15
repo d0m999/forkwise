@@ -2998,13 +2998,16 @@ function Workspace() {
       ? deletedBody.card
       : undefined);
   // 按钮禁用与捕获中止是两套条件。并集会让框选、草稿等额外禁用导出，这里保持分开。
+  // 内联编辑会话要在捕获侧单独把关：导出已开始后再双击进入编辑时，会话刚建立还没有未保存内容，
+  // 只查 hasPending() 会把编辑框（textarea 与所选样式）连同白底烘进图像。
+  // 这里必须用 currentSession() 读当场状态：session 是渲染快照，闭包里会停在导出开始那一刻。
   function exportCaptureIntact(snapshotId: string) {
     const current = authority.current;
     if (!current || current.snapshot !== snapshotId) return false;
     if (pendingAction.current || saving.current || unconfirmed.current || closedDrafts.current.length || Object.keys(drafts.current).length || composition.current || frameDrag.current) return false;
-    if (pose.hasPending() || shapeMove.hasPending() || texts.hasPending() || texts.hasMove() || shapeText.hasPending()) return false;
+    if (pose.hasPending() || shapeMove.hasPending() || texts.hasPending() || texts.hasMove() || shapeText.hasPending() || !!shapeText.currentSession()) return false;
     if (appearance.hasPending() || cardLayout.hasPending() || canvasMove.hasPointerGesture() || frameMove.hasGesture() || groupGeometry.hasGesture() || marqueeSelection.hasGesture()) return false;
-    if (strokeDraw.hasPending() || connectorCreate.hasPending() || connectorEdit.hasPending() || connectorLabel.hasPending() || frameDraft.current || labelPositionPreview.current.size > 0) return false;
+    if (strokeDraw.hasPending() || connectorCreate.hasPending() || connectorEdit.hasPending() || connectorLabel.hasPending() || !!connectorLabel.currentSession() || frameDraft.current || labelPositionPreview.current.size > 0) return false;
     return !imageGeometry.hasPending(current.project.id) && !imageInput.hasPending(current.project.id) && imageGeometry.cropping?.projectId !== current.project.id;
   }
   const exportBlocked = !state || busy || historyBlocked || saveStatus !== '已保存到本机' || !!pendingAction.current ||
