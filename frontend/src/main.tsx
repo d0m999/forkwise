@@ -7,6 +7,8 @@ import { pasteJournal, pasteNotCommitted, type PasteAttempt } from "./paste-reco
 import type { CopyRef } from "./canvas-snapshot";
 import { nextPaste, pasteTranslation, type PasteSequence } from "./canvas-snapshot-geometry";
 import { SnapshotMenu } from "./snapshot-menu";
+import { ExportMenu } from "./export-menu";
+import { renderCanvasPng, type CanvasExportVisual } from "./canvas-export";
 import { useCanvasImageInput } from "./canvas-image-input";
 import { droppedFilePlan, fileAssetPayload, runDroppedFiles } from "./canvas-drop";
 import { openCardAttachment } from "./card-attachments";
@@ -342,6 +344,19 @@ function Workspace() {
   const [layerHold, setLayerHold] = useState<{ projectId: string; generation: number } | null>(null);
   const layerHoldActive = !!state && layerHold?.projectId === state.project.id && layerHold.generation === canvasSelection.generation();
   const [syncNotice, setSyncNotice] = useState("");
+  const [exportStatus, setExportStatus] = useState("");
+  const [exportVisual, setExportVisual] = useState<CanvasExportVisual | null>(null);
+  const frameDraft = useRef(false);
+  const [frameDrafting, setFrameDrafting] = useState(false);
+  const labelPositionPreview = useRef(new Set<string>());
+  function noteFrameDraft(dirty: boolean) {
+    frameDraft.current = dirty;
+    setFrameDrafting(current => current === dirty ? current : dirty);
+  }
+  function noteLabelPositionPreview(id: string, active: boolean) {
+    if (active) labelPositionPreview.current.add(id);
+    else labelPositionPreview.current.delete(id);
+  }
   const [nav, setNav] = useState(false),
     [pinned, setPinned] = useState(false);
   const [renaming, setRenaming] = useState<string | null>(null),
@@ -1963,6 +1978,9 @@ function Workspace() {
         ? "媒体保存失败 · 重试或移除"
         : "媒体处理中 · 尚未保存"
       : status);
+  useEffect(() => {
+    setExportStatus('');
+  }, [state?.project.id, state?.project.revision, saveStatus]);
   async function copyOriginalBody(cardId: string, before: Block[], after: Block[]) {
     const projectId=authority.current?.project.id;
     if (!projectId || !(await flush())) return;
@@ -2979,6 +2997,20 @@ function Workspace() {
     deletedBody.card.id === bodyCard
       ? deletedBody.card
       : undefined);
+  function exportCaptureIntact(snapshotId: string) {
+    const current = authority.current;
+    if (!current || current.snapshot !== snapshotId) return false;
+    if (pendingAction.current || saving.current || unconfirmed.current || closedDrafts.current.length || Object.keys(drafts.current).length || composition.current || frameDrag.current) return false;
+    if (pose.hasPending() || shapeMove.hasPending() || texts.hasPending() || texts.hasMove() || shapeText.hasPending()) return false;
+    if (appearance.hasPending() || cardLayout.hasPending() || canvasMove.hasPointerGesture() || frameMove.hasGesture() || groupGeometry.hasGesture() || marqueeSelection.hasGesture()) return false;
+    if (strokeDraw.hasPending() || connectorCreate.hasPending() || connectorEdit.hasPending() || connectorLabel.hasPending() || frameDraft.current || labelPositionPreview.current.size > 0) return false;
+    return !imageGeometry.hasPending(current.project.id) && !imageInput.hasPending(current.project.id);
+  }
+  const exportBlocked = !state || busy || historyBlocked || saveStatus !== '已保存到本机' || !!pendingAction.current ||
+    shapeMove.pending || shapeMove.dragging || !!shapeText.session || texts.hasPending() || pose.pending || pose.dragging ||
+    appearance.pending || cardLayout.pending || canvasMove.dragging || frameMove.hasGesture() || frameDrafting || strokeDraw.hasPending() ||
+    connectorCreate.hasPending() || connectorEdit.hasPending() || imageGeometry.hasPending(state.project.id) ||
+    imageInput.hasPending(state.project.id) || mediaQueue.hasUnconfirmed;
   const hasRecovery = recoveries.some(
     (r) => r.value.projectId === state?.project.id,
   );
@@ -3067,6 +3099,12 @@ function Workspace() {
             重命名
           </button>
         )}
+        {state && <ExportMenu project={state.project} disabled={exportBlocked} report={setExportStatus} image={async () => {
+          const snapshot = state;
+          const root = document.querySelector<HTMLElement>('.canvas .react-flow');
+          if (!root) throw new Error('画布尚未完成绘制，无法导出');
+          return renderCanvasPng(root, setExportVisual, () => exportCaptureIntact(snapshot.snapshot));
+        }} />}
       </header>
       {nav && (
         <aside className="project-nav">
@@ -3091,6 +3129,7 @@ function Workspace() {
       )}
       <main
         className={panelCard ? "canvas with-editor" : "canvas"}
+        data-exporting={exportVisual ? 'true' : undefined}
         tabIndex={0}
         onDragOver={event => {
           if (!event.dataTransfer.types.includes('Files')) return;
@@ -3261,14 +3300,14 @@ function Workspace() {
       >
         {state ? (
           <ReactFlow
-            style={{ '--connector-controls-layer': connectorTargets.controlsLayer } as CSSProperties}
+            style={{ '--connector-controls-layer': connectorTargets.controlsLayer, '--export-viewport-transform': exportVisual?.transform } as CSSProperties}
             ariaLabelConfig={{
               "controls.ariaLabel": "画布视图",
               "controls.zoomIn.ariaLabel": "放大",
               "controls.zoomOut.ariaLabel": "缩小",
               "controls.fitView.ariaLabel": "适应画布",
             }}
-            nodes={orderCanvas([...nodes, ...textNodes, ...imageNodes(state.images ?? [], state.project.id, selection, (id, extend) => void chooseCanvasItem(id, extend), busy || historyBlocked || composition.current || !!pendingAction.current || placing || !!shapePreset || texts.placing || panTool || !!strokeDraw.mode || !!shapeText.session || texts.geometryBlocked, imageGeometry, (value, dx, dy) => { if (canvasMove.start(value.item.id)) canvasMove.finish({ x: value.item.pose.x + dx, y: value.item.pose.y + dy }); }, singleItemId, memberAction, layerProps), ...shapeNodes(state.shapes ?? [], selection, (id, extend) => void chooseCanvasItem(id, extend), busy || historyBlocked || placing || !!shapePreset || texts.placing || panTool, id => void beginShapeText(id), !!shapeText.session, (id, trigger) => void beginShapeAppearance(id, trigger), value => void removeShape(value), shapeMove.positions, shapeMove, composition.current || !!pendingAction.current || pose.pending || pose.dragging || canvasMove.dragging || texts.hasPending() || appearance.pending || cardLayout.pending, singleItemId, memberAction, layerProps), ...strokeNodes(state.strokes ?? [], selection, (id, extend) => void chooseStrokeItem(id, extend), value => void removeStroke(value), busy || historyBlocked || !!pendingAction.current || placing || !!shapePreset || texts.placing || panTool || !!strokeDraw.mode, singleItemId, memberAction, itemId => !!state.groups?.some(group => group.memberItemIds.includes(itemId)) || (flowSelection.includes(itemId) && flowSelection.length > 1))].map(node => groupGeometry.project({ ...node, selected: flowSelection.includes(node.id), position: frameMove.positions[node.id] ?? canvasMove.positions[node.id] ?? shapeMove.positions[node.id] ?? attachmentPreview[node.id] ?? node.position, draggable: node.draggable !== false && !groupGeometry.active && !strokeDraw.mode && !busy && !historyBlocked && !panTool && !placing && !shapePreset && !texts.placing && !texts.geometryBlocked && !shapeText.session && !connectorLabel.session && !shapeMove.pending })), state, selection, { temporaryRaise: pureCardSelection && !layerHoldActive })}
+            nodes={orderCanvas([...nodes, ...textNodes, ...imageNodes(state.images ?? [], state.project.id, selection, (id, extend) => void chooseCanvasItem(id, extend), busy || historyBlocked || composition.current || !!pendingAction.current || placing || !!shapePreset || texts.placing || panTool || !!strokeDraw.mode || !!shapeText.session || texts.geometryBlocked, imageGeometry, (value, dx, dy) => { if (canvasMove.start(value.item.id)) canvasMove.finish({ x: value.item.pose.x + dx, y: value.item.pose.y + dy }); }, singleItemId, memberAction, layerProps), ...shapeNodes(state.shapes ?? [], selection, (id, extend) => void chooseCanvasItem(id, extend), busy || historyBlocked || placing || !!shapePreset || texts.placing || panTool, id => void beginShapeText(id), !!shapeText.session, (id, trigger) => void beginShapeAppearance(id, trigger), value => void removeShape(value), shapeMove.positions, shapeMove, composition.current || !!pendingAction.current || pose.pending || pose.dragging || canvasMove.dragging || texts.hasPending() || appearance.pending || cardLayout.pending, singleItemId, memberAction, layerProps), ...strokeNodes(state.strokes ?? [], selection, (id, extend) => void chooseStrokeItem(id, extend), value => void removeStroke(value), busy || historyBlocked || !!pendingAction.current || placing || !!shapePreset || texts.placing || panTool || !!strokeDraw.mode, singleItemId, memberAction, itemId => !!state.groups?.some(group => group.memberItemIds.includes(itemId)) || (flowSelection.includes(itemId) && flowSelection.length > 1))].map(node => groupGeometry.project({ ...node, selected: exportVisual ? false : flowSelection.includes(node.id), position: frameMove.positions[node.id] ?? canvasMove.positions[node.id] ?? shapeMove.positions[node.id] ?? attachmentPreview[node.id] ?? node.position, draggable: node.draggable !== false && !groupGeometry.active && !strokeDraw.mode && !busy && !historyBlocked && !panTool && !placing && !shapePreset && !texts.placing && !texts.geometryBlocked && !shapeText.session && !connectorLabel.session && !shapeMove.pending })), state, selection, { temporaryRaise: !exportVisual && pureCardSelection && !layerHoldActive })}
             onNodeClick={(event, node) => {
               if (attachTarget && state.cards.some(card => card.item.id === node.id)) {
                 const card = state.cards.find(value => value.item.id === node.id)!;
@@ -3371,14 +3410,14 @@ function Workspace() {
             <Background gap={24} color="#dce0e7" />
             <Controls showInteractive={false} />
             <ViewportPortal>
-              <CanvasFrames drawMemberIds={frameDrawMemberIds} dropCandidateId={frameDropCandidate} key={`${state.project.id}:${frameEditorEpoch}`} state={state} preview={framePreview} selectedId={selectedFrameId} selectedIds={selectedFrameIds} choose={chooseFrame}
+              <CanvasFrames drawMemberIds={frameDrawMemberIds} dropCandidateId={frameDropCandidate} key={`${state.project.id}:${frameEditorEpoch}`} state={state} preview={framePreview} selectedId={exportVisual ? null : selectedFrameId} selectedIds={exportVisual ? [] : selectedFrameIds} choose={chooseFrame}
                 focusId={frameEditorFocus.current?.projectId === state.project.id ? frameEditorFocus.current.id : null}
                 onFocusRestored={id => { if (frameEditorFocus.current?.projectId === state.project.id && frameEditorFocus.current.id === id) frameEditorFocus.current = null; }}
-                blocked={busy || historyBlocked || !!pendingAction.current}
+                blocked={busy || historyBlocked || !!pendingAction.current} onDraft={noteFrameDraft}
                 execute={(command, done, endEditing) => void action(command, done, { onSettled: () => {
                   if (!pendingAction.current && authority.current?.project.id === command.projectId) endEditing?.();
                 } })} move={frameMove} />
-              <CanvasGroups state={state} selection={canvasSelection.value} positions={{ ...canvasMove.positions, ...frameMove.positions, ...groupGeometry.poses }} geometry={groupGeometry}
+              <CanvasGroups state={state} selection={exportVisual ? { targets: [], enteredGroupId: null } : canvasSelection.value} positions={{ ...canvasMove.positions, ...frameMove.positions, ...groupGeometry.poses }} geometry={groupGeometry}
                 blocked={busy || historyBlocked || !!pendingAction.current || texts.hasPending()}
                 create={() => void createSelectedGroup()}
                 createFrame={() => void createSelectedFrame()}
@@ -3386,14 +3425,15 @@ function Workspace() {
                 remove={id => void deleteSelectedCanvas(id)}
                 enter={id => canvasSelection.set({ targets: [], enteredGroupId: id })}
                 layer={layerProps} />
-              {(state.connectors ?? []).map(value => <CanvasConnector key={value.id} value={value} selected={selectedConnectors.includes(value.id)} resolve={connectorTargets.resolve}
+              {(state.connectors ?? []).map(value => <CanvasConnector key={value.id} value={value} selected={!exportVisual && selectedConnectors.includes(value.id)} resolve={connectorTargets.resolve}
                 labelEditor={{ ...connectorLabel, begin: origin => void beginConnectorLabel(value.id, origin), finish: () => void finishConnectorLabel(),
                   history: travelConnectorLabel, locked: connectorLabelHistoryBusy,
                   blocked: busy || historyBlocked || composition.current || !!pendingAction.current || !!connectorLabel.session || connectorEdit.hasPending(),
-                  move: (original, position) => { if (original.label) void action({ commandId: crypto.randomUUID(), projectId: state.project.id, type: 'connector.label', expected: original.versionId,
-                    payload: { id: original.id, label: { ...original.label, position } } }); } }}
+                  move: (original, position) => original.label ? action({ commandId: crypto.randomUUID(), projectId: state.project.id, type: 'connector.label', expected: original.versionId,
+                    payload: { id: original.id, label: { ...original.label, position } } }) : Promise.resolve(false) }}
                 focus={connectorCreate.focusId === value.id || connectorEdit.focusId === value.id}
                 focused={() => { if (connectorCreate.focusId === value.id) connectorCreate.focused(); if (connectorEdit.focusId === value.id) connectorEdit.focused(); }}
+                onPositionPreview={noteLabelPositionPreview}
                 drag={event => { if (!connectorLabel.session) connectorEdit.move(value, event); }}
                 choose={extend => { if (!connectorCreate.hasPending() && !connectorEdit.hasPending()) { editorEpoch.current++; setFrameSelection(null); if (!extend) setSelection([]);
                   setSelectedConnectors(previous => extend ? previous.includes(value.id) ? previous.filter(id => id !== value.id) : [...previous, value.id] : [value.id]); } }} />)}
@@ -3770,7 +3810,7 @@ function Workspace() {
         {texts.createRejected && <button onClick={texts.abandonCreate}>放弃本次文字创建</button>}
         {mediaQueue.hasUnconfirmed && <button onClick={mediaQueue.retryUnconfirmed} disabled={historyBlocked}>重试媒体保存确认</button>}
         <span role="status" aria-live="polite">
-          {connectorCreate.working ? '正在保存…' : shapeMove.status || shapeText.status || texts.status || (appearance.error
+          {exportStatus || (connectorCreate.working ? '正在保存…' : shapeMove.status || shapeText.status || texts.status || (appearance.error
             ? "外观保存未完成"
             : appearance.pending
               ? "外观等待保存…"
@@ -3784,7 +3824,7 @@ function Workspace() {
                       ? "布局等待保存…"
                       : recovery.current?.damaged && status === "已保存到本机"
                         ? "部分恢复记录未确认"
-                        : saveStatus)}
+                        : saveStatus))}
         </span>
         {(appearance.error || appearance.pending || cardLayout.error) && (
           <>

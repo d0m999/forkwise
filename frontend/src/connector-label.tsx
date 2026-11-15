@@ -6,18 +6,25 @@ import { connectorPathPosition } from './connector-geometry';
 export type LabelEditor = { session: ConnectorLabelSession | null; error: string; working: boolean;
   begin: (origin: HTMLElement | SVGElement) => void; change: (text: string) => void; boundary: () => void; compose: (active: boolean) => void; finish: () => void;
   history: (direction: 'undo' | 'redo') => Promise<void>; locked: boolean;
-  blocked: boolean; move: (original: CanvasConnector, position: number) => void;
+  blocked: boolean; move: (original: CanvasConnector, position: number) => Promise<boolean | void>;
   conflict: LabelConflict | null; resolve: (choice: 'mine' | 'remote') => Promise<boolean>; stash: () => boolean };
 type TextEditor = Pick<LabelEditor, 'session' | 'working' | 'error' | 'change' | 'boundary' | 'compose' | 'finish' | 'conflict' | 'resolve' | 'stash' | 'history' | 'locked'>;
-export function ConnectorLabel({ value, path, origin, geometry, editor, choose }: {
+export function ConnectorLabel({ value, path, origin, geometry, editor, choose, onPositionPreview }: {
   value: CanvasConnector; path: RefObject<SVGPathElement | null>; origin: { x: number; y: number }; geometry: string; editor: LabelEditor; choose: (extend: boolean) => void;
+  onPositionPreview?: ((id: string, active: boolean) => void) | undefined;
 }) {
   const [point, setPoint] = useState({ x: 0, y: 0 });
   const [preview, setPreview] = useState<number | null>(null);
+  const previewNotify = useRef(onPositionPreview);
+  previewNotify.current = onPositionPreview;
   const drag = useRef<{ original: CanvasConnector; pointer: number; element: HTMLButtonElement; x: number; y: number; position: number; moved: boolean } | null>(null);
+  function showPosition(position: number | null) {
+    setPreview(position);
+    previewNotify.current?.(value.id, position !== null);
+  }
   const session = editor.session?.value.id === value.id ? editor.session : null, label = session?.label ?? value.label;
   function cancel() {
-    const active = drag.current; drag.current = null; setPreview(null);
+    const active = drag.current; drag.current = null; showPosition(null);
     if (active?.element.hasPointerCapture(active.pointer)) active.element.releasePointerCapture(active.pointer);
   }
   useEffect(() => {
@@ -30,7 +37,8 @@ export function ConnectorLabel({ value, path, origin, geometry, editor, choose }
     document.addEventListener('visibilitychange', hidden);
     return () => { cancel(); window.removeEventListener('blur', cancel); window.removeEventListener('pagehide', cancel); window.removeEventListener('keydown', escape, true); document.removeEventListener('visibilitychange', hidden); };
   }, []);
-  useLayoutEffect(() => { setPreview(null); }, [value.versionId]);
+  useEffect(() => () => previewNotify.current?.(value.id, false), [value.id]);
+  useLayoutEffect(() => { showPosition(null); }, [value.versionId]);
   useLayoutEffect(() => {
     const element = path.current;
     if (element) setPoint(element.getPointAtLength(element.getTotalLength() * (preview ?? label?.position ?? 0.5)));
@@ -56,15 +64,16 @@ export function ConnectorLabel({ value, path, origin, geometry, editor, choose }
       if (!active.moved && Math.hypot(event.clientX - active.x, event.clientY - active.y) < 3) return;
       const position = connectorPathPosition(path.current, { x: event.clientX, y: event.clientY });
       if (position === null) return;
-      active.moved = true; active.position = position; setPreview(position);
+      active.moved = true; active.position = position; showPosition(position);
     }}
     onPointerUp={event => {
       const active = drag.current;
       if (!active || active.pointer !== event.pointerId) return;
       event.preventDefault(); event.stopPropagation(); drag.current = null;
       if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
-      if (active.moved && Math.abs(active.position - active.original.label!.position) > 0.0001) editor.move(active.original, active.position);
-      else setPreview(null);
+      if (active.moved && Math.abs(active.position - active.original.label!.position) > 0.0001)
+        void Promise.resolve(editor.move(active.original, active.position)).then(saved => { if (!saved) showPosition(null); });
+      else showPosition(null);
     }}
     onPointerCancel={cancel} onLostPointerCapture={() => { if (drag.current) cancel(); }}
     onClick={event => { event.stopPropagation(); if (event.detail === 0) choose(event.shiftKey); }}

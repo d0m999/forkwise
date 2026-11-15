@@ -81,6 +81,14 @@ export const api = {
     request<CutStateView>(`/projects/${encodeURIComponent(projectId)}/cuts/${encodeURIComponent(cutId)}`),
   projects: () => request<Project[]>("/projects"),
   project: (id: string) => readCompactMap(id, request),
+  readableSummary: async (id: string, revision: number): Promise<Blob> => {
+    const response = await fetch(`/api/mapping/projects/${encodeURIComponent(id)}/export.md?revision=${revision}`, { credentials: 'same-origin' });
+    if (!response.ok) {
+      const result = await response.json().catch(() => ({})) as { code?: string; message?: string; details?: unknown };
+      throw new MappingError(result.code ?? TRANSPORT_FALLBACK_CODE, result.message ?? '摘要生成失败，请重试；项目未修改', result.details, response.status);
+    }
+    return response.blob();
+  },
   poseVersion: (projectId: string, itemId: string, versionId: string) =>
     request<CanvasShape["item"]>(`/projects/${encodeURIComponent(projectId)}/versions/pose/${encodeURIComponent(itemId)}/${encodeURIComponent(versionId)}`),
   synchronize: (value: WorkspaceProjection) => syncCompactMap(value, request),

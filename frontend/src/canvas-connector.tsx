@@ -16,11 +16,12 @@ export function ConnectorEntries({ values, choose, preview }: { values: Connecto
     style={{ left: value.point.x, top: value.point.y }} />)}</>;
 }
 
-export function CanvasConnector({ value, selected, choose, resolve, drag, focus, focused, labelEditor }: {
+export function CanvasConnector({ value, selected, choose, resolve, drag, focus, focused, labelEditor, onPositionPreview }: {
   value: Connector; selected: boolean; choose: (extend: boolean) => void; resolve: (endpoint: ConnectorEndpoint) => ConnectorPoint | null;
   drag: (event: PointerEvent<SVGSVGElement>) => void;
   focus: boolean; focused: () => void;
   labelEditor: LabelEditor;
+  onPositionPreview?: (id: string, active: boolean) => void;
 }) {
   const element = useRef<SVGSVGElement>(null);
   const path = useRef<SVGPathElement>(null);
@@ -50,7 +51,7 @@ export function CanvasConnector({ value, selected, choose, resolve, drag, focus,
     <path ref={path} d={line.path} style={{ stroke: style.color, strokeWidth: style.width, strokeDasharray: style.dash === 'dashed' ? `${style.width * 2} ${style.width * 2}` : undefined }}
       markerStart={style.startMarker === 'none' ? undefined : `url(#${markerId}-start)`}
       markerEnd={style.endMarker === 'none' ? undefined : `url(#${markerId}-end)`} />
-  </svg><ConnectorLabel value={value} path={path} origin={line} geometry={line.path} editor={labelEditor} choose={choose} /></>;
+  </svg><ConnectorLabel value={value} path={path} origin={line} geometry={line.path} editor={labelEditor} choose={choose} onPositionPreview={onPositionPreview} /></>;
 }
 
 export function ConnectorPreview({ draft }: { draft: ConnectorDraft | null }) {

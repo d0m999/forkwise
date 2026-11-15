@@ -99,14 +99,25 @@ export function useFrameMove({ state, blocked, point, execute }: {
   };
 }
 
-export function CanvasFrames({ state, preview, selectedId, selectedIds = [], choose, focusId, onFocusRestored, blocked, execute, move, dropCandidateId, drawMemberIds = [] }: {
+export function CanvasFrames({ state, preview, selectedId, selectedIds = [], choose, focusId, onFocusRestored, blocked, execute, move, dropCandidateId, drawMemberIds = [], onDraft }: {
   state: ProjectState; preview: FrameRect | null; dropCandidateId?: string | null; drawMemberIds?: string[]; selectedId: string | null; selectedIds?: string[]; choose: (id: string | null, extend?: boolean) => void; blocked: boolean; execute: Execute;
   move: ReturnType<typeof useFrameMove>; focusId: string | null; onFocusRestored: (id: string) => void;
+  onDraft: (dirty: boolean) => void;
 }) {
   const [editing, setEditing] = useState<{ projectId: string; id: string; versionId: string } | null>(null);
   const [name, setName] = useState('');
   const [background, setBackground] = useState('');
   const [composing, setComposing] = useState(false);
+  const onDraftRef = useRef(onDraft);
+  onDraftRef.current = onDraft;
+  function notifyDraft(nextName: string, nextBackground: string, session = editing) {
+    const frame = state.frames?.find(item => item.id === session?.id);
+    onDraftRef.current(!!session && !!frame && (nextName !== frame.name || nextBackground !== (frame.background ?? '')));
+  }
+  useEffect(() => {
+    notifyDraft(name, background);
+  }, [editing, name, background, state.frames, state.project.id]);
+  useEffect(() => () => onDraftRef.current(false), []);
   const triggers = useRef<Record<string, HTMLButtonElement | null>>({});
   const handles = useRef<Record<string, HTMLButtonElement | null>>({});
   const restoreHandleFocus = useRef<string | null>(null);
@@ -143,7 +154,7 @@ export function CanvasFrames({ state, preview, selectedId, selectedIds = [], cho
           width: move.positions[frame.id]?.width ?? frame.pose.width, height: move.positions[frame.id]?.height ?? frame.pose.height, background: frame.background ?? 'transparent' }}>
         {edited?.id === frame.id ? <form className="canvas-frame-editor nodrag nopan" onSubmit={event => { event.preventDefault(); save(); }}>
           <textarea aria-label="分区名称" rows={1} maxLength={240} autoFocus value={name} readOnly={blocked}
-            onChange={event => setName(event.target.value)}
+            onChange={event => { const next = event.target.value; setName(next); notifyDraft(next, background); }}
             onCompositionStart={() => setComposing(true)} onCompositionEnd={() => setComposing(false)}
             onKeyDown={event => {
               event.stopPropagation();
@@ -151,7 +162,7 @@ export function CanvasFrames({ state, preview, selectedId, selectedIds = [], cho
               if (event.key === 'Enter' && !event.shiftKey || event.key === 'Escape') { event.preventDefault(); save(); }
             }} />
           <input aria-label="分区背景" type="text" placeholder="透明" value={background} readOnly={blocked}
-            onChange={event => setBackground(event.target.value)} onKeyDown={event => event.stopPropagation()} />
+            onChange={event => { const next = event.target.value; setBackground(next); notifyDraft(name, next); }} onKeyDown={event => event.stopPropagation()} />
           <button type="button" disabled={blocked}
             onClick={() => {
               const session = editing;

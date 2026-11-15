@@ -37,7 +37,7 @@ test('拖入 PDF、三个普通文件和图片分别建卡或图片，中文名�
   await expect(page.getByRole('button', { name: '打开 页面.html', exact: true })).toBeVisible();
   await page.screenshot({ path: test.info().outputPath('02-html-card.png') });
   const htmlPopupPromise = page.waitForEvent('popup');
-  const downloadPromise = page.waitForEvent('download', { timeout: 8000 });
+  const downloadPromise = htmlPopupPromise.then(popup => popup.waitForEvent('download', { timeout: 8000 }));
   await page.getByRole('button', { name: '打开 页面.html', exact: true }).click();
   const htmlPopup = await htmlPopupPromise;
   expect((await downloadPromise).suggestedFilename()).toContain('页面');
