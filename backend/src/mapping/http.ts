@@ -146,28 +146,25 @@ export function createWorkspaceApp(
       'Content-Disposition': `${disposition}; filename*=UTF-8''${encoded}`,
     } });
   });
-  app.get('/api/mapping/projects/:id/export.md', (c) => {
-    const expectedRevision = z.coerce.number().int().nonnegative().optional().parse(c.req.query('revision'));
-    const state = mapping.read({ type: 'project', projectId: c.req.param('id') }, c.get('principal'));
+  const savedForExport = (projectId: string, revision: string | undefined, actor: Principal) => {
+    const expectedRevision = z.coerce.number().int().nonnegative().optional().parse(revision);
+    const state = mapping.read({ type: 'project', projectId }, actor);
     requireThat(
       expectedRevision === undefined || state.project.revision === expectedRevision,
       'EXPORT_REVISION_CHANGED',
       '项目已保存状态已变化，请重新打开导出菜单',
       409,
     );
+    return state;
+  };
+  app.get('/api/mapping/projects/:id/export.md', (c) => {
+    const state = savedForExport(c.req.param('id'), c.req.query('revision'), c.get('principal'));
     return new Response(readableMarkdown(state, new Date().toISOString()), {
       headers: { 'Content-Type': 'text/markdown; charset=utf-8' },
     });
   });
   app.get('/api/mapping/projects/:id/export.package', (c) => {
-    const expectedRevision = z.coerce.number().int().nonnegative().optional().parse(c.req.query('revision'));
-    const state = mapping.read({ type: 'project', projectId: c.req.param('id') }, c.get('principal'));
-    requireThat(
-      expectedRevision === undefined || state.project.revision === expectedRevision,
-      'EXPORT_REVISION_CHANGED',
-      '项目已保存状态已变化，请重新打开导出菜单',
-      409,
-    );
+    const state = savedForExport(c.req.param('id'), c.req.query('revision'), c.get('principal'));
     const bytes = new Uint8Array(mapping.fullPackage(state.project.id, c.get('principal'), new Date().toISOString()));
     const safe = state.project.name.replace(/[\\/:*?"<>|]/g, '-').trim().slice(0, 80) || '见岔项目';
     const filename = encodeURIComponent(`${safe}-r${state.project.revision}.zip`).replace(/[!'()*]/g, (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`);

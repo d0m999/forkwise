@@ -204,6 +204,36 @@ describe('完整项目包', () => {
       expect(crossedResult.status).not.toBe(0);
       expect(crossedResult.stdout).toContain('CROSS_PROJECT research.project.id expected=p actual=other-project');
 
+      const rebuild = (target: unknown, name: string, rename?: (entry: string) => string) => {
+        const path = join(isolated, name);
+        writeFileSync(path, writeZip([
+          { name: 'forkwise-project.json', data: Buffer.from(JSON.stringify(target)) },
+          ...[...good].filter(([entry]) => entry !== 'forkwise-project.json').map(([entry, data]) => ({ name: rename ? rename(entry) : entry, data })),
+        ]));
+        return path;
+      };
+      const ghostAsset = structuredClone(manifest);
+      const ghostCard = ghostAsset.mapping.cards[0]! as unknown as { body: { requiredAssetIds?: string[] } };
+      ghostCard.body.requiredAssetIds = ['ghost-asset'];
+      ghostAsset.mapping.stored.cards[0]!.json = JSON.stringify(ghostCard);
+      const ghostResult = verify(rebuild(ghostAsset, 'ghost-asset.zip'));
+      expect(ghostResult.status).not.toBe(0);
+      expect(ghostResult.stdout).toContain('REFERENCE mapping.cards[0].body.requiredAssetIds[0] expected=resource ghost-asset actual=missing');
+
+      const malformedPath = structuredClone(manifest);
+      malformedPath.resources[0]!.path = 'resources/0-short';
+      const malformedResult = verify(rebuild(malformedPath, 'malformed-path.zip'));
+      expect(malformedResult.status).not.toBe(0);
+      expect(malformedResult.stdout).toContain('RESOURCE_PATH resources[0].path expected=resources/<序号>-<sha256> actual=resources/0-short');
+
+      const staleName = structuredClone(manifest);
+      const renamed = `resources/0000-${'a'.repeat(64)}`;
+      const previousPath = staleName.resources[0]!.path;
+      staleName.resources[0]!.path = renamed;
+      const staleResult = verify(rebuild(staleName, 'stale-name.zip', (entry) => (entry === previousPath ? renamed : entry)));
+      expect(staleResult.status).not.toBe(0);
+      expect(staleResult.stdout).toContain(`RESOURCE_PATH resources[0].path expected=resources/<序号>-${manifest.resources[0]!.sha256} actual=${renamed}`);
+
       expect((await app.fetch(new Request(`${origin}/api/mapping/projects/p/export.package?revision=${before.revision - 1}`, { headers: { Authorization: `Bearer ${token}` } }))).status).toBe(409);
       const denied = mapping.access.issue('agent', ['other']);
       expect((await app.fetch(new Request(`${origin}/api/mapping/projects/p/export.package`, { headers: { Authorization: `Bearer ${denied}` } }))).status).toBe(403);
@@ -212,5 +242,5 @@ describe('完整项目包', () => {
       mapping.close();
       rmSync(directory, { recursive: true, force: true });
     }
-  });
+  }, 20000);
 });

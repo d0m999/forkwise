@@ -2,6 +2,42 @@ import { useEffect, useRef, useState } from 'react';
 import { api, type Project } from './api';
 import { downloadBlob, exportFilename } from './download';
 
+type ExportKind = 'markdown' | 'image' | 'package';
+
+const EXPORT_STEPS: Record<ExportKind, {
+  label: string;
+  busy: string;
+  done: string;
+  failed: string;
+  extension: 'md' | 'png' | 'zip';
+  load: (project: Project, image: () => Promise<Blob>) => Promise<Blob>;
+}> = {
+  markdown: {
+    label: '下载可读摘要（Markdown）',
+    busy: '正在生成可读摘要…',
+    done: '可读摘要下载已开始',
+    failed: '摘要生成失败，请重试；项目未修改',
+    extension: 'md',
+    load: (project) => api.readableSummary(project.id, project.revision),
+  },
+  image: {
+    label: '下载画布图像（PNG）',
+    busy: '正在生成画布图像…',
+    done: '画布图像下载已开始',
+    failed: '画布图像生成失败，请重试；项目未修改',
+    extension: 'png',
+    load: (_project, image) => image(),
+  },
+  package: {
+    label: '下载完整项目包（ZIP）',
+    busy: '正在生成完整项目包…',
+    done: '完整项目包下载已开始',
+    failed: '完整项目包生成失败，请重试；项目未修改',
+    extension: 'zip',
+    load: (project) => api.fullPackage(project.id, project.revision),
+  },
+};
+
 export function ExportMenu({ project, disabled, report, image }: {
   project: Project;
   disabled: boolean;
@@ -9,7 +45,7 @@ export function ExportMenu({ project, disabled, report, image }: {
   image: () => Promise<Blob>;
 }) {
   const [open, setOpen] = useState(false);
-  const [busy, setBusy] = useState<'markdown' | 'image' | 'package' | null>(null);
+  const [busy, setBusy] = useState<ExportKind | null>(null);
   const root = useRef<HTMLDivElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
   const first = useRef<HTMLButtonElement>(null);
@@ -40,17 +76,18 @@ export function ExportMenu({ project, disabled, report, image }: {
     setOpen(false);
     trigger.current?.focus({ preventScroll: true });
   }
-  async function run(kind: 'markdown' | 'image' | 'package') {
+  async function run(kind: ExportKind) {
     if (disabled || busy) return;
+    const step = EXPORT_STEPS[kind];
     const returnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     setBusy(kind);
-    report(kind === 'markdown' ? '正在生成可读摘要…' : kind === 'package' ? '正在生成完整项目包…' : '正在生成画布图像…');
+    report(step.busy);
     try {
-      const blob = kind === 'markdown' ? await api.readableSummary(project.id, project.revision) : kind === 'package' ? await api.fullPackage(project.id, project.revision) : await image();
-      downloadBlob(blob, exportFilename(project.name, project.revision, kind === 'markdown' ? 'md' : kind === 'package' ? 'zip' : 'png'));
-      report(kind === 'markdown' ? '可读摘要下载已开始' : kind === 'package' ? '完整项目包下载已开始' : '画布图像下载已开始');
+      const blob = await step.load(project, image);
+      downloadBlob(blob, exportFilename(project.name, project.revision, step.extension));
+      report(step.done);
     } catch (error) {
-      report(error instanceof Error ? error.message : kind === 'markdown' ? '摘要生成失败，请重试；项目未修改' : kind === 'package' ? '完整项目包生成失败，请重试；项目未修改' : '画布图像生成失败，请重试；项目未修改');
+      report(error instanceof Error ? error.message : step.failed);
     } finally {
       setBusy(null);
       requestAnimationFrame(() => {
@@ -80,13 +117,13 @@ export function ExportMenu({ project, disabled, report, image }: {
       <p>完整项目包包含已保存的数据和资源文件，可离开本机读取；它不是加密备份，也不能在这里导入。</p>
       {disabled && <p role="note">当前有未保存内容，请先完成保存；导出只读取已保存状态。</p>}
       <button ref={first} type="button" role="menuitem" disabled={disabled || !!busy} onClick={() => void run('markdown')}>
-        {busy === 'markdown' ? '正在生成可读摘要…' : '下载可读摘要（Markdown）'}
+        {busy === 'markdown' ? EXPORT_STEPS.markdown.busy : EXPORT_STEPS.markdown.label}
       </button>
       <button type="button" role="menuitem" disabled={disabled || !!busy} onClick={() => void run('image')}>
-        {busy === 'image' ? '正在生成画布图像…' : '下载画布图像（PNG）'}
+        {busy === 'image' ? EXPORT_STEPS.image.busy : EXPORT_STEPS.image.label}
       </button>
       <button type="button" role="menuitem" disabled={disabled || !!busy} onClick={() => void run('package')}>
-        {busy === 'package' ? '正在生成完整项目包…' : '下载完整项目包（ZIP）'}
+        {busy === 'package' ? EXPORT_STEPS.package.busy : EXPORT_STEPS.package.label}
       </button>
     </div>}
   </div>;

@@ -1,18 +1,8 @@
-import { createHash } from 'node:crypto';
 import type Database from 'better-sqlite3';
 import { DomainError } from '../domain/errors.js';
+import { assetHash } from './media.js';
+import { SECRET_KEYS } from './secret-keys.js';
 import { writeZip } from './zip-store.js';
-
-const SECRET_KEYS = new Set([
-  'session',
-  'token',
-  'tokenHash',
-  'runToken',
-  'authorization',
-  'secret',
-  'password',
-  'cookie',
-]);
 
 const RECORD_QUERIES = {
   cards: 'SELECT c.value AS value FROM mapping_cards c JOIN mapping_card_ids i ON i.id=c.id WHERE c.project_id=? ORDER BY i.rowid',
@@ -31,10 +21,6 @@ const RECORD_QUERIES = {
 type RecordName = keyof typeof RECORD_QUERIES;
 type JsonRecord = Record<string, unknown>;
 
-function digest(bytes: Buffer): string {
-  return createHash('sha256').update(bytes).digest('hex');
-}
-
 function records(db: Database.Database, projectId: string, name: RecordName): { parsed: unknown[]; stored: { json: string }[] } {
   const rows = db.prepare(RECORD_QUERIES[name]).all(projectId) as { value: string }[];
   return {
@@ -43,7 +29,7 @@ function records(db: Database.Database, projectId: string, name: RecordName): { 
   };
 }
 
-export function redactSecrets(value: unknown): unknown {
+function redactSecrets(value: unknown): unknown {
   if (Array.isArray(value)) return value.map((item) => redactSecrets(item));
   if (!value || typeof value !== 'object') return value;
   const copy: JsonRecord = {};
@@ -54,7 +40,7 @@ export function redactSecrets(value: unknown): unknown {
   return copy;
 }
 
-export function stackOf(mapping: {
+function stackOf(mapping: {
   cards?: unknown[];
   texts?: unknown[];
   shapes?: unknown[];
@@ -91,7 +77,7 @@ export function stackOf(mapping: {
   return rows;
 }
 
-export function membershipOf(
+function membershipOf(
   frames: unknown[],
   groups: unknown[],
   containment: unknown[],
@@ -181,7 +167,7 @@ export function buildFullPackage(db: Database.Database, projectId: string, expor
   const mappingRecords = Object.fromEntries((Object.keys(RECORD_QUERIES) as RecordName[]).map((name) => [name, loaded[name].parsed]));
   const drafts = resourceDrafts(assets, research);
   const resources = drafts.map((draft, index) => {
-    const sha256 = digest(draft.bytes);
+    const sha256 = assetHash(draft.bytes);
     return {
       id: draft.id,
       mime: draft.mime,

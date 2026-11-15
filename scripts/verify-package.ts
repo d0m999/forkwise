@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
+import { SECRET_KEYS } from '../backend/src/mapping/secret-keys.js';
 
 interface Failure {
   code: string;
@@ -7,8 +8,6 @@ interface Failure {
   expected: string;
   actual: string;
 }
-
-const SECRET_KEYS = new Set(['session', 'token', 'tokenHash', 'runToken', 'authorization', 'secret', 'password', 'cookie']);
 
 function fail(failures: Failure[], code: string, path: string, expected: unknown, actual: unknown) {
   const clip = (value: unknown) => {
@@ -215,12 +214,13 @@ function verifyManifest(manifest: Record<string, unknown>, files: Map<string, Bu
     }
     if (typeof record.sha256 === 'string' && !/^[a-f0-9]{64}$/.test(record.sha256))
       fail(failures, 'RESOURCE_HASH', `${path}.sha256`, '64 hex', record.sha256);
-    if (typeof record.path !== 'string' || record.path.startsWith('/') || record.path.includes('\\') || record.path.split('/').includes('..'))
-      fail(failures, 'RESOURCE_PATH', `${path}.path`, 'relative path', record.path);
+    if (typeof record.path !== 'string' || !/^resources\/\d{4,}-[a-f0-9]{64}$/.test(record.path))
+      fail(failures, 'RESOURCE_PATH', `${path}.path`, 'resources/<序号>-<sha256>', record.path);
     else if (!files.has(record.path)) fail(failures, 'RESOURCE_MISSING', record.path, 'file bytes', 'missing');
     else if (typeof record.sha256 === 'string') {
       const actual = createHash('sha256').update(files.get(record.path)!).digest('hex');
       if (actual !== record.sha256) fail(failures, 'RESOURCE_HASH', record.path, record.sha256, actual);
+      else if (!record.path.endsWith(`-${record.sha256}`)) fail(failures, 'RESOURCE_PATH', `${path}.path`, `resources/<序号>-${record.sha256}`, record.path);
     }
   });
   const requireAsset = (id: unknown, path: string) => {
@@ -232,6 +232,8 @@ function verifyManifest(manifest: Record<string, unknown>, files: Map<string, Bu
     if (!value || typeof value !== 'object') return;
     for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
       if (key === 'assetId') requireAsset(child, `${path}.assetId`);
+      else if (key === 'requiredAssetIds' && Array.isArray(child))
+        child.forEach((id, index) => requireAsset(id, `${path}.requiredAssetIds[${index}]`));
       else if (key !== 'stored' && key !== 'versions' && key !== 'history' && key !== 'changes') walkAssets(child, `${path}.${key}`);
     }
   };

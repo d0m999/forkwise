@@ -46,6 +46,11 @@ test('同一导出入口在摘要生成失败时不显示下载成功，重试�
   await expect(imageAction).toBeFocused();
   await page.keyboard.press('Shift+Tab');
   await expect(action).toBeFocused();
+  const packageAction = page.getByRole('menuitem', { name: '下载完整项目包（ZIP）', exact: true });
+  await page.keyboard.press('End');
+  await expect(packageAction).toBeFocused();
+  await page.keyboard.press('Home');
+  await expect(action).toBeFocused();
   await expect(page.getByText('只导出当前已保存状态；未保存草稿不包含在内。')).toBeVisible();
   await action.click();
   await expect(page.getByRole('status')).toHaveText('摘要生成失败，请重试；项目未修改');
