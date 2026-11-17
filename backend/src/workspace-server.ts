@@ -12,9 +12,6 @@ import {
 } from 'node:fs';
 import { extname, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { openMapping } from './mapping/storage.js';
-import { createWorkspaceApp } from './mapping/http.js';
-
 const directory = process.env.FORKWISE_DATA_DIR;
 if (!directory)
   throw new Error('请显式设置 FORKWISE_DATA_DIR 为新的开放工作台目录；不读取旧 .data');
@@ -25,6 +22,9 @@ const webRoot = resolve(fileURLToPath(new URL('../workspace/', import.meta.url))
 if (!existsSync(resolve(webRoot, 'index.html')))
   throw new Error('开放工作台尚未构建，请先运行 npm run build:workspace；旧入口未改变');
 const origin = `http://127.0.0.1:${port}`;
+// 环境校验先于工作台模块加载：缺目录时立即失败，不因新增映射模块拖慢启动。
+const { openMapping } = await import('./mapping/storage.js');
+const { createWorkspaceApp } = await import('./mapping/http.js');
 const mapping = openMapping(directory);
 const types: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',

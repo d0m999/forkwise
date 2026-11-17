@@ -46,10 +46,10 @@ v1 用 `.strict()` 描述既有研究归档，把画布字段塞进 v1 会让旧
 
 `npx --no-install --prefix backend tsx scripts/verify-package.ts <path>`。缺路径退出码 2，有失败退出码 1，通过为 0；每行失败是 `代码 路径 expected=… actual=…`。
 
-检查项：容器与清单形状、`format` / `schemaVersion`、`mapping.project` 与顶层身份一致、十一个集合与 `versions` 的 `stored` 逐条对应、`membership` 与 `stack` 重算一致、资源字段与 `id` 唯一、路径形状与 `sha256` 后缀绑定、文件存在与哈希、`assetId` / `requiredAssetIds` / 连线端点 / 容器成员与父级 / 附着目标的引用闭合、`research` 的 v1 形状与项目 ID、`SECRET_KEYS` 扫描、跨项目 ID 扫描。
+检查项：容器与清单形状、`format` / `schemaVersion`、`mapping.project` 与顶层身份一致、十一个集合与 `versions` 的 `stored` 逐条对应、`membership` 与 `stack` 重算一致、资源字段与 `id` 唯一、路径形状与 `sha256` 后缀绑定、文件存在与哈希、`assetId` / `requiredAssetIds` / 连线端点 / 容器成员与父级 / 附着目标的引用闭合、`research` 的 v1 形状与项目 ID、`SECRET_KEYS` 扫描、跨项目 ID 扫描。#47 起跨项目检查收窄为顶层 `projectId`、`mapping.project.id`、`research.project.id` 与变更回执 `projectId`；历史归档和未知内容里的旧项目号按原文保留，见 [ADR 0032](0032-isolated-package-import.md)。
 
 验证器不复用导出器的派生实现，也不依赖服务端与数据库；`SECRET_KEYS` 是唯一共享常量，避免脱敏键集两处漂移后校验静默放行。
 
 ## 未纳入
 
-#47 的导入与跨版本迁移不在本模型内。研究归档入口尚未实现：产品导出只写 `research: null`，把 `research.sqlite` 的 v1 对象接进入口需要另立票，在此之前 AC1 的「旧研究记录按原结构保留」只能由调用方参数路径满足。后交付新类型由该功能在完成前同时扩展格式与验证器（`extensions` 预留）。是否在清单里去掉 `assets.base64` 让媒体只出现一次，留作待决定项：去掉会缩小包体，但清单不再自足，读取原件必须解 ZIP。
+#47 的导入与跨版本迁移不在本模型内；隔离导入的命令、身份映射与归档表见 [ADR 0032](0032-isolated-package-import.md)。研究归档入口尚未实现：产品导出只写 `research: null`，把 `research.sqlite` 的 v1 对象接进入口需要另立票，在此之前 AC1 的「旧研究记录按原结构保留」只能由调用方参数路径满足。后交付新类型由该功能在完成前同时扩展格式与验证器（`extensions` 预留）。是否在清单里去掉 `assets.base64` 让媒体只出现一次，留作待决定项：去掉会缩小包体，但清单不再自足，读取原件必须解 ZIP。

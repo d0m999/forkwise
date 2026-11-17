@@ -29,6 +29,7 @@ import { reconcileMediaTasks, completeMediaTask } from './media-tasks.js';
 import { completeMediaHistory } from './history.js';
 import { readAsset, saveAsset, validateImageAssets } from './media.js';
 import { buildFullPackage } from './full-package.js';
+import { importPackage, previewImport as previewPackageSource, type ImportPreview } from './package-import.js';
 import { DEFAULT_APPEARANCE, DEFAULT_PREVIEW_HEIGHT } from './presentation-values.js';
 import type Database from 'better-sqlite3';
 import { CompactMaps, type CompactOptions } from './compact.js';
@@ -49,7 +50,7 @@ import { editedBlocks, requireBlockOwnership, bodyContentUnchanged, originalCopy
 import { deleteCard } from './lifecycle.js';
 import { createTagSelection, readTags, updateTag, writeCardTags, deleteTag } from './tags.js';
 import { addCardAttachment, removeCardAttachment } from './card-attachment.js';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { searchProject } from './search.js';
 import { SearchLibraries, type SearchAssetReader } from './search-language.js';
 import { contentEditTimes } from './search-edits.js';
@@ -211,11 +212,19 @@ export class Mapping {
     })();
   }
 
-  fullPackage(projectId: string, actor: Principal, exportedAt: string, research: unknown = null): Buffer {
+  fullPackage(projectId: string, actor: Principal, exportedAt: string, research?: unknown): Buffer {
     return this.db.transaction(() => {
       this.access.validate(actor);
       this.access.project(actor, projectId);
       return buildFullPackage(this.db, projectId, exportedAt, research);
+    })();
+  }
+
+  previewImport(base64: string, actor: Principal): ImportPreview {
+    return this.db.transaction(() => {
+      this.access.validate(actor);
+      this.access.human(actor);
+      return previewPackageSource(base64);
     })();
   }
 
@@ -257,12 +266,22 @@ export class Mapping {
         this.access.mappingWrite(actor, command.projectId);
         if (
           command.type === 'project.create' ||
+          command.type === 'project.import' ||
           isSearchStateCommand(command) ||
           command.type === 'history.undo' ||
           command.type === 'history.redo'
         )
           this.access.human(actor);
-        const request = canonical(command);
+        const request = command.type === 'project.import'
+          ? canonical({
+              ...command,
+              payload: {
+                name: command.payload.name,
+                base64Sha256: createHash('sha256').update(Buffer.from(command.payload.base64, 'base64')).digest('hex'),
+                base64Length: command.payload.base64.length,
+              },
+            })
+          : canonical(command);
         const saved = this.db
           .prepare(
             'SELECT actor_id, request, receipt FROM mapping_receipts WHERE project_id=? AND command_id=?',
@@ -676,6 +695,14 @@ export class Mapping {
             .prepare('INSERT INTO mapping_projects VALUES(?,?,?,1)')
             .run(command.projectId, command.payload.name, randomUUID());
           revision = 1;
+          changedIds = [command.projectId];
+          after = this.project(command.projectId);
+        } else if (command.type === 'project.import') {
+          ({ revision } = importPackage(this.db, {
+            projectId: command.projectId,
+            name: command.payload.name,
+            base64: command.payload.base64,
+          }));
           changedIds = [command.projectId];
           after = this.project(command.projectId);
         } else if (command.type === 'thought.create') {

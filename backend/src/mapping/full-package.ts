@@ -134,11 +134,14 @@ function resourceDrafts(assets: unknown[], research: unknown): DraftResource[] {
   return drafts;
 }
 
-export function buildFullPackage(db: Database.Database, projectId: string, exportedAt: string, research: unknown): Buffer {
+export function buildFullPackage(db: Database.Database, projectId: string, exportedAt: string, research?: unknown): Buffer {
   const project = db
     .prepare('SELECT id, name, version_id AS versionId, revision FROM mapping_projects WHERE id=?')
     .get(projectId) as { id: string; name: string; versionId: string; revision: number } | undefined;
   if (!project) throw new DomainError('NOT_FOUND', '项目不存在', 404);
+  const archived = db.prepare('SELECT research, extensions FROM mapping_import_archive WHERE project_id=?').get(projectId) as { research: string; extensions: string } | undefined;
+  const effectiveResearch = research === undefined ? (archived ? (JSON.parse(archived.research) as unknown) : null) : research ?? null;
+  const extensions = archived ? (JSON.parse(archived.extensions) as unknown) ?? {} : {};
   const loaded = Object.fromEntries(
     (Object.keys(RECORD_QUERIES) as RecordName[]).map((name) => [name, records(db, projectId, name)]),
   ) as Record<RecordName, { parsed: unknown[]; stored: { json: string }[] }>;
@@ -165,7 +168,7 @@ export function buildFullPackage(db: Database.Database, projectId: string, expor
     }[]
   ).map((row) => ({ revision: row.revision, receipt: redactSecrets(JSON.parse(row.receipt) as unknown) }));
   const mappingRecords = Object.fromEntries((Object.keys(RECORD_QUERIES) as RecordName[]).map((name) => [name, loaded[name].parsed]));
-  const drafts = resourceDrafts(assets, research);
+  const drafts = resourceDrafts(assets, effectiveResearch);
   const resources = drafts.map((draft, index) => {
     const sha256 = assetHash(draft.bytes);
     return {
@@ -182,7 +185,7 @@ export function buildFullPackage(db: Database.Database, projectId: string, expor
     exportedAt,
     projectId: project.id,
     revision: project.revision,
-    research: research ?? null,
+    research: effectiveResearch,
     mapping: {
       project,
       ...mappingRecords,
@@ -198,7 +201,7 @@ export function buildFullPackage(db: Database.Database, projectId: string, expor
       },
     },
     resources: resources.map(({ id, mime, sha256, path }) => ({ id, mime, sha256, path })),
-    extensions: {},
+    extensions,
   };
   return writeZip([
     { name: 'forkwise-project.json', data: Buffer.from(JSON.stringify(manifest)) },

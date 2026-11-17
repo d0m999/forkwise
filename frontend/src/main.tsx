@@ -8,6 +8,7 @@ import type { CopyRef } from "./canvas-snapshot";
 import { nextPaste, pasteTranslation, type PasteSequence } from "./canvas-snapshot-geometry";
 import { SnapshotMenu } from "./snapshot-menu";
 import { ExportMenu } from "./export-menu";
+import { ImportPackage } from "./import-package";
 import { renderCanvasPng, type CanvasExportVisual } from "./canvas-export";
 import { useCanvasImageInput } from "./canvas-image-input";
 import { droppedFilePlan, fileAssetPayload, runDroppedFiles } from "./canvas-drop";
@@ -3091,6 +3092,12 @@ function Workspace() {
         >
           新建研究
         </button>
+        <ImportPackage
+          disabled={busy || historyBlocked}
+          onImported={(id) => {
+            void select(id).finally(() => { void api.projects().then(setProjects).catch(() => { /* 保留当前可见项目 */ }); });
+          }}
+        />
         {state && (
           <button
             aria-label="重命名当前项目"

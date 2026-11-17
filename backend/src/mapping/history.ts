@@ -104,7 +104,7 @@ export function recordAction(
   change: Change,
   session: string,
 ) {
-  if (command.type === 'project.create') return;
+  if (command.type === 'project.create' || command.type === 'project.import') return;
   const stack = load(db, command.projectId);
   // 剪切是独立的源端动作：它可能只删一张没有归属行的卡片，不能落到后面的通用分支。
   if (command.type === 'canvas.cut') {

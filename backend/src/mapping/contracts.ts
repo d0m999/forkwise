@@ -208,6 +208,14 @@ export const MappingCommand = z.discriminatedUnion('type', [
   z
     .object({
       ...Envelope,
+      type: z.literal('project.import'),
+      expected: z.null(),
+      payload: z.object({ name: Name, base64: z.string().min(1) }).strict(),
+    })
+    .strict(),
+  z
+    .object({
+      ...Envelope,
       type: z.literal('thought.create'),
       editGroup: Id.optional(),
       expected: z.null(),

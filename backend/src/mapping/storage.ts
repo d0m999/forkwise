@@ -96,6 +96,7 @@ export function openMapping(directory: string, options: CommitOptions = {}): Map
       CREATE TABLE IF NOT EXISTS mapping_cards(id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES mapping_projects(id), value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS mapping_receipts(project_id TEXT NOT NULL REFERENCES mapping_projects(id), command_id TEXT NOT NULL, actor_id TEXT NOT NULL, request TEXT NOT NULL, receipt TEXT NOT NULL, PRIMARY KEY(project_id, command_id));
       CREATE TABLE IF NOT EXISTS mapping_changes(project_id TEXT NOT NULL REFERENCES mapping_projects(id), revision INTEGER NOT NULL, receipt TEXT NOT NULL, PRIMARY KEY(project_id, revision));
+      CREATE TABLE IF NOT EXISTS mapping_import_archive(project_id TEXT PRIMARY KEY REFERENCES mapping_projects(id), research TEXT, history TEXT, changes TEXT, extensions TEXT);
     `);
     initializeMedia(db);
     initializeMediaTasks(db);

@@ -1,6 +1,7 @@
 import type { SearchQuery, SearchResult, SearchStateView } from '../../backend/src/mapping/search-contracts';
 import type { MediaAsset, ImageAsset } from '../../backend/src/mapping/media';
 import type { CutStateView } from '../../backend/src/mapping/cut-contracts';
+import type { ImportPreview } from '../../backend/src/mapping/package-import';
 import type { CanvasShape } from '../../backend/src/mapping/shape-contracts';
 import type {
   CardIdentity,
@@ -80,6 +81,7 @@ export const api = {
   cutState: (projectId: string, cutId: string) =>
     request<CutStateView>(`/projects/${encodeURIComponent(projectId)}/cuts/${encodeURIComponent(cutId)}`),
   projects: () => request<Project[]>("/projects"),
+  previewImport: (base64: string) => request<ImportPreview>("/import.preview", { base64 }),
   project: (id: string) => readCompactMap(id, request),
   readableSummary: async (id: string, revision: number): Promise<Blob> => {
     const response = await fetch(`/api/mapping/projects/${encodeURIComponent(id)}/export.md?revision=${revision}`, { credentials: 'same-origin' });

@@ -68,7 +68,7 @@ export function createWorkspaceApp(
   const smallBody = bodyLimit({ maxSize: 1_000_000, onError: tooLarge });
   const executeBody = bodyLimit({ maxSize: 48 * 1024 * 1024, onError: tooLarge });
   app.use('/api/*', async (c, next) => {
-    if (c.req.method === 'POST' && c.req.path === '/api/mapping/execute') return next();
+    if (c.req.method === 'POST' && (c.req.path === '/api/mapping/execute' || c.req.path === '/api/mapping/import.preview')) return next();
     return smallBody(c, next);
   });
   app.post('/api/session', (c) => {
@@ -214,6 +214,10 @@ export function createWorkspaceApp(
       ),
     ),
   );
+  app.post('/api/mapping/import.preview', executeBody, async (c) => {
+    const body = z.object({ base64: z.string().min(1) }).strict().parse(await c.req.json());
+    return c.json(mapping.previewImport(body.base64, c.get('principal')));
+  });
   app.post('/api/mapping/execute', executeBody, async (c) => {
     const raw = await c.req.text();
     const oversized = Buffer.byteLength(raw) > 1_000_000;
@@ -225,8 +229,8 @@ export function createWorkspaceApp(
       throw error;
     }
     const type = command && typeof command === 'object' && 'type' in command ? command.type : undefined;
-    // 48 MiB 只留给原件和跨项目粘贴。普通命令仍在字段校验前按 1 MiB 拒绝。
-    if (oversized && type !== 'asset.save' && type !== 'canvas.paste') return tooLarge(c);
+    // 48 MiB 只留给原件、跨项目粘贴和完整项目包导入。普通命令仍在字段校验前按 1 MiB 拒绝。
+    if (oversized && type !== 'asset.save' && type !== 'canvas.paste' && type !== 'project.import') return tooLarge(c);
     return c.json(mapping.execute(command, c.get('principal')));
   });
   app.get('/', (c) => {
@@ -246,14 +250,18 @@ export function createWorkspaceApp(
   });
   app.onError((error, c) => {
     const searching = c.req.path.endsWith('/search');
+    const previewing = c.req.path.endsWith('/import.preview');
     const packageExport = c.req.path.endsWith('/export.package');
     const exporting = packageExport || c.req.path.endsWith('/export.md');
+    const importing = previewing || c.req.path.endsWith('/execute');
     if (error instanceof DomainError)
       return c.json(
         {
           code: error.code,
           message: error.message,
-          ...(c.req.path.endsWith('/map') || c.req.path.endsWith('/changes')
+          ...(error.details !== null &&
+          ((c.req.path.endsWith('/map') || c.req.path.endsWith('/changes')) ||
+            (importing && (error.code === 'INVALID_PACKAGE' || error.code === 'IMPORT_CLOSURE_FAILED')))
             ? { details: error.details }
             : {}),
         },
@@ -261,6 +269,7 @@ export function createWorkspaceApp(
       );
     if (error instanceof ZodError || error instanceof SyntaxError)
       return exporting ? c.json({ code: 'INVALID_EXPORT_REQUEST', message: '导出请求格式无效；项目未修改' }, 400)
+        : previewing ? c.json({ code: 'INVALID_IMPORT_REQUEST', message: '导入预览请求格式无效；项目未修改' }, 400)
         : searching ? c.json({ code: 'INVALID_QUERY', message: '搜索条件格式无效；原输入未修改' }, 400)
         : c.req.path.endsWith('/map') || c.req.path.endsWith('/changes')
         ? c.json({ code: 'INVALID_QUERY', message: '地图读取请求格式无效' }, 400)

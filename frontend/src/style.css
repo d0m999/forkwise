@@ -519,6 +519,89 @@ body:has(.workspace[data-board-full="true"]) .card-tooltip { display: none; }
   background: #365ec9;
   color: white;
 }
+.import-package {
+  display: inline-flex;
+}
+.dialog-shade form.import-dialog {
+  width: min(560px, 92vw);
+  max-height: 88vh;
+  overflow: auto;
+}
+.import-dialog h2 {
+  margin-bottom: 12px;
+}
+.import-dialog .import-note {
+  margin: 0 0 14px;
+  color: #58677e;
+  font-size: 12px;
+  line-height: 1.55;
+}
+.import-dialog .import-hint {
+  margin: 6px 0 0;
+  color: #697386;
+  font-size: 12px;
+  line-height: 1.55;
+}
+.import-dialog input {
+  box-sizing: border-box;
+}
+.import-block {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid #e6e9ef;
+}
+.import-block h3 {
+  margin: 0 0 8px;
+  font-size: 13px;
+}
+.import-block ul {
+  margin: 0;
+  padding-left: 18px;
+  color: #45536a;
+  font-size: 12px;
+  line-height: 1.6;
+}
+.import-scope {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px 12px;
+  margin: 0;
+  font-size: 12px;
+}
+.import-scope div {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  border-bottom: 1px dashed #e6e9ef;
+  padding-bottom: 3px;
+}
+.import-scope dt {
+  color: #697386;
+}
+.import-scope dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+.import-failed {
+  border-top-color: #e6b8b8;
+}
+.import-failed h3 {
+  color: #a53131;
+}
+.import-failures {
+  max-height: 180px;
+  overflow: auto;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.import-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 20px;
+}
 .react-flow__attribution {
   bottom: 8px !important;
   right: auto !important;
