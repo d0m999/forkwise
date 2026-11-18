@@ -220,8 +220,10 @@ test('响应丢失后用原 commandId 重试只建一个项目', async ({ page, 
   expect(packagePath).not.toBeNull();
   const tabsBefore = await page.getByRole('tab').count();
   let dropped = false;
+  const importCommandIds: string[] = [];
   await page.route('**/api/mapping/execute', async (route) => {
-    const body = route.request().postDataJSON() as { type?: string } | null;
+    const body = route.request().postDataJSON() as { type?: string; commandId?: string } | null;
+    if (body?.type === 'project.import' && body.commandId) importCommandIds.push(body.commandId);
     if (!dropped && body?.type === 'project.import') {
       dropped = true;
       await route.fetch();
@@ -260,6 +262,9 @@ test('响应丢失后用原 commandId 重试只建一个项目', async ({ page, 
   await expect(page.getByRole('tab')).toHaveCount(tabsBefore + 1);
   const projects = await projectsOf(page, workspace.origin);
   expect(projects.filter((project) => project.name === '重试导入')).toHaveLength(1);
+  // 两次提交必须复用同一 commandId；只复用 projectId 会走 ID_CONFLICT，也能通过上面的项目数断言。
+  expect(importCommandIds).toHaveLength(2);
+  expect(importCommandIds[1]).toBe(importCommandIds[0]);
   await page.unroute('**/api/mapping/execute');
 });
 

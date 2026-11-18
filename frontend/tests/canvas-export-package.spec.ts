@@ -171,7 +171,7 @@ test('官方入口下载的完整项目包可离开数据目录验证，四种�
   }
 });
 
-test('超过导入上限的包仍可下载，下载前说明它不能从本入口恢复', async ({ page, workspace }) => {
+test('界面收到不可恢复标注时仍完成下载，并说明不能从本入口导入', async ({ page, workspace }) => {
   test.setTimeout(120000);
   await place(page, '超限提示卡');
   // 36 MiB 的包在 e2e 里不现实；这里改响应头，直接走界面的不可恢复分支。

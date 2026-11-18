@@ -609,7 +609,7 @@ function verifyManifest(manifest: Record<string, unknown>, files: Map<string, Bu
       if (seen.has(id)) {
         // 只按环本身的节点去重：同一环从不同尾巴进入时只报一次。
         const cycle = path.slice(path.indexOf(id));
-        const key = [...cycle].sort().join('\u0000');
+        const key = cycle.sort().join('\u0000');
         if (!reportedCycles.has(key))
           fail(failures, 'CONTAINMENT_CYCLE', 'mapping.containment', `acyclic chain from ${start}`, [...path, id].join(' → '));
         reportedCycles.add(key);

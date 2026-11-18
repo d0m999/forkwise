@@ -702,12 +702,12 @@ export class Mapping {
           changedIds = [command.projectId];
           after = this.project(command.projectId);
         } else if (command.type === 'project.import') {
-          // pendingImport 与本分支同一条件生成；?? 只补类型收窄，不会再解码一次。
-          const archive = pendingImport?.archive ?? decodeArchive(command.payload.base64);
+          // 与本分支同一条件生成；这里只做类型收窄，走到缺失说明不变量已破坏，直接失败而非重新解码。
+          if (!pendingImport) throw new Error('project.import 缺少已解码的包');
           ({ revision } = importPackage(this.db, {
             projectId: command.projectId,
             name: command.payload.name,
-            archive,
+            archive: pendingImport.archive,
           }));
           changedIds = [command.projectId];
           after = this.project(command.projectId);

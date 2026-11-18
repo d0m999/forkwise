@@ -66,7 +66,7 @@
 5. 按包内数组顺序写各集合与 id 表，保持 `rowid` 顺序；资源 id、正文块 id、摆放 id、版本 id 保持。
 6. 资源字节写入 `mapping_assets`，内容指纹用现有 `assetHash`；清单里的 `base64` 必须与 `resources/` 字节同哈希，入库以资源字节为准。资源记录缺 `hash`、MIME 不合形、图片缺正尺寸、图片超过 512 KiB、文件超过 10 MiB 都在校验阶段拒绝；被引用资产可以只有清单 base64，也可以只有 `resources/` 字节。研究文件 `base64` 为空但带 v1 `omission` 声明时按原文保留；既无字节又无省略才拒绝。
 7. 版本行按包内顺序写入；domain 限定为已知集合，`value.id` 必须等于行 `id`；当前对象（含 tag、归属行与批注附着）的版本必须存在（`VERSION_MISSING`），版本主键重复在预览阶段拒绝。
-8. 研究归档与 `extensions` 写入归档表；研究对象只改 `project.id`，嵌套的旧 `projectId` 是历史原文。`mapping.archive` 存在时把它的 `history`、`changes` 作为不可执行归档原样转存，只有首次导入才把包内的活历史当作归档。归档表的列只承接 `history`、`changes`，`mapping.archive` 顶层与 `editTimes` 行内除已知字段外的键不落库，重导出按已知字段重建：这两个块由导出器按固定形状生成，额外的键按噪声丢弃，不适用「未知键原样保留」。`editTimes` 按新卡号写入 `mapping_import_edit_times`，供搜索排序沿用原编辑时间，只写包内当前集合里仍存在的卡；已删除卡的时间行随删除丢弃，即使源包 `contentEditTimes` 仍保留它。包里的旧动作不重放，`mapping_history` 写空栈。
+8. 研究归档与 `extensions` 写入归档表；研究对象只改 `project.id`，嵌套的旧 `projectId` 是历史原文。`mapping.archive` 存在时把它的 `history`、`changes` 作为不可执行归档原样转存，只有首次导入才把包内的活历史当作归档。`mapping.archive` 只贡献 `history`、`changes` 两列（`research` 与 `extensions` 来自清单顶层），`mapping.archive` 顶层与 `editTimes` 行内除已知字段外的键不落库，重导出按已知字段重建：这两个块由导出器按固定形状生成，额外的键按噪声丢弃，不适用「未知键原样保留」。`editTimes` 按新卡号写入 `mapping_import_edit_times`，供搜索排序沿用原编辑时间，只写包内当前集合里仍存在的卡；已删除卡的时间行随删除丢弃，即使源包 `contentEditTimes` 仍保留它。包里的旧动作不重放，`mapping_history` 写空栈。
 9. 由现有执行尾部写变更行与回执；导入不调用 `recordAction`，不占 40 步研究历史。回执的请求指纹只存 ZIP 的 SHA-256 与 base64 长度，不把整包 base64 落库。
 
 写入后再导出一次并核对：引用闭合、各集合与版本条数、当前对象版本存在；失败抛 `IMPORT_CLOSURE_FAILED` 并回滚，不把「已经插入一半」返回给界面。包级跨项目深扫收窄为顶层 `projectId`、`mapping.project.id`、`research.project.id` 与变更回执的 `projectId`；历史归档和未知内容里的旧项目号按原文保留。凭证明文扫描与资源引用检查跳过历史归档、`extensions` 和正文未知块；未知块里的 `token`、`assetId` 不按已知引用解释。
@@ -106,4 +106,4 @@
 对上一节修复（`51c7dc69`）的复审补齐以下口径，同样不改容器、身份映射与入口：
 
 - `CONTAINMENT_CYCLE` 按环本身的成员去重：同一个环即使从环外的尾节点进入，也只报一次，不再随进入路径重复计数。
-- `mapping.archive` 顶层与 `editTimes` 行内的未知键不落库；`editTimes` 只保留仍在包内当前集合的卡，已删除卡的时间丢弃。两条都写入「身份映射」与「写入顺序与闭合」第 8 条，不再只由代码注释声明。
+- `mapping.archive` 顶层与 `editTimes` 行内的未知键不落库；`editTimes` 只保留仍在包内当前集合的卡，已删除卡的时间丢弃。未知键例外写入「身份映射」的「保持原样」段，两条规则都写入「写入顺序与闭合」第 8 条，不再只由代码注释声明。
