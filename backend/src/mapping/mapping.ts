@@ -58,6 +58,7 @@ import { readSearchState, saveSearchState, isSearchStateCommand } from './search
 import type { SearchStateView, SearchStateQuery } from './search-contracts.js';
 import { SearchQuerySchema, type SearchQuery, type SearchResult } from './search-contracts.js';
 import { AccessService, type Principal } from '../services/access.js';
+import { requireLayoutWrite } from './layout-scope.js';
 import { requireThat } from '../domain/errors.js';
 import {
   MappingCommand,
@@ -264,6 +265,8 @@ export class Mapping {
           this.access.project(actor, input.projectId);
         const command = MappingCommand.parse(input);
         this.access.mappingWrite(actor, command.projectId);
+        // Layout scope is checked before any stored receipt can be returned.
+        requireLayoutWrite(this.access, this.db, actor, command);
         if (
           command.type === 'project.create' ||
           command.type === 'project.import' ||

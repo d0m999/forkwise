@@ -8,6 +8,19 @@ export interface Principal {
   projects: string[];
   tokenHash: string;
 }
+
+export type LayoutOperation = 'pose.move' | 'pose.batch';
+export type LayoutObjectKind = 'card' | 'text' | 'shape' | 'image' | 'stroke';
+export type LayoutField = 'x' | 'y' | 'width' | 'height';
+// A layout delegation narrows what an Agent session may move. It never widens
+// project access and never grants content, appearance, tags or project edits.
+export interface LayoutDelegation {
+  projectId: string;
+  operations: LayoutOperation[];
+  objectKinds: LayoutObjectKind[];
+  objectIds: '*' | string[];
+  fields: LayoutField[];
+}
 export class AccessService {
   constructor(
     readonly db: Database.Database,
@@ -20,6 +33,7 @@ export class AccessService {
     lifetimeMs = 8 * 60 * 60 * 1000,
     token = randomBytes(32).toString('base64url'),
     personalRecordProjects: string[] = [],
+    layoutDelegations?: LayoutDelegation[],
   ): string {
     const hash = this.hash(token);
     requireThat(
@@ -28,6 +42,25 @@ export class AccessService {
       '委托必须属于授权项目',
       403,
     );
+    if (layoutDelegations !== undefined) {
+      requireThat(
+        Array.isArray(layoutDelegations) &&
+          layoutDelegations.every(
+            (scope) =>
+              scope &&
+              projects.includes(scope.projectId) &&
+              Array.isArray(scope.operations) &&
+              Array.isArray(scope.objectKinds) &&
+              Array.isArray(scope.fields) &&
+              (scope.objectIds === '*' ||
+                (Array.isArray(scope.objectIds) &&
+                  scope.objectIds.every((id) => typeof id === 'string'))),
+          ),
+        'INVALID_SCOPE',
+        '布局授权必须属于授权项目并列出操作、对象与字段',
+        403,
+      );
+    }
     requireThat(
       type === 'human' || !projects.includes('*'),
       'INVALID_SCOPE',
@@ -44,7 +77,10 @@ export class AccessService {
         type,
         JSON.stringify(projects),
         new Date(this.clock() + lifetimeMs).toISOString(),
-        JSON.stringify({ personalRecordProjects }),
+        JSON.stringify({
+          personalRecordProjects,
+          ...(layoutDelegations === undefined ? {} : { layoutDelegations }),
+        }),
       );
     return token;
   }
@@ -105,6 +141,21 @@ export class AccessService {
       '此操作需要本机会话确认或明确的项目编辑委托',
       403,
     );
+  }
+  // Re-read on every write: a grant narrowed or revoked after issue must not be
+  // honoured from an in-memory principal. Undefined means the row predates layout
+  // scopes; an explicit list (including []) is authoritative.
+  layoutDelegations(principal: Principal): LayoutDelegation[] | undefined {
+    const row = this.db
+      .prepare('SELECT capabilities FROM sessions WHERE token_hash=?')
+      .get(principal.tokenHash) as { capabilities: string } | undefined;
+    if (!row) return [];
+    const capabilities = JSON.parse(row.capabilities) as {
+      layoutDelegations?: LayoutDelegation[];
+    };
+    return Array.isArray(capabilities.layoutDelegations)
+      ? capabilities.layoutDelegations
+      : undefined;
   }
   project(principal: Principal, projectId: string): void {
     requireThat(

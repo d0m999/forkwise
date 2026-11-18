@@ -105,4 +105,115 @@ export function registerCompactMapTool(server: McpServer, transport: ApiTranspor
       }
     },
   );
+  server.registerTool(
+    'forkwise_read_mapping_history',
+    {
+      description:
+        '只读当前授权项目的 Mapping 项目历史（undo/redo 两个栈，按项目时间顺序）。这是开放地图历史，与旧研究 action-history 工具无关；Agent 只能读取，不能撤销或重做。',
+      inputSchema: z.object({ projectId: z.string().min(1).max(160) }).strict(),
+      annotations: { readOnlyHint: true, openWorldHint: false },
+    },
+    async ({ projectId }) => {
+      try {
+        const page = await transport.call(
+          `/api/mapping/projects/${encodeURIComponent(projectId)}/history`,
+        );
+        return {
+          content: [{ type: 'text' as const, text: JSON.stringify(page) }],
+          structuredContent: { response: page },
+        };
+      } catch (error) {
+        return readError(error, '历史读取失败');
+      }
+    },
+  );
+  server.registerTool(
+    'forkwise_move_card',
+    {
+      description:
+        '在明确的项目布局委托内移动一张已有卡片到绝对坐标。先读取 index 取得该卡的 item.versionId 与当前 Pose，将版本作为 expected 提交；与本人界面共用同一 execute、项目 revision、历史与持久 commandId 回执。只写 x/y，不写正文、标题、外观、标签或归属。',
+      inputSchema: z
+        .object({
+          projectId: z.string().min(1).max(160),
+          commandId: z.string().min(8).max(160),
+          cardId: z.string().min(1).max(160),
+          expected: z.string().min(1).max(160),
+          x: z.number().finite(),
+          y: z.number().finite(),
+        })
+        .strict(),
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    },
+    async ({ projectId, commandId, cardId, expected, x, y }) => {
+      try {
+        const response = await transport.call('/api/mapping/execute', 'POST', {
+          commandId,
+          projectId,
+          type: 'pose.move',
+          expected,
+          payload: { id: cardId, x, y },
+        });
+        return {
+          content: [{ type: 'text' as const, text: JSON.stringify(response) }],
+          structuredContent: { response },
+        };
+      } catch (error) {
+        return readError(error, '布局保存失败');
+      }
+    },
+  );
+  server.registerTool(
+    'forkwise_move_cards',
+    {
+      description:
+        '在明确的项目布局委托内批量移动已有卡片。每张卡都要给出当前 Pose 版本与目标 x/y/width/height；任何一个目标无权限、已删除、版本过期或字段超范围时整批拒绝，不产生部分移动。与本人界面共用同一 execute。',
+      inputSchema: z
+        .object({
+          projectId: z.string().min(1).max(160),
+          commandId: z.string().min(8).max(160),
+          expected: z.record(z.string().min(1).max(160), z.string().min(1).max(160)),
+          poses: z
+            .array(
+              z
+                .object({
+                  cardId: z.string().min(1).max(160),
+                  x: z.number().finite(),
+                  y: z.number().finite(),
+                  width: z.number().finite().positive(),
+                  height: z.number().finite().positive(),
+                })
+                .strict(),
+            )
+            .min(1)
+            .max(200),
+        })
+        .strict(),
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    },
+    async ({ projectId, commandId, expected, poses }) => {
+      try {
+        const response = await transport.call('/api/mapping/execute', 'POST', {
+          commandId,
+          projectId,
+          type: 'pose.batch',
+          expected,
+          payload: {
+            poses: poses.map((pose) => ({
+              id: pose.cardId,
+              x: pose.x,
+              y: pose.y,
+              width: pose.width,
+              height: pose.height,
+            })),
+          },
+        });
+        return {
+          content: [{ type: 'text' as const, text: JSON.stringify(response) }],
+          structuredContent: { response },
+        };
+      } catch (error) {
+        return readError(error, '批量布局保存失败');
+      }
+    },
+  );
 }
