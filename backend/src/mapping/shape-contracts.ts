@@ -3,13 +3,16 @@ import { MembershipExpected } from './containment-contracts.js';
 import { z } from 'zod';
 
 const Id = z.string().min(1).max(160);
-export const ShapeContentSchema = z.object({
+const shapeContentFields = {
   shapeType: z.enum(['rectangle', 'roundedRectangle', 'ellipse', 'diamond', 'triangle']),
   shortText: z.string(),
   fill: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional(),
   stroke: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional(),
   strokeWidth: z.number().finite().positive().optional(),
-}).strict();
+};
+export const ShapeContentSchema = z.object(shapeContentFields).strict();
+// 导入边界只要求已知字段合形；未知键随原文保留，由 package-verify 使用。
+export const ShapeContentImportCheck = z.object(shapeContentFields);
 export const ShapePoseSchema = z.object({
   x: z.number().finite(),
   y: z.number().finite(),

@@ -4,13 +4,15 @@ import { downloadBlob, exportFilename } from './download';
 
 type ExportKind = 'markdown' | 'image' | 'package';
 
+const mebibytes = (bytes: number) => `${(bytes / 1024 / 1024).toFixed(1)} MiB`;
+
 const EXPORT_STEPS: Record<ExportKind, {
   label: string;
   busy: string;
   done: string;
   failed: string;
   extension: 'md' | 'png' | 'zip';
-  load: (project: Project, image: () => Promise<Blob>) => Promise<Blob>;
+  load: (project: Project, image: () => Promise<Blob>) => Promise<{ blob: Blob; notice?: string }>;
 }> = {
   markdown: {
     label: '下载可读摘要（Markdown）',
@@ -18,7 +20,7 @@ const EXPORT_STEPS: Record<ExportKind, {
     done: '可读摘要下载已开始',
     failed: '摘要生成失败，请重试；项目未修改',
     extension: 'md',
-    load: (project) => api.readableSummary(project.id, project.revision),
+    load: async (project) => ({ blob: await api.readableSummary(project.id, project.revision) }),
   },
   image: {
     label: '下载画布图像（PNG）',
@@ -26,7 +28,7 @@ const EXPORT_STEPS: Record<ExportKind, {
     done: '画布图像下载已开始',
     failed: '画布图像生成失败，请重试；项目未修改',
     extension: 'png',
-    load: (_project, image) => image(),
+    load: async (_project, image) => ({ blob: await image() }),
   },
   package: {
     label: '下载完整项目包（ZIP）',
@@ -34,7 +36,15 @@ const EXPORT_STEPS: Record<ExportKind, {
     done: '完整项目包下载已开始',
     failed: '完整项目包生成失败，请重试；项目未修改',
     extension: 'zip',
-    load: (project) => api.fullPackage(project.id, project.revision),
+    load: async (project) => {
+      const { blob, restorable, limit } = await api.fullPackage(project.id, project.revision);
+      if (restorable) return { blob };
+      // 超过导入上限的包仍给用户留底，但要在下载前说明它无法从本入口恢复。
+      return {
+        blob,
+        notice: `完整项目包 ${mebibytes(blob.size)}，超过本入口约 ${mebibytes(limit)} 的恢复上限；这份包能下载，但不能在这里导入恢复。`,
+      };
+    },
   },
 };
 
@@ -83,9 +93,10 @@ export function ExportMenu({ project, disabled, report, image }: {
     setBusy(kind);
     report(step.busy);
     try {
-      const blob = await step.load(project, image);
+      const { blob, notice } = await step.load(project, image);
+      if (notice) report(notice);
       downloadBlob(blob, exportFilename(project.name, project.revision, step.extension));
-      report(step.done);
+      if (!notice) report(step.done);
     } catch (error) {
       report(error instanceof Error ? error.message : step.failed);
     } finally {
@@ -114,7 +125,7 @@ export function ExportMenu({ project, disabled, report, image }: {
     {open && <div className="export-popover" role="menu" aria-label="导出当前项目">
       <p>只导出当前已保存状态；未保存草稿不包含在内。</p>
       <p>摘要是可读文本，不含完整恢复数据或原件；图像呈现画布，不含完整正文，也不是备份。</p>
-      <p>完整项目包包含已保存的数据和资源文件，可离开本机读取；它不是加密备份，也不能在这里导入。</p>
+      <p>完整项目包包含已保存的数据和资源文件，可离开本机读取；它不是加密备份，导入时会新建一份独立研究。</p>
       {disabled && <p role="note">当前有未保存内容，请先完成保存；导出只读取已保存状态。</p>}
       <button ref={first} type="button" role="menuitem" disabled={disabled || !!busy} onClick={() => void run('markdown')}>
         {busy === 'markdown' ? EXPORT_STEPS.markdown.busy : EXPORT_STEPS.markdown.label}

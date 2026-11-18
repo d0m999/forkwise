@@ -218,7 +218,7 @@ describe('完整项目包', () => {
       ghostAsset.mapping.stored.cards[0]!.json = JSON.stringify(ghostCard);
       const ghostResult = verify(rebuild(ghostAsset, 'ghost-asset.zip'));
       expect(ghostResult.status).not.toBe(0);
-      expect(ghostResult.stdout).toContain('REFERENCE mapping.cards[0].body.requiredAssetIds[0] expected=resource ghost-asset actual=missing');
+      expect(ghostResult.stdout).toContain('REFERENCE mapping.cards[0].body.requiredAssetIds[0] expected=asset ghost-asset actual=missing');
 
       const malformedPath = structuredClone(manifest);
       malformedPath.resources[0]!.path = 'resources/0-short';

@@ -2,27 +2,28 @@ import { FramePlacement } from './frame-spatial.js';
 import { MembershipExpected } from './containment-contracts.js';
 import { z } from 'zod';
 const Id = z.string().min(1).max(160);
-export const TextContentSchema = z
-  .object({
-    runs: z.array(
-      z
-        .object({
-          text: z.string(),
-          bold: z.boolean().optional(),
-          color: z
-            .string()
-            .regex(/^#[0-9a-fA-F]{6}$/)
-            .optional(),
-        })
-        .strict(),
-    ),
-    fontSize: z.number().finite().positive(),
-    lineHeight: z.literal(1.5),
-    align: z.enum(['left', 'center', 'right']),
-    widthMode: z.enum(['auto', 'fixed']),
-    width: z.number().finite().positive(),
-  })
-  .strict();
+const textRunFields = {
+  text: z.string(),
+  bold: z.boolean().optional(),
+  color: z
+    .string()
+    .regex(/^#[0-9a-fA-F]{6}$/)
+    .optional(),
+};
+const textContentFields = {
+  runs: z.array(z.object(textRunFields).strict()),
+  fontSize: z.number().finite().positive(),
+  lineHeight: z.literal(1.5),
+  align: z.enum(['left', 'center', 'right']),
+  widthMode: z.enum(['auto', 'fixed']),
+  width: z.number().finite().positive(),
+};
+export const TextContentSchema = z.object(textContentFields).strict();
+// 导入边界只要求已知字段合形；未知键随原文保留，由 package-verify 使用。
+export const TextContentImportCheck = z.object({
+  ...textContentFields,
+  runs: z.array(z.object(textRunFields)),
+});
 export const TextPoseSchema = z
   .object({
     x: z.number().finite(),

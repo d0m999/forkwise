@@ -23,6 +23,20 @@ function readBase64(file: File): Promise<string> {
   });
 }
 
+async function fingerprint(base64: string): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(base64));
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
+// 画布快捷键据此判断导入对话框是否打开；类名由本模块独占。
+export function importDialogOpen() {
+  return !!document.querySelector('.import-dialog');
+}
+
+// 只校验的预览是只读的，随时可以退出；已提交的请求不能再被 Esc 打断。
+type Phase = 'idle' | 'verifying' | 'submitting';
+type Attempt = { commandId: string; projectId: string; name: string };
+
 export function ImportPackage({ disabled, onImported }: {
   disabled: boolean;
   onImported: (projectId: string) => void;
@@ -33,13 +47,18 @@ export function ImportPackage({ disabled, onImported }: {
   const closeButton = useRef<HTMLButtonElement>(null);
   const dialogRef = useRef<HTMLFormElement>(null);
   const failureRef = useRef<HTMLElement>(null);
-  const attempt = useRef<{ commandId: string; projectId: string; name: string; base64: string } | null>(null);
+  // 未确认的导入请求按包保留：换个文件看看不会丢掉上一次待重试的 commandId。
+  const attempts = useRef(new Map<string, Attempt>());
+  // 迟到的预览结果属于已经关闭或已被替换的那一次选择，直接丢弃。
+  const selection = useRef(0);
   const [open, setOpen] = useState(false);
-  const [source, setSource] = useState<{ fileName: string; base64: string; preview: ImportPreview } | null>(null);
+  const [source, setSource] = useState<{ fileName: string; base64: string; key: string; preview: ImportPreview } | null>(null);
   const [name, setName] = useState('');
-  const [busy, setBusy] = useState(false);
+  const [phase, setPhase] = useState<Phase>('idle');
   const [message, setMessage] = useState('');
   const [failures, setFailures] = useState<string[]>([]);
+  const verifying = phase === 'verifying';
+  const submitting = phase === 'submitting';
 
   useEffect(() => {
     if (failures.length) failureRef.current?.focus({ preventScroll: true });
@@ -48,17 +67,19 @@ export function ImportPackage({ disabled, onImported }: {
   useEffect(() => {
     if (!open) return;
     if (source) nameInput.current?.focus({ preventScroll: true });
-    else if (busy) dialogRef.current?.focus({ preventScroll: true });
+    else if (verifying) dialogRef.current?.focus({ preventScroll: true });
     else closeButton.current?.focus({ preventScroll: true });
-  }, [open, source, busy]);
+  }, [open, source, verifying]);
 
   function close() {
-    if (busy) return;
+    if (submitting) return;
+    selection.current += 1;
     setOpen(false);
     setSource(null);
     setName('');
     setMessage('');
     setFailures([]);
+    setPhase('idle');
     requestAnimationFrame(() => trigger.current?.focus({ preventScroll: true }));
   }
 
@@ -72,7 +93,7 @@ export function ImportPackage({ disabled, onImported }: {
     };
     window.addEventListener('keydown', escape, true);
     return () => window.removeEventListener('keydown', escape, true);
-  }, [open, busy]);
+  }, [open, submitting]);
 
   function trapTab(event: ReactKeyboardEvent<HTMLFormElement>) {
     if (event.key !== 'Tab') return;
@@ -95,35 +116,40 @@ export function ImportPackage({ disabled, onImported }: {
   }
 
   async function choose(file: File) {
+    const ticket = ++selection.current;
     setOpen(true);
-    setBusy(true);
+    setPhase('verifying');
     setSource(null);
     setMessage('正在校验完整项目包…');
     setFailures([]);
-    const previous = attempt.current;
     try {
       const base64 = await readBase64(file);
-      if (previous && previous.base64 !== base64) attempt.current = null;
+      if (ticket !== selection.current) return;
+      const key = await fingerprint(base64);
+      if (ticket !== selection.current) return;
       const preview = await api.previewImport(base64);
-      setSource({ fileName: file.name, base64, preview });
+      if (ticket !== selection.current) return;
+      setSource({ fileName: file.name, base64, key, preview });
       setName(preview.suggestedName);
       setMessage('');
     } catch (error) {
+      if (ticket !== selection.current) return;
       setMessage(error instanceof Error ? error.message : '所选文件无法读取');
     } finally {
-      setBusy(false);
+      if (ticket === selection.current) setPhase('idle');
     }
   }
 
   async function submit(event: FormEvent) {
     event.preventDefault();
-    if (!source || busy || disabled || !name.trim() || source.preview.failures.length) return;
+    if (!source || submitting || disabled || !name.trim() || source.preview.failures.length) return;
     const trimmed = name.trim();
-    const sameRequest = attempt.current?.base64 === source.base64 && attempt.current?.name === trimmed;
-    const commandId = sameRequest ? attempt.current!.commandId : crypto.randomUUID();
-    const projectId = attempt.current?.base64 === source.base64 ? attempt.current.projectId : crypto.randomUUID();
-    attempt.current = { commandId, projectId, name: trimmed, base64: source.base64 };
-    setBusy(true);
+    const previous = attempts.current.get(source.key);
+    const sameRequest = previous?.name === trimmed;
+    const commandId = sameRequest ? previous!.commandId : crypto.randomUUID();
+    const projectId = previous ? previous.projectId : crypto.randomUUID();
+    attempts.current.set(source.key, { commandId, projectId, name: trimmed });
+    setPhase('submitting');
     setMessage('');
     setFailures([]);
     try {
@@ -134,22 +160,24 @@ export function ImportPackage({ disabled, onImported }: {
         expected: null,
         payload: { name: trimmed, base64: source.base64 },
       });
+      attempts.current.delete(source.key);
       setOpen(false);
       setSource(null);
-      attempt.current = null;
+      setPhase('idle');
       requestAnimationFrame(() => trigger.current?.focus({ preventScroll: true }));
       onImported(projectId);
     } catch (error) {
-      if (error instanceof MappingError && error.code === 'ID_CONFLICT' && attempt.current?.projectId === projectId) {
+      if (error instanceof MappingError && error.code === 'ID_CONFLICT') {
         // 上一次响应丢失后已提交，或用户改名后重提；项目编号已经存在时直接打开它，不再建第二个。
+        attempts.current.delete(source.key);
         setOpen(false);
         setSource(null);
-        attempt.current = null;
+        setPhase('idle');
         onImported(projectId);
         return;
       }
       if (error instanceof MappingError && (error.status ?? 0) < 500) {
-        attempt.current = null;
+        attempts.current.delete(source.key);
         setMessage(error.message);
         setFailures(failureLines(error));
       } else if (error instanceof MappingError) {
@@ -159,7 +187,7 @@ export function ImportPackage({ disabled, onImported }: {
         setMessage('响应未收到，原请求已保留；重试会使用同一命令编号，不会重复建项目。');
       }
     } finally {
-      setBusy(false);
+      setPhase('idle');
     }
   }
 
@@ -182,6 +210,7 @@ export function ImportPackage({ disabled, onImported }: {
         setSource(null);
         setMessage('');
         setFailures([]);
+        setPhase('idle');
         picker.current?.click();
       }}>
         导入项目包
@@ -193,8 +222,9 @@ export function ImportPackage({ disabled, onImported }: {
             {!source && (
               <>
                 <p role="status" className="import-note">{message || '请选择一份完整项目包（ZIP）。'}</p>
+                {verifying && <p className="import-hint">这一步只读文件；可以随时关闭，校验结果不会写入库。</p>}
                 <div className="import-actions">
-                  <button ref={closeButton} type="button" disabled={busy} onClick={close}>关闭</button>
+                  <button ref={closeButton} type="button" onClick={close}>关闭</button>
                 </div>
               </>
             )}
@@ -281,12 +311,12 @@ export function ImportPackage({ disabled, onImported }: {
                 )}
 
                 <div className="import-actions">
-                  <button type="button" disabled={busy} onClick={close}>取消</button>
+                  <button type="button" disabled={submitting} onClick={close}>取消</button>
                   <button
                     type="submit"
-                    disabled={busy || disabled || !name.trim() || source.preview.failures.length > 0}
+                    disabled={submitting || disabled || !name.trim() || source.preview.failures.length > 0}
                   >
-                    {busy ? '正在导入…' : '导入为新研究'}
+                    {submitting ? '正在导入…' : '导入为新研究'}
                   </button>
                 </div>
               </>

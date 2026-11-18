@@ -71,7 +71,7 @@ test('官方入口下载的完整项目包可离开数据目录验证，四种�
   const token = new URLSearchParams(new URL(access.url).hash.slice(1)).get('token')!;
   const trigger = page.getByRole('button', { name: '导出', exact: true });
   await trigger.click();
-  await expect(page.getByText('完整项目包包含已保存的数据和资源文件，可离开本机读取；它不是加密备份，也不能在这里导入。')).toBeVisible();
+  await expect(page.getByText('完整项目包包含已保存的数据和资源文件，可离开本机读取；它不是加密备份，导入时会新建一份独立研究。')).toBeVisible();
   const action = page.getByRole('menuitem', { name: '下载完整项目包（ZIP）', exact: true });
   const downloadPromise = page.waitForEvent('download');
   await action.click();

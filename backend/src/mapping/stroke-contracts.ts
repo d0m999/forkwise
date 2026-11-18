@@ -3,13 +3,16 @@ import { MembershipExpected } from './containment-contracts.js';
 import { z } from 'zod';
 
 const Id = z.string().min(1).max(160);
-export const StrokeContentSchema = z.object({
+const strokeContentFields = {
   penKind: z.enum(['pen', 'highlighter']),
   path: z.array(z.object({ x: z.number().finite(), y: z.number().finite() }).strict()).min(1),
   color: z.string().regex(/^#[0-9a-fA-F]{6}$/),
   width: z.number().finite().positive(),
   opacity: z.number().finite().min(0).max(1),
-}).strict();
+};
+export const StrokeContentSchema = z.object(strokeContentFields).strict();
+// 导入边界只要求已知字段合形；未知键随原文保留，由 package-verify 使用。
+export const StrokeContentImportCheck = z.object(strokeContentFields);
 export const StrokePoseSchema = z.object({
   x: z.number().finite(),
   y: z.number().finite(),

@@ -29,7 +29,7 @@ import { reconcileMediaTasks, completeMediaTask } from './media-tasks.js';
 import { completeMediaHistory } from './history.js';
 import { readAsset, saveAsset, validateImageAssets } from './media.js';
 import { buildFullPackage } from './full-package.js';
-import { importPackage, previewImport as previewPackageSource, type ImportPreview } from './package-import.js';
+import { decodeArchive, importPackage, previewImport as previewPackageSource, type ImportPreview } from './package-import.js';
 import { DEFAULT_APPEARANCE, DEFAULT_PREVIEW_HEIGHT } from './presentation-values.js';
 import type Database from 'better-sqlite3';
 import { CompactMaps, type CompactOptions } from './compact.js';
@@ -272,12 +272,14 @@ export class Mapping {
           command.type === 'history.redo'
         )
           this.access.human(actor);
+        // 同一份 ZIP 只解码一次：回执指纹与提交校验共用这段字节。
+        const archive = command.type === 'project.import' ? decodeArchive(command.payload.base64) : undefined;
         const request = command.type === 'project.import'
           ? canonical({
               ...command,
               payload: {
                 name: command.payload.name,
-                base64Sha256: createHash('sha256').update(Buffer.from(command.payload.base64, 'base64')).digest('hex'),
+                base64Sha256: createHash('sha256').update(archive!).digest('hex'),
                 base64Length: command.payload.base64.length,
               },
             })
@@ -701,7 +703,7 @@ export class Mapping {
           ({ revision } = importPackage(this.db, {
             projectId: command.projectId,
             name: command.payload.name,
-            base64: command.payload.base64,
+            archive: archive!,
           }));
           changedIds = [command.projectId];
           after = this.project(command.projectId);

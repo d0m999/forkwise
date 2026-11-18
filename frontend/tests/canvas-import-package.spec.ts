@@ -34,6 +34,16 @@ async function openPackage(page: import('@playwright/test').Page, path: string) 
   return { trigger, dialog };
 }
 
+async function exportPackage(page: import('@playwright/test').Page): Promise<string> {
+  const downloadPromise = page.waitForEvent('download');
+  await page.getByRole('button', { name: '导出', exact: true }).click();
+  await page.getByRole('menuitem', { name: '下载完整项目包（ZIP）', exact: true }).click();
+  const download = await downloadPromise;
+  const path = await download.path();
+  expect(path).not.toBeNull();
+  return path!;
+}
+
 test('预览校验后导入隔离研究：取消无副作用、确认后逐项对上包内原文、停服重开仍在', async ({ page, workspace }) => {
   test.setTimeout(180000);
   await seedCanvasExportSample(page, workspace);
@@ -269,4 +279,55 @@ test('响应丢失后改名重试时 ID_CONFLICT 直接打开已导入项目', a
   const projects = await projectsOf(page, workspace.origin);
   expect(projects.filter((project) => project.name === '另一个名字')).toHaveLength(0);
   await page.unroute('**/api/mapping/execute');
+});
+
+test('导入对话框打开期间撤销快捷键不改动源研究', async ({ page, workspace }) => {
+  test.setTimeout(120000);
+  await place(page, '撤销隔离卡');
+  const packagePath = await exportPackage(page);
+  const before = await workspace.state();
+  expect(before.cards).toHaveLength(1);
+
+  const { dialog } = await openPackage(page, packagePath);
+  await dialog.getByRole('button', { name: '取消', exact: true }).focus();
+  await page.keyboard.press('Control+z');
+  await page.waitForTimeout(400);
+  const during = await workspace.state();
+  expect(during.project.revision).toBe(before.project.revision);
+  expect(during.cards).toHaveLength(before.cards.length);
+
+  await page.keyboard.press('Escape');
+  await expect(dialog).toHaveCount(0);
+  const after = await workspace.state();
+  expect(after.project.revision).toBe(before.project.revision);
+  expect(after.cards).toHaveLength(before.cards.length);
+});
+
+test('校验未完成时可以关闭预览，迟到的校验结果不会重新打开对话框', async ({ page, workspace }) => {
+  test.setTimeout(120000);
+  await place(page, '慢校验卡');
+  const packagePath = await exportPackage(page);
+  const tabsBefore = await page.getByRole('tab').count();
+
+  let release: (() => void) | undefined;
+  await page.route('**/api/mapping/import.preview', async (route) => {
+    await new Promise<void>((resolve) => { release = resolve; });
+    await route.continue();
+  });
+  const trigger = page.getByRole('button', { name: '导入项目包', exact: true });
+  const chooserPromise = page.waitForEvent('filechooser');
+  await trigger.click();
+  await (await chooserPromise).setFiles(packagePath);
+  const dialog = page.getByRole('dialog', { name: '导入项目包' });
+  await expect(dialog.getByText('正在校验完整项目包…', { exact: false })).toBeVisible();
+  await expect(dialog.getByRole('button', { name: '关闭', exact: true })).toBeEnabled();
+  await page.keyboard.press('Escape');
+  await expect(dialog).toHaveCount(0);
+  await expect(trigger).toBeFocused();
+
+  release?.();
+  await page.waitForTimeout(600);
+  await expect(dialog).toHaveCount(0);
+  expect((await projectsOf(page, workspace.origin)).length).toBe(tabsBefore);
+  await page.unroute('**/api/mapping/import.preview');
 });

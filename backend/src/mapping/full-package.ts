@@ -2,6 +2,7 @@ import type Database from 'better-sqlite3';
 import { DomainError } from '../domain/errors.js';
 import { assetHash } from './media.js';
 import { SECRET_KEYS } from './secret-keys.js';
+import { contentEditTimes } from './search-edits.js';
 import { writeZip } from './zip-store.js';
 
 const RECORD_QUERIES = {
@@ -139,9 +140,21 @@ export function buildFullPackage(db: Database.Database, projectId: string, expor
     .prepare('SELECT id, name, version_id AS versionId, revision FROM mapping_projects WHERE id=?')
     .get(projectId) as { id: string; name: string; versionId: string; revision: number } | undefined;
   if (!project) throw new DomainError('NOT_FOUND', '项目不存在', 404);
-  const archived = db.prepare('SELECT research, extensions FROM mapping_import_archive WHERE project_id=?').get(projectId) as { research: string; extensions: string } | undefined;
+  const archived = db
+    .prepare('SELECT research, extensions, history, changes FROM mapping_import_archive WHERE project_id=?')
+    .get(projectId) as { research: string; extensions: string; history: string; changes: string } | undefined;
   const effectiveResearch = research === undefined ? (archived ? (JSON.parse(archived.research) as unknown) : null) : research ?? null;
   const extensions = archived ? (JSON.parse(archived.extensions) as unknown) ?? {} : {};
+  // 旧历史只作为不可执行的归档随包保留；重导出不再用活表覆盖它。
+  const archive = archived
+    ? {
+        history: redactSecrets((JSON.parse(archived.history) as unknown) ?? { undo: [], redo: [] }),
+        changes: redactSecrets((JSON.parse(archived.changes) as unknown) ?? []),
+      }
+    : null;
+  const editTimes = [...contentEditTimes(db, projectId)]
+    .map(([cardId, editedAt]) => ({ cardId, editedAt }))
+    .sort((left, right) => (left.cardId < right.cardId ? -1 : left.cardId > right.cardId ? 1 : 0));
   const loaded = Object.fromEntries(
     (Object.keys(RECORD_QUERIES) as RecordName[]).map((name) => [name, records(db, projectId, name)]),
   ) as Record<RecordName, { parsed: unknown[]; stored: { json: string }[] }>;
@@ -193,6 +206,8 @@ export function buildFullPackage(db: Database.Database, projectId: string, expor
       versions: versions.map(({ domain, id, versionId, value }) => ({ domain, id, versionId, value })),
       history,
       changes,
+      archive,
+      editTimes,
       membership: membershipOf(loaded.frames.parsed, loaded.groups.parsed, loaded.containment.parsed),
       stack: stackOf(mappingRecords),
       stored: {

@@ -8,7 +8,7 @@ import type { CopyRef } from "./canvas-snapshot";
 import { nextPaste, pasteTranslation, type PasteSequence } from "./canvas-snapshot-geometry";
 import { SnapshotMenu } from "./snapshot-menu";
 import { ExportMenu } from "./export-menu";
-import { ImportPackage } from "./import-package";
+import { ImportPackage, importDialogOpen } from "./import-package";
 import { renderCanvasPng, type CanvasExportVisual } from "./canvas-export";
 import { useCanvasImageInput } from "./canvas-image-input";
 import { droppedFilePlan, fileAssetPayload, runDroppedFiles } from "./canvas-drop";
@@ -741,6 +741,9 @@ function Workspace() {
         return;
       const target = event.target as HTMLElement;
       if (target.closest("dialog.project-search, dialog.shape-appearance-dialog")) return;
+      // 导入对话框是模态表单，不是原生 <dialog>：打开期间画布动作历史一律不动。
+      // 这里直接返回、不 preventDefault，名称输入框的原生撤销照常生效。
+      if (importDialogOpen()) return;
       // Text inputs and title rounds own native text undo; non-text controls
       // such as the appearance checkbox use the project's action history.
       const input = target.closest("input");

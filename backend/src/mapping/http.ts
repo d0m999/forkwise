@@ -7,6 +7,7 @@ import type { Principal } from '../services/access.js';
 import { DomainError, requireThat } from '../domain/errors.js';
 import { CompactQuerySchema } from './compact-contracts.js';
 import { ObserveQuerySchema } from './observe-contracts.js';
+import { PACKAGE_IMPORT_BODY_LIMIT, PACKAGE_IMPORT_MAX_BYTES } from './package-import.js';
 import { SearchQuerySchema } from './search-contracts.js';
 import { EXECUTE_FALLBACK_CODE } from './recovery-contract.js';
 import { versionDomains } from './read-contracts.js';
@@ -66,7 +67,7 @@ export function createWorkspaceApp(
   const tooLarge = (c: { json: (body: { code: string; message: string }, status: 413) => Response }) =>
     c.json({ code: 'TOO_LARGE', message: '内容超过本次保存上限' }, 413);
   const smallBody = bodyLimit({ maxSize: 1_000_000, onError: tooLarge });
-  const executeBody = bodyLimit({ maxSize: 48 * 1024 * 1024, onError: tooLarge });
+  const executeBody = bodyLimit({ maxSize: PACKAGE_IMPORT_BODY_LIMIT, onError: tooLarge });
   app.use('/api/*', async (c, next) => {
     if (c.req.method === 'POST' && (c.req.path === '/api/mapping/execute' || c.req.path === '/api/mapping/import.preview')) return next();
     return smallBody(c, next);
@@ -172,6 +173,9 @@ export function createWorkspaceApp(
       headers: {
         'Content-Type': 'application/zip',
         'Content-Disposition': `attachment; filename*=UTF-8''${filename}`,
+        // 超过导入上限的包仍可下载，但界面要在下载时说明它无法从本入口恢复。
+        'X-Forkwise-Package-Restorable': bytes.length <= PACKAGE_IMPORT_MAX_BYTES ? 'yes' : 'no',
+        'X-Forkwise-Package-Limit': String(PACKAGE_IMPORT_MAX_BYTES),
       },
     });
   });

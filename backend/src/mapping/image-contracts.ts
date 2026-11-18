@@ -3,16 +3,24 @@ import { MembershipExpected } from './containment-contracts.js';
 import { z } from 'zod';
 
 const Id = z.string().min(1).max(160);
-export const ImageCropSchema = z.object({
+const cropFields = {
   x: z.number().finite().min(0).max(1), y: z.number().finite().min(0).max(1),
   width: z.number().finite().positive().max(1), height: z.number().finite().positive().max(1),
-}).strict().refine(c => c.x + c.width <= 1 && c.y + c.height <= 1, '裁剪范围不能超出原图');
+};
+const cropInsideOrigin = (c: { x: number; width: number; y: number; height: number }) =>
+  c.x + c.width <= 1 && c.y + c.height <= 1;
+export const ImageCropSchema = z.object(cropFields).strict().refine(cropInsideOrigin, '裁剪范围不能超出原图');
 export const ImagePoseSchema = z.object({
   x: z.number().finite(), y: z.number().finite(),
   width: z.number().finite().positive(), height: z.number().finite().positive(),
   rotation: z.union([z.literal(0), z.literal(90), z.literal(180), z.literal(270)]),
 }).strict();
 export const ImageContentSchema = z.object({ assetId: Id, crop: ImageCropSchema }).strict();
+// 导入边界只要求已知字段合形；未知键随原文保留，由 package-verify 使用。
+export const ImageContentImportCheck = z.object({
+  assetId: Id,
+  crop: z.object(cropFields).refine(cropInsideOrigin, '裁剪范围不能超出原图'),
+});
 export const ImageCommands = z.discriminatedUnion('type', [
   z.object({ commandId: Id, projectId: Id, placement: FramePlacement.optional(), type: z.literal('image.crop'), expected: z.object({ image: Id, pose: Id }).strict(),
     payload: z.object({ id: Id, crop: ImageCropSchema }).strict() }).strict(),

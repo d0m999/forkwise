@@ -25,7 +25,7 @@
 
 形状与 `project.create` 对齐：`expected` 为 `null`，`projectId` 由调用方给出，`commandId` 承担幂等键。同一 `commandId` 加同一请求重试返回原回执，不建第二个项目；请求内容不同返回 `IDEMPOTENCY_MISMATCH`。导入与 `project.create`、撤销/重做一样只允许本人会话。
 
-请求体沿用现有上限：超过 1 MiB 的命令只有 `asset.save`、`canvas.paste` 和 `project.import` 可以继续，硬顶 48 MiB，超过返回 `TOO_LARGE` 且不建项目。48 MiB 是 JSON 请求体上限，base64 膨胀后可用 ZIP 约 36 MiB；这是现成上限，不是新的容量承诺。预览路由使用同一硬顶。这个上限是现成的原件/粘贴上限，不是新的产品容量承诺。
+请求体沿用现有上限：超过 1 MiB 的命令只有 `asset.save`、`canvas.paste` 和 `project.import` 可以继续，硬顶 48 MiB，超过返回 `TOO_LARGE` 且不建项目。48 MiB 是 JSON 请求体上限，base64 膨胀后可用 ZIP 约 36 MiB；这是现成上限，不是新的容量承诺。预览路由使用同一硬顶。这个上限是现成的原件/粘贴上限，不是新的产品容量承诺。导出响应带 `X-Forkwise-Package-Restorable` 与 `X-Forkwise-Package-Limit`；超过上限的包仍可下载，但界面在下载前说明它无法从本入口恢复。
 
 ## 身份映射
 
@@ -66,18 +66,20 @@
 5. 按包内数组顺序写各集合与 id 表，保持 `rowid` 顺序；资源 id、正文块 id、摆放 id、版本 id 保持。
 6. 资源字节写入 `mapping_assets`，内容指纹用现有 `assetHash`；清单里的 `base64` 必须与 `resources/` 字节同哈希，入库以资源字节为准。资源记录缺 `hash`、MIME 不合形、图片缺正尺寸、图片超过 512 KiB、文件超过 10 MiB 都在校验阶段拒绝；被引用资产可以只有清单 base64，也可以只有 `resources/` 字节。研究文件 `base64` 为空但带 v1 `omission` 声明时按原文保留；既无字节又无省略才拒绝。
 7. 版本行按包内顺序写入；domain 限定为已知集合，`value.id` 必须等于行 `id`；当前对象（含 tag、归属行与批注附着）的版本必须存在（`VERSION_MISSING`），版本主键重复在预览阶段拒绝。
-8. 研究归档、已脱敏的 `history`、`changes`、`extensions` 写入归档表；研究对象只改 `project.id`，嵌套的旧 `projectId` 是历史原文。`mapping_history` 写空栈。
+8. 研究归档与 `extensions` 写入归档表；研究对象只改 `project.id`，嵌套的旧 `projectId` 是历史原文。`mapping.archive` 存在时把它的 `history`、`changes` 作为不可执行归档原样转存，只有首次导入才把包内的活历史当作归档。`editTimes` 按新卡号写入 `mapping_import_edit_times`，供搜索排序沿用原编辑时间；包里的旧动作不重放，`mapping_history` 写空栈。
 9. 由现有执行尾部写变更行与回执；导入不调用 `recordAction`，不占 40 步研究历史。回执的请求指纹只存 ZIP 的 SHA-256 与 base64 长度，不把整包 base64 落库。
 
 写入后再导出一次并核对：引用闭合、各集合与版本条数、当前对象版本存在；失败抛 `IMPORT_CLOSURE_FAILED` 并回滚，不把「已经插入一半」返回给界面。包级跨项目深扫收窄为顶层 `projectId`、`mapping.project.id`、`research.project.id` 与变更回执的 `projectId`；历史归档和未知内容里的旧项目号按原文保留。凭证明文扫描与资源引用检查跳过历史归档、`extensions` 和正文未知块；未知块里的 `token`、`assetId` 不按已知引用解释。
 
-`buildFullPackage` 在调用方没有传入研究参数时，读取归档行，把归档中的 `research` 与 `extensions` 放进清单；`history`/`changes` 仍读活表，因此刚导入的重导出撤销栈为空、研究归档还在。调用方显式传入 `null` 表示本次导出不带研究归档；归档中的 `extensions` 仍随清单导出，避免扩展丢失。
+`buildFullPackage` 在调用方没有传入研究参数时，读取归档行，把归档中的 `research` 与 `extensions` 放进清单；同时把归档里的 `history`、`changes` 作为 `mapping.archive` 导出，并把 `contentEditTimes` 的结果作为 `mapping.editTimes` 导出。活表 `history`/`changes` 仍按当前项目写，因此刚导入的重导出撤销栈为空、旧历史只存在于 `mapping.archive` 里，再次往返不会丢。调用方显式传入 `null` 表示本次导出不带研究归档；归档中的 `extensions` 仍随清单导出，避免扩展丢失。
 
 ## 界面
 
-顶栏「新建研究」旁增加「导入项目包」。选择 ZIP 后打开预览对话框，说明目标、范围、缺口与身份；校验失败时列出 `代码 路径 expected actual`，提交按钮不可用。预览失败仍以 200 返回失败列表，提交才以 400 `INVALID_PACKAGE` 拒绝。取消、关闭与 Esc 不发提交请求，焦点回到触发按钮；Tab 在对话框内循环。
+顶栏「新建研究」旁增加「导入项目包」。选择 ZIP 后打开预览对话框，说明目标、范围、缺口与身份；校验失败时列出 `代码 路径 expected actual`，提交按钮不可用。预览失败仍以 200 返回失败列表，提交才以 400 `INVALID_PACKAGE` 拒绝。校验阶段是只读的：Esc 与「关闭」都能退出，迟到的校验结果直接丢弃；只有已提交的请求不能再被 Esc 打断。取消、关闭与 Esc 不发提交请求，焦点回到触发按钮；Tab 在对话框内循环。对话框打开期间画布撤销快捷键不生效，名称输入框的原生撤销保留。
 
-成功后项目标签增加新研究并切过去，源项目标签仍在；失败时对话框保留，展示服务端代码与路径。重试使用新的 `commandId`；响应丢失且请求完全相同时复用原 `commandId` 与原 `projectId`。5xx 或传输失败保留原请求，关闭对话框后重新选择同一文件仍保留；确定性 4xx 才清空重试身份。若项目编号已存在（上次响应丢失后已提交，或改名重试），直接打开该项目，不再建第二份。
+缺口列表除「有没有旧研究归档」外，还要列出归档里因权利限制只保留索引的原件数量、名称与 `omission` 原因。
+
+成功后项目标签增加新研究并切过去，源项目标签仍在；失败时对话框保留，展示服务端代码与路径。重试按包保留身份：请求完全相同时复用原 `commandId` 与原 `projectId`，换看另一个包不会丢掉上一份待确认的请求。5xx 或传输失败保留原请求，关闭对话框后重新选择同一文件仍保留；确定性 4xx 才清空该包的重试身份。若项目编号已存在（上次响应丢失后已提交，或改名重试），直接打开该项目，不再建第二份。
 
 ## 未纳入
 
@@ -88,3 +90,13 @@
 - 不决定 ADR 0031 的待决定项「清单是否去掉 `assets.base64`」。导入同时接受清单 base64 与 `resources/` 字节。
 - 不新增 npm 依赖，不改 `package.json`。
 - 归档表的 `history`/`changes` 只作历史留档，不在界面回放；包内旧 `revision` 由 `changes` 的逐条 revision 间接保留，不另设列。
+
+## 2026-11-18 审查修复
+
+同一提交（`8bb76bd1`）的两轴审查发现以下边界不够紧，均在本文件口径内收紧，不改变容器、身份映射与入口：
+
+- 文字、形状、笔迹、图片的 `content` 在预览与提交都按现有内容契约（`TextContentImportCheck` 等）校验已知字段；不符返回 `CONTENT_FIELD`。校验只读，不改写记录，未知键随原文保留。此前只要求 `content` 是对象，缺 `runs` 的文字能入库，但画布投影读 `runs.length`，导入的研究会打不开。
+- 归属链必须无环（`CONTAINMENT_CYCLE`，D416）。循环归属能入库，但随后调整分区会卡在祖先遍历；普通连线的几何闭环不受限制（D403）。
+- 被引用的资产必须落在 `mapping.assets` 行上（仍是 `REFERENCE`）；原件字节可以只在 ZIP 的 `resources/` 里，导入只为资产行入库，此前只指向资源目录的引用会预览放行、提交回滚。
+- `mapping.history`、`mapping.changes`、`mapping.archive`、`mapping.editTimes` 的形状在预览阶段校验（`HISTORY_FIELD` / `CHANGES_FIELD` / `ARCHIVE_FIELD` / `EDIT_TIMES`），保证预览通过的包在提交后的闭合复验里也能通过。
+- 提交时 ZIP 只解码一次：回执指纹与 `importPackage` 共用同一段 `Buffer`，提交侧仍独立完整校验一次。

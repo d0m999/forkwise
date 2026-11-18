@@ -1,5 +1,10 @@
 import { createHash } from 'node:crypto';
+import type { z } from 'zod';
+import { ImageContentImportCheck } from './image-contracts.js';
 import { SECRET_KEYS } from './secret-keys.js';
+import { ShapeContentImportCheck } from './shape-contracts.js';
+import { StrokeContentImportCheck } from './stroke-contracts.js';
+import { TextContentImportCheck } from './text-contracts.js';
 import { readZip } from './zip-store.js';
 
 export interface PackageFailure {
@@ -27,7 +32,7 @@ function fail(failures: PackageFailure[], code: string, path: string, expected: 
   failures.push({ code, path, expected: clip(expected), actual: clip(actual) });
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
+export function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value);
 }
 
@@ -116,6 +121,22 @@ function requirePose(failures: PackageFailure[], path: string, value: unknown) {
       fail(failures, 'RECORD_FIELD', `${path}.${field}`, 'positive number', value[field]);
 }
 
+function requireContent(failures: PackageFailure[], path: string, value: unknown, check: z.ZodType) {
+  if (!isRecord(value)) {
+    fail(failures, 'RECORD_FIELD', path, 'content object', value);
+    return;
+  }
+  const parsed = check.safeParse(value);
+  if (parsed.success) return;
+  for (const issue of parsed.error.issues.slice(0, 20)) {
+    const at = issue.path.reduce<unknown>(
+      (node, key) => (node && typeof node === 'object' ? (node as Record<string, unknown>)[String(key)] : undefined),
+      value,
+    );
+    fail(failures, 'CONTENT_FIELD', `${path}${issue.path.length ? `.${issue.path.join('.')}` : ''}`, issue.message, at);
+  }
+}
+
 function requireItem(failures: PackageFailure[], path: string, value: unknown, rotation = false) {
   if (!isRecord(value)) {
     fail(failures, 'RECORD_FIELD', path, 'item object', value);
@@ -185,14 +206,18 @@ function verifyRecords(mapping: Record<string, unknown>, failures: PackageFailur
     }
   });
 
-  for (const [name, kind] of [['texts', 'text'], ['shapes', 'shape'], ['strokes', 'stroke'], ['images', 'image']] as const) {
+  for (const [name, kind, check] of [
+    ['texts', 'text', TextContentImportCheck],
+    ['shapes', 'shape', ShapeContentImportCheck],
+    ['strokes', 'stroke', StrokeContentImportCheck],
+    ['images', 'image', ImageContentImportCheck],
+  ] as const) {
     list(mapping, name).forEach((value, index) => {
       const path = `mapping.${name}[${index}]`;
       if (!isRecord(value)) return fail(failures, 'RECORD_FIELD', path, `${kind} object`, value);
       requireString(failures, `${path}.id`, value.id);
       requireString(failures, `${path}.versionId`, value.versionId);
-      if (!isRecord(value.content)) fail(failures, 'RECORD_FIELD', `${path}.content`, 'object', value.content);
-      if (kind === 'image' && isRecord(value.content)) requireString(failures, `${path}.content.assetId`, value.content.assetId);
+      requireContent(failures, `${path}.content`, value.content, check);
       requireItem(failures, `${path}.item`, value.item, kind === 'image');
     });
   }
@@ -522,10 +547,11 @@ function verifyManifest(manifest: Record<string, unknown>, files: Map<string, Bu
     }
   });
   verifyAssets(map, resources.filter(isRecord), files, failures);
-  const inlineAssetIds = new Set(list(map, 'assets').flatMap((value) => (isRecord(value) && typeof value.id === 'string' && typeof value.base64 === 'string' && value.base64 ? [value.id] : [])));
+  // 引用必须落在 mapping.assets 的行上：导入只为资产行入库，原件字节可以只在 ZIP 里。
+  const assetRowIds = new Set(list(map, 'assets').flatMap((value) => (isRecord(value) && typeof value.id === 'string' ? [value.id] : [])));
   const requireAsset = (id: unknown, path: string) => {
     if (typeof id !== 'string' || !id) return;
-    if (!resourceIds.has(id) && !inlineAssetIds.has(id)) fail(failures, 'REFERENCE', path, `resource ${id}`, 'missing');
+    if (!assetRowIds.has(id)) fail(failures, 'REFERENCE', path, `asset ${id}`, 'missing');
   };
   list(map, 'cards').forEach((card, index) => {
     if (!isRecord(card)) return;
@@ -566,6 +592,30 @@ function verifyManifest(manifest: Record<string, unknown>, files: Map<string, Bu
     const ids = parent.kind === 'frame' ? frameIds : parent.kind === 'group' ? groupItemIds : new Set<string>();
     if (typeof parent.id !== 'string' || !ids.has(parent.id)) fail(failures, 'REFERENCE', `mapping.containment[${index}].parent.id`, parent.kind, parent.id);
   });
+  // 归属只能沿容器向外收敛：循环归属能入库，但随后调整分区会在祖先遍历里绕不出去。
+  // 这里只约束容器归属，普通连线的几何闭环仍由用户定义（D416、D403）。
+  // 分区/组合编号与 item 编号同串时按普通 item 处理（ADR 0032），不当作容器边。
+  const isContainerMember = (id: string) => !itemIds.has(id) && (frameIds.has(id) || groupItemIds.has(id));
+  const parentOf = new Map<string, string>();
+  for (const row of list(map, 'containment'))
+    if (isRecord(row) && typeof row.id === 'string' && isRecord(row.parent) && typeof row.parent.id === 'string' && isContainerMember(row.id))
+      parentOf.set(row.id, row.parent.id);
+  const reportedCycles = new Set<string>();
+  for (const start of parentOf.keys()) {
+    const seen = new Set<string>();
+    let id: string | undefined = start;
+    while (id && isContainerMember(id)) {
+      if (seen.has(id)) {
+        const key = [...seen].sort().join('\u0000');
+        if (!reportedCycles.has(key))
+          fail(failures, 'CONTAINMENT_CYCLE', 'mapping.containment', `acyclic chain from ${start}`, [...seen, id].join(' → '));
+        reportedCycles.add(key);
+        break;
+      }
+      seen.add(id);
+      id = parentOf.get(id);
+    }
+  }
   list(map, 'attachments').forEach((attachment, index) => {
     if (!isRecord(attachment)) return;
     if (typeof attachment.id === 'string' && !itemIds.has(attachment.id)) fail(failures, 'REFERENCE', `mapping.attachments[${index}].id`, 'known item', attachment.id);
@@ -635,6 +685,28 @@ function verifyManifest(manifest: Record<string, unknown>, files: Map<string, Bu
     if (typeof change.receipt.projectId === 'string' && change.receipt.projectId !== projectId)
       fail(failures, 'CROSS_PROJECT', `mapping.changes[${index}].receipt.projectId`, projectId, change.receipt.projectId);
   });
+  // 旧历史只作为不可执行的归档随包保留；这里只核对形状，不校验旧动作是否可重放。
+  if (map.history !== undefined && map.history !== null && !isRecord(map.history))
+    fail(failures, 'HISTORY_FIELD', 'mapping.history', 'object or null', map.history);
+  if (map.changes !== undefined && map.changes !== null && !Array.isArray(map.changes))
+    fail(failures, 'CHANGES_FIELD', 'mapping.changes', 'array or null', map.changes);
+  if (map.archive !== undefined && map.archive !== null) {
+    const archive = map.archive;
+    if (!isRecord(archive) || !isRecord(archive.history) || !Array.isArray(archive.changes))
+      fail(failures, 'ARCHIVE_FIELD', 'mapping.archive', '{ history, changes }', archive);
+  }
+  if (map.editTimes !== undefined) {
+    if (!Array.isArray(map.editTimes)) fail(failures, 'EDIT_TIMES', 'mapping.editTimes', 'array', map.editTimes);
+    else
+      map.editTimes.forEach((value, index) => {
+        const path = `mapping.editTimes[${index}]`;
+        if (!isRecord(value)) return fail(failures, 'EDIT_TIMES', path, 'object', value);
+        requireString(failures, `${path}.cardId`, value.cardId);
+        requireString(failures, `${path}.editedAt`, value.editedAt);
+        if (typeof value.editedAt === 'string' && Number.isNaN(Date.parse(value.editedAt)))
+          fail(failures, 'EDIT_TIMES', `${path}.editedAt`, 'ISO date', value.editedAt);
+      });
+  }
   return failures;
 }
 

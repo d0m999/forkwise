@@ -9,6 +9,7 @@ import { createWorkspaceApp } from '../src/mapping/http.js';
 import { captureSpatial } from '../src/mapping/frame-spatial.js';
 import { readZip, writeZip } from '../src/mapping/zip-store.js';
 import { verifyPackage } from '../src/mapping/package-verify.js';
+import { PACKAGE_IMPORT_BODY_LIMIT, PACKAGE_IMPORT_MAX_BYTES } from '../src/mapping/package-import.js';
 import type { Block } from '../src/mapping/contracts.js';
 
 const ISO = '2026-11-15T00:00:00.000Z';
@@ -113,6 +114,16 @@ function rewriteManifest(bytes: Buffer, mutate: (manifest: Record<string, unknow
 
 function manifestOf(bytes: Buffer) {
   return JSON.parse(readZip(bytes).get('forkwise-project.json')!.toString('utf8')) as Record<string, any>;
+}
+
+function syncMembership(manifest: Record<string, unknown>) {
+  const mapping = manifest.mapping as Record<string, any>;
+  const members = (kind: string, id: string) =>
+    mapping.containment.filter((row: any) => row?.parent?.kind === kind && row.parent.id === id).map((row: any) => String(row.id));
+  mapping.membership = {
+    frames: mapping.frames.map((frame: any) => ({ id: frame.id, memberItemIds: members('frame', frame.id) })),
+    groups: mapping.groups.map((group: any) => ({ id: group.id, memberItemIds: members('group', group.itemId) })),
+  };
 }
 
 describe('隔离导入完整项目包', () => {
@@ -283,6 +294,10 @@ describe('隔离导入完整项目包', () => {
         objects: [{ id: 'claim-1', projectId: 'p', unknownClaim: { keep: true, projectId: 'p' } }],
         versions: [{ id: 'snapshot-1', snapshot: { projectId: 'p', note: '旧项目号是历史原文' } }],
         actor: { delegation: { projectId: 'p' } },
+        materials: [
+          { id: 'material-1', text: '保留的原文' },
+          { id: 'material-2', text: null, omission: '仅保留索引' },
+        ],
         files: [
           { id: 'file-1', name: '原件.txt', mime: 'text/plain', hash: createHash('sha256').update(researchBytes).digest('hex'), base64: researchBytes.toString('base64') },
           { id: 'file-2', name: '省略.txt', mime: 'text/plain', hash: '0'.repeat(64), base64: null, omission: '旧归档声明省略' },
@@ -297,6 +312,10 @@ describe('隔离导入完整项目包', () => {
       expect(preview.failures).toEqual([]);
       expect(preview.extensionKeys).toEqual(['futureReader']);
       expect(preview.gaps.join('\n')).toContain('本版不解释这些扩展：futureReader');
+      expect(preview.gaps.join('\n')).toContain('1 份原件未随包提供');
+      expect(preview.gaps.join('\n')).toContain('旧归档声明省略');
+      expect(preview.gaps.join('\n')).toContain('1 份原文未随包提供');
+      expect(preview.gaps.join('\n')).toContain('仅保留索引');
 
       execute(importCommand(bytes.toString('base64')));
       const db = new Database(join(directory, 'workspace.sqlite'), { readonly: true });
@@ -327,6 +346,67 @@ describe('隔离导入完整项目包', () => {
       const reexportFiles = readZip(withoutResearch);
       const fileResource = (manifest.resources as { id: string; path: string }[]).find((resource) => resource.id === 'research:file-1')!;
       expect(reexportFiles.get(fileResource.path)!.equals(researchBytes)).toBe(true);
+    } finally {
+      close();
+    }
+  }, 30000);
+
+  it('再次导出把旧历史作为不可执行归档随包保留，并按原编辑时间维持排序', async () => {
+    const fixture = await makeFixture();
+    const { execute, mapping, human, post, close } = fixture;
+    try {
+      seedMixed(fixture);
+      const firstBytes = mapping.fullPackage('p', human, ISO);
+      const first = manifestOf(firstBytes);
+      expect(first.mapping.archive).toBeNull();
+      expect((first.mapping.history.undo as unknown[]).length).toBeGreaterThan(1);
+      expect((first.mapping.changes as unknown[]).length).toBeGreaterThan(1);
+      const editTimesOf = (manifest: Record<string, any>) =>
+        new Map<string, string>((manifest.mapping.editTimes as { cardId: string; editedAt: string }[]).map((row) => [row.cardId, row.editedAt]));
+      const sourceEditedAt = editTimesOf(first).get(first.mapping.cards[0].id as string);
+      expect(sourceEditedAt).toBeTruthy();
+
+      execute(importCommand(firstBytes.toString('base64')));
+      const importedCard = mapping.read({ type: 'project', projectId: 'q' }, human).cards[0]!;
+      expect(mapping.read({ type: 'history', projectId: 'q' }, human)).toMatchObject({ undo: [], redo: [] });
+      const secondBytes = mapping.fullPackage('q', human, ISO);
+      const second = manifestOf(secondBytes);
+      expect(second.mapping.archive).toEqual({ history: first.mapping.history, changes: first.mapping.changes });
+      expect(second.mapping.history).toEqual({ undo: [], redo: [] });
+      expect(editTimesOf(second).get(importedCard.id)).toBe(sourceEditedAt);
+      const secondPreview = await (await post('/api/mapping/import.preview', { base64: secondBytes.toString('base64') })).json() as Record<string, any>;
+      expect(secondPreview.gaps.join('\n')).toContain('更早的历史归档');
+
+      execute(importCommand(secondBytes.toString('base64'), { commandId: 'import-2', projectId: 'r' }));
+      const thirdCard = mapping.read({ type: 'project', projectId: 'r' }, human).cards[0]!;
+      const third = manifestOf(mapping.fullPackage('r', human, ISO));
+      expect(third.mapping.archive).toEqual(second.mapping.archive);
+      expect(editTimesOf(third).get(thirdCard.id)).toBe(sourceEditedAt);
+    } finally {
+      close();
+    }
+  }, 30000);
+
+  it('导出响应标注包能否从当前入口恢复，上限与命令请求体一致', async () => {
+    const fixture = await makeFixture();
+    const { mapping, token, close } = fixture;
+    try {
+      seedMixed(fixture);
+      const response = await fixture.app.fetch(new Request(`${ORIGIN}/api/mapping/projects/p/export.package`, {
+        headers: { Authorization: `Bearer ${token}` },
+      }));
+      expect(response.status).toBe(200);
+      expect(response.headers.get('X-Forkwise-Package-Restorable')).toBe('yes');
+      expect(Number(response.headers.get('X-Forkwise-Package-Limit'))).toBe(PACKAGE_IMPORT_MAX_BYTES);
+      expect(Buffer.from(await response.arrayBuffer()).length).toBeLessThanOrEqual(PACKAGE_IMPORT_MAX_BYTES);
+      const body = (base64: string) => JSON.stringify({
+        commandId: crypto.randomUUID(),
+        projectId: crypto.randomUUID(),
+        type: 'project.import',
+        expected: null,
+        payload: { name: '导'.repeat(240), base64 },
+      });
+      expect(Buffer.byteLength(body('A'.repeat(4 * Math.ceil(PACKAGE_IMPORT_MAX_BYTES / 3))))).toBeLessThanOrEqual(PACKAGE_IMPORT_BODY_LIMIT);
     } finally {
       close();
     }
@@ -442,11 +522,62 @@ describe('隔离导入完整项目包', () => {
         manifest.resources = (manifest.resources as any[]).filter((resource) => resource.id !== 'asset-image');
       });
       cases.push({ name: 'asset-too-large', bytes: oversizedAsset, code: 'ASSET_FIELD' });
+      const missingRuns = rewriteManifest(good, (manifest) => {
+        const mapping = manifest.mapping as Record<string, any>;
+        delete mapping.texts[0].content.runs;
+        syncStored(manifest, 'texts');
+      });
+      cases.push({ name: 'text-content-runs', bytes: missingRuns, code: 'CONTENT_FIELD' });
+      const missingAssetRow = rewriteManifest(good, (manifest) => {
+        const mapping = manifest.mapping as Record<string, any>;
+        mapping.assets = mapping.assets.filter((asset: any) => asset.id !== 'asset-image');
+      });
+      cases.push({ name: 'asset-row-missing', bytes: missingAssetRow, code: 'REFERENCE' });
+      const cyclicContainment = rewriteManifest(good, (manifest) => {
+        const mapping = manifest.mapping as Record<string, any>;
+        const versionId = 'cycle-containment';
+        const row = { id: 'outer', versionId, parent: { kind: 'frame', id: 'inner' } };
+        mapping.containment.push(row);
+        mapping.stored.containment.push({ json: JSON.stringify(row) });
+        mapping.versions.push({ domain: 'containment', id: 'outer', versionId, value: row });
+        mapping.stored.versions.push({ domain: 'containment', id: 'outer', versionId, json: JSON.stringify(row) });
+        syncMembership(manifest);
+      });
+      cases.push({ name: 'containment-cycle', bytes: cyclicContainment, code: 'CONTAINMENT_CYCLE' });
 
       const inlineOnly = rewriteManifest(good, (manifest) => {
         manifest.resources = (manifest.resources as any[]).filter((resource) => resource.id !== 'asset-image');
       });
       expect(verifyPackage(inlineOnly)).toEqual([]);
+      const resourceOnly = rewriteManifest(good, (manifest) => {
+        const mapping = manifest.mapping as Record<string, any>;
+        delete mapping.assets.find((asset: any) => asset.id === 'asset-image').base64;
+      });
+      expect(verifyPackage(resourceOnly)).toEqual([]);
+      // 分区编号与 item 编号同串：归属行按普通 item 处理（ADR 0032），不当成容器环。
+      const sharedIdentity = rewriteManifest(good, (manifest) => {
+        const mapping = manifest.mapping as Record<string, any>;
+        const shapeItemId = mapping.shapes[0].item.id as string;
+        mapping.shapes[0].item.id = 'outer';
+        syncStored(manifest, 'shapes');
+        mapping.connectors[0].end.itemId = 'outer';
+        syncStored(manifest, 'connectors');
+        for (const row of mapping.containment) if (row.id === shapeItemId) row.id = 'outer';
+        syncStored(manifest, 'containment');
+        const rename = (version: any) => {
+          if (version.id !== shapeItemId || !['containment', 'pose'].includes(version.domain)) return;
+          version.id = 'outer';
+          version.value = { ...version.value, id: 'outer' };
+        };
+        mapping.versions.forEach(rename);
+        mapping.stored.versions.forEach((raw: any) => {
+          if (raw.id !== shapeItemId || !['containment', 'pose'].includes(raw.domain)) return;
+          raw.id = 'outer';
+          raw.json = JSON.stringify({ ...JSON.parse(raw.json), id: 'outer' });
+        });
+        syncMembership(manifest);
+      });
+      expect(verifyPackage(sharedIdentity)).toEqual([]);
       for (const item of cases) {
         const previewResponse = await post('/api/mapping/import.preview', { base64: item.bytes.toString('base64') });
         expect(previewResponse.status, item.name).toBe(200);

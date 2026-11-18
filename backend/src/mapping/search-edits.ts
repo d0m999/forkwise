@@ -4,8 +4,13 @@ import { canonical } from '../domain/canonical.js';
 
 // Derive from the persisted write ledger, including pre-search versions. Reading
 // never stamps old data with "now", and pose/tag-only writes never count as edits.
+// Imported projects seed the source's edit times first so sorting survives a roundtrip.
 export function contentEditTimes(db: Database.Database, projectId: string): Map<string, string> {
   const times = new Map<string, string>();
+  for (const row of db
+    .prepare('SELECT card_id AS cardId, edited_at AS editedAt FROM mapping_import_edit_times WHERE project_id=?')
+    .all(projectId) as { cardId: string; editedAt: string }[])
+    times.set(row.cardId, row.editedAt);
   const record = (before: Card | null, after: Card | null, at: string) => {
     if (!after) return;
     if (
