@@ -49,7 +49,7 @@
 
 同一类型内的旧编号必须唯一；`item.id` 在卡片/文字/形状/笔迹/图片之间共用一个命名空间，组合的 `itemId` 在组合之间唯一。分区 id 允许与某个 item id 同串（生产已按类型区分普通连线端点）：普通连线端点的 `targetKind` 必须与目标身份集合一致（`item` / `group` / `frame`），缺省按 `item`；归属行成员同串时按普通 item 处理，不误当分区换号。
 
-保持原样：资源身份（`assets[].id`、`assetId`、`requiredAssetIds[]`、`research.files[].id`）；对象内部编号（正文块、摆放、`group.itemId`、全部版本编号、普通归属行与被批注 item 身份）；普通连线指向 item/group 的端点。未知键、未知正文块和 `extensions` 原样保留，不补默认正文或默认值，不改个人判断。
+保持原样：资源身份（`assets[].id`、`assetId`、`requiredAssetIds[]`、`research.files[].id`）；对象内部编号（正文块、摆放、`group.itemId`、全部版本编号、普通归属行与被批注 item 身份）；普通连线指向 item/group 的端点。未知键、未知正文块和 `extensions` 原样保留，不补默认正文或默认值，不改个人判断；例外是 `mapping.archive` 顶层与 `editTimes` 行，它们只保留已知字段（见「写入顺序与闭合」第 8 条）。
 
 改写按字段路径结构化进行，不做整段字符串替换，避免短编号撞进正文。`200` 这类编号也不会被改写。
 
@@ -66,7 +66,7 @@
 5. 按包内数组顺序写各集合与 id 表，保持 `rowid` 顺序；资源 id、正文块 id、摆放 id、版本 id 保持。
 6. 资源字节写入 `mapping_assets`，内容指纹用现有 `assetHash`；清单里的 `base64` 必须与 `resources/` 字节同哈希，入库以资源字节为准。资源记录缺 `hash`、MIME 不合形、图片缺正尺寸、图片超过 512 KiB、文件超过 10 MiB 都在校验阶段拒绝；被引用资产可以只有清单 base64，也可以只有 `resources/` 字节。研究文件 `base64` 为空但带 v1 `omission` 声明时按原文保留；既无字节又无省略才拒绝。
 7. 版本行按包内顺序写入；domain 限定为已知集合，`value.id` 必须等于行 `id`；当前对象（含 tag、归属行与批注附着）的版本必须存在（`VERSION_MISSING`），版本主键重复在预览阶段拒绝。
-8. 研究归档与 `extensions` 写入归档表；研究对象只改 `project.id`，嵌套的旧 `projectId` 是历史原文。`mapping.archive` 存在时把它的 `history`、`changes` 作为不可执行归档原样转存，只有首次导入才把包内的活历史当作归档。`editTimes` 按新卡号写入 `mapping_import_edit_times`，供搜索排序沿用原编辑时间；包里的旧动作不重放，`mapping_history` 写空栈。
+8. 研究归档与 `extensions` 写入归档表；研究对象只改 `project.id`，嵌套的旧 `projectId` 是历史原文。`mapping.archive` 存在时把它的 `history`、`changes` 作为不可执行归档原样转存，只有首次导入才把包内的活历史当作归档。归档表的列只承接 `history`、`changes`，`mapping.archive` 顶层与 `editTimes` 行内除已知字段外的键不落库，重导出按已知字段重建：这两个块由导出器按固定形状生成，额外的键按噪声丢弃，不适用「未知键原样保留」。`editTimes` 按新卡号写入 `mapping_import_edit_times`，供搜索排序沿用原编辑时间，只写包内当前集合里仍存在的卡；已删除卡的时间行随删除丢弃，即使源包 `contentEditTimes` 仍保留它。包里的旧动作不重放，`mapping_history` 写空栈。
 9. 由现有执行尾部写变更行与回执；导入不调用 `recordAction`，不占 40 步研究历史。回执的请求指纹只存 ZIP 的 SHA-256 与 base64 长度，不把整包 base64 落库。
 
 写入后再导出一次并核对：引用闭合、各集合与版本条数、当前对象版本存在；失败抛 `IMPORT_CLOSURE_FAILED` 并回滚，不把「已经插入一半」返回给界面。包级跨项目深扫收窄为顶层 `projectId`、`mapping.project.id`、`research.project.id` 与变更回执的 `projectId`；历史归档和未知内容里的旧项目号按原文保留。凭证明文扫描与资源引用检查跳过历史归档、`extensions` 和正文未知块；未知块里的 `token`、`assetId` 不按已知引用解释。
@@ -100,3 +100,10 @@
 - 被引用的资产必须落在 `mapping.assets` 行上（仍是 `REFERENCE`）；原件字节可以只在 ZIP 的 `resources/` 里，导入只为资产行入库，此前只指向资源目录的引用会预览放行、提交回滚。
 - `mapping.history`、`mapping.changes`、`mapping.archive`、`mapping.editTimes` 的形状在预览阶段校验（`HISTORY_FIELD` / `CHANGES_FIELD` / `ARCHIVE_FIELD` / `EDIT_TIMES`），保证预览通过的包在提交后的闭合复验里也能通过。
 - 提交时 ZIP 只解码一次：回执指纹与 `importPackage` 共用同一段 `Buffer`，提交侧仍独立完整校验一次。
+
+## 2026-11-18 复审修复
+
+对上一节修复（`51c7dc69`）的复审补齐以下口径，同样不改容器、身份映射与入口：
+
+- `CONTAINMENT_CYCLE` 按环本身的成员去重：同一个环即使从环外的尾节点进入，也只报一次，不再随进入路径重复计数。
+- `mapping.archive` 顶层与 `editTimes` 行内的未知键不落库；`editTimes` 只保留仍在包内当前集合的卡，已删除卡的时间丢弃。两条都写入「身份映射」与「写入顺序与闭合」第 8 条，不再只由代码注释声明。

@@ -7,11 +7,16 @@ import type { Principal } from '../services/access.js';
 import { DomainError, requireThat } from '../domain/errors.js';
 import { CompactQuerySchema } from './compact-contracts.js';
 import { ObserveQuerySchema } from './observe-contracts.js';
-import { PACKAGE_IMPORT_BODY_LIMIT, PACKAGE_IMPORT_MAX_BYTES } from './package-import.js';
 import { SearchQuerySchema } from './search-contracts.js';
 import { EXECUTE_FALLBACK_CODE } from './recovery-contract.js';
 import { versionDomains } from './read-contracts.js';
 import { readableMarkdown } from './readable-summary.js';
+
+// 命令接口的 JSON 请求体上限（asset.save、canvas.paste、project.import 共用）。
+export const EXECUTE_BODY_LIMIT = 48 * 1024 * 1024;
+// base64 膨胀后能装回这个请求体的 ZIP 上限；扣掉命令外壳与名称的余量。
+const PACKAGE_REQUEST_OVERHEAD = 4 * 1024;
+export const PACKAGE_MAX_BYTES = Math.floor((EXECUTE_BODY_LIMIT - PACKAGE_REQUEST_OVERHEAD) / 4) * 3;
 
 export function createWorkspaceApp(
   mapping: Mapping,
@@ -67,7 +72,7 @@ export function createWorkspaceApp(
   const tooLarge = (c: { json: (body: { code: string; message: string }, status: 413) => Response }) =>
     c.json({ code: 'TOO_LARGE', message: '内容超过本次保存上限' }, 413);
   const smallBody = bodyLimit({ maxSize: 1_000_000, onError: tooLarge });
-  const executeBody = bodyLimit({ maxSize: PACKAGE_IMPORT_BODY_LIMIT, onError: tooLarge });
+  const executeBody = bodyLimit({ maxSize: EXECUTE_BODY_LIMIT, onError: tooLarge });
   app.use('/api/*', async (c, next) => {
     if (c.req.method === 'POST' && (c.req.path === '/api/mapping/execute' || c.req.path === '/api/mapping/import.preview')) return next();
     return smallBody(c, next);
@@ -174,8 +179,8 @@ export function createWorkspaceApp(
         'Content-Type': 'application/zip',
         'Content-Disposition': `attachment; filename*=UTF-8''${filename}`,
         // 超过导入上限的包仍可下载，但界面要在下载时说明它无法从本入口恢复。
-        'X-Forkwise-Package-Restorable': bytes.length <= PACKAGE_IMPORT_MAX_BYTES ? 'yes' : 'no',
-        'X-Forkwise-Package-Limit': String(PACKAGE_IMPORT_MAX_BYTES),
+        'X-Forkwise-Package-Restorable': bytes.length <= PACKAGE_MAX_BYTES ? 'yes' : 'no',
+        'X-Forkwise-Package-Limit': String(PACKAGE_MAX_BYTES),
       },
     });
   });

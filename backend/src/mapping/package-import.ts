@@ -74,22 +74,17 @@ function arrayOf(map: Json | undefined, name: string): unknown[] {
   return Array.isArray(value) ? value : [];
 }
 
-// 48 MiB 是命令接口的 JSON 请求体上限；扣掉命令外壳与名称后，base64 膨胀能装回的 ZIP 约 36 MiB。
-const PACKAGE_REQUEST_OVERHEAD = 4 * 1024;
-export const PACKAGE_IMPORT_BODY_LIMIT = 48 * 1024 * 1024;
-export const PACKAGE_IMPORT_MAX_BYTES = Math.floor((PACKAGE_IMPORT_BODY_LIMIT - PACKAGE_REQUEST_OVERHEAD) / 4) * 3;
-
 function recordsOf(value: Json, name: string): Json[] {
   const entries = value[name];
   return Array.isArray(entries) ? entries.filter(isRecord) : [];
 }
 
-function omissionGap(kind: '原件' | '原文', entries: Json[], missing: (entry: Json) => boolean): string[] {
+function omissionGap(kind: '原件' | '材料原文', entries: Json[], missing: (entry: Json) => boolean): string[] {
   const omitted = entries.filter(missing);
   if (!omitted.length) return [];
   const labels = omitted.map((entry) => (typeof entry.name === 'string' && entry.name ? entry.name : typeof entry.id === 'string' ? entry.id : '未命名'));
   const reasons = [...new Set(omitted.map((entry) => (typeof entry.omission === 'string' && entry.omission ? entry.omission : '未说明原因')))];
-  return [`旧研究归档有 ${omitted.length} 份${kind}未随包提供，只保留索引：${labels.slice(0, 5).join('、')}${labels.length > 5 ? ` 等 ${labels.length} 份` : ''}；原因：${reasons.join('；')}。`];
+  return [`旧研究归档有 ${omitted.length} 份${kind}未随包提供，只保留索引：${labels.join('、')}；原因：${reasons.join('；')}。`];
 }
 
 export function previewImport(base64: string): ImportPreview {
@@ -118,7 +113,7 @@ export function previewImport(base64: string): ImportPreview {
   if (isRecord(research)) {
     gaps.push(
       ...omissionGap('原件', recordsOf(research, 'files'), (file) => typeof file.base64 !== 'string' || !file.base64),
-      ...omissionGap('原文', recordsOf(research, 'materials'), (material) => material.text === null),
+      ...omissionGap('材料原文', recordsOf(research, 'materials'), (material) => material.text === null),
     );
   }
   const archive = isRecord(mapping?.archive) ? mapping.archive : null;
@@ -360,7 +355,7 @@ export function importPackage(db: Database.Database, request: ImportRequest): { 
     JSON.stringify(extensions),
   );
   const editTimes = db.prepare('INSERT INTO mapping_import_edit_times VALUES(?,?,?)');
-  // 形状已由 inspectPackage 的 EDIT_TIMES 检查保证；这里只按新卡号落库，已删除的卡不再保留时间。
+  // 形状已由 inspectPackage 的 EDIT_TIMES 检查保证；只按新卡号落库，已删除的卡不再保留时间（ADR 0032）。
   for (const row of arrayOf(mapping, 'editTimes') as { cardId: string; editedAt: string }[]) {
     const cardId = ids.byKind.card.get(row.cardId);
     if (cardId) editTimes.run(request.projectId, cardId, row.editedAt);

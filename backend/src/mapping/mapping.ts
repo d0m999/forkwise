@@ -273,14 +273,16 @@ export class Mapping {
         )
           this.access.human(actor);
         // 同一份 ZIP 只解码一次：回执指纹与提交校验共用这段字节。
-        const archive = command.type === 'project.import' ? decodeArchive(command.payload.base64) : undefined;
-        const request = command.type === 'project.import'
+        const pendingImport = command.type === 'project.import'
+          ? { command, archive: decodeArchive(command.payload.base64) }
+          : undefined;
+        const request = pendingImport
           ? canonical({
-              ...command,
+              ...pendingImport.command,
               payload: {
-                name: command.payload.name,
-                base64Sha256: createHash('sha256').update(archive!).digest('hex'),
-                base64Length: command.payload.base64.length,
+                name: pendingImport.command.payload.name,
+                base64Sha256: createHash('sha256').update(pendingImport.archive).digest('hex'),
+                base64Length: pendingImport.command.payload.base64.length,
               },
             })
           : canonical(command);
@@ -700,10 +702,12 @@ export class Mapping {
           changedIds = [command.projectId];
           after = this.project(command.projectId);
         } else if (command.type === 'project.import') {
+          // pendingImport 与本分支同一条件生成；?? 只补类型收窄，不会再解码一次。
+          const archive = pendingImport?.archive ?? decodeArchive(command.payload.base64);
           ({ revision } = importPackage(this.db, {
             projectId: command.projectId,
             name: command.payload.name,
-            archive: archive!,
+            archive,
           }));
           changedIds = [command.projectId];
           after = this.project(command.projectId);

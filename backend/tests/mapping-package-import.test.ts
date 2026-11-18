@@ -5,11 +5,10 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import Database from 'better-sqlite3';
 import { openMapping } from '../src/mapping/storage.js';
-import { createWorkspaceApp } from '../src/mapping/http.js';
+import { createWorkspaceApp, EXECUTE_BODY_LIMIT, PACKAGE_MAX_BYTES } from '../src/mapping/http.js';
 import { captureSpatial } from '../src/mapping/frame-spatial.js';
 import { readZip, writeZip } from '../src/mapping/zip-store.js';
 import { verifyPackage } from '../src/mapping/package-verify.js';
-import { PACKAGE_IMPORT_BODY_LIMIT, PACKAGE_IMPORT_MAX_BYTES } from '../src/mapping/package-import.js';
 import type { Block } from '../src/mapping/contracts.js';
 
 const ISO = '2026-11-15T00:00:00.000Z';
@@ -295,12 +294,14 @@ describe('隔离导入完整项目包', () => {
         versions: [{ id: 'snapshot-1', snapshot: { projectId: 'p', note: '旧项目号是历史原文' } }],
         actor: { delegation: { projectId: 'p' } },
         materials: [
-          { id: 'material-1', text: '保留的原文' },
-          { id: 'material-2', text: null, omission: '仅保留索引' },
+          { id: 'material-1', name: '现金流说明', text: '保留的原文' },
+          { id: 'material-2', name: '权利受限材料', text: null, omission: '仅保留索引' },
         ],
         files: [
           { id: 'file-1', name: '原件.txt', mime: 'text/plain', hash: createHash('sha256').update(researchBytes).digest('hex'), base64: researchBytes.toString('base64') },
-          { id: 'file-2', name: '省略.txt', mime: 'text/plain', hash: '0'.repeat(64), base64: null, omission: '旧归档声明省略' },
+          ...['省略一.txt', '省略二.txt', '省略三.txt', '省略四.txt', '省略五.txt', '省略六.txt'].map((name, index) => ({
+            id: `file-${index + 2}`, name, mime: 'text/plain', hash: '0'.repeat(64), base64: null, omission: '旧归档声明省略',
+          })),
         ],
       };
       const bytes = rewriteManifest(mapping.fullPackage('p', human, ISO, research), (manifest) => {
@@ -312,9 +313,12 @@ describe('隔离导入完整项目包', () => {
       expect(preview.failures).toEqual([]);
       expect(preview.extensionKeys).toEqual(['futureReader']);
       expect(preview.gaps.join('\n')).toContain('本版不解释这些扩展：futureReader');
-      expect(preview.gaps.join('\n')).toContain('1 份原件未随包提供');
+      expect(preview.gaps.join('\n')).toContain('6 份原件未随包提供');
+      for (const name of ['省略一.txt', '省略二.txt', '省略三.txt', '省略四.txt', '省略五.txt', '省略六.txt'])
+        expect(preview.gaps.join('\n')).toContain(name);
       expect(preview.gaps.join('\n')).toContain('旧归档声明省略');
-      expect(preview.gaps.join('\n')).toContain('1 份原文未随包提供');
+      expect(preview.gaps.join('\n')).toContain('1 份材料原文未随包提供');
+      expect(preview.gaps.join('\n')).toContain('权利受限材料');
       expect(preview.gaps.join('\n')).toContain('仅保留索引');
 
       execute(importCommand(bytes.toString('base64')));
@@ -397,8 +401,8 @@ describe('隔离导入完整项目包', () => {
       }));
       expect(response.status).toBe(200);
       expect(response.headers.get('X-Forkwise-Package-Restorable')).toBe('yes');
-      expect(Number(response.headers.get('X-Forkwise-Package-Limit'))).toBe(PACKAGE_IMPORT_MAX_BYTES);
-      expect(Buffer.from(await response.arrayBuffer()).length).toBeLessThanOrEqual(PACKAGE_IMPORT_MAX_BYTES);
+      expect(Number(response.headers.get('X-Forkwise-Package-Limit'))).toBe(PACKAGE_MAX_BYTES);
+      expect(Buffer.from(await response.arrayBuffer()).length).toBeLessThanOrEqual(PACKAGE_MAX_BYTES);
       const body = (base64: string) => JSON.stringify({
         commandId: crypto.randomUUID(),
         projectId: crypto.randomUUID(),
@@ -406,7 +410,7 @@ describe('隔离导入完整项目包', () => {
         expected: null,
         payload: { name: '导'.repeat(240), base64 },
       });
-      expect(Buffer.byteLength(body('A'.repeat(4 * Math.ceil(PACKAGE_IMPORT_MAX_BYTES / 3))))).toBeLessThanOrEqual(PACKAGE_IMPORT_BODY_LIMIT);
+      expect(Buffer.byteLength(body('A'.repeat(4 * Math.ceil(PACKAGE_MAX_BYTES / 3))))).toBeLessThanOrEqual(EXECUTE_BODY_LIMIT);
     } finally {
       close();
     }
@@ -535,15 +539,23 @@ describe('隔离导入完整项目包', () => {
       cases.push({ name: 'asset-row-missing', bytes: missingAssetRow, code: 'REFERENCE' });
       const cyclicContainment = rewriteManifest(good, (manifest) => {
         const mapping = manifest.mapping as Record<string, any>;
-        const versionId = 'cycle-containment';
-        const row = { id: 'outer', versionId, parent: { kind: 'frame', id: 'inner' } };
-        mapping.containment.push(row);
-        mapping.stored.containment.push({ json: JSON.stringify(row) });
-        mapping.versions.push({ domain: 'containment', id: 'outer', versionId, value: row });
-        mapping.stored.versions.push({ domain: 'containment', id: 'outer', versionId, json: JSON.stringify(row) });
+        const rows = [
+          { id: 'outer', parent: { kind: 'frame', id: 'inner' } },
+          // 尾巴从环外进入同一个环：去重后仍只报一次。
+          { id: mapping.groups[0].itemId, parent: { kind: 'frame', id: 'outer' } },
+        ];
+        rows.forEach((value, index) => {
+          const versionId = `cycle-containment-${index}`;
+          const row = { ...value, versionId };
+          mapping.containment.push(row);
+          mapping.stored.containment.push({ json: JSON.stringify(row) });
+          mapping.versions.push({ domain: 'containment', id: row.id, versionId, value: row });
+          mapping.stored.versions.push({ domain: 'containment', id: row.id, versionId, json: JSON.stringify(row) });
+        });
         syncMembership(manifest);
       });
       cases.push({ name: 'containment-cycle', bytes: cyclicContainment, code: 'CONTAINMENT_CYCLE' });
+      expect(verifyPackage(cyclicContainment).filter((failure) => failure.code === 'CONTAINMENT_CYCLE')).toHaveLength(1);
 
       const inlineOnly = rewriteManifest(good, (manifest) => {
         manifest.resources = (manifest.resources as any[]).filter((resource) => resource.id !== 'asset-image');

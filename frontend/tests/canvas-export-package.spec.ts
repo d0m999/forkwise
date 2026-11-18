@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { copyFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { test, expect } from './writing-board-fixture';
+import { test, expect, place } from './writing-board-fixture';
 import { seedCanvasExportSample } from './canvas-export-fixture';
 import { readZip, writeZip } from '../../backend/src/mapping/zip-store';
 import Database from '../../backend/node_modules/better-sqlite3/lib/index.js';
@@ -169,4 +169,25 @@ test('官方入口下载的完整项目包可离开数据目录验证，四种�
   } finally {
     rmSync(isolated, { recursive: true, force: true });
   }
+});
+
+test('超过导入上限的包仍可下载，下载前说明它不能从本入口恢复', async ({ page, workspace }) => {
+  test.setTimeout(120000);
+  await place(page, '超限提示卡');
+  // 36 MiB 的包在 e2e 里不现实；这里改响应头，直接走界面的不可恢复分支。
+  const packageRoute = /\/export\.package\?/;
+  await page.route(packageRoute, async (route) => {
+    const response = await route.fetch();
+    await route.fulfill({
+      response,
+      headers: { ...response.headers(), 'x-forkwise-package-restorable': 'no', 'x-forkwise-package-limit': '1024' },
+    });
+  });
+  const downloadPromise = page.waitForEvent('download');
+  await page.getByRole('button', { name: '导出', exact: true }).click();
+  await page.getByRole('menuitem', { name: '下载完整项目包（ZIP）', exact: true }).click();
+  const download = await downloadPromise;
+  expect(await download.path()).toBeTruthy();
+  await expect(page.getByRole('status')).toContainText('不能在这里导入恢复');
+  await page.unroute(packageRoute);
 });

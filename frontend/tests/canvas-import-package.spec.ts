@@ -237,6 +237,22 @@ test('响应丢失后用原 commandId 重试只建一个项目', async ({ page, 
   // 服务端已提交、客户端没收到响应；此时项目已经存在，重试只能复用原回执。
   expect((await projectsOf(page, workspace.origin)).length).toBe(tabsBefore + 1);
   await dialog.getByRole('button', { name: '取消', exact: true }).click();
+  // 换看另一个包不会丢掉上一份待确认的请求：再回到原包时仍按原 commandId 重试。
+  const isolated = mkdtempSync(join(tmpdir(), 'forkwise-import-other-'));
+  try {
+    const otherPath = join(isolated, 'other.zip');
+    const files = readZip(readFileSync(packagePath!));
+    const otherManifest = JSON.parse(files.get('forkwise-project.json')!.toString('utf8')) as Record<string, any>;
+    otherManifest.mapping.project.name = '另一个包';
+    files.set('forkwise-project.json', Buffer.from(JSON.stringify(otherManifest)));
+    writeFileSync(otherPath, writeZip([...files].map(([name, data]) => ({ name, data }))));
+    const switched = await openPackage(page, otherPath);
+    await expect(switched.dialog.getByLabel('新研究名称')).toHaveValue('另一个包');
+    await switched.dialog.getByRole('button', { name: '取消', exact: true }).click();
+    await expect(switched.dialog).toHaveCount(0);
+  } finally {
+    rmSync(isolated, { recursive: true, force: true });
+  }
   const reopened = await openPackage(page, packagePath!);
   await reopened.dialog.getByLabel('新研究名称').fill('重试导入');
   await reopened.dialog.getByRole('button', { name: '导入为新研究', exact: true }).click();

@@ -24,6 +24,8 @@ v1 用 `.strict()` 描述既有研究归档，把画布字段塞进 v1 会让旧
 | `versions` | `domain`、`id`、`versionId`、`value` |
 | `history` | 撤销栈原文，去掉 `SECRET_KEYS` 键 |
 | `changes` | 每条回执的 `revision` 与脱敏后的 `receipt` |
+| `archive` | 导入项目带出的旧历史归档（`history`、`changes`）；普通项目为 `null` |
+| `editTimes` | `cardId`、`editedAt`；按变更回执与导入时沿用的时间算出的原编辑时间 |
 | `membership` | 由 `containment` 算出的分区成员（帧按 `id`，组按 `itemId`） |
 | `stack` | 卡片、文本、图形、笔迹、图片按 `item.createdOrder` 叠放 |
 | `stored` | 上述十一个集合与 `versions` 的 `json` 原文，与解析值逐条对应 |
@@ -46,9 +48,9 @@ v1 用 `.strict()` 描述既有研究归档，把画布字段塞进 v1 会让旧
 
 `npx --no-install --prefix backend tsx scripts/verify-package.ts <path>`。缺路径退出码 2，有失败退出码 1，通过为 0；每行失败是 `代码 路径 expected=… actual=…`。
 
-检查项：容器与清单形状、`format` / `schemaVersion`、`mapping.project` 与顶层身份一致、十一个集合与 `versions` 的 `stored` 逐条对应、`membership` 与 `stack` 重算一致、资源字段与 `id` 唯一、路径形状与 `sha256` 后缀绑定、文件存在与哈希、`assetId` / `requiredAssetIds` / 连线端点 / 容器成员与父级 / 附着目标的引用闭合、`research` 的 v1 形状与项目 ID、`SECRET_KEYS` 扫描、跨项目 ID 扫描。#47 起跨项目检查收窄为顶层 `projectId`、`mapping.project.id`、`research.project.id` 与变更回执 `projectId`；历史归档和未知内容里的旧项目号按原文保留，见 [ADR 0032](0032-isolated-package-import.md)。
+检查项：容器与清单形状、`format` / `schemaVersion`、`mapping.project` 与顶层身份一致、十一个集合与 `versions` 的 `stored` 逐条对应、`membership` 与 `stack` 重算一致、资源字段与 `id` 唯一、路径形状与 `sha256` 后缀绑定、文件存在与哈希、`assetId` / `requiredAssetIds` / 连线端点 / 容器成员与父级 / 附着目标的引用闭合、文字/形状/笔迹/图片 `content` 的已知字段、归属链无环、`archive` / `editTimes` 的形状、`research` 的 v1 形状与项目 ID、`SECRET_KEYS` 扫描、跨项目 ID 扫描。#47 起跨项目检查收窄为顶层 `projectId`、`mapping.project.id`、`research.project.id` 与变更回执 `projectId`；历史归档和未知内容里的旧项目号按原文保留，见 [ADR 0032](0032-isolated-package-import.md)。
 
-验证器不复用导出器的派生实现，也不依赖服务端与数据库；`SECRET_KEYS` 是唯一共享常量，避免脱敏键集两处漂移后校验静默放行。
+验证器不复用导出器的派生实现，也不依赖服务端与数据库。共享的只有 `SECRET_KEYS` 与内容契约的导入检查 schema（`TextContentImportCheck` 等）：前者避免脱敏键集两处漂移后校验静默放行；后者让预览、提交与画布投影按同一份字段形状判断，避免形状漂移，且这些 schema 只描述形状、不引入数据库或服务端依赖（[ADR 0032](0032-isolated-package-import.md) 的 2026-11-18 节）。
 
 ## 未纳入
 
