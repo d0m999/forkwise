@@ -159,6 +159,27 @@ it('AC4 同 commandId 不同 body、不同 actor 一律拒绝，不返回别人�
   expect(receipt.revision).toBe(revision);
 });
 
+it('AC4 布局授权在提交后被收窄，重放仍取回原回执，新请求按新授权拒绝', async () => {
+  const f = await fixture();
+  const original = f.card();
+  const commandId = randomUUID();
+  const body = moveBody(commandId, original.item.versionId);
+  const receipt = f.mapping.execute(body, f.agent());
+  const revision = f.state().project.revision;
+
+  // 目前没有“收窄但不撤销”的 API；直接改写会话能力，模拟授权被收紧。
+  f.mapping.access.db
+    .prepare("UPDATE sessions SET capabilities=? WHERE type='agent'")
+    .run(JSON.stringify({ personalRecordProjects: ['p'], layoutDelegations: [] }));
+
+  expect(f.mapping.execute(body, f.agent())).toEqual(receipt);
+  expect(f.state().project.revision).toBe(revision);
+
+  const fresh = moveBody(randomUUID(), f.card().item.versionId, 260, 360);
+  expect(() => f.mapping.execute(fresh, f.agent())).toThrow(/布局写入授权/);
+  expect(f.state().project.revision).toBe(revision);
+});
+
 it('AC4 事务各阶段失败均回滚，失败不占用 commandId，重试成功后只写一次', async () => {
   const f = await fixture();
   const original = f.card();

@@ -10,6 +10,7 @@ import { openMapping } from '../src/mapping/storage.js';
 import { createWorkspaceApp } from '../src/mapping/http.js';
 import { createMcpServer, httpTransport } from '../src/mcp-server.js';
 import type { LayoutDelegation } from '../src/services/access.js';
+import { MAX_BATCH_POSES } from '../src/mapping/contracts.js';
 
 const cleanups: (() => void)[] = [];
 afterEach(() => {
@@ -223,6 +224,28 @@ it('AC3 过期版本、已删除目标、跨项目与越对象逐类拒绝，失
   expect(batch.content[0]!.text).toContain('VERSION_CONFLICT');
   expect(f.card('c1').item.pose).toEqual(first.item.pose);
   expect(f.state().project.revision).toBe(before.project.revision);
+});
+
+it('AC3 批量张数上限由权威契约执行，HTTP 直连超过 200 张同样拒绝且无写入', async () => {
+  const f = await fixture();
+  const before = f.state();
+  const poses = Array.from({ length: MAX_BATCH_POSES + 1 }, (_, index) => ({
+    id: `c${index + 1}`,
+    x: 0,
+    y: 0,
+    width: 10,
+    height: 10,
+  }));
+  const response = await f.post({
+    commandId: randomUUID(),
+    projectId: 'p',
+    type: 'pose.batch',
+    expected: {},
+    payload: { poses },
+  });
+  expect(response.status).toBe(400);
+  expect(response.body.code).toBe('INVALID_COMMAND');
+  expect(f.state()).toEqual(before);
 });
 
 it('AC3 并发人类修改同一 Pose 后旧 Agent 请求冲突，重读并更换 commandId 才写入', async () => {

@@ -254,7 +254,10 @@ export class Mapping {
   execute(input: unknown, actor: Principal): Receipt {
     return this.db
       .transaction(() => {
-        this.access.validate(actor);
+        // Re-read the session row once per execute: project, edit and layout
+        // checks all use this snapshot, so a grant revoked or narrowed after
+        // issue is never honoured from memory.
+        const capabilities = this.access.validate(actor);
         // Check project scope before parsing content or returning an old receipt.
         if (
           input &&
@@ -264,9 +267,7 @@ export class Mapping {
         )
           this.access.project(actor, input.projectId);
         const command = MappingCommand.parse(input);
-        this.access.mappingWrite(actor, command.projectId);
-        // Layout scope is checked before any stored receipt can be returned.
-        requireLayoutWrite(this.access, this.db, actor, command);
+        this.access.mappingWrite(actor, command.projectId, capabilities);
         if (
           command.type === 'project.create' ||
           command.type === 'project.import' ||
@@ -305,6 +306,10 @@ export class Mapping {
           );
           return JSON.parse(saved.receipt) as Receipt;
         }
+        // A stored receipt records a command this actor already committed;
+        // returning it performs no write, so a layout grant narrowed afterwards
+        // must not hide it (AC4). New commands are still checked before any write.
+        requireLayoutWrite(this.db, actor, command, capabilities);
         if (isSearchStateCommand(command)) {
           const project = this.project(command.projectId);
           let expected = command.expected;

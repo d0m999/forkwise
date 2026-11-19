@@ -9,9 +9,13 @@ export interface Principal {
   tokenHash: string;
 }
 
-export type LayoutOperation = 'pose.move' | 'pose.batch';
-export type LayoutObjectKind = 'card' | 'text' | 'shape' | 'image' | 'stroke';
-export type LayoutField = 'x' | 'y' | 'width' | 'height';
+export const LAYOUT_OPERATIONS = ['pose.move', 'pose.batch'] as const;
+export type LayoutOperation = (typeof LAYOUT_OPERATIONS)[number];
+// Only cards carry a writable pose today; any other kind would mint a grant
+// that every layout check rejects, so the type does not offer one.
+export type LayoutObjectKind = 'card';
+export const LAYOUT_FIELDS = ['x', 'y', 'width', 'height'] as const;
+export type LayoutField = (typeof LAYOUT_FIELDS)[number];
 // A layout delegation narrows what an Agent session may move. It never widens
 // project access and never grants content, appearance, tags or project edits.
 export interface LayoutDelegation {
@@ -20,6 +24,10 @@ export interface LayoutDelegation {
   objectKinds: LayoutObjectKind[];
   objectIds: '*' | string[];
   fields: LayoutField[];
+}
+export interface SessionCapabilities {
+  personalRecordProjects?: string[];
+  layoutDelegations?: LayoutDelegation[];
 }
 export class AccessService {
   constructor(
@@ -105,11 +113,13 @@ export class AccessService {
   }
   // A Principal is only a transport context, never self-authenticating. Recheck
   // persisted grants at the Mapping boundary, including after revocation/restart.
-  validate(principal: Principal): void {
+  // The same query returns the capabilities so one execute checks the session
+  // row once instead of once per authorization step.
+  validate(principal: Principal): SessionCapabilities {
     const row = this.db
-      .prepare('SELECT actor_id,type,projects,expires_at FROM sessions WHERE token_hash=?')
+      .prepare('SELECT actor_id,type,projects,expires_at,capabilities FROM sessions WHERE token_hash=?')
       .get(principal?.tokenHash ?? '') as
-      | { actor_id: string; type: string; projects: string; expires_at: string }
+      | { actor_id: string; type: string; projects: string; expires_at: string; capabilities: string }
       | undefined;
     requireThat(
       row && Date.parse(row.expires_at) > this.clock(),
@@ -125,37 +135,18 @@ export class AccessService {
       '调用者身份和范围必须来自可信会话',
       403,
     );
+    return JSON.parse(row.capabilities) as SessionCapabilities;
   }
-  mappingWrite(principal: Principal, projectId: string): void {
+  mappingWrite(principal: Principal, projectId: string, capabilities: SessionCapabilities): void {
     this.project(principal, projectId);
     if (principal.actor.type === 'human') return;
-    const row = this.db
-      .prepare('SELECT capabilities FROM sessions WHERE token_hash=?')
-      .get(principal.tokenHash) as { capabilities: string } | undefined;
-    const delegated: string[] = row
-      ? (JSON.parse(row.capabilities).personalRecordProjects ?? [])
-      : [];
     requireThat(
-      principal.actor.type === 'agent' && delegated.includes(projectId),
+      principal.actor.type === 'agent' &&
+        (capabilities.personalRecordProjects ?? []).includes(projectId),
       'EDIT_DELEGATION_REQUIRED',
       '此操作需要本机会话确认或明确的项目编辑委托',
       403,
     );
-  }
-  // Re-read on every write: a grant narrowed or revoked after issue must not be
-  // honoured from an in-memory principal. Undefined means the row predates layout
-  // scopes; an explicit list (including []) is authoritative.
-  layoutDelegations(principal: Principal): LayoutDelegation[] | undefined {
-    const row = this.db
-      .prepare('SELECT capabilities FROM sessions WHERE token_hash=?')
-      .get(principal.tokenHash) as { capabilities: string } | undefined;
-    if (!row) return [];
-    const capabilities = JSON.parse(row.capabilities) as {
-      layoutDelegations?: LayoutDelegation[];
-    };
-    return Array.isArray(capabilities.layoutDelegations)
-      ? capabilities.layoutDelegations
-      : undefined;
   }
   project(principal: Principal, projectId: string): void {
     requireThat(

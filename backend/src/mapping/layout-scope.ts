@@ -1,10 +1,9 @@
 import type Database from 'better-sqlite3';
 import { requireThat } from '../domain/errors.js';
 import type {
-  AccessService,
-  LayoutDelegation,
   LayoutField,
   Principal,
+  SessionCapabilities,
 } from '../services/access.js';
 
 // Every command that can change where an existing object sits. Agents may only
@@ -74,30 +73,32 @@ function readPose(
   db: Database.Database,
   id: string,
 ): { projectId: string; pose: Record<LayoutField, number> } | undefined {
-  const row = db.prepare('SELECT project_id, value FROM mapping_cards WHERE id=?').get(id) as
-    | { project_id: string; value: string }
-    | undefined;
+  // Only the pose is needed here; extracting it in SQLite avoids parsing the
+  // whole card body and tags for every target of a 200-card batch.
+  const row = db
+    .prepare("SELECT project_id, json_extract(value, '$.item.pose') AS pose FROM mapping_cards WHERE id=?")
+    .get(id) as { project_id: string; pose: string } | undefined;
   if (!row) return undefined;
-  const card = JSON.parse(row.value) as { item: { pose: Record<LayoutField, number> } };
-  return { projectId: row.project_id, pose: card.item.pose };
+  return { projectId: row.project_id, pose: JSON.parse(row.pose) as Record<LayoutField, number> };
 }
 
 // Object identity is checked for every Agent layout write, including sessions
-// issued before layout scopes existed. Sessions without a layoutDelegations list
-// keep their prior reach for geometry commands this ticket does not support, but
-// the two supported pose writes always require an explicit delegation: a missing
-// list is treated as deny, never as a blanket grant.
+// issued before layout scopes existed. A missing layoutDelegations list is
+// treated as deny for the supported pose writes, never as a blanket grant;
+// geometry commands outside this ticket's matrix keep their older reach.
 export function requireLayoutWrite(
-  access: AccessService,
   db: Database.Database,
   principal: Principal,
   command: { type: string; projectId: string; payload: unknown },
+  capabilities: SessionCapabilities,
 ): void {
   if (principal.actor.type === 'human') return;
   if (!LAYOUT_COMMANDS.has(command.type)) return;
   const targets = targetsOf(command);
 
-  for (const target of targets) {
+  // Read each target once: existence, project ownership and the changed-field
+  // comparison share the same pose snapshot inside this transaction.
+  const current = targets.map((target) => {
     const found = readPose(db, target.id);
     requireThat(found, 'LAYOUT_TARGET_NOT_FOUND', '目标对象不存在或已删除', 404);
     requireThat(
@@ -106,9 +107,14 @@ export function requireLayoutWrite(
       '目标对象不属于当前项目',
       403,
     );
-  }
+    return found;
+  });
 
-  const delegations: LayoutDelegation[] | undefined = access.layoutDelegations(principal);
+  // Undefined means the session row predates layout scopes; an explicit list
+  // (including []) is authoritative.
+  const delegations = Array.isArray(capabilities.layoutDelegations)
+    ? capabilities.layoutDelegations
+    : undefined;
   // Older sessions keep their previous reach for unsupported geometry commands,
   // but pose.move / pose.batch always need a grant; undefined is deny, not full.
   if (delegations === undefined && !SUPPORTED[command.type]) return;
@@ -141,12 +147,10 @@ export function requireLayoutWrite(
       403,
     );
 
-  for (const target of targets) {
-    const current = readPose(db, target.id);
-    if (!current) continue;
+  targets.forEach((target, index) => {
     const changed = supported.fields.filter(
       (field) =>
-        target.values[field] !== undefined && target.values[field] !== current.pose[field],
+        target.values[field] !== undefined && target.values[field] !== current[index]!.pose[field],
     );
     for (const field of changed)
       requireThat(
@@ -155,5 +159,5 @@ export function requireLayoutWrite(
         '布局授权未包含该字段',
         403,
       );
-  }
+  });
 }
