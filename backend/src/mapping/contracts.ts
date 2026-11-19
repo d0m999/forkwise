@@ -21,21 +21,37 @@ import { SearchConditionsSchema, type SearchStateView } from './search-contracts
 const Id = z.string().min(1).max(160);
 const Name = z.string().trim().min(1).max(240);
 export const MAX_AGENT_BATCH_POSES = 200;
+export const MAX_BODY_TEXT_LENGTH = 200_000;
 const Envelope = { commandId: Id, projectId: Id, placement: FramePlacement.optional() };
 export const BodyBlock = z
   .object({ id: Id, type: z.string().min(1), text: z.string().optional(), inlineId: Id.optional() })
   .passthrough();
 export type Block = z.infer<typeof BodyBlock>;
 const BodyInput = {
-  text: z.string().max(200000).optional(),
+  text: z.string().max(MAX_BODY_TEXT_LENGTH).optional(),
   blocks: z
     .array(BodyBlock)
     .min(1)
-    .refine((blocks) => bodyText({ blocks }).length <= 200000, '正文文字不能超过200000')
+    .refine((blocks) => bodyText({ blocks }).length <= MAX_BODY_TEXT_LENGTH, '正文文字不能超过200000')
     .optional(),
 };
+export const BodyPatchPayload = z.object({
+  id: Id,
+  blockId: Id,
+  range: z.object({ start: z.int().nonnegative(), end: z.int().nonnegative() }).strict(),
+  text: z.string().max(MAX_BODY_TEXT_LENGTH),
+}).strict();
+export const BodyPatchCommand = z.object({
+  commandId: Id,
+  projectId: Id,
+  type: z.literal('body.patch'),
+  expected: Id,
+  payload: BodyPatchPayload,
+}).strict();
+export type BodyPatch = z.infer<typeof BodyPatchCommand>;
 export { TagCommandSchema } from './tag-contracts.js';
 export const MappingCommand = z.discriminatedUnion('type', [
+  BodyPatchCommand,
   ...AttachmentCommands.options,
   ...FrameCommands.options,
   ...GroupGeometryCommands.options,

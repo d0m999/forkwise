@@ -59,6 +59,7 @@ import type { SearchStateView, SearchStateQuery } from './search-contracts.js';
 import { SearchQuerySchema, type SearchQuery, type SearchResult } from './search-contracts.js';
 import { AccessService, type Principal } from '../services/access.js';
 import { requireLayoutWrite } from './layout-scope.js';
+import { parseBodyPatch, patchedBlocks, requireContentWrite } from './content-scope.js';
 import { requireThat } from '../domain/errors.js';
 import {
   MappingCommand,
@@ -267,8 +268,14 @@ export class Mapping {
           typeof input.projectId === 'string'
         )
           this.access.project(actor, input.projectId);
-        const command = MappingCommand.parse(input);
-        this.access.mappingWrite(actor, command.projectId, capabilities);
+        const command = input && typeof input === 'object' && 'type' in input && input.type === 'body.patch'
+          ? parseBodyPatch(input)
+          : MappingCommand.parse(input);
+        const contentRestricted = actor.actor.type === 'agent' && capabilities.contentDelegations !== undefined;
+        if (command.type === 'body.patch' || contentRestricted)
+          this.access.project(actor, command.projectId);
+        else
+          this.access.mappingWrite(actor, command.projectId, capabilities);
         if (
           command.type === 'project.create' ||
           command.type === 'project.import' ||
@@ -307,9 +314,11 @@ export class Mapping {
           );
           return JSON.parse(saved.receipt) as Receipt;
         }
-        // A stored receipt records a command this actor already committed;
-        // returning it performs no write, so a layout grant narrowed afterwards
-        // must not hide it (AC4). Check new Agent batches before reading targets.
+        // A stored receipt records an already committed command. A narrowed
+        // layout or content grant still permits replay by the original actor.
+        requireContentWrite(actor, command, capabilities);
+        if (contentRestricted && command.type !== 'body.patch')
+          this.access.mappingWrite(actor, command.projectId, capabilities);
         if (actor.actor.type === 'agent' && command.type === 'pose.batch') {
           requireThat(
             command.payload.poses.length <= MAX_AGENT_BATCH_POSES,
@@ -801,13 +810,21 @@ export class Mapping {
             changedIds = [project.id];
             after = { ...this.project(project.id), revision: project.revision + 1 };
           } else {
-            const row = this.db
-              .prepare('SELECT value FROM mapping_cards WHERE id=? AND project_id=?')
-              .get(command.payload.id, project.id) as { value: string } | undefined;
+            const row = (command.type === 'body.patch'
+              ? this.db.prepare('SELECT value, project_id FROM mapping_cards WHERE id=?').get(command.payload.id)
+              : this.db.prepare('SELECT value FROM mapping_cards WHERE id=? AND project_id=?').get(command.payload.id, project.id)) as
+              { value: string; project_id?: string } | undefined;
             requireThat(row, 'NOT_FOUND', '卡片不存在于当前项目', 404);
+            if (command.type === 'body.patch')
+              requireThat(row.project_id === project.id, 'CONTENT_OBJECT_FORBIDDEN', '该卡片不属于当前项目', 403);
             const card = JSON.parse(row.value) as Card;
             before = JSON.parse(row.value) as Card;
-            if (command.type === 'card.layout') {
+            if (command.type === 'body.patch') {
+              const blocks = patchedBlocks(card, command);
+              if (blocks === card.body.blocks) return unchanged(project.revision);
+              card.body = { ...card.body, versionId: randomUUID(), blocks };
+              changedIds = [card.body.id];
+            } else if (command.type === 'card.layout') {
               requireThat(
                 command.expected.thought === card.versionId &&
                   command.expected.body === card.body.versionId &&

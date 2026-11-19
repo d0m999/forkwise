@@ -3,7 +3,7 @@ import { z } from 'zod';
 import type { ApiTransport } from '../mcp-server.js';
 import { ApiTransportError } from '../api-transport-error.js';
 import { ObserveQuerySchema } from './observe-contracts.js';
-import { MAX_AGENT_BATCH_POSES, TagCommandSchema } from './contracts.js';
+import { BodyPatchCommand, BodyPatchPayload, MAX_AGENT_BATCH_POSES, TagCommandSchema } from './contracts.js';
 
 function readError(error: unknown, fallback: string) {
   return {
@@ -124,6 +124,34 @@ export function registerCompactMapTool(server: McpServer, transport: ApiTranspor
         };
       } catch (error) {
         return readError(error, '历史读取失败');
+      }
+    },
+  );
+  server.registerTool(
+    'forkwise_patch_card_body',
+    {
+      description:
+        '仅限已授权块区间，不写布局/标题/外观。先读取该卡片完整正文块与 body.versionId，再提交单块内 [start, end) 范围的 JS UTF-16 code unit 偏移。冲突时请重读。以原 commandId 重试同一请求可取回原回执。',
+      inputSchema: BodyPatchCommand.omit({ type: true, payload: true }).extend({
+        cardId: BodyPatchPayload.shape.id,
+        blockId: BodyPatchPayload.shape.blockId,
+        range: BodyPatchPayload.shape.range,
+        text: BodyPatchPayload.shape.text,
+      }),
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
+    },
+    async ({ projectId, commandId, expected, cardId, blockId, range, text }) => {
+      try {
+        const response = await transport.call('/api/mapping/execute', 'POST', {
+          projectId, commandId, expected, type: 'body.patch',
+          payload: { id: cardId, blockId, range, text },
+        });
+        return {
+          content: [{ type: 'text' as const, text: JSON.stringify(response) }],
+          structuredContent: { response },
+        };
+      } catch (error) {
+        return readError(error, '正文补丁保存失败');
       }
     },
   );

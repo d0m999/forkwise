@@ -1,7 +1,9 @@
 import { createHash, createHmac, randomBytes, randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
+import { z } from 'zod';
 import type { Actor } from '../contracts/entities.js';
 import { requireThat } from '../domain/errors.js';
+import type { Card } from '../mapping/contracts.js';
 
 export interface Principal {
   actor: Actor;
@@ -25,9 +27,20 @@ export interface LayoutDelegation {
   objectIds: '*' | string[];
   fields: LayoutField[];
 }
+const ScopedId = z.string().min(1).max(160);
+const ContentScope = z.object({
+  projectId: ScopedId,
+  operations: z.array(z.literal('body.patch')).min(1),
+  objectKinds: z.array(z.literal('card')).min(1),
+  objectIds: z.union([z.literal('*'), z.array(ScopedId).min(1)]),
+  blockIds: z.union([z.literal('*'), z.array(ScopedId).min(1)]),
+}).strict();
+export type ContentDelegation = z.infer<typeof ContentScope>;
+
 export interface SessionCapabilities {
   personalRecordProjects?: string[];
   layoutDelegations?: LayoutDelegation[];
+  contentDelegations?: ContentDelegation[];
 }
 export class AccessService {
   constructor(
@@ -42,6 +55,7 @@ export class AccessService {
     token = randomBytes(32).toString('base64url'),
     personalRecordProjects: string[] = [],
     layoutDelegations?: LayoutDelegation[],
+    contentDelegations?: ContentDelegation[],
   ): string {
     const hash = this.hash(token);
     requireThat(
@@ -75,6 +89,35 @@ export class AccessService {
       'Agent 需逐项目授权',
       403,
     );
+    if (contentDelegations !== undefined) {
+      const parsed = z.array(ContentScope).safeParse(contentDelegations);
+      requireThat(
+        type === 'agent' && parsed.success,
+        'INVALID_SCOPE', '正文授权必须为 Agent 指定项目、操作、卡片与块范围', 403,
+      );
+      for (const scope of parsed.data) {
+        requireThat(
+          projects.includes(scope.projectId) &&
+            this.db.prepare('SELECT 1 FROM mapping_projects WHERE id=?').get(scope.projectId),
+          'INVALID_SCOPE', '正文授权必须属于会话内的现有项目', 403,
+        );
+        if (scope.objectIds === '*' && scope.blockIds === '*') continue;
+        const rows = this.db.prepare('SELECT id, value FROM mapping_cards WHERE project_id=?')
+          .all(scope.projectId) as { id: string; value: string }[];
+        const cards = rows.filter(({ id }) => scope.objectIds === '*' || scope.objectIds.includes(id));
+        requireThat(
+          scope.objectIds === '*' || scope.objectIds.every(id => cards.some(card => card.id === id)),
+          'INVALID_SCOPE', '正文授权指定的卡片不属于当前项目或已删除', 403,
+        );
+        if (scope.blockIds !== '*') {
+          const ids = new Set(cards.flatMap(({ value }) => (JSON.parse(value) as Card).body.blocks.map(block => block.id)));
+          requireThat(
+            scope.blockIds.every(id => ids.has(id)),
+            'INVALID_SCOPE', '正文授权指定的块不属于选定卡片或已删除', 403,
+          );
+        }
+      }
+    }
     this.db
       .prepare(
         'INSERT INTO sessions(token_hash,actor_id,type,projects,expires_at,capabilities) VALUES(?,?,?,?,?,?)',
@@ -88,6 +131,7 @@ export class AccessService {
         JSON.stringify({
           personalRecordProjects,
           ...(layoutDelegations === undefined ? {} : { layoutDelegations }),
+          ...(contentDelegations === undefined ? {} : { contentDelegations }),
         }),
       );
     return token;

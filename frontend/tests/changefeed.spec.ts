@@ -6,8 +6,9 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createServer } from "node:net";
 import { openMapping } from "../../backend/src/mapping/storage";
+import type { LayoutDelegation } from "../../backend/src/services/access";
 
-async function fixture(browser: Browser) {
+async function fixture(browser: Browser, layoutDelegations?: LayoutDelegation[]) {
   const directory = mkdtempSync(join(tmpdir(), "forkwise-changefeed-web-"));
   const mapping = openMapping(directory);
   const humanToken = mapping.access.issue("human", ["*"]);
@@ -32,9 +33,14 @@ async function fixture(browser: Browser) {
     },
     human,
   );
-  const agentToken = mapping.access.issue("agent", ["p"], 600000, undefined, [
-    "p",
-  ]);
+  const agentToken = mapping.access.issue(
+    "agent",
+    ["p"],
+    600000,
+    undefined,
+    ["p"],
+    layoutDelegations,
+  );
   mapping.close();
   const probe = createServer();
   const port = await new Promise<number>((resolve) =>
@@ -311,7 +317,15 @@ test("真正服务重启使旧缓存 token 失效，同页面及新 context 完�
 test("过旧真实游标 RESET_REQUIRED 后 UI 完整重读，原幂等与旧版本仍可用", async ({
   browser,
 }, info) => {
-  const f = await fixture(browser);
+  const f = await fixture(browser, [
+    {
+      projectId: "p",
+      operations: ["pose.move"],
+      objectKinds: ["card"],
+      objectIds: ["c"],
+      fields: ["x", "y"],
+    },
+  ]);
   try {
     await f.page.route("**/changes?**", (route) =>
       route.abort("connectionfailed"),
