@@ -10,14 +10,14 @@ import { openMapping } from '../src/mapping/storage.js';
 import { createWorkspaceApp } from '../src/mapping/http.js';
 import { createMcpServer, httpTransport } from '../src/mcp-server.js';
 import type { LayoutDelegation } from '../src/services/access.js';
-import { MAX_BATCH_POSES } from '../src/mapping/contracts.js';
+import type { Card } from '../src/mapping/contracts.js';
 
 const cleanups: (() => void)[] = [];
 afterEach(() => {
   for (const cleanup of cleanups.splice(0).reverse()) cleanup();
 });
 
-async function fixture() {
+async function fixture(cardCount = 3) {
   const directory = mkdtempSync(join(tmpdir(), 'forkwise-agent-layout-write-'));
   let mapping = openMapping(directory);
   let app: ReturnType<typeof createWorkspaceApp>;
@@ -26,7 +26,8 @@ async function fixture() {
     server.once('listening', resolve);
     server.once('error', reject);
   });
-  const origin = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+  const port = (server.address() as { port: number }).port;
+  const origin = `http://127.0.0.1:${port}`;
   app = createWorkspaceApp(mapping, origin, () => new Response(''));
   cleanups.push(() => rmSync(directory, { recursive: true, force: true }));
   cleanups.push(() => mapping.close());
@@ -35,11 +36,13 @@ async function fixture() {
     server.close();
   });
 
-  const human = mapping.access.authenticate(mapping.access.issue('human', ['*']));
+  const humanToken = mapping.access.issue('human', ['*']);
+  const human = mapping.access.authenticate(humanToken);
   const execute = (command: Record<string, unknown>, actor = human) =>
     mapping.execute({ commandId: randomUUID(), projectId: 'p', ...command }, actor);
   execute({ type: 'project.create', expected: null, payload: { name: 'Agent 布局' } });
-  for (const id of ['c1', 'c2', 'c3']) {
+  for (let index = 1; index <= cardCount; index++) {
+    const id = `c${index}`;
     execute({
       type: 'thought.create',
       expected: null,
@@ -83,6 +86,7 @@ async function fixture() {
     },
     origin,
     human,
+    agent: mapping.access.authenticate(token),
     execute,
     state,
     history,
@@ -93,13 +97,15 @@ async function fixture() {
       mapping = openMapping(directory);
       app = createWorkspaceApp(mapping, origin, () => new Response(''));
     },
-    async post(body: unknown) {
+    async post(body: unknown, actor: 'agent' | 'human' = 'agent') {
       const response = await fetch(origin + '/api/mapping/execute', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           Origin: origin,
-          Authorization: `Bearer ${token}`,
+          ...(actor === 'human'
+            ? { Cookie: `forkwise_workspace_${port}=${humanToken}` }
+            : { Authorization: `Bearer ${token}` }),
         },
         body: JSON.stringify(body),
       });
@@ -107,6 +113,18 @@ async function fixture() {
     },
   };
 }
+
+const BATCH_OVER_AGENT_LIMIT = 201;
+
+const poseBatch = (cards: Card[], dx = 0) => ({
+  commandId: randomUUID(),
+  projectId: 'p',
+  type: 'pose.batch',
+  expected: Object.fromEntries(cards.map((card) => [card.id, card.item.versionId])),
+  payload: {
+    poses: cards.map(({ id, item }) => ({ id, ...item.pose, x: item.pose.x + dx })),
+  },
+});
 
 it('AC2 Agent 读取同快照与 Pose 版本后经真实 MCP/HTTP 写入，SQLite、revision、历史与变更一致且重开仍存在', async () => {
   const f = await fixture();
@@ -226,26 +244,76 @@ it('AC3 过期版本、已删除目标、跨项目与越对象逐类拒绝，失
   expect(f.state().project.revision).toBe(before.project.revision);
 });
 
-it('AC3 批量张数上限由权威契约执行，HTTP 直连超过 200 张同样拒绝且无写入', async () => {
-  const f = await fixture();
+it('AC3 Agent 经 HTTP 直连超过 200 张时先于目标查找拒绝，且不占用 commandId', async () => {
+  const f = await fixture(BATCH_OVER_AGENT_LIMIT - 1);
   const before = f.state();
-  const poses = Array.from({ length: MAX_BATCH_POSES + 1 }, (_, index) => ({
-    id: `c${index + 1}`,
-    x: 0,
-    y: 0,
-    width: 10,
-    height: 10,
-  }));
+  const history = f.history();
+  const valid = poseBatch(before.cards, 10);
+  const missing = { ...valid.payload.poses[0]!, id: 'c201' };
   const response = await f.post({
-    commandId: randomUUID(),
-    projectId: 'p',
-    type: 'pose.batch',
-    expected: {},
-    payload: { poses },
+    ...valid,
+    expected: { ...valid.expected, [missing.id]: 'missing-version' },
+    payload: { poses: [...valid.payload.poses, missing] },
   });
   expect(response.status).toBe(400);
   expect(response.body.code).toBe('INVALID_COMMAND');
   expect(f.state()).toEqual(before);
+  expect(f.history()).toEqual(history);
+  expect((await f.post(valid)).status).toBe(200);
+});
+
+it('人类经工作台使用的 HTTP 入口批量移动 201 张卡片，末项版本冲突时整批回滚，成功后重启可重放', async () => {
+  const f = await fixture(BATCH_OVER_AGENT_LIMIT);
+  const before = f.state();
+  const history = f.history();
+  const command = poseBatch(before.cards, 10);
+  const conflicted = await f.post(
+    { ...command, expected: { ...command.expected, [before.cards.at(-1)!.id]: 'stale-version' } },
+    'human',
+  );
+  expect(conflicted.status).toBe(409);
+  expect(conflicted.body.code).toBe('VERSION_CONFLICT');
+  expect(f.state()).toEqual(before);
+  expect(f.history()).toEqual(history);
+
+  const saved = await f.post(command, 'human');
+  expect(saved.status).toBe(200);
+  expect(saved.body.revision).toBe(before.project.revision + 1);
+  expect(saved.body.changedIds).toHaveLength(BATCH_OVER_AGENT_LIMIT);
+  const after = f.state();
+  expect(after.cards.map(({ id, item }) => ({ id, ...item.pose }))).toEqual(command.payload.poses);
+  const savedHistory = f.history();
+  expect(savedHistory.undo.at(-1)).toMatchObject({ label: 'pose.batch' });
+
+  f.restart();
+  expect(await f.post(command, 'human')).toEqual(saved);
+  expect(f.state()).toEqual(after);
+  expect(f.history()).toEqual(savedHistory);
+});
+
+it('AC4 Agent 在上限生效前保存的 201 张卡片批量回执可跨重启重放', async () => {
+  const f = await fixture(BATCH_OVER_AGENT_LIMIT);
+  const before = f.state();
+  const history = f.history();
+  const command = poseBatch(before.cards);
+  const receipt = {
+    commandId: command.commandId,
+    projectId: command.projectId,
+    revision: before.project.revision,
+    changedIds: [],
+  };
+  // 上限生效前经 HTTP 直连提交的旧批次没有改变任何 Pose，只留下成功回执。
+  f.mapping.access.db
+    .prepare('INSERT INTO mapping_receipts (project_id, command_id, actor_id, request, receipt) VALUES (?, ?, ?, ?, ?)')
+    .run(command.projectId, command.commandId, f.agent.actor.id, JSON.stringify(command), JSON.stringify(receipt));
+
+  f.restart();
+  expect(await f.post(command)).toEqual({ status: 200, body: receipt });
+  const mismatched = await f.post({ ...command, expected: { ...command.expected, c1: 'different' } });
+  expect(mismatched.status).toBe(409);
+  expect(mismatched.body.code).toBe('IDEMPOTENCY_MISMATCH');
+  expect(f.state()).toEqual(before);
+  expect(f.history()).toEqual(history);
 });
 
 it('AC3 并发人类修改同一 Pose 后旧 Agent 请求冲突，重读并更换 commandId 才写入', async () => {

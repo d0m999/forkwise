@@ -9,7 +9,7 @@ import { createWorkspaceApp, EXECUTE_BODY_LIMIT, PACKAGE_MAX_BYTES } from '../sr
 import { captureSpatial } from '../src/mapping/frame-spatial.js';
 import { readZip, writeZip } from '../src/mapping/zip-store.js';
 import { verifyPackage } from '../src/mapping/package-verify.js';
-import type { Block } from '../src/mapping/contracts.js';
+import type { Block, Card } from '../src/mapping/contracts.js';
 
 const ISO = '2026-11-15T00:00:00.000Z';
 const ORIGIN = 'http://127.0.0.1:4173';
@@ -37,14 +37,27 @@ async function makeFixture() {
   const execute = (command: unknown) => mapping.execute(command, human);
   const read = (id = 'p') => mapping.read({ type: 'project', projectId: id }, human);
   const app = createWorkspaceApp(mapping, ORIGIN, () => new Response(''));
-  const post = async (path: string, body: unknown) =>
+  const post = async (path: string, body: unknown, sessionToken = token) =>
     app.fetch(new Request(`${ORIGIN}${path}`, {
       method: 'POST',
-      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', Origin: ORIGIN },
+      headers: { Authorization: `Bearer ${sessionToken}`, 'Content-Type': 'application/json', Origin: ORIGIN },
       body: JSON.stringify(body),
     }));
   const close = () => { mapping.close(); rmSync(directory, { recursive: true, force: true }); };
   return { directory, mapping, token, human, execute, read, app, post, close };
+}
+
+function seedUnknownBlock(fixture: Fixture, cardId: string, block: Block) {
+  const writer = new Database(join(fixture.directory, 'workspace.sqlite'));
+  try {
+    const row = writer.prepare('SELECT project_id, value FROM mapping_cards WHERE id=?').get(cardId) as { project_id: string; value: string };
+    const stored = JSON.parse(row.value) as Card;
+    stored.body = { ...stored.body, versionId: 'body-unknown', blocks: [...stored.body.blocks, block] };
+    writer.prepare('UPDATE mapping_cards SET value=? WHERE id=?').run(JSON.stringify(stored), cardId);
+    writer.prepare('INSERT INTO mapping_versions VALUES(?,?,?,?,?)').run(row.project_id, 'body', stored.body.id, stored.body.versionId, JSON.stringify(stored.body));
+  } finally {
+    writer.close();
+  }
 }
 
 function seedMixed(fixture: Fixture) {
@@ -61,18 +74,7 @@ function seedMixed(fixture: Fixture) {
     { id: 'paragraph', type: 'text', text: '这是包含完整已保存内容的长正文。' },
     { id: 'body-image', type: 'image', assetId: 'asset-image', name: '现金流.svg', mime: 'image/svg+xml', naturalWidth: 20, naturalHeight: 10, caption: '现金流图', alt: '绿色现金流示意图' },
   ] } });
-  {
-    const writer = new Database(join(fixture.directory, 'workspace.sqlite'));
-    try {
-      const row = writer.prepare('SELECT value FROM mapping_cards WHERE id=?').get('card-1') as { value: string };
-      const stored = JSON.parse(row.value) as { body: { id: string; versionId: string; blocks: unknown[] } };
-      stored.body = { ...stored.body, versionId: 'body-unknown', blocks: [...stored.body.blocks, unknown] };
-      writer.prepare('UPDATE mapping_cards SET value=? WHERE id=?').run(JSON.stringify(stored), 'card-1');
-      writer.prepare('INSERT INTO mapping_versions VALUES(?,?,?,?,?)').run('p', 'body', stored.body.id, stored.body.versionId, JSON.stringify(stored.body));
-    } finally {
-      writer.close();
-    }
-  }
+  seedUnknownBlock(fixture, card.id, unknown);
   execute({ commandId: 'file-attachment', projectId: 'p', type: 'card.attachment.add', expected: { attachments: null }, payload: { id: card.id, assetId: 'asset-file', name: '财报原件.pdf' } });
   execute({ commandId: 'text', projectId: 'p', type: 'text.create', expected: null, payload: { id: 'text-1', content: { runs: [{ text: '随动批注' }], fontSize: 18, lineHeight: 1.5, align: 'left', widthMode: 'fixed', width: 160 }, pose: { x: 600, y: 140, width: 160, height: 60 } } });
   execute({ commandId: 'shape', projectId: 'p', type: 'shape.create', expected: null, payload: { id: 'shape-1', content: { shapeType: 'rectangle', shortText: '条件成立' }, pose: { x: 260, y: 340, width: 180, height: 100 } } });
@@ -219,6 +221,41 @@ describe('隔离导入完整项目包', () => {
       close();
     }
   }, 30000);
+
+  it('Agent 可移动含深层未知正文的导入卡片，正文和正文版本保持原样', async () => {
+    const fixture = await makeFixture();
+    const { execute, mapping, human, post, read, close } = fixture;
+    try {
+      execute({ commandId: 'project', projectId: 'p', type: 'project.create', expected: null, payload: { name: '旧研究' } });
+      execute({ commandId: 'card', projectId: 'p', type: 'thought.create', expected: null, payload: { id: 'card-1', title: '旧卡片', text: '原正文', x: 120, y: 160 } });
+      // SQLite 的 JSON 函数最多接受 1000 层嵌套，项目包支持保留这类未知块。
+      const original = JSON.parse(`${'['.repeat(1100)}"原始厂商内容"${']'.repeat(1100)}`) as unknown;
+      const block: Block = { id: 'old-unknown', type: 'vendor-block', original };
+      seedUnknownBlock(fixture, 'card-1', block);
+      const bytes = mapping.fullPackage('p', human, ISO);
+      const imported = await post('/api/mapping/execute', importCommand(bytes.toString('base64')));
+      expect(imported.status).toBe(200);
+      const before = read('q').cards[0]!;
+      expect(JSON.stringify(before.body.blocks.at(-1))).toBe(JSON.stringify(block));
+
+      const agentToken = mapping.access.issue('agent', ['q'], undefined, undefined, ['q'], [{
+        projectId: 'q', operations: ['pose.move'], objectKinds: ['card'], objectIds: [before.id], fields: ['x', 'y'],
+      }]);
+      const moved = await post('/api/mapping/execute', {
+        commandId: 'move-imported-card', projectId: 'q', type: 'pose.move', expected: before.item.versionId,
+        payload: { id: before.id, x: 320, y: 240 },
+      }, agentToken);
+      const receipt = await moved.json();
+      expect(moved.status, JSON.stringify(receipt)).toBe(200);
+
+      const saved = read('q').cards[0]!;
+      expect(saved.item.pose).toEqual({ ...before.item.pose, x: 320, y: 240 });
+      expect(saved.item.versionId).not.toBe(before.item.versionId);
+      expect(JSON.stringify(saved.body)).toBe(JSON.stringify(before.body));
+    } finally {
+      close();
+    }
+  });
 
   it('历史版本保留已删除身份，派生卡内身份随新卡号，分区端点与外观撤销可用', async () => {
     const fixture = await makeFixture();

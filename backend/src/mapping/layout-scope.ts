@@ -1,5 +1,6 @@
 import type Database from 'better-sqlite3';
 import { requireThat } from '../domain/errors.js';
+import type { Card } from './contracts.js';
 import type {
   LayoutField,
   Principal,
@@ -73,13 +74,14 @@ function readPose(
   db: Database.Database,
   id: string,
 ): { projectId: string; pose: Record<LayoutField, number> } | undefined {
-  // Only the pose is needed here; extracting it in SQLite avoids parsing the
-  // whole card body and tags for every target of a 200-card batch.
+  // SQLite JSON functions reject deeply nested opaque content that a card can
+  // legally contain after package import. Use the same parser as card reads.
   const row = db
-    .prepare("SELECT project_id, json_extract(value, '$.item.pose') AS pose FROM mapping_cards WHERE id=?")
-    .get(id) as { project_id: string; pose: string } | undefined;
+    .prepare('SELECT project_id, value FROM mapping_cards WHERE id=?')
+    .get(id) as { project_id: string; value: string } | undefined;
   if (!row) return undefined;
-  return { projectId: row.project_id, pose: JSON.parse(row.pose) as Record<LayoutField, number> };
+  const card = JSON.parse(row.value) as Card;
+  return { projectId: row.project_id, pose: card.item.pose };
 }
 
 // Object identity is checked for every Agent layout write, including sessions

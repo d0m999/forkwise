@@ -3,7 +3,7 @@ import { z } from 'zod';
 import type { ApiTransport } from '../mcp-server.js';
 import { ApiTransportError } from '../api-transport-error.js';
 import { ObserveQuerySchema } from './observe-contracts.js';
-import { MAX_BATCH_POSES, TagCommandSchema } from './contracts.js';
+import { MAX_AGENT_BATCH_POSES, TagCommandSchema } from './contracts.js';
 
 function readError(error: unknown, fallback: string) {
   return {
@@ -185,7 +185,7 @@ export function registerCompactMapTool(server: McpServer, transport: ApiTranspor
                 .strict(),
             )
             .min(1)
-            .max(MAX_BATCH_POSES),
+            .max(MAX_AGENT_BATCH_POSES),
         })
         .strict(),
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },

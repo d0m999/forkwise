@@ -62,6 +62,7 @@ import { requireLayoutWrite } from './layout-scope.js';
 import { requireThat } from '../domain/errors.js';
 import {
   MappingCommand,
+  MAX_AGENT_BATCH_POSES,
   type Card,
   type CardIdentity,
   type IdentityQuery,
@@ -308,7 +309,15 @@ export class Mapping {
         }
         // A stored receipt records a command this actor already committed;
         // returning it performs no write, so a layout grant narrowed afterwards
-        // must not hide it (AC4). New commands are still checked before any write.
+        // must not hide it (AC4). Check new Agent batches before reading targets.
+        if (actor.actor.type === 'agent' && command.type === 'pose.batch') {
+          requireThat(
+            command.payload.poses.length <= MAX_AGENT_BATCH_POSES,
+            'INVALID_COMMAND',
+            `Agent 单次最多移动 ${MAX_AGENT_BATCH_POSES} 张卡片`,
+            400,
+          );
+        }
         requireLayoutWrite(this.db, actor, command, capabilities);
         if (isSearchStateCommand(command)) {
           const project = this.project(command.projectId);

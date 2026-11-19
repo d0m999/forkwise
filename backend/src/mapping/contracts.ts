@@ -20,9 +20,7 @@ import { bodyText } from './body-text.js';
 import { SearchConditionsSchema, type SearchStateView } from './search-contracts.js';
 const Id = z.string().min(1).max(160);
 const Name = z.string().trim().min(1).max(240);
-// One batch is capped here, not only in the MCP tool schema: Bearer callers
-// reach the same execute over HTTP and must hit the same bound.
-export const MAX_BATCH_POSES = 200;
+export const MAX_AGENT_BATCH_POSES = 200;
 const Envelope = { commandId: Id, projectId: Id, placement: FramePlacement.optional() };
 export const BodyBlock = z
   .object({ id: Id, type: z.string().min(1), text: z.string().optional(), inlineId: Id.optional() })
@@ -115,8 +113,7 @@ export const MappingCommand = z.discriminatedUnion('type', [
                 })
                 .strict(),
             )
-            .min(1)
-            .max(MAX_BATCH_POSES),
+            .min(1),
         })
         .strict(),
     })
