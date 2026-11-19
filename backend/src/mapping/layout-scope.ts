@@ -83,8 +83,10 @@ function readPose(
 }
 
 // Object identity is checked for every Agent layout write, including sessions
-// issued before layout scopes existed. Operation and field narrowing only apply
-// to sessions that carry an explicit layoutDelegations list.
+// issued before layout scopes existed. Sessions without a layoutDelegations list
+// keep their prior reach for geometry commands this ticket does not support, but
+// the two supported pose writes always require an explicit delegation: a missing
+// list is treated as deny, never as a blanket grant.
 export function requireLayoutWrite(
   access: AccessService,
   db: Database.Database,
@@ -107,8 +109,10 @@ export function requireLayoutWrite(
   }
 
   const delegations: LayoutDelegation[] | undefined = access.layoutDelegations(principal);
-  if (delegations === undefined) return; // Session predates layout scopes; object check above still applies.
-  const scope = delegations.find((candidate) => candidate.projectId === command.projectId);
+  // Older sessions keep their previous reach for unsupported geometry commands,
+  // but pose.move / pose.batch always need a grant; undefined is deny, not full.
+  if (delegations === undefined && !SUPPORTED[command.type]) return;
+  const scope = delegations?.find((candidate) => candidate.projectId === command.projectId);
   requireThat(scope, 'LAYOUT_DELEGATION_REQUIRED', '此会话没有该项目的布局写入授权', 403);
   const supported = SUPPORTED[command.type];
   requireThat(
@@ -116,7 +120,8 @@ export function requireLayoutWrite(
     'LAYOUT_OPERATION_UNSUPPORTED',
     '当前布局授权不支持此操作类型',
     403,
-  );  requireThat(
+  );
+  requireThat(
     Array.isArray(scope.operations) && scope.operations.includes(command.type as never),
     'LAYOUT_OPERATION_FORBIDDEN',
     '布局授权未包含此操作',

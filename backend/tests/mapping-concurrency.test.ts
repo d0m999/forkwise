@@ -282,7 +282,15 @@ it.each(['independent', 'same-body', 'same-command'] as const)(
         ),
       );
       const agent = mapping.access.authenticate(
-        mapping.access.issue('agent', ['p'], 60000, undefined, ['p']),
+        mapping.access.issue('agent', ['p'], 60000, undefined, ['p'], [
+          {
+            projectId: 'p',
+            operations: ['pose.move', 'pose.batch'],
+            objectKinds: ['card'],
+            objectIds: '*',
+            fields: ['x', 'y', 'width', 'height'],
+          },
+        ]),
       );
       const body = {
         commandId: 'race-body',

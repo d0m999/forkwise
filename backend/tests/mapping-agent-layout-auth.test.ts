@@ -129,6 +129,13 @@ it('AC1 有编辑委托但无布局细化授权时只读，布局写入在服务
   expect(readOnlyWrite.status).toBe(403);
   expect(readOnlyWrite.body.code).toBe('EDIT_DELEGATION_REQUIRED');
   expect(f.state()).toEqual(before);
+
+  // 旧会话（capabilities 没有 layoutDelegations 键）不再默认获得 Pose 写入。
+  const legacyToken = f.issueAgent(undefined, ['p']);
+  const legacy = await f.post(moveCommand('c1', card.item.versionId), legacyToken);
+  expect(legacy.status).toBe(403);
+  expect(legacy.body.code).toBe('LAYOUT_DELEGATION_REQUIRED');
+  expect(f.state()).toEqual(before);
 });
 
 it('AC1 声明式布局授权允许卡片 Pose 移动，写入 revision 与历史各增加一次', async () => {

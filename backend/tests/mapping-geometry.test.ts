@@ -186,7 +186,15 @@ it('真实HTTP原子几何进入同SQLite，MCP SDK固定快照及变化一致�
   await new Promise<void>((resolve) => http.once('listening', resolve));
   const origin = `http://127.0.0.1:${(http.address() as { port: number }).port}`;
   app = createWorkspaceApp(f.mapping, origin, () => new Response(''));
-  const token = f.mapping.access.issue('agent', ['p'], undefined, undefined, ['p']);
+  const token = f.mapping.access.issue('agent', ['p'], undefined, undefined, ['p'], [
+    {
+      projectId: 'p',
+      operations: ['pose.move', 'pose.batch'],
+      objectKinds: ['card'],
+      objectIds: '*',
+      fields: ['x', 'y', 'width', 'height'],
+    },
+  ]);
   const readonly = f.mapping.access.issue('agent', ['p']);
   const server = createMcpServer(httpTransport(origin, token));
   const client = new Client({ name: 'geometry-test', version: '1.0.0' });
