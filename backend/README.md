@@ -4,6 +4,8 @@
 
 开放工作台的 UI 与 Agent 可按[紧凑读取合同](../docs/adr/0022-compact-map-read-contract.md)核对同一 snapshot：`GET /api/mapping/projects/{projectId}/map?view=index&budget=131072`，再携带原 snapshot、cardId 读取 body/detail。MCP 只读工具 `forkwise_read_map` 连接开放工作台的实际回环端口；沿用明确签发的项目 Agent 凭据，不因工具存在而新增授权。预算为完整 Mapping JSON 的 UTF-8 字节，分页和正文分片必须固定 snapshot；当前仅覆盖已有普通卡片，未来类型由拥有者票扩展。
 
+本人可在 `backend/` 运行 `npx tsx scripts/issue-body-grant.ts`，显式填写 `--data-dir`、`--project`、`--card`、`--block`、`--version`、`--start`、`--end` 和 `--out`。`--version` 取当前 `body.versionId`，`--start` 和 `--end` 使用块内 UTF-16 半开区间，`--out` 指向工作台数据目录外尚不存在的文件。Agent 可用该凭据经 `forkwise_patch_card_body` 提交授权版本内的补丁，请求区间须落在已授权区间内。正文版本变化后，由本人重新选择和签发。同一成功命令以原 `commandId` 和原请求重试可取回原回执。
+
 ## 安装和启动
 
 要求 Node.js >= 22.22.2、npm，首轮实现实际使用 Node.js 24.4.1。完整构建包含正式开放工作台与旧研究画布，两者依赖分别安装。

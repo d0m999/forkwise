@@ -119,21 +119,26 @@ it('HTTP 可信项目编辑委托与 UI 共用 execute；请求自报 human、�
     expect((await post(human, { ...create, commandId: 'duplicate' })).status).toBe(409);
     const actor = mapping.access.authenticate(human);
     const original = mapping.read({ type: 'project', projectId: 'p' }, actor).cards[0]!;
-    const agent = mapping.access.issue('agent', ['p'], 60000, undefined, ['p']);
-    const other = mapping.access.issue('agent', ['other'], 60000, undefined, ['other']);
+    const blockId = original.body.blocks[0]!.id;
+    const range = { start: 0, end: 2 };
+    const agent = mapping.access.issue('agent', ['p'], 60000, undefined, [], undefined, [{
+      projectId: 'p', operations: ['body.patch'], objectKinds: ['card'], cardId: 'c', blockId,
+      bodyVersionId: original.body.versionId, range,
+    }]);
+    const other = mapping.access.issue('agent', ['other']);
     const edit = {
       commandId: 'edit',
       projectId: 'p',
-      type: 'body.edit',
+      type: 'body.patch',
       expected: original.body.versionId,
-      payload: { id: 'c', text: '授权正文' },
+      payload: { id: 'c', blockId, range, text: '授权正文' },
     };
     expect(
       (await post(agent, { ...edit, actor: { type: 'human', id: 'local-owner' } })).status,
-    ).toBe(400);
+    ).toBe(403);
     expect((await post('forged', edit)).status).toBe(401);
     expect((await post(other, edit)).status).toBe(403);
-    expect((await post(other, { ...edit, projectId: 'other' })).status).toBe(404);
+    expect((await post(other, { ...edit, projectId: 'other' })).status).toBe(403);
     expect((await post(agent, edit)).status).toBe(200);
     expect((await post(agent, { ...edit, commandId: 'stale' })).status).toBe(409);
     const receipt = await (await post(agent, edit)).json();

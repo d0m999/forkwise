@@ -1,6 +1,6 @@
 import { DomainError, requireThat } from '../domain/errors.js';
 import type { Principal, SessionCapabilities } from '../services/access.js';
-import { bodyText, plainParagraph } from './body-text.js';
+import { bodyText, plainParagraph, validBodyPatchRange } from './body-text.js';
 import { BodyPatchCommand, MAX_BODY_TEXT_LENGTH, type BodyPatch, type Card, type Command } from './contracts.js';
 
 export function parseBodyPatch(input: object): BodyPatch {
@@ -26,6 +26,10 @@ export function requireContentWrite(actor: Principal, command: Command, capabili
   if (actor.actor.type !== 'agent') return;
   const delegations = capabilities.contentDelegations;
   if (command.type !== 'body.patch') {
+    requireThat(
+      command.type !== 'body.edit' && command.type !== 'card.edit',
+      'CONTENT_OPERATION_UNSUPPORTED', 'Agent 修改正文须提交已授权区间的补丁', 403,
+    );
     if (delegations === undefined) return;
     // A separate layout grant still goes through the full layout and
     // project edit checks. Neither delegation widens the other.
@@ -40,24 +44,21 @@ export function requireContentWrite(actor: Principal, command: Command, capabili
   requireThat(project.length, 'CONTENT_DELEGATION_REQUIRED', '此会话没有该项目的正文授权', 403);
   const operations = project.filter(scope => scope.operations.includes(command.type));
   requireThat(operations.length, 'CONTENT_OPERATION_FORBIDDEN', '正文授权未包含此操作', 403);
-  const { id, blockId } = command.payload;
-  const cards = operations.filter(scope => scope.objectKinds.includes('card') &&
-    (scope.objectIds === '*' || scope.objectIds.includes(id)));
+  const { id, blockId, range } = command.payload;
+  const cards = operations.filter(scope => scope.objectKinds.includes('card') && scope.cardId === id);
   requireThat(cards.length, 'CONTENT_OBJECT_FORBIDDEN', '正文授权未包含该卡片', 403);
+  const blocks = cards.filter(scope => scope.blockId === blockId);
+  requireThat(blocks.length, 'CONTENT_BLOCK_FORBIDDEN', '正文授权未包含该块', 403);
+  const versions = blocks.filter(scope => scope.bodyVersionId === command.expected);
+  requireThat(versions.length, 'CONTENT_VERSION_FORBIDDEN', '正文授权未包含此版本，请由本人重新授权', 403);
   requireThat(
-    cards.some(scope => scope.blockIds === '*' || scope.blockIds.includes(blockId)),
-    'CONTENT_BLOCK_FORBIDDEN', '正文授权未包含该块', 403,
+    versions.some(scope => range.start >= scope.range.start && range.end <= scope.range.end),
+    'CONTENT_RANGE_FORBIDDEN', '补丁区间超出正文授权范围', 403,
   );
 }
 
-function splitsSurrogate(text: string, offset: number): boolean {
-  const before = text.charCodeAt(offset - 1);
-  const after = text.charCodeAt(offset);
-  return before >= 0xd800 && before <= 0xdbff && after >= 0xdc00 && after <= 0xdfff;
-}
-
 export function patchedBlocks(card: Card, command: BodyPatch): Card['body']['blocks'] {
-  const { blockId, range: { start, end }, text } = command.payload;
+  const { blockId, range, text } = command.payload;
   const blocks = card.body.blocks;
   const index = blocks.findIndex(block => block.id === blockId);
   const block = blocks[index];
@@ -67,16 +68,15 @@ export function patchedBlocks(card: Card, command: BodyPatch): Card['body']['blo
       cardId: card.id, blockId, expected: command.expected, current: card.body.versionId,
     });
   requireThat(
-    plainParagraph(block) && typeof block.text === 'string' && !Object.hasOwn(block, 'inlineId'),
-    'CONTENT_BLOCK_UNSUPPORTED', '此操作只支持没有行内身份或额外字段的纯文本段落', 409,
+    plainParagraph(block),
+    'CONTENT_BLOCK_UNSUPPORTED', '此操作只支持纯文本段落及其原有行内身份', 409,
   );
   const original = block.text;
   requireThat(
-    start <= end && end <= original.length &&
-      !splitsSurrogate(original, start) && !splitsSurrogate(original, end),
+    validBodyPatchRange(original, range),
     'CONTENT_RANGE_INVALID', '补丁区间越界、反向或切开了 UTF-16 代理对', 400,
   );
-  const replacement = original.slice(0, start) + text + original.slice(end);
+  const replacement = original.slice(0, range.start) + text + original.slice(range.end);
   if (replacement === original) return blocks;
   if (replacement.length > original.length)
     requireThat(

@@ -15,13 +15,6 @@ afterEach(async () => {
   for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
 });
 
-export function grant(projectId = 'p', fields: Partial<ContentDelegation> = {}): ContentDelegation {
-  return {
-    projectId, operations: ['body.patch'], objectKinds: ['card'],
-    objectIds: ['card'], blockIds: ['paragraph'], ...fields,
-  };
-}
-
 export function command(type: string, expected: unknown, payload: unknown, projectId = 'p') {
   return { type, projectId, commandId: randomUUID(), expected, payload };
 }
@@ -102,6 +95,13 @@ export async function contentFixture(checkpoint?: CommitOptions['checkpoint']) {
     directory, humanToken, human, state, card, history, apply, snapshot, post, request,
     get mapping() { return mapping; },
     get origin() { return origin; },
+    grant(fields: Partial<ContentDelegation> = {}): ContentDelegation {
+      return {
+        projectId: 'p', operations: ['body.patch'], objectKinds: ['card'],
+        cardId: 'card', blockId: 'paragraph', bodyVersionId: card().body.versionId,
+        range: { start: 0, end: 1 }, ...fields,
+      };
+    },
     issue(content?: ContentDelegation[], layout?: LayoutDelegation[], projects = ['p'], ttl = 60_000) {
       return mapping.access.issue('agent', projects, ttl, randomUUID(), projects, layout, content);
     },

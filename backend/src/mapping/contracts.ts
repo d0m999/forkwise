@@ -35,10 +35,11 @@ const BodyInput = {
     .refine((blocks) => bodyText({ blocks }).length <= MAX_BODY_TEXT_LENGTH, '正文文字不能超过200000')
     .optional(),
 };
+export const BodyPatchRange = z.object({ start: z.int().nonnegative(), end: z.int().nonnegative() }).strict();
 export const BodyPatchPayload = z.object({
   id: Id,
   blockId: Id,
-  range: z.object({ start: z.int().nonnegative(), end: z.int().nonnegative() }).strict(),
+  range: BodyPatchRange,
   text: z.string().max(MAX_BODY_TEXT_LENGTH),
 }).strict();
 export const BodyPatchCommand = z.object({

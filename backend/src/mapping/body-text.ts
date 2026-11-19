@@ -1,4 +1,4 @@
-import type { Block, Card } from './contracts.js';
+import type { Block, BodyPatch, Card } from './contracts.js';
 
 // Recovery validates the JSON shape without loading server command schemas
 // into the browser. Extra keys are preserved, never treated as supported input.
@@ -43,10 +43,21 @@ export function blockPlainText(block: Block): string {
 
 // Only this ticket's plain paragraphs are editable. Other JSON remains original
 // data, including text blocks with fields belonging to a future editor.
-export function plainParagraph(block: Block): boolean {
+export function plainParagraph(block: Block): block is Block & { type: 'text'; text: string } {
   return (
     block.type === 'text' &&
     typeof block.text === 'string' &&
     Object.keys(block).every((key) => ['id', 'type', 'text', 'inlineId'].includes(key))
   );
+}
+
+function splitsSurrogate(text: string, offset: number): boolean {
+  const before = text.charCodeAt(offset - 1);
+  const after = text.charCodeAt(offset);
+  return before >= 0xd800 && before <= 0xdbff && after >= 0xdc00 && after <= 0xdfff;
+}
+
+export function validBodyPatchRange(text: string, { start, end }: BodyPatch['payload']['range']): boolean {
+  return start <= end && end <= text.length &&
+    !splitsSurrogate(text, start) && !splitsSurrogate(text, end);
 }

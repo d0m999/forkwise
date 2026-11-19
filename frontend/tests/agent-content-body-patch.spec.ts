@@ -11,27 +11,28 @@ test('本人签发的 Agent 补丁在正式工作台同 revision 重读', async 
   const initial = await workspace.state();
   const card = initial.cards[0]!;
   const blockId = card.body.blocks[0]!.id;
-  await workspace.execute(page, {
-    type: 'body.edit', projectId: initial.project.id, commandId: crypto.randomUUID(),
-    expected: card.body.versionId,
-    payload: { id: card.id, blocks: [{ id: blockId, type: 'text', text: '原有😀正文' }] },
-  });
-  await workspace.open(page);
+  await page.getByRole('button', { name: '编辑正文', exact: true }).click();
+  await page.getByRole('textbox', { name: '卡片正文', exact: true }).click();
+  await page.keyboard.insertText('原有😀正文');
+  await expect.poll(async () => (await workspace.state()).cards[0]!.body.blocks[0]?.text).toBe('原有😀正文');
   const prepared = await workspace.state();
+  const paragraph = prepared.cards[0]!.body.blocks[0]!;
+  expect(paragraph).toMatchObject({ id: blockId, inlineId: expect.any(String) });
+  const commandId = crypto.randomUUID(), expected = prepared.cards[0]!.body.versionId;
+  const range = { start: 0, end: 2 }, text = '补丁结果';
   const temp = mkdtempSync(join(tmpdir(), 'forkwise-body-ui-'));
   try {
     const tokenFile = join(temp, 'grant');
     const issued = spawnSync(process.execPath, [
       '--import', 'tsx', 'scripts/issue-body-grant.ts',
       '--data-dir', workspace.directory, '--project', initial.project.id,
-      '--objects', card.id, '--blocks', blockId, '--out', tokenFile,
+      '--card', card.id, '--block', blockId, '--version', expected,
+      '--start', String(range.start), '--end', String(range.end), '--out', tokenFile,
     ], { cwd: resolve('../backend'), encoding: 'utf8', timeout: 20_000 });
     expect(issued.status, issued.error?.message ?? issued.stderr).toBe(0);
     expect(issued.stdout.trim()).toMatch(/^[0-9a-f]{12}$/);
     expect(statSync(tokenFile).mode & 0o777).toBe(0o600);
     const token = readFileSync(tokenFile, 'utf8').trim();
-    const commandId = crypto.randomUUID(), expected = prepared.cards[0]!.body.versionId;
-    const range = { start: 0, end: 2 }, text = '补丁结果';
     const response = await fetch(workspace.origin + '/api/mapping/execute', {
       method: 'POST',
       headers: {
@@ -77,6 +78,7 @@ test('本人签发的 Agent 补丁在正式工作台同 revision 重读', async 
     await page.getByText('正文补丁验收', { exact: true }).click();
     await page.getByRole('button', { name: '编辑正文', exact: true }).click();
     await expect(page.getByRole('textbox', { name: '卡片正文', exact: true })).toContainText('补丁结果😀正文');
+    expect((await workspace.state()).cards[0]!.body.blocks[0]).toEqual({ ...paragraph, text: '补丁结果😀正文' });
     await expect(page.locator('.workspace')).toHaveAttribute('data-revision', String(receipt.revision));
     await page.screenshot({ path: info.outputPath('body-patch-reopened.png') });
     writeFileSync(info.outputPath('body-patch-ui-revision.json'), JSON.stringify({

@@ -3,7 +3,8 @@ import type Database from 'better-sqlite3';
 import { z } from 'zod';
 import type { Actor } from '../contracts/entities.js';
 import { requireThat } from '../domain/errors.js';
-import type { Card } from '../mapping/contracts.js';
+import { plainParagraph, validBodyPatchRange } from '../mapping/body-text.js';
+import { BodyPatchRange, type Card } from '../mapping/contracts.js';
 
 export interface Principal {
   actor: Actor;
@@ -32,9 +33,12 @@ const ContentScope = z.object({
   projectId: ScopedId,
   operations: z.array(z.literal('body.patch')).min(1),
   objectKinds: z.array(z.literal('card')).min(1),
-  objectIds: z.union([z.literal('*'), z.array(ScopedId).min(1)]),
-  blockIds: z.union([z.literal('*'), z.array(ScopedId).min(1)]),
+  cardId: ScopedId,
+  blockId: ScopedId,
+  bodyVersionId: ScopedId,
+  range: BodyPatchRange,
 }).strict();
+const ContentScopes = z.array(ContentScope);
 export type ContentDelegation = z.infer<typeof ContentScope>;
 
 export interface SessionCapabilities {
@@ -90,33 +94,23 @@ export class AccessService {
       403,
     );
     if (contentDelegations !== undefined) {
-      const parsed = z.array(ContentScope).safeParse(contentDelegations);
+      const parsed = ContentScopes.safeParse(contentDelegations);
       requireThat(
         type === 'agent' && parsed.success,
-        'INVALID_SCOPE', '正文授权必须为 Agent 指定项目、操作、卡片与块范围', 403,
+        'INVALID_SCOPE', '正文授权必须为 Agent 指定项目、操作、卡片、块、正文版本与文字区间', 403,
       );
       for (const scope of parsed.data) {
-        requireThat(
-          projects.includes(scope.projectId) &&
-            this.db.prepare('SELECT 1 FROM mapping_projects WHERE id=?').get(scope.projectId),
-          'INVALID_SCOPE', '正文授权必须属于会话内的现有项目', 403,
-        );
-        if (scope.objectIds === '*' && scope.blockIds === '*') continue;
-        const rows = this.db.prepare('SELECT id, value FROM mapping_cards WHERE project_id=?')
-          .all(scope.projectId) as { id: string; value: string }[];
-        const cards = rows.filter(({ id }) => scope.objectIds === '*' || scope.objectIds.includes(id));
-        requireThat(
-          scope.objectIds === '*' || scope.objectIds.every(id => cards.some(card => card.id === id)),
-          'INVALID_SCOPE', '正文授权指定的卡片不属于当前项目或已删除', 403,
-        );
-        if (scope.blockIds !== '*') {
-          const ids = new Set(cards.flatMap(({ value }) => (JSON.parse(value) as Card).body.blocks.map(block => block.id)));
-          requireThat(
-            scope.blockIds.every(id => ids.has(id)),
-            'INVALID_SCOPE', '正文授权指定的块不属于选定卡片或已删除', 403,
-          );
-        }
+        requireThat(projects.includes(scope.projectId), 'INVALID_SCOPE', '正文授权必须属于会话内的项目', 403);
+        const row = this.db.prepare('SELECT value FROM mapping_cards WHERE project_id=? AND id=?')
+          .get(scope.projectId, scope.cardId) as { value: string } | undefined;
+        requireThat(row, 'INVALID_SCOPE', '正文授权指定的卡片不属于当前项目或已删除', 403);
+        const { body } = JSON.parse(row.value) as Card;
+        requireThat(body.versionId === scope.bodyVersionId, 'INVALID_SCOPE', '正文版本已更新，请重新选择授权区间', 403);
+        const block = body.blocks.find(block => block.id === scope.blockId);
+        requireThat(block && plainParagraph(block), 'INVALID_SCOPE', '正文授权需要选定卡片内的纯文本段落', 403);
+        requireThat(validBodyPatchRange(block.text, scope.range), 'INVALID_SCOPE', '正文授权区间无效', 403);
       }
+      contentDelegations = parsed.data;
     }
     this.db
       .prepare(
@@ -179,7 +173,13 @@ export class AccessService {
       '调用者身份和范围必须来自可信会话',
       403,
     );
-    return JSON.parse(row.capabilities) as SessionCapabilities;
+    const capabilities = JSON.parse(row.capabilities) as SessionCapabilities;
+    if (capabilities.contentDelegations !== undefined) {
+      const scopes = ContentScopes.safeParse(capabilities.contentDelegations);
+      // 旧的正文委托缺少区间和版本，需要本人重新签发。仍按正文受限会话处理。
+      capabilities.contentDelegations = scopes.success ? scopes.data : [];
+    }
+    return capabilities;
   }
   mappingWrite(principal: Principal, projectId: string, capabilities: SessionCapabilities): void {
     this.project(principal, projectId);

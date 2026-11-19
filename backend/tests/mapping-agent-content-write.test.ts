@@ -1,7 +1,7 @@
 import { expect, it } from 'vitest';
 import { canonical } from '../src/domain/canonical.js';
 import type { Block } from '../src/mapping/contracts.js';
-import { command, contentFixture, grant, patch } from './fixtures/agent-content.js';
+import { command, contentFixture, patch } from './fixtures/agent-content.js';
 
 it.each([
   ['反向', { start: 2, end: 1 }],
@@ -13,7 +13,7 @@ it.each([
 ])('AC1/AC4 区间%s返回稳定错误且无写入', async (_label, range) => {
   const f = await contentFixture();
   const before = f.snapshot();
-  expect(await f.post(patch(f.card().body.versionId, { range }), f.issue([grant()]))).toMatchObject({
+  expect(await f.post(patch(f.card().body.versionId, { range }))).toMatchObject({
     status: 400, body: { code: 'CONTENT_RANGE_INVALID' },
   });
   expect(f.snapshot()).toEqual(before);
@@ -22,14 +22,13 @@ it.each([
 it.each([{ x: 21 }, { patches: [] }, { blocks: [] }])('AC1 补丁拒绝额外字段 %j', async (fields) => {
   const f = await contentFixture();
   const before = f.snapshot();
-  expect(await f.post(patch(f.card().body.versionId, fields), f.issue([grant()]))).toMatchObject({
+  expect(await f.post(patch(f.card().body.versionId, fields), f.issue([f.grant()]))).toMatchObject({
     status: 400, body: { code: 'INVALID_COMMAND' },
   });
   expect(f.snapshot()).toEqual(before);
 });
 
 const unsupported: Block[] = [
-  { id: 'inline', type: 'text', text: '保留行内', inlineId: 'inline-id' },
   { id: 'text-extra', type: 'text', text: '保留额外字段', later: { id: 1 } },
   { id: 'table', type: 'table', rows: [[{ text: '表格' }]] },
   { id: 'code', type: 'code', text: 'const x = 1' },
@@ -55,9 +54,9 @@ function installExistingBlocks(f: Awaited<ReturnType<typeof contentFixture>>) {
 it.each(unsupported.map(block => [block.id]))('AC2 不支持的块 %s 拒绝且保留原件', async (blockId) => {
   const f = await contentFixture();
   installExistingBlocks(f);
-  const token = f.issue([grant('p', { blockIds: '*' })]);
+  expect(() => f.issue([f.grant({ blockId })])).toThrowError(expect.objectContaining({ code: 'INVALID_SCOPE' }));
   const before = f.snapshot();
-  expect(await f.post(patch(f.card().body.versionId, { blockId }), token)).toMatchObject({
+  expect(await f.post(patch(f.card().body.versionId, { blockId }))).toMatchObject({
     status: 409, body: { code: 'CONTENT_BLOCK_UNSUPPORTED' },
   });
   expect(f.snapshot()).toEqual(before);
@@ -72,7 +71,7 @@ it.each([
 ])('AC2 只修改%s区间且其余块逐字节保真', async (_label, range, text, expected) => {
   const f = await contentFixture();
   installExistingBlocks(f);
-  const token = f.issue([grant()]);
+  const token = f.issue([f.grant({ range })]);
   const before = f.card();
   const originalMedia = f.mapping.read({ type: 'asset', projectId: 'p', id: 'asset' }, f.human);
   const beforeProject = f.state().project;
@@ -95,7 +94,7 @@ it.each([
 
 it('AC3 人类移动后正文补丁成功，同正文旧版本和陈旧布局均冲突', async () => {
   const f = await contentFixture();
-  const token = f.issue([grant()]);
+  const token = f.issue([f.grant()]);
   const initial = f.card();
   const move = await f.post(command('pose.move', initial.item.versionId, { id: initial.id, x: 105, y: 203 }));
   expect(move.status).toBe(200);
@@ -107,10 +106,11 @@ it('AC3 人类移动后正文补丁成功，同正文旧版本和陈旧布局均
   expect(patched.item).toEqual(newPose);
   expect(patched.body.blocks[0]?.text).toBe('新文😀e\u0301结束');
 
+  const competingToken = f.issue([f.grant()]);
   const bodyWrite = await f.post(command('body.edit', patched.body.versionId, { id: initial.id, text: '人类新正文' }));
   expect(bodyWrite.status).toBe(200);
   const beforeConflict = f.snapshot();
-  const conflict = await f.post(patch(patched.body.versionId), token);
+  const conflict = await f.post(patch(patched.body.versionId), competingToken);
   expect(conflict).toMatchObject({ status: 409, body: { code: 'VERSION_CONFLICT' } });
   for (const identity of [initial.id, 'paragraph', f.card().body.versionId])
     expect(conflict.body.message).toContain(identity);

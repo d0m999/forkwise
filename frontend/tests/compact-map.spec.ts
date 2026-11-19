@@ -86,6 +86,7 @@ test("实际工作台和授权 Agent 在并发写入期间核对同一固定 sna
     const access = JSON.parse(
       readFileSync(join(directory, "local-access.json"), "utf8"),
     );
+    const humanToken = new URLSearchParams(new URL(access.url).hash.slice(1)).get("token")!;
     await page.goto(access.url);
     await expect(page.getByRole("status")).toHaveText("已保存到本机");
     await page.getByRole("button", { name: "新建研究", exact: true }).click();
@@ -107,8 +108,6 @@ test("实际工作台和授权 Agent 在并发写入期间核对同一固定 sna
       "agent",
       [projectId],
       60000,
-      undefined,
-      [projectId],
     );
     mapping.close();
     const read = async (view: string, snapshot?: string, cardId?: string, cursor?: string) => {
@@ -164,9 +163,9 @@ test("实际工作台和授权 Agent 在并发写入期间核对同一固定 sna
       const write = await context.request.post(
         origin + "/api/mapping/execute",
         {
-          headers: { Origin: origin, Authorization: "Bearer " + agentToken },
+          headers: { Origin: origin, Authorization: "Bearer " + humanToken },
           data: {
-            commandId: "agent-concurrent",
+            commandId: "remote-concurrent",
             projectId,
             type: "card.edit",
             expected: { body: card.body.versionId, pose: card.item.versionId },

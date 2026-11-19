@@ -120,16 +120,21 @@ it('跨 Body/Pose 命令一次校验全部 expected，一次提交；同正文�
   ).toEqual([]);
   expect(read()).toEqual(saved);
 });
-it('明确项目委托的 Agent 共用 execute，伪造身份/范围及撤销会话连重试也拒绝', () => {
+it('明确正文委托的 Agent 共用 execute，伪造身份/范围及撤销会话连重试也拒绝', () => {
   const { mapping, actor, read, original } = fixture();
-  const token = mapping.access.issue('agent', ['p'], 60000, undefined, ['p']);
+  const blockId = original.body.blocks[0]!.id;
+  const range = { start: 0, end: 2 };
+  const token = mapping.access.issue('agent', ['p'], 60000, undefined, [], undefined, [{
+    projectId: 'p', operations: ['body.patch'], objectKinds: ['card'], cardId: 'c', blockId,
+    bodyVersionId: original.body.versionId, range,
+  }]);
   const agent = mapping.access.authenticate(token);
   const command = {
     commandId: 'agent-edit',
     projectId: 'p',
-    type: 'body.edit',
+    type: 'body.patch',
     expected: original.body.versionId,
-    payload: { id: 'c', text: '受委托写入' },
+    payload: { id: 'c', blockId, range, text: '受委托写入' },
   };
   mapping.execute(command, agent);
   expect(read().cards[0]!.body.blocks[0]!.text).toBe('受委托写入');
@@ -140,7 +145,7 @@ it('明确项目委托的 Agent 共用 execute，伪造身份/范围及撤销会
   expect(() => mapping.read({ type: 'projects' }, { ...agent, projects: ['*'] })).toThrow('可信');
   expect(() => mapping.execute({ ...command, projectId: 'other' }, agent)).toThrow('授权');
   const readOnly = mapping.access.authenticate(mapping.access.issue('agent', ['p']));
-  expect(() => mapping.execute(command, readOnly)).toThrow('委托');
+  expect(() => mapping.execute({ ...command, commandId: 'read-only-write' }, readOnly)).toThrow('正文授权');
   mapping.access.revoke(agent.tokenHash);
   expect(() => mapping.execute(command, agent)).toThrow('会话');
   expect(() => mapping.read({ type: 'project', projectId: 'p' }, agent)).toThrow('会话');
@@ -281,6 +286,8 @@ it.each(['independent', 'same-body', 'same-command'] as const)(
             }),
         ),
       );
+      const blockId = original.body.blocks[0]!.id;
+      const range = { start: 0, end: 2 };
       const agent = mapping.access.authenticate(
         mapping.access.issue('agent', ['p'], 60000, undefined, ['p'], [
           {
@@ -290,7 +297,10 @@ it.each(['independent', 'same-body', 'same-command'] as const)(
             objectIds: '*',
             fields: ['x', 'y', 'width', 'height'],
           },
-        ]),
+        ], [{
+          projectId: 'p', operations: ['body.patch'], objectKinds: ['card'], cardId: 'c', blockId,
+          bodyVersionId: original.body.versionId, range,
+        }]),
       );
       const body = {
         commandId: 'race-body',
@@ -310,7 +320,7 @@ it.each(['independent', 'same-body', 'same-command'] as const)(
             }
           : mode === 'same-command'
             ? body
-            : { ...body, commandId: 'other-body', payload: { id: 'c', text: '另一正文' } };
+            : { ...body, type: 'body.patch', commandId: 'other-body', payload: { id: 'c', blockId, range, text: '另一正文' } };
       const results = await Promise.all(
         workers.map(
           (worker, index) =>

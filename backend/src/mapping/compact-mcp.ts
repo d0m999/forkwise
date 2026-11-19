@@ -131,7 +131,7 @@ export function registerCompactMapTool(server: McpServer, transport: ApiTranspor
     'forkwise_patch_card_body',
     {
       description:
-        '仅限已授权块区间，不写布局/标题/外观。先读取该卡片完整正文块与 body.versionId，再提交单块内 [start, end) 范围的 JS UTF-16 code unit 偏移。冲突时请重读。以原 commandId 重试同一请求可取回原回执。',
+        '仅限已授权的正文版本及块内区间。先读取该卡片完整正文块与 body.versionId，再提交单块内 [start, end) 范围的 JS UTF-16 code unit 偏移。版本变化后请重读并由本人重新授权。以原 commandId 重试同一请求可取回原回执。',
       inputSchema: BodyPatchCommand.omit({ type: true, payload: true }).extend({
         cardId: BodyPatchPayload.shape.id,
         blockId: BodyPatchPayload.shape.blockId,

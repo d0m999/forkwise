@@ -57,17 +57,24 @@ function fixture(options: CommitOptions = {}) {
 it('多卡完整几何在一个revision和历史动作持久化，正文并发不被旧Pose覆盖，重开及Agent同快照一致', () => {
   const f = fixture();
   const before = f.state();
+  const card = before.cards[0]!;
+  const blockId = card.body.blocks[0]!.id;
+  const range = { start: 0, end: 3 };
+  const token = f.mapping.access.issue('agent', ['p'], undefined, undefined, [], undefined, [{
+    projectId: 'p', operations: ['body.patch'], objectKinds: ['card'], cardId: card.id, blockId,
+    bodyVersionId: card.body.versionId, range,
+  }]);
   const peer = openMapping(f.directory);
   try {
     peer.execute(
       {
         commandId: 'body-peer',
         projectId: 'p',
-        type: 'body.edit',
-        expected: before.cards[0]!.body.versionId,
-        payload: { id: 'a', text: '并发新正文' },
+        type: 'body.patch',
+        expected: card.body.versionId,
+        payload: { id: card.id, blockId, range, text: '并发新正文' },
       },
-      peer.access.authenticate(f.mapping.access.issue('agent', ['p'], undefined, undefined, ['p'])),
+      peer.access.authenticate(token),
     );
   } finally {
     peer.close();

@@ -194,12 +194,15 @@ test("断连重连后 UI 和 Agent 恢复同一地图，删除不留幽灵对象
       route.abort("connectionfailed"),
     );
     const card = (await f.index()).items[0];
-    await f.execute({
-      commandId: "remote-edit",
-      type: "card.edit",
-      expected: { body: card.body.versionId, pose: card.item.versionId },
-      payload: { id: "c", text: "断连期间完整中文🧠正文", x: 380, y: 220 },
-    });
+    await f.execute(
+      {
+        commandId: "remote-edit",
+        type: "card.edit",
+        expected: { body: card.body.versionId, pose: card.item.versionId },
+        payload: { id: "c", text: "断连期间完整中文🧠正文", x: 380, y: 220 },
+      },
+      f.humanToken,
+    );
     await expectTextValue(f.page.getByLabel("卡片正文", { exact: true }), "初始正文");
     await f.page.unroute("**/changes?**");
     await expect(f.page.locator(".workspace")).toHaveAttribute(
@@ -567,12 +570,15 @@ for (const field of ["body", "title"] as const) {
         await editor.dispatchEvent("compositionstart");
         await editor.fill("组合中的起始草稿");
         const card = (await f.index()).items[0];
-        await f.execute({
-          commandId: "remote-before-read",
-          type: "body.edit",
-          expected: card.body.versionId,
-          payload: { id: "c", text: "读取开始前已提交的远端正文" },
-        });
+        await f.execute(
+          {
+            commandId: "remote-before-read",
+            type: "body.edit",
+            expected: card.body.versionId,
+            payload: { id: "c", text: "读取开始前已提交的远端正文" },
+          },
+          f.humanToken,
+        );
         armed = true;
         await captured;
         await expect(f.page.locator(".workspace")).toHaveAttribute(

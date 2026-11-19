@@ -17,7 +17,8 @@ it('段落完整Body经实际HTTP保存，HTTP与MCP固定同snapshot往返且�
   let client: Client | undefined, mcp: ReturnType<typeof createMcpServer> | undefined;
   try {
     host = openMapping(directory);
-    const human = host.access.authenticate(host.access.issue('human', ['*']));
+    const humanToken = host.access.issue('human', ['*']);
+    const human = host.access.authenticate(humanToken);
     const run = (c: Record<string, unknown>) => host!.execute({ commandId: randomUUID(), projectId: 'p', ...c }, human);
     run({ type: 'project.create', expected: null, payload: { name: '段落HTTP' } });
     run({ type: 'thought.create', expected: null, payload: { id: 'a', title: '原卡', text: '完整旧原文', x: 10, y: 20 } });
@@ -27,13 +28,12 @@ it('段落完整Body经实际HTTP保存，HTTP与MCP固定同snapshot往返且�
     await new Promise<void>(resolve => http!.once('listening', resolve));
     const origin = `http://127.0.0.1:${(http.address() as { port: number }).port}`;
     app = createWorkspaceApp(host, origin, () => new Response(''));
-    const token = host.access.issue('agent', ['p'], undefined, undefined, ['p']);
-    const readOnly = host.access.issue('agent', ['p']);
+    const token = host.access.issue('agent', ['p']);
     const blocks = [{ ...original.body.blocks[0]!, inlineId: 'http-inline', text: '完整中文🚀\n软换行' }, { id: 'http-second', type: 'text', inlineId: 'http-second-inline', text: '第二段完整原文' }, { id: 'http-empty', type: 'text', inlineId: 'http-empty-inline', text: '' }];
     const command = { commandId: 'http-original', projectId: 'p', type: 'body.edit', expected: original.body.versionId, payload: { id: 'a', blocks } };
     const post = (c: unknown, credential = token) => fetch(origin + '/api/mapping/execute', { method: 'POST', headers: { Origin: origin, Authorization: `Bearer ${credential}`, 'Content-Type': 'application/json' }, body: JSON.stringify(c) });
-    expect((await post(command, readOnly)).status).toBe(403);
-    const saved = await post(command); expect(saved.status).toBe(200);
+    expect((await post(command)).status).toBe(403);
+    const saved = await post(command, humanToken); expect(saved.status).toBe(200);
     const receipt = await saved.json();
     mcp = createMcpServer(httpTransport(origin, token)); client = new Client({ name: 'paragraph-sdk', version: '1.0.0' });
     const [a, b] = InMemoryTransport.createLinkedPair(); await mcp.connect(b); await client.connect(a);
@@ -45,7 +45,7 @@ it('段落完整Body经实际HTTP保存，HTTP与MCP固定同snapshot往返且�
     expect(actual.blocks).toEqual(blocks); expect(body.revision).toBe(index.revision);
     const response = await fetch(origin + `/api/mapping/projects/p/map?view=detail&cardId=a&snapshot=${index.snapshot}`, { headers: { Authorization: `Bearer ${token}` } });
     expect(await response.json()).toEqual(body);
-    expect(await (await post(command)).json()).toEqual(receipt);
+    expect(await (await post(command, humanToken)).json()).toEqual(receipt);
     expect((await post({ ...command, commandId: 'agent-undo', type: 'history.undo', expected: index.revision, payload: { actionId: command.commandId } })).status).toBe(403);
     host.access.revoke(host.access.authenticate(token).tokenHash);
     expect((await post(command)).status).toBe(401);

@@ -17,7 +17,8 @@ it('富文导入经HTTP写权限、幂等和撤权校验，MCP同snapshot完整�
   let client: Client | undefined, mcp: ReturnType<typeof createMcpServer> | undefined;
   try {
     host = openMapping(directory);
-    const human = host.access.authenticate(host.access.issue('human', ['*']));
+    const humanToken = host.access.issue('human', ['*']);
+    const human = host.access.authenticate(humanToken);
     const run = (c: Record<string, unknown>) =>
       host!.execute({ commandId: randomUUID(), projectId: 'p', ...c }, human);
     run({ type: 'project.create', expected: null, payload: { name: '富文HTTP' } });
@@ -32,8 +33,7 @@ it('富文导入经HTTP写权限、幂等和撤权校验，MCP同snapshot完整�
     await new Promise<void>((resolve) => http!.once('listening', resolve));
     const origin = `http://127.0.0.1:${(http.address() as { port: number }).port}`;
     app = createWorkspaceApp(host, origin, () => new Response(''));
-    const token = host.access.issue('agent', ['p'], undefined, undefined, ['p']);
-    const readOnly = host.access.issue('agent', ['p']);
+    const token = host.access.issue('agent', ['p']);
     const blocks = [
       {
         ...original.body.blocks[0]!,
@@ -84,7 +84,7 @@ it('富文导入经HTTP写权限、幂等和撤权校验，MCP同snapshot完整�
         },
         body: JSON.stringify(c),
       });
-    expect((await post(command, readOnly)).status).toBe(403);
+    expect((await post(command)).status).toBe(403);
     expect(host.read({ type: 'project', projectId: 'p' }, human).cards[0]!.body).toEqual(
       original.body,
     );
@@ -92,13 +92,13 @@ it('富文导入经HTTP写权限、幂等和撤权校验，MCP同snapshot完整�
       ...command,
       commandId: 'bad-bytes',
       payload: { id: 'a', blocks: [{ ...blocks[2], byteLength: 5 }] },
-    });
+    }, humanToken);
     expect(malformed.status).toBe(409);
     expect(await malformed.json()).toMatchObject({ code: 'BODY_FORMAT_UNSUPPORTED' });
     expect(host.read({ type: 'project', projectId: 'p' }, human).cards[0]!.body).toEqual(
       original.body,
     );
-    const saved = await post(command);
+    const saved = await post(command, humanToken);
     expect(saved.status).toBe(200);
     const receipt = await saved.json();
     mcp = createMcpServer(httpTransport(origin, token));
@@ -122,7 +122,7 @@ it('富文导入经HTTP写权限、幂等和撤权校验，MCP同snapshot完整�
       { headers: { Authorization: `Bearer ${token}` } },
     );
     expect(await response.json()).toEqual(body);
-    expect(await (await post(command)).json()).toEqual(receipt);
+    expect(await (await post(command, humanToken)).json()).toEqual(receipt);
     expect(
       (
         await post({

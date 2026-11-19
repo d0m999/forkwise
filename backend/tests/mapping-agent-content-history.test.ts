@@ -5,16 +5,14 @@ import { join } from 'node:path';
 import { expect, it } from 'vitest';
 import { SECRET_KEYS } from '../src/mapping/secret-keys.js';
 import { readZip } from '../src/mapping/zip-store.js';
-import { command, contentFixture, grant, patch } from './fixtures/agent-content.js';
+import { command, contentFixture, patch } from './fixtures/agent-content.js';
 
 it('AC6 按项目时间顺序撤销人类 C、Agent B，且可按顺序重做', async () => {
   const f = await contentFixture();
-  const token = f.issue([grant()]);
-  for (const [type, text, actor] of [['body.edit', 'A', f.humanToken], ['body.patch', 'B', token], ['body.edit', 'C', f.humanToken]]) {
-    const v = f.card().body.versionId;
-    const req = type === 'body.patch' ? patch(v, { text }) : command(type!, v, { id: 'card', text });
-    expect((await f.post(req, actor)).status).toBe(200);
-  }
+  expect((await f.post(command('body.edit', f.card().body.versionId, { id: 'card', text: 'A' }))).status).toBe(200);
+  const token = f.issue([f.grant()]);
+  expect((await f.post(patch(f.card().body.versionId, { text: 'B' }), token)).status).toBe(200);
+  expect((await f.post(command('body.edit', f.card().body.versionId, { id: 'card', text: 'C' }))).status).toBe(200);
   const view = await f.request('/api/mapping/projects/p/history', token);
   expect(view.status).toBe(200);
   const visible = await view.json();
@@ -38,7 +36,7 @@ it('AC6 按项目时间顺序撤销人类 C、Agent B，且可按顺序重做', 
 
 it('AC6 项目包通过真实 verifier，隔离导入保全正文、对象和历史归档', async () => {
   const source = await contentFixture();
-  const token = source.issue([grant()]);
+  const token = source.issue([source.grant()]);
   const patched = await source.post(patch(source.card().body.versionId), token);
   expect(patched.status).toBe(200);
   const exportResponse = await source.request(`/api/mapping/projects/p/export.package?revision=${patched.body.revision}`);

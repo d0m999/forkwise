@@ -22,6 +22,20 @@ function fixture(options: CommitOptions = {}) {
   const history = (projectId = 'p') => mapping.read({ type: 'history', projectId }, human);
   const run = (command: Record<string, unknown>, actor = human) =>
     mapping.execute({ commandId: randomUUID(), projectId: 'p', ...command }, actor);
+  const patchAsAgent = (text: string) => {
+    const card = state().cards[0]!;
+    const block = card.body.blocks[0]!;
+    const range = { start: 0, end: block.text!.length };
+    const agent = mapping.access.authenticate(mapping.access.issue('agent', ['p'], undefined, undefined, [], undefined, [{
+      projectId: 'p', operations: ['body.patch'], objectKinds: ['card'], cardId: card.id, blockId: block.id,
+      bodyVersionId: card.body.versionId, range,
+    }]));
+    run({
+      type: 'body.patch', expected: card.body.versionId,
+      payload: { id: card.id, blockId: block.id, range, text },
+    }, agent);
+    return agent;
+  };
   const project = (projectId = 'p') =>
     run({ projectId, type: 'project.create', expected: null, payload: { name: '研究' } });
   const create = (id = 'c', projectId = 'p', editGroup?: string) =>
@@ -41,6 +55,7 @@ function fixture(options: CommitOptions = {}) {
     },
     human,
     run,
+    patchAsAgent,
     state,
     history,
     create,
@@ -91,9 +106,6 @@ it('human/Agent 的 Body 与 Pose 按项目时间倒序，撤销只写变化域�
   f.project('other');
   f.create('other-card', 'other');
   const other = f.state('other');
-  const agent = f.mapping.access.authenticate(
-    f.mapping.access.issue('agent', ['p'], undefined, undefined, ['p']),
-  );
   const initial = f.state().cards[0]!;
   f.run({
     type: 'body.edit',
@@ -101,14 +113,7 @@ it('human/Agent 的 Body 与 Pose 按项目时间倒序，撤销只写变化域�
     payload: { id: 'c', text: '本人正文' },
   });
   const humanBody = f.state().cards[0]!;
-  f.run(
-    {
-      type: 'body.edit',
-      expected: humanBody.body.versionId,
-      payload: { id: 'c', text: 'Agent 正文' },
-    },
-    agent,
-  );
+  const agent = f.patchAsAgent('Agent 正文');
   const agentBody = f.state().cards[0]!;
   f.run({
     type: 'pose.move',
@@ -185,16 +190,12 @@ it('仅最近40步可撤销：第41步截断最老动作，重启保留边界且
 it('相邻正文保存批次合为一组，布局及其他actor命令截断，undo/redo不重新打开旧组', () => {
   const f = fixture();
   f.create();
-  const body = (text: string, editGroup: string, actor = f.human) =>
-    f.run(
-      {
-        type: 'body.edit',
-        editGroup,
-        expected: f.state().cards[0]!.body.versionId,
-        payload: { id: 'c', text },
-      },
-      actor,
-    );
+  const body = (text: string, editGroup: string) => f.run({
+    type: 'body.edit',
+    editGroup,
+    expected: f.state().cards[0]!.body.versionId,
+    payload: { id: 'c', text },
+  });
   body('一', 'session:typing');
   body('一二', 'session:typing');
   expect(f.history().undo).toHaveLength(2);
@@ -211,10 +212,7 @@ it('相邻正文保存批次合为一组，布局及其他actor命令截断，un
   });
   body('四', 'session:typing');
   expect(f.history().undo).toHaveLength(5);
-  const agent = f.mapping.access.authenticate(
-    f.mapping.access.issue('agent', ['p'], undefined, undefined, ['p']),
-  );
-  body('Agent', 'session:typing', agent);
+  f.patchAsAgent('Agent');
   body('五', 'session:typing');
   expect(f.history().undo).toHaveLength(7);
   f.travel('history.undo');
