@@ -73,6 +73,7 @@ export function readableMarkdown(state: ProjectState, exportedAt: string): strin
   ];
   for (const card of state.cards) {
     lines.push(`### ${oneLine(card.title) || '未命名卡片'}`, '', `卡片 id：${card.id}`, '');
+    if (card.aiOrigin) lines.push(`内容起点：${card.aiOrigin.mode === 'simulate' ? '模拟整理' : 'AI 候选'}`, '');
     const cardTags = (card.cardTags?.tagIds ?? []).map((id) => tags.get(id) ?? `已删除标签（${id}）`);
     lines.push(`标签：${cardTags.length ? cardTags.map(oneLine).join('、') : '无'}`, '');
     lines.push(card.body.blocks.map(readableBlock).join('\n') || '（无正文）', '');

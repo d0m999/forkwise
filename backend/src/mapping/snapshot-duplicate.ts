@@ -85,6 +85,7 @@ export function duplicateCanvas(db: Database.Database, command: Duplicate): Snap
     ...selectedOrdinary.map(({ kind, source }) => {
       const base = { copyId: copyIds.get(source.item.id)!, stack: source.item.createdOrder ?? 0, pose: structuredClone(source.item.pose) };
       if ('body' in source) return { ...base, kind: 'card' as const, title: source.title, blocks: source.body.blocks,
+        ...(source.aiOrigin ? { aiOrigin: { mode: source.aiOrigin.mode } } : {}),
         tagIds: source.cardTags?.tagIds ?? null, appearance: source.appearance ? { titleColor: source.appearance.titleColor, showPreview: source.appearance.showPreview } : null,
         ...(source.item.heightPolicy ? { heightPolicy: source.item.heightPolicy } : {}),
         ...(source.attachments?.items.length ? { attachments: source.attachments.items.map(item => ({ id: item.id, assetId: item.assetId, name: item.name })) } : {}) };

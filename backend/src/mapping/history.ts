@@ -138,7 +138,7 @@ export function recordAction(
     stack.undo.push({ session, lastRevision: change.revision, id: command.commandId, label: command.type, target: { id: created?.id ?? command.commandId, title }, actor: change.actor, before: null, after: null, ...(change.cut ? { cut: change.cut } : {}), cardLifecycleChanges: change.cardLifecycleChanges, textChanges: change.textChanges, shapeChanges: change.shapeChanges, imageChanges: change.imageChanges, strokeChanges: change.strokeChanges, connectorChanges: change.connectorChanges, groupChanges: change.groupChanges, frameChanges: change.frameChanges, containmentChanges: change.containmentChanges, ...(change.attachmentChanges?.length ? { attachmentChanges: change.attachmentChanges } : {}), changedIds: change.changedIds, ...(change.tagChanges?.length ? { tagChanges: change.tagChanges } : {}), ...(change.assetChanges?.length ? { assetChanges: change.assetChanges } : {}) });
     stack.undo = stack.undo.slice(-40); stack.redo = []; save(db, command.projectId, stack); return;
   }
-  if (command.type === 'canvas.delete-selection' || (change.groupChanges || change.containmentChanges) && !change.textChange && command.type !== 'thought.create') {
+  if (command.type === 'canvas.delete-selection' || (change.groupChanges || change.containmentChanges) && !change.textChange && command.type !== 'thought.create' && command.type !== 'organize.add') {
     const value = change.groupChanges?.find(value => value.after)?.after ?? change.groupChanges?.[0]?.before;
     let selected = change.before && 'body' in change.before ? { id: change.before.id, title: change.before.title }
       : change.shapeChange?.before ? { id: change.shapeChange.before.id, title: change.shapeChange.before.content.shortText }

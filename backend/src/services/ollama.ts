@@ -20,6 +20,7 @@ const Reply = z.object({
   eval_count: z.number().int().nonnegative().optional(),
   model: z.string(),
 });
+type ModelUsage = { inputTokens: number | null; outputTokens: number | null; model: string };
 async function boundedText(response: Response, signal: AbortSignal): Promise<string> {
   const reader = response.body?.getReader();
   requireThat(reader, 'PROVIDER_PROTOCOL_ERROR', '模型返回空响应');
@@ -72,13 +73,15 @@ export class OllamaClient {
     data: unknown,
     signal: AbortSignal,
     images?: string[],
+    onAttempt?: (number: number, usage: ModelUsage, received: boolean) => void,
   ) {
-    const usage: { inputTokens: number | null; outputTokens: number | null; model: string }[] = [];
+    const usage: ModelUsage[] = [];
     let repair = '';
     for (let attempt = 0; attempt < 2; attempt++) {
       signal.throwIfAborted();
       let response: Response;
       try {
+        onAttempt?.(attempt + 1, { inputTokens: null, outputTokens: null, model: this.model }, false);
         response = await this.request(this.origin + '/api/chat', {
           method: 'POST',
           redirect: 'error',
@@ -134,11 +137,13 @@ export class OllamaClient {
           { usage, cost: null },
         );
       }
-      usage.push({
+      const actual = {
         inputTokens: result.prompt_eval_count ?? null,
         outputTokens: result.eval_count ?? null,
         model: result.model,
-      });
+      };
+      usage.push(actual);
+      onAttempt?.(attempt + 1, actual, true);
       try {
         return {
           result: schema.parse(JSON.parse(result.message.content)),

@@ -4,6 +4,7 @@ import { assetHash } from './media.js';
 import { SECRET_KEYS } from './secret-keys.js';
 import { contentEditTimes } from './search-edits.js';
 import { writeZip } from './zip-store.js';
+import type { OrganizeTask } from './organize-contracts.js';
 
 const RECORD_QUERIES = {
   cards: 'SELECT c.value AS value FROM mapping_cards c JOIN mapping_card_ids i ON i.id=c.id WHERE c.project_id=? ORDER BY i.rowid',
@@ -135,7 +136,7 @@ function resourceDrafts(assets: unknown[], research: unknown): DraftResource[] {
   return drafts;
 }
 
-export function buildFullPackage(db: Database.Database, projectId: string, exportedAt: string, research?: unknown): Buffer {
+export function buildFullPackage(db: Database.Database, projectId: string, exportedAt: string, research?: unknown, organizeTasks: OrganizeTask[] | null = []): Buffer {
   const project = db
     .prepare('SELECT id, name, version_id AS versionId, revision FROM mapping_projects WHERE id=?')
     .get(projectId) as { id: string; name: string; versionId: string; revision: number } | undefined;
@@ -144,7 +145,15 @@ export function buildFullPackage(db: Database.Database, projectId: string, expor
     .prepare('SELECT research, extensions, history, changes FROM mapping_import_archive WHERE project_id=?')
     .get(projectId) as { research: string; extensions: string; history: string; changes: string } | undefined;
   const effectiveResearch = research === undefined ? (archived ? (JSON.parse(archived.research) as unknown) : null) : research ?? null;
-  const extensions = archived ? (JSON.parse(archived.extensions) as unknown) ?? {} : {};
+  const extensions = archived ? (JSON.parse(archived.extensions) as JsonRecord | null) ?? {} : {};
+  if (organizeTasks === null) delete extensions.forkwiseOrganize;
+  else if (organizeTasks.length) {
+    const previous = extensions.forkwiseOrganize;
+    extensions.forkwiseOrganize = [
+      ...(Array.isArray(previous) ? previous : previous === undefined ? [] : [previous]),
+      { projectId, tasks: organizeTasks },
+    ];
+  }
   // 旧历史只作为不可执行的归档随包保留；重导出不再用活表覆盖它。
   const archive = archived
     ? {

@@ -24,6 +24,7 @@ export function CardMenu({
   blocked,
   onEdit,
   onBody,
+  onAI,
   onDelete,
   onRemoveFromGroup,
   onAppearance,
@@ -35,12 +36,13 @@ export function CardMenu({
   value: Appearance;
   onEdit: () => void;
   onBody: () => void;
+  onAI: () => void;
   onDelete: () => void;
   onRemoveFromGroup?: (() => void) | undefined;
   onAppearance: (value: Appearance) => void;
   layer?: LayerMenuProps | undefined;
 }) {
-  const [open, setOpen] = useState<"外观" | "AI" | "更多" | null>(null);
+  const [open, setOpen] = useState<"外观" | "更多" | null>(null);
   const [hint, setHint] = useState<string | null>(null);
   const toolbar = useRef<HTMLDivElement>(null),
     popup = useRef<HTMLDivElement>(null);
@@ -174,8 +176,9 @@ export function CardMenu({
           <span className="card-icon-wrap" key={name}>
             <button
               aria-label={name}
-              aria-expanded={name === "写字板" ? undefined : open === name}
-              aria-pressed={name === "写字板" ? undefined : open === name}
+              aria-haspopup={name === "AI" ? "dialog" : undefined}
+              aria-expanded={name === "写字板" || name === "AI" ? undefined : open === name}
+              aria-pressed={name === "写字板" || name === "AI" ? undefined : open === name}
               aria-describedby={
                 hint === name ? `hint-${card.id}-${name}` : undefined
               }
@@ -188,6 +191,11 @@ export function CardMenu({
                 if (name === "写字板") {
                   close(false);
                   onBody();
+                  return;
+                }
+                if (name === "AI") {
+                  close(false);
+                  onAI();
                   return;
                 }
                 trigger.current = e.currentTarget;
@@ -257,8 +265,6 @@ export function CardMenu({
                 显示正文预览
               </label>
             </>
-          ) : open === "AI" ? (
-            <p>AI 整理与查证尚未接入。此入口不会发送材料。</p>
           ) : (
             <>
               <button

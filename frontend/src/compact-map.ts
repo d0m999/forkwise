@@ -105,6 +105,7 @@ export async function readCompactMap(
       throw new Error("正文版本与地图身份不一致，请重新读取");
     cards.push({
       id: item.id,
+      ...(item.aiOrigin ? { aiOrigin: item.aiOrigin } : {}),
       title: item.title,
       versionId: item.versionId,
       item: item.item,

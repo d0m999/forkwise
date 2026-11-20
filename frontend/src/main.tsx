@@ -103,6 +103,7 @@ import { alignMove, type Guide, type Position } from "./canvas-geometry";
 import { useCardResize } from "./card-resize";
 import { InlineTitle } from "./inline-title";
 import { CardMenu } from "./card-menu";
+import { OrganizeDialog } from "./organize-dialog";
 import { bodyPreviewText, useCardPresentation } from "./card-presentation";
 import { useCardLayoutSave } from "./card-layout-save";
 import { useAppearanceSave, type AppearanceInput } from "./appearance-save";
@@ -133,6 +134,7 @@ type CardData = {
   onFinish: () => void;
   onEdit: () => void;
   onBody: () => void;
+  onAI: () => void;
   onOpenAttachment: (assetId: string) => void;
   onRemoveAttachment: (attachmentId: string) => void;
   onAddAttachment: (file: File) => void;
@@ -184,6 +186,7 @@ function ThoughtCard({ data, selected }: NodeProps<Node<CardData>>) {
           blocked={data.historyBlocked}
           onEdit={data.onEdit}
           onBody={data.onBody}
+          onAI={data.onAI}
           onDelete={data.onDelete}
           onRemoveFromGroup={data.onRemoveFromGroup}
           onAppearance={data.onAppearance}
@@ -227,6 +230,9 @@ function ThoughtCard({ data, selected }: NodeProps<Node<CardData>>) {
           {data.title || "未命名卡片"}
         </button>
       )}
+      {data.card.aiOrigin && <span className="card-ai-origin">
+        {data.card.aiOrigin.mode === 'simulate' ? '模拟整理' : 'AI 候选'}
+      </span>}
       <CardAttachmentList card={data.card} blocked={data.historyBlocked} onOpen={data.onOpenAttachment} onRemove={data.onRemoveAttachment} onAdd={data.onAddAttachment} />
       <CardTagSummary card={data.card} tags={data.tags} onOpen={data.onBody} />
       {text && data.appearanceValue.showPreview && (
@@ -327,6 +333,7 @@ function Workspace() {
     Record<string, { width: number; height: number }>
   >({});
   const [projects, setProjects] = useState<Project[]>([]);
+  const [organizing, setOrganizing] = useState<{ projectId: string; source?: Card } | null>(null);
   const authority = useRef<ProjectState | null>(null);
   const [selectedConnectors, setSelectedConnectors] = useState<string[]>([]);
   const selectedFrameIds = frameSelection?.projectId === state?.project.id && frameSelection?.generation === canvasSelection.generation()
@@ -481,7 +488,7 @@ function Workspace() {
         const deletion = [...timeline.undo].reverse().find(a => deletesCard(a, saved.cardId));
         const target = deletion ?? timeline.redo.at(-1);
         const eligible = timeline.revision === latest.project.revision && target &&
-          (deletion ? timeline.undo.at(-1)?.id === target.id : target.target.id === saved.cardId && ["thought.create", "thought.delete"].includes(target.label));
+          (deletion ? timeline.undo.at(-1)?.id === target.id : target.target.id === saved.cardId && ["thought.create", "organize.add", "thought.delete"].includes(target.label));
         setDeletedRecovery({
           projectId: saved.projectId,
           cardId: saved.cardId,
@@ -740,7 +747,7 @@ function Workspace() {
       if (event.isComposing || event.keyCode === 229 || composition.current)
         return;
       const target = event.target as HTMLElement;
-      if (target.closest("dialog.project-search, dialog.shape-appearance-dialog")) return;
+      if (target.closest("dialog.project-search, dialog.shape-appearance-dialog, dialog.organize-dialog")) return;
       // 导入对话框是模态表单，不是原生 <dialog>：打开期间画布动作历史一律不动。
       // 这里直接返回、不 preventDefault，名称输入框的原生撤销照常生效。
       if (importDialogOpen()) return;
@@ -821,7 +828,7 @@ function Workspace() {
         if (
           !binding.removalActionId &&
           timeline?.revision === value.project.revision &&
-          removed && (deletion || ["thought.create", "thought.delete"].includes(removed.label) && removed.target.id === binding.card.id)
+          removed && (deletion || ["thought.create", "organize.add", "thought.delete"].includes(removed.label) && removed.target.id === binding.card.id)
         )
           { binding.removalActionId = removed.id; binding.restoreDirection = deletion ? "undo" : "redo"; }
         if (composition.current) compose(false);
@@ -1293,7 +1300,7 @@ function Workspace() {
         event.keyCode === 229 ||
         composition.current ||
         (event.target as HTMLElement).closest(
-          "input, textarea, [contenteditable=true]",
+          "input, textarea, [contenteditable=true], dialog.organize-dialog",
         )
       )
         return;
@@ -2926,6 +2933,18 @@ function Workspace() {
       },
       onEdit: () => void editCard(card.id, "title"),
       onBody: () => void editCard(card.id, "body"),
+      onAI: () => {
+        const current = authority.current;
+        const source = current?.cards.find(item => item.id === card.id);
+        if (!current || !source || composition.current || busy || historyBlocked) return;
+        void (async () => {
+          if (!(await flush())) return;
+          const saved = authority.current?.cards.find(item => item.id === source.id);
+          if (saved && authority.current?.project.id === current.project.id) {
+            setOrganizing({ projectId: current.project.id, source: saved });
+          }
+        })();
+      },
       onOpenAttachment: (assetId) => {
         const projectId = authority.current?.project.id;
         if (!projectId) return;
@@ -3051,6 +3070,11 @@ function Workspace() {
           {syncNotice}
         </div>
       )}
+      {organizing && organizing.projectId === state?.project.id &&
+        <OrganizeDialog projectId={organizing.projectId} {...(organizing.source ? { source: organizing.source } : {})}
+          cards={state.cards}
+          close={() => setOrganizing(null)}
+          onAdded={async () => { await refresh(organizing.projectId); }} />}
       <header className="topbar">
         {state && <ProjectSearch key={state.project.id} projectId={state.project.id} revision={state.project.revision} tags={state.tags ?? []} cards={state.cards} onOpen={openSearch} disabled={busy || historyBlocked} />}
         <button
@@ -3128,6 +3152,8 @@ function Workspace() {
               {pinned ? "取消固定" : "固定"}
             </button>
           </div>
+          {state && <button onClick={() => setOrganizing({ projectId: state.project.id })}
+            disabled={busy || historyBlocked} aria-haspopup="dialog">AI 整理记录</button>}
           {projects.map((project) => (
             <button
               key={project.id}

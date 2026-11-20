@@ -89,7 +89,9 @@ export function duplicatePlan(state: ProjectState, selection: CanvasSelection, c
 }
 function freezeObject(value: Located): FrozenObject {
   const base = { sourceId: value.value.id, itemId: value.value.item.id, stack: value.value.item.createdOrder ?? 0, pose: structuredClone(value.value.item.pose) };
-  if (value.kind === 'card') return { ...base, kind: 'card', title: value.value.title, blocks: structuredClone(value.value.body.blocks), tagIds: value.value.cardTags ? [...value.value.cardTags.tagIds] : null, appearance: value.value.appearance ? { titleColor: value.value.appearance.titleColor, showPreview: value.value.appearance.showPreview } : null, ...(value.value.item.heightPolicy ? { heightPolicy: structuredClone(value.value.item.heightPolicy) } : {}), ...(value.value.attachments?.items.length ? { attachments: value.value.attachments.items.map(item => ({ id: item.id, assetId: item.assetId, name: item.name })) } : {}) };
+  if (value.kind === 'card') return { ...base, kind: 'card', title: value.value.title, blocks: structuredClone(value.value.body.blocks),
+    ...(value.value.aiOrigin ? { aiOrigin: { mode: value.value.aiOrigin.mode } } : {}),
+    tagIds: value.value.cardTags ? [...value.value.cardTags.tagIds] : null, appearance: value.value.appearance ? { titleColor: value.value.appearance.titleColor, showPreview: value.value.appearance.showPreview } : null, ...(value.value.item.heightPolicy ? { heightPolicy: structuredClone(value.value.item.heightPolicy) } : {}), ...(value.value.attachments?.items.length ? { attachments: value.value.attachments.items.map(item => ({ id: item.id, assetId: item.assetId, name: item.name })) } : {}) };
   return { ...base, kind: value.kind, content: structuredClone(value.value.content) } as FrozenObject;
 }
 export function captureClipboard(state: ProjectState, selection: CanvasSelection, connectorIds: string[], frameIds: string[] = []) {

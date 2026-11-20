@@ -3,6 +3,7 @@ import type { MediaAsset, ImageAsset } from '../../backend/src/mapping/media';
 import type { CutStateView } from '../../backend/src/mapping/cut-contracts';
 import type { ImportPreview } from '../../backend/src/mapping/package-import';
 import type { CanvasShape } from '../../backend/src/mapping/shape-contracts';
+import type { OrganizeRequest, OrganizeSummary, OrganizeTask } from '../../backend/src/mapping/organize-contracts';
 import type {
   CardIdentity,
   Command,
@@ -61,7 +62,22 @@ export function missingImageSizeMessage(error: unknown): string | null {
 function readMediaAsset(projectId: string, id: string) {
   return request<MediaAsset>(`/projects/${encodeURIComponent(projectId)}/assets/${encodeURIComponent(id)}`);
 }
+function organizePath(projectId: string) {
+  return `/projects/${encodeURIComponent(projectId)}/organize`;
+}
 export const api = {
+  organizeStatus: (projectId: string) => request<{ model: string | null }>(`${organizePath(projectId)}/status`),
+  organizeList: (projectId: string, cardId?: string) => request<OrganizeSummary[]>(cardId
+    ? `/projects/${encodeURIComponent(projectId)}/cards/${encodeURIComponent(cardId)}/organize/tasks`
+    : `${organizePath(projectId)}/tasks`),
+  organizeStart: (projectId: string, input: OrganizeRequest) =>
+    request<OrganizeTask>(`${organizePath(projectId)}/tasks`, input),
+  organizeTask: (projectId: string, taskId: string) =>
+    request<OrganizeTask>(`${organizePath(projectId)}/tasks/${encodeURIComponent(taskId)}`),
+  organizeRetry: (projectId: string, taskId: string, attempt: number, requestId: string) =>
+    request<OrganizeTask>(`${organizePath(projectId)}/tasks/${encodeURIComponent(taskId)}/retry`, { attempt, requestId }),
+  organizeCancel: (projectId: string, taskId: string, attempt: number) =>
+    request<OrganizeTask>(`${organizePath(projectId)}/tasks/${encodeURIComponent(taskId)}/cancel`, { attempt }),
   searchState: (projectId: string) => request<SearchStateView>(`/projects/${encodeURIComponent(projectId)}/search-state`),
   search: (projectId: string, query: Omit<SearchQuery, "type" | "projectId">) =>
     request<SearchResult>(`/projects/${encodeURIComponent(projectId)}/search`, query),

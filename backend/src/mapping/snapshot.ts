@@ -258,6 +258,7 @@ export function pasteCanvas(db: Database.Database, command: Paste): SnapshotWrit
       const pose = shift(value.pose, translation.x, translation.y);
       const after: Card = {
         id: value.copyId, title: value.title, versionId: randomUUID(),
+        ...(value.aiOrigin ? { aiOrigin: { mode: value.aiOrigin.mode } } : {}),
         body: { id: randomUUID(), versionId: randomUUID(), blocks: remapBlocks(value.blocks as Block[]) },
         item: { id: randomUUID(), versionId: randomUUID(), createdOrder, pose, ...(value.heightPolicy ? { heightPolicy: { manualHeight: value.heightPolicy.manualHeight, necessaryHeight: value.heightPolicy.necessaryHeight, ...(value.heightPolicy.previewFloor !== undefined ? { previewFloor: value.heightPolicy.previewFloor } : {}) } } : {}) },
       };

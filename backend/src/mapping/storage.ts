@@ -28,6 +28,7 @@ import { initializeVersions } from './versions.js';
 import { initializeTags } from './tags.js';
 import { initializeSearchState } from './search-state.js';
 import { initializeCuts } from './cut.js';
+import { initializeOrganize } from './organize-store.js';
 
 const WORKSPACE_DATABASE_FILENAME = 'workspace.sqlite';
 const workspaceWalFilename = `${WORKSPACE_DATABASE_FILENAME}-wal`;
@@ -155,6 +156,7 @@ export function openMapping(directory: string, options: CommitOptions = {}): Map
     initializeAttachments(db);
     initializeFrames(db);
     initializeCuts(db);
+    initializeOrganize(db);
     return new Mapping(db, options);
   } catch (error) {
     db.close();

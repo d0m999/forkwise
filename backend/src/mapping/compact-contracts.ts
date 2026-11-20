@@ -51,6 +51,7 @@ export const CompactQuerySchema = z.discriminatedUnion('view', [
 ]);
 export type CompactQuery = z.input<typeof CompactQuerySchema>;
 export interface CardIndex {
+  aiOrigin?: Card['aiOrigin'];
   cardTags?: Card['cardTags'];
   attachments?: { count: number; id: string; versionId: string; items: { id: string; assetId: string; name: string }[] };
   id: string;

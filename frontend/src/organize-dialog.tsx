@@ -1,0 +1,246 @@
+import { useLayoutEffect, useEffect, useRef, useState } from 'react';
+import { api, MappingError, type Card, type Command } from './api';
+import type { OrganizeRequest, OrganizeSummary, OrganizeTask } from '../../backend/src/mapping/organize-contracts';
+
+const states: Record<OrganizeTask['state'], string> = {
+  running: '正在整理', succeeded: '可以审阅', partial: '部分完成', failed: '整理失败',
+  cancelled: '已取消', interrupted: '运行已中断',
+};
+const modeName = (mode: OrganizeTask['mode']) => mode === 'real' ? '本机模型' : '模拟整理';
+
+export function OrganizeDialog({ projectId, source, cards, close, onAdded }: {
+  projectId: string;
+  source?: Card;
+  cards: Card[];
+  close: () => void;
+  onAdded: () => Promise<void>;
+}) {
+  const dialog = useRef<HTMLDialogElement>(null);
+  const [title, setTitle] = useState(false);
+  const [selected, setSelected] = useState<string[]>([]);
+  const [model, setModel] = useState<string | null>();
+  const [history, setHistory] = useState<OrganizeSummary[]>([]);
+  const [task, setTask] = useState<OrganizeTask | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const startRequest = useRef<{ key: string; id: string }>(null);
+  const addRequest = useRef<{ key: string; command: Extract<Command, { type: 'organize.add' }> }>(null);
+  const retryRequest = useRef<{ key: string; id: string }>(null);
+  const current = cards.find(card => card.id === (task?.cardId ?? source?.id));
+  const blocks = source?.body.blocks.filter(block => block.type === 'text' && block.text?.trim()) ?? [];
+  const chosen = blocks.filter(block => selected.includes(block.id));
+  const length = (title ? source?.title.length ?? 0 : 0) + chosen.reduce((count, block) => count + block.text!.length, 0);
+  const freshness = !current ? 'deleted' : task
+    ? current.versionId === task.input.thoughtVersionId && current.body.versionId === task.input.bodyVersionId ? task.freshness : 'changed'
+    : current.versionId === source?.versionId && current.body.versionId === source.body.versionId ? 'current' : 'changed';
+  const stale = !!(source || task) && freshness !== 'current';
+
+  useLayoutEffect(() => {
+    const element = dialog.current;
+    element?.showModal();
+    return () => element?.close();
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    void Promise.all([api.organizeStatus(projectId), api.organizeList(projectId, source?.id)]).then(async ([status, list]) => {
+      if (!active) return;
+      setHistory(list);
+      const latest = list[0] ? await api.organizeTask(projectId, list[0].id) : null;
+      if (!active) return;
+      setModel(status.model);
+      setTask(previous => previous ?? latest);
+    }).catch(() => {
+      if (active) setError('无法读取整理设置和任务，请关闭后重新打开');
+    });
+    return () => { active = false; };
+  }, [projectId, source?.id]);
+
+  useEffect(() => {
+    if (task?.state !== 'running' || busy) return;
+    let active = true;
+    let timer: ReturnType<typeof setTimeout>;
+    const poll = async () => {
+      try {
+        const next = await api.organizeTask(projectId, task.id);
+        if (!active) return;
+        setTask(next);
+        setError('');
+        if (next.state !== 'running') return;
+      } catch {
+        if (!active) return;
+        setError('暂时无法读取进度，正在重新连接');
+      }
+      timer = setTimeout(() => void poll(), 650);
+    };
+    timer = setTimeout(() => void poll(), 200);
+    return () => { active = false; clearTimeout(timer); };
+  }, [projectId, task?.id, task?.attempt, task?.state, busy]);
+
+  async function start(mode: OrganizeRequest['mode']) {
+    if (!source) return;
+    const input = {
+      mode, cardId: source.id, thoughtVersionId: source.versionId, bodyVersionId: source.body.versionId,
+      includeTitle: title, blockIds: chosen.map(block => block.id),
+    };
+    const key = JSON.stringify(input);
+    if (startRequest.current?.key !== key) startRequest.current = { key, id: crypto.randomUUID() };
+    setBusy(true);
+    setError('');
+    try {
+      const next = await api.organizeStart(projectId, { requestId: startRequest.current.id, ...input });
+      setTask(next);
+      setHistory(list => [next, ...list.filter(item => item.id !== next.id)]);
+      startRequest.current = null;
+    } catch (cause) {
+      setError(cause instanceof MappingError ? cause.message : '任务回执未确认，可以按相同范围重试');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function change(action: 'retry' | 'cancel') {
+    if (!task) return;
+    setBusy(true);
+    setError('');
+    try {
+      if (action === 'retry') {
+        const key = `${task.id}/${task.attempt}`;
+        if (retryRequest.current?.key !== key) retryRequest.current = { key, id: crypto.randomUUID() };
+        setTask(await api.organizeRetry(projectId, task.id, task.attempt, retryRequest.current.id));
+      } else {
+        setTask(await api.organizeCancel(projectId, task.id, task.attempt));
+      }
+    } catch (cause) {
+      setError(cause instanceof MappingError ? cause.message : '未确认操作结果，请重试');
+      if (cause instanceof MappingError && cause.code === 'ORGANIZE_ATTEMPT_CHANGED')
+        void api.organizeTask(projectId, task.id).then(setTask, () => {});
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function add() {
+    if (!task || !current) return;
+    const key = `${task.id}/${task.attempt}`;
+    if (addRequest.current?.key !== key) {
+      addRequest.current = { key, command: {
+        commandId: crypto.randomUUID(), projectId, type: 'organize.add', expected: null,
+        payload: { taskId: task.id, attempt: task.attempt,
+          x: current.item.pose.x + current.item.pose.width + 24, y: current.item.pose.y },
+      } };
+    }
+    setError('');
+    setBusy(true);
+    try {
+      await api.execute(addRequest.current.command);
+      setTask({ ...task, applied: true, candidateOnCanvas: true });
+      await onAdded();
+    } catch (cause) {
+      setError(cause instanceof MappingError ? cause.message : '未确认画布更新，请重试或重新打开项目核对');
+      if (cause instanceof MappingError && ['ORGANIZE_SOURCE_STALE', 'ORGANIZE_RESULT_UNAVAILABLE'].includes(cause.code))
+        void api.organizeTask(projectId, task.id).then(setTask, () => {});
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return <dialog className="organize-dialog" aria-labelledby="organize-heading" ref={dialog}
+    onCancel={event => { event.preventDefault(); if (!busy) close(); }}>
+    <header>
+      <div>
+        <h2 id="organize-heading">{source ? 'AI 整理' : 'AI 整理记录'}</h2>
+        {source && <p className="organize-muted">{source.title || '未命名卡片'}</p>}
+      </div>
+      <button type="button" disabled={busy} onClick={close} aria-label="关闭 AI 整理">关闭</button>
+    </header>
+    <div className="organize-content">
+      {stale && <p role="status">{freshness === 'deleted' ? '原卡已删除，仍可查看旧结果。' : '原卡内容已更新。关闭后重新打开，可选择当前内容。'}</p>}
+      {error && <p role="alert" className="organize-error">{error}</p>}
+      {history.length > 0 && <label className="organize-history">整理记录
+        <select value={task?.id ?? ''} disabled={busy} onChange={event => {
+          const id = event.currentTarget.value;
+          setError('');
+          if (!id) { setTask(null); return; }
+          setBusy(true);
+          void api.organizeTask(projectId, id).then(setTask, () => setError('无法读取该任务，请重试')).finally(() => setBusy(false));
+        }}>
+          <option value="" disabled={!source}>{source ? '新建整理' : '选择任务'}</option>
+          {history.map(item => <option key={item.id} value={item.id}>
+            {modeName(item.mode)} {new Date(item.createdAt).toLocaleString()}{!source && ` · ${cards.find(card => card.id === item.cardId)?.title || '原卡无标题或已删除'}`}
+          </option>)}
+        </select>
+      </label>}
+      {!task && source ? <>
+        <fieldset disabled={stale || busy}>
+          <legend>选择本次处理的内容</legend>
+          {source.title.trim() && <label><input type="checkbox" checked={title} onChange={event => setTitle(event.currentTarget.checked)} />
+            <span><strong>卡片标题</strong><span>{source.title}</span></span>
+          </label>}
+          {blocks.map((block, index) => <label key={block.id}>
+            <input type="checkbox" checked={selected.includes(block.id)} aria-label={`段落 ${index + 1}`}
+              onChange={event => {
+                const checked = event.currentTarget.checked;
+                setSelected(previous => checked ? [...previous, block.id] : previous.filter(id => id !== block.id));
+              }} />
+            <span><strong>段落 {index + 1}</strong><span>{block.text}</span></span>
+          </label>)}
+          {!source.title.trim() && blocks.length === 0 && <p>请先给这张卡添加标题或文字段落。</p>}
+        </fieldset>
+        <p className="organize-muted">本次仅处理勾选的标题与文字段落。{model ? `已配置本机模型 ${model}。` : model === null ? '当前未配置本机真实模型。' : '正在读取模型设置。'}</p>
+        {length > 24_000 && <p role="alert">选中的文字超过 24,000 字符，请减少范围。</p>}
+      </> : task ? <>
+        <p role="status" className="organize-status"><strong>{modeName(task.mode)}</strong> {states[task.state]}{task.applied
+          ? task.candidateOnCanvas ? '，已添加为新卡' : '，新卡已撤销或删除'
+          : ''}</p>
+        {task.error && <p role="alert" className="organize-error">{task.error}</p>}
+        {task.output && task.outputAttempt !== task.attempt && <p className="organize-muted">下方显示第 {task.outputAttempt} 次的结果。</p>}
+        {task.output?.candidate && <article className="organize-result">
+          <h3>{task.output.candidate.title}</h3>
+          <p>{task.output.candidate.text}</p>
+        </article>}
+        {!!task.output?.gaps.length && <section aria-label="资料缺口">
+          <h3>资料缺口</h3>
+          <ul>{task.output.gaps.map((gap, index) => <li key={index}>{gap}</li>)}</ul>
+        </section>}
+        <details>
+          <summary>输入范围与用量</summary>
+          <p>{task.input.title === null ? '未选标题' : `标题：${task.input.title}`}，选了 {task.input.blocks.length} 个段落，另有 {task.input.omittedBlockCount} 个块未处理。</p>
+          {task.input.blocks.map(block => <p className="organize-trace" key={block.id}>{block.text}</p>)}
+          <p className="organize-trace">标题版本 {task.input.thoughtVersionId}<br />正文版本 {task.input.bodyVersionId}<br />任务 {task.id}</p>
+          {task.mode === 'simulate' ? <p>模拟在工作台中生成，无模型用量。</p> : <>
+            <p>模型 {task.model}。费用未知。</p>
+            <ul>{task.attempts.map(attempt => <li key={attempt.number}>
+              第 {attempt.number} 次，{new Date(attempt.requestedAt).toLocaleString()}，{states[attempt.state]}
+              {attempt.error && <p>{attempt.error}</p>}
+              {attempt.output && attempt.number !== task.outputAttempt && <details>
+                <summary>查看这次结果</summary>
+                {attempt.output.candidate && <p className="organize-trace">{attempt.output.candidate.title}<br />{attempt.output.candidate.text}</p>}
+                {!!attempt.output.gaps.length && <ul>{attempt.output.gaps.map((gap, index) => <li key={index}>{gap}</li>)}</ul>}
+              </details>}
+              {attempt.usage?.modelDigest && <p className="organize-trace">模型摘要 {attempt.usage.modelDigest}</p>}
+              {attempt.usage?.attempts.length ? <ul>{attempt.usage.attempts.map((call, index) =>
+                <li key={index}>{call.model}，{call.responseReceived === false ? '已发起，用量未返回'
+                  : `输入 ${call.inputTokens ?? '未知'}、输出 ${call.outputTokens ?? '未知'} token`}</li>)}</ul>
+                : attempt.state === 'running' ? '，正在检查模型' : '，未记录模型调用'}
+            </li>)}</ul>
+          </>}
+        </details>
+      </> : <p>{model === undefined ? '正在读取整理记录。' : '还没有整理记录。请从卡片的 AI 入口开始整理。'}</p>}
+    </div>
+    <footer>
+      {task ? <>
+        {task.state === 'running' && <button type="button" disabled={busy} onClick={() => void change('cancel')}>取消任务</button>}
+        {['failed', 'partial', 'cancelled', 'interrupted'].includes(task.state) && !task.applied &&
+          <button type="button" disabled={busy || stale} onClick={() => void change('retry')}>重试整理</button>}
+        {['succeeded', 'partial'].includes(task.state) && task.output?.candidate && !task.applied &&
+          <button type="button" className="primary" disabled={busy || stale} onClick={() => void add()}>添加为新卡</button>}
+      </> : source && <>
+        <button type="button" disabled={busy || stale || !length || length > 24_000 || selected.length > 100 || model === undefined}
+          onClick={() => void start('simulate')}>试用模拟整理</button>
+        <button type="button" className="primary" disabled={busy || stale || !model || !length || length > 24_000 || selected.length > 100}
+          onClick={() => void start('real')}>用本机模型整理</button>
+      </>}
+    </footer>
+  </dialog>;
+}

@@ -8,6 +8,7 @@ import { TITLE_COLORS } from './presentation-values.js';
 import { ShapeContentSchema, ShapePoseSchema } from './shape-contracts.js';
 import { StrokeContentSchema, StrokePoseSchema } from './stroke-contracts.js';
 import { TextContentSchema, TextPoseSchema } from './text-contracts.js';
+import { OrganizeOrigin } from './organize-contracts.js';
 
 const Id = z.string().min(1).max(160);
 const Envelope = { commandId: Id, projectId: Id, placement: FramePlacement.optional() };
@@ -40,6 +41,7 @@ export const PasteObject = z.discriminatedUnion('kind', [
   z.object({
     kind: z.literal('card'), copyId: Id, stack: z.number().finite(),
     title: z.string().max(10000),
+    aiOrigin: OrganizeOrigin.pick({ mode: true }).optional(),
     blocks: z.array(Block).min(1).max(5000),
     tagIds: z.array(Id).max(100).nullable(),
     appearance: Appearance.nullable(),

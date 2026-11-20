@@ -61,6 +61,7 @@ import { AccessService, type Principal } from '../services/access.js';
 import { requireLayoutWrite } from './layout-scope.js';
 import { parseBodyPatch, patchedBlocks, requireContentWrite } from './content-scope.js';
 import { requireThat } from '../domain/errors.js';
+import { OrganizeTasks, type OrganizeModel } from './organize.js';
 import {
   MappingCommand,
   MAX_AGENT_BATCH_POSES,
@@ -79,6 +80,7 @@ import {
 } from './contracts.js';
 
 export interface CommitOptions {
+  organizeModel?: OrganizeModel;
   // Local asset I/O seam for hosts and fault tests; never accepted from HTTP.
   searchAssetReader?: SearchAssetReader;
   compact?: CompactOptions;
@@ -88,6 +90,7 @@ export interface CommitOptions {
 }
 export class Mapping {
   readonly access: AccessService;
+  readonly organize: OrganizeTasks;
   private readonly compact: CompactMaps;
   private readonly searchLibraries: SearchLibraries;
   constructor(
@@ -95,10 +98,12 @@ export class Mapping {
     private readonly options: CommitOptions = {},
   ) {
     this.access = new AccessService(db);
+    this.organize = new OrganizeTasks(db, this.access, options.organizeModel);
     this.compact = new CompactMaps(db, options.compact);
     this.searchLibraries = new SearchLibraries(options.searchAssetReader);
   }
   close() {
+    this.organize.close();
     this.db.close();
   }
 
@@ -219,7 +224,8 @@ export class Mapping {
     return this.db.transaction(() => {
       this.access.validate(actor);
       this.access.project(actor, projectId);
-      return buildFullPackage(this.db, projectId, exportedAt, research);
+      return buildFullPackage(this.db, projectId, exportedAt, research,
+        actor.actor.type === 'human' ? this.organize.archive(projectId) : null);
     })();
   }
 
@@ -279,6 +285,7 @@ export class Mapping {
         if (
           command.type === 'project.create' ||
           command.type === 'project.import' ||
+          command.type === 'organize.add' ||
           isSearchStateCommand(command) ||
           command.type === 'history.undo' ||
           command.type === 'history.redo'
@@ -737,18 +744,21 @@ export class Mapping {
           }));
           changedIds = [command.projectId];
           after = this.project(command.projectId);
-        } else if (command.type === 'thought.create') {
+        } else if (command.type === 'thought.create' || command.type === 'organize.add') {
           const project = this.project(command.projectId);
-          const p = command.payload;
+          const p = command.type === 'thought.create'
+            ? { ...command.payload, aiOrigin: undefined }
+            : { ...this.organize.takeCandidate(project.id, command.payload.taskId, command.payload.attempt), attachment: undefined };
           requireThat(
             !this.db.prepare('SELECT 1 FROM mapping_card_ids WHERE id=?').get(p.id),
             'ID_CONFLICT',
             '身份已使用，请重新创建',
             409,
           );
-          if (p.attachment)
+          const { attachment } = p;
+          if (attachment)
             requireThat(
-              this.db.prepare('SELECT 1 FROM mapping_assets WHERE project_id=? AND id=?').get(project.id, p.attachment.assetId),
+              this.db.prepare('SELECT 1 FROM mapping_assets WHERE project_id=? AND id=?').get(project.id, attachment.assetId),
               'NOT_FOUND',
               '资产不存在于当前项目',
               404,
@@ -756,6 +766,7 @@ export class Mapping {
           const card: Card = {
             id: p.id,
             title: p.title,
+            ...(p.aiOrigin ? { aiOrigin: p.aiOrigin } : {}),
             versionId: randomUUID(),
             body: {
               id: randomUUID(),
@@ -766,19 +777,19 @@ export class Mapping {
               createdOrder: nextCreatedOrder(this.db, project.id, project.revision),
               id: randomUUID(),
               versionId: randomUUID(),
-              pose: { x: p.x, y: p.y, width: 280, height: 160 },
+              pose: { x: command.payload.x, y: command.payload.y, width: 280, height: 160 },
               heightPolicy: {
                 manualHeight: null,
                 necessaryHeight: 0,
                 previewFloor: p.text.length ? DEFAULT_PREVIEW_HEIGHT : 0,
               },
             },
-            ...(p.attachment
+            ...(attachment
               ? {
                   attachments: {
                     id: `attachments:${p.id}`,
                     versionId: randomUUID(),
-                    items: [{ id: randomUUID(), assetId: p.attachment.assetId, name: p.attachment.name }],
+                    items: [{ id: randomUUID(), assetId: attachment.assetId, name: attachment.name }],
                   },
                 }
               : {}),
@@ -965,7 +976,7 @@ export class Mapping {
           ...[textChange, shapeChange, imageChange, strokeChange].flatMap(v => v?.after && !v.before ? [v.after] : []),
           ...[...(cardLifecycleChanges ?? []), ...(textChanges ?? []), ...(shapeChanges ?? []), ...(imageChanges ?? []), ...(strokeChanges ?? [])].flatMap(v => v.after && !v.before ? [v.after] : []),
         ];
-        if (createdItems.length && ['thought.create', 'text.create', 'text.copy', 'shape.create', 'image.create', 'stroke.create'].includes(command.type)) {
+        if (createdItems.length && ['thought.create', 'organize.add', 'text.create', 'text.copy', 'shape.create', 'image.create', 'stroke.create'].includes(command.type)) {
           const added = updateFrameParents(this.db, command.projectId, createdItems.map(v => ({ id: v.item.id,
             point: { x: v.item.pose.x + v.item.pose.width / 2, y: v.item.pose.y + v.item.pose.height / 2 } })));
           if (added.length) containmentChanges = [...(containmentChanges ?? []), ...added];

@@ -6,6 +6,7 @@ import { ShapeContentImportCheck } from './shape-contracts.js';
 import { StrokeContentImportCheck } from './stroke-contracts.js';
 import { TextContentImportCheck } from './text-contracts.js';
 import { readZip } from './zip-store.js';
+import { OrganizeOrigin } from './organize-contracts.js';
 
 export interface PackageFailure {
   code: string;
@@ -158,6 +159,8 @@ function verifyRecords(mapping: Record<string, unknown>, failures: PackageFailur
     }
     requireString(failures, `${path}.id`, value.id);
     requireString(failures, `${path}.versionId`, value.versionId);
+    if (value.aiOrigin !== undefined && !OrganizeOrigin.safeParse(value.aiOrigin).success)
+      fail(failures, 'RECORD_FIELD', `${path}.aiOrigin`, 'AI origin', 'invalid');
     if (typeof value.title !== 'string') fail(failures, 'RECORD_FIELD', `${path}.title`, 'string', value.title);
     if (!isRecord(value.body)) fail(failures, 'RECORD_FIELD', `${path}.body`, 'body object', value.body);
     else {

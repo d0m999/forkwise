@@ -18,6 +18,7 @@ import { z } from 'zod';
 import { TITLE_COLORS } from './presentation-values.js';
 import { bodyText } from './body-text.js';
 import { SearchConditionsSchema, type SearchStateView } from './search-contracts.js';
+import type { OrganizeOrigin } from './organize-contracts.js';
 const Id = z.string().min(1).max(160);
 const Name = z.string().trim().min(1).max(240);
 export const MAX_AGENT_BATCH_POSES = 200;
@@ -249,6 +250,17 @@ export const MappingCommand = z.discriminatedUnion('type', [
         .strict(),
     })
     .strict(),
+  z.object({
+    ...Envelope,
+    type: z.literal('organize.add'),
+    expected: z.null(),
+    payload: z.object({
+      taskId: Id,
+      attempt: z.int().positive(),
+      x: z.number().finite(),
+      y: z.number().finite(),
+    }).strict(),
+  }).strict(),
 ]);
 export type Command = z.infer<typeof MappingCommand>;
 export interface Project {
@@ -258,6 +270,7 @@ export interface Project {
   revision: number;
 }
 export interface Card {
+  aiOrigin?: OrganizeOrigin;
   cardTags?: { id: string; versionId: string; tagIds: string[] };
   attachments?: CardAttachmentSet;
   id: string;

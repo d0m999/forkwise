@@ -121,6 +121,22 @@ export function createWorkspaceApp(
       ),
     ),
   );
+  app.get('/api/mapping/projects/:id/organize/status', (c) =>
+    c.json(mapping.organize.status(c.req.param('id'), c.get('principal'))));
+  app.get('/api/mapping/projects/:id/cards/:cardId/organize/tasks', (c) =>
+    c.json(mapping.organize.list(c.req.param('id'), c.req.param('cardId'), c.get('principal'))));
+  app.get('/api/mapping/projects/:id/organize/tasks', (c) =>
+    c.json(mapping.organize.list(c.req.param('id'), undefined, c.get('principal'))));
+  app.post('/api/mapping/projects/:id/organize/tasks', async (c) => {
+    const { task, created } = mapping.organize.start(c.req.param('id'), await c.req.json(), c.get('principal'));
+    return c.json(task, created ? 201 : 200);
+  });
+  app.get('/api/mapping/projects/:id/organize/tasks/:taskId', (c) =>
+    c.json(mapping.organize.get(c.req.param('id'), c.req.param('taskId'), c.get('principal'))));
+  app.post('/api/mapping/projects/:id/organize/tasks/:taskId/retry', async (c) =>
+    c.json(mapping.organize.retry(c.req.param('id'), c.req.param('taskId'), await c.req.json(), c.get('principal'))));
+  app.post('/api/mapping/projects/:id/organize/tasks/:taskId/cancel', async (c) =>
+    c.json(mapping.organize.cancel(c.req.param('id'), c.req.param('taskId'), await c.req.json(), c.get('principal'))));
   app.get('/api/mapping/projects/:id/assets/:assetId', (c) =>
     c.json(mapping.read({type:'asset',projectId:c.req.param('id'),id:c.req.param('assetId')},c.get('principal'))));
   app.get('/api/mapping/projects/:id/assets/:assetId/content', (c) => {
