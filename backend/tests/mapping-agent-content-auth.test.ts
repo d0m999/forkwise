@@ -1,8 +1,8 @@
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, relative } from 'node:path';
 import { expect, it } from 'vitest';
 import { command, contentFixture, patch, type ContentFixture } from './fixtures/agent-content.js';
 
@@ -156,27 +156,33 @@ it.each([
   expect(f.mapping.access.db.prepare('SELECT count(*) AS n FROM sessions').get()).toEqual(before);
 });
 
+function bodyGrantCli(f: ContentFixture) {
+  writeFileSync(join(f.directory, 'local-access.json'), JSON.stringify({ url: `${f.origin}/#token=${f.humanToken}` }), { mode: 0o600 });
+  const card = f.card();
+  const selection = [
+    '--card', card.id, '--block', 'paragraph', '--version', card.body.versionId, '--start', '0', '--end', '1',
+  ];
+  return (out: string, includeSelection = true) => spawnSync(process.execPath, [
+    '--import', 'tsx', 'scripts/issue-body-grant.ts', '--data-dir', f.directory, '--project', 'p',
+    ...(includeSelection ? selection : []), '--out', out,
+  ], { encoding: 'utf8', timeout: 5_000 });
+}
+
 it('签发 CLI 要求显式选区，拒绝在工作台目录及其路径别名内输出令牌', async () => {
   const f = await contentFixture();
-  writeFileSync(join(f.directory, 'local-access.json'), JSON.stringify({ url: `${f.origin}/#token=${f.humanToken}` }), { mode: 0o600 });
+  const issue = bodyGrantCli(f);
   const temp = mkdtempSync(join(tmpdir(), 'forkwise-body-cli-'));
   try {
     const alias = join(temp, 'workspace');
     symlinkSync(f.directory, alias, 'dir');
-    const args = ['--data-dir', f.directory, '--project', 'p'];
     const card = f.card();
-    const selection = [
-      '--card', card.id, '--block', 'paragraph', '--version', card.body.versionId, '--start', '0', '--end', '1',
-    ];
     const baseline = f.mapping.access.grants();
-    for (const { out, flags, message } of [
-      { out: join(temp, 'missing-scope'), flags: [], message: '--card' },
-      { out: join(f.directory, 'grant'), flags: selection, message: '工作台数据目录之外' },
-      { out: join(alias, 'grant'), flags: selection, message: '工作台数据目录之外' },
+    for (const { out, includeSelection, message } of [
+      { out: join(temp, 'missing-scope'), includeSelection: false, message: '--card' },
+      { out: join(f.directory, 'grant'), message: '工作台数据目录之外' },
+      { out: join(alias, 'grant'), message: '工作台数据目录之外' },
     ]) {
-      const result = spawnSync(process.execPath, [
-        '--import', 'tsx', 'scripts/issue-body-grant.ts', ...args, ...flags, '--out', out,
-      ], { encoding: 'utf8', timeout: 5_000 });
+      const result = issue(out, includeSelection);
       expect(result.status, result.error?.message ?? result.stderr).toBe(2);
       expect(result.stderr).toContain(message);
       expect(existsSync(out)).toBe(false);
@@ -184,6 +190,64 @@ it('签发 CLI 要求显式选区，拒绝在工作台目录及其路径别名�
     }
     await f.restart();
     expect(f.card()).toEqual(card);
+  } finally {
+    rmSync(temp, { recursive: true });
+  }
+}, 20_000);
+
+it('签发 CLI 拒绝写入另一工作台的数据目录，另一工作台仍可重开', async () => {
+  const source = await contentFixture();
+  const other = await contentFixture();
+  const issue = bodyGrantCli(source);
+  const temp = mkdtempSync(join(tmpdir(), 'forkwise-body-cli-'));
+  try {
+    const alias = join(temp, 'other-workspace');
+    symlinkSync(other.directory, alias, 'dir');
+    const baseline = source.mapping.access.grants();
+    const card = other.card();
+    for (const out of [join(other.directory, 'grant'), join(alias, 'grant')]) {
+      const result = issue(out);
+      expect(result.status, result.error?.message ?? result.stderr).toBe(2);
+      expect(result.stderr).toContain('工作台数据目录之外');
+      expect(existsSync(out)).toBe(false);
+      expect(source.mapping.access.grants()).toEqual(baseline);
+    }
+    await other.restart();
+    expect(other.card()).toEqual(card);
+  } finally {
+    rmSync(temp, { recursive: true });
+  }
+}, 20_000);
+
+it('签发 CLI 按文件系统顺序解析 --out 中的符号链接和上级目录', async () => {
+  const f = await contentFixture();
+  const issue = bodyGrantCli(f);
+  const temp = mkdtempSync(join(tmpdir(), 'forkwise-body-cli-'));
+  try {
+    const destination = join(temp, 'destination');
+    const child = join(destination, 'child');
+    mkdirSync(child, { recursive: true });
+    const alias = join(temp, 'link');
+    symlinkSync(child, alias, 'dir');
+    const out = `${relative(process.cwd(), alias)}/../grant`;
+    const result = issue(out);
+    expect(result.status, result.error?.message ?? result.stderr).toBe(0);
+    expect(existsSync(out)).toBe(true);
+    expect(existsSync(join(temp, 'grant'))).toBe(false);
+    expect(statSync(out).mode & 0o777).toBe(0o600);
+    const token = readFileSync(out, 'utf8').trim();
+    const hash = createHash('sha256').update(token).digest('hex');
+    expect(result.stdout.trim()).toBe(hash.slice(0, 12));
+    const grants = f.mapping.access.grants();
+    const duplicate = issue(out);
+    expect(duplicate.status, duplicate.error?.message ?? duplicate.stderr).toBe(1);
+    expect(createHash('sha256').update(readFileSync(out, 'utf8').trim()).digest('hex')).toBe(hash);
+    expect(f.mapping.access.grants()).toEqual(grants);
+    const directoryOut = `${out}-directory`;
+    const invalid = issue(`${directoryOut}/`);
+    expect(invalid.status, invalid.error?.message ?? invalid.stderr).toBe(2);
+    expect(existsSync(directoryOut)).toBe(false);
+    expect((await f.post(patch(f.card().body.versionId), token)).status).toBe(200);
   } finally {
     rmSync(temp, { recursive: true });
   }

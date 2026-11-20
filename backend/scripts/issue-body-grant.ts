@@ -1,9 +1,9 @@
 import { createHash, randomBytes } from 'node:crypto';
-import { closeSync, openSync, readFileSync, realpathSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
-import { basename, dirname, resolve } from 'node:path';
+import { closeSync, lstatSync, openSync, readFileSync, realpathSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { basename, dirname, join, resolve, sep } from 'node:path';
 import { parseArgs } from 'node:util';
 import { DomainError, requireThat } from '../src/domain/errors.js';
-import { openMapping } from '../src/mapping/storage.js';
+import { openMapping, WORKSPACE_DATABASE_FILENAME } from '../src/mapping/storage.js';
 import type { ContentDelegation } from '../src/services/access.js';
 
 function issueGrant() {
@@ -39,13 +39,19 @@ function issueGrant() {
     range: { start: Number(start), end: Number(end) },
   };
   const directory = resolve(dataDir);
-  const output = resolve(out);
-  const outputParent = realpathSync(dirname(output));
-  const outputPath = resolve(outputParent, basename(output));
+  requireThat(!out.endsWith(sep), 'INVALID_SCOPE', '--out 必须指向文件', 403);
+  // Native realpath resolves symlinks before traversing subsequent '..' segments.
+  const outputParent = realpathSync.native(dirname(out));
+  const outputPath = join(outputParent, basename(out));
   const workspaceDirectory = statSync(directory);
   const outputDirectory = statSync(outputParent);
+  const isSourceWorkspace =
+    workspaceDirectory.dev === outputDirectory.dev && workspaceDirectory.ino === outputDirectory.ino;
+  // The primary database marks a workspace even without a running server or local-access.json.
+  const hasWorkspaceDatabase =
+    lstatSync(join(outputParent, WORKSPACE_DATABASE_FILENAME), { throwIfNoEntry: false }) !== undefined;
   requireThat(
-    workspaceDirectory.dev !== outputDirectory.dev || workspaceDirectory.ino !== outputDirectory.ino,
+    !isSourceWorkspace && !hasWorkspaceDatabase,
     'INVALID_SCOPE', '请将令牌输出到工作台数据目录之外', 403,
   );
   const localAccess = JSON.parse(readFileSync(resolve(directory, 'local-access.json'), 'utf8')) as { url?: string };

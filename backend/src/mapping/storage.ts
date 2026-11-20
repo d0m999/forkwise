@@ -26,6 +26,10 @@ import { initializeTags } from './tags.js';
 import { initializeSearchState } from './search-state.js';
 import { initializeCuts } from './cut.js';
 
+export const WORKSPACE_DATABASE_FILENAME = 'workspace.sqlite';
+const workspaceWalFilename = `${WORKSPACE_DATABASE_FILENAME}-wal`;
+const workspaceShmFilename = `${WORKSPACE_DATABASE_FILENAME}-shm`;
+
 // Separate from research.sqlite: opening the workspace never runs legacy migrations,
 // activation recovery, background jobs, or retention cleanup.
 export function openMapping(directory: string, options: CommitOptions = {}): Mapping {
@@ -40,16 +44,16 @@ export function openMapping(directory: string, options: CommitOptions = {}): Map
     if (directoryInfo.uid !== process.getuid?.() || (directoryInfo.mode & 0o077) !== 0)
       throw new Error('数据目录必须仅归当前本机账户访问（0700）；原权限未修改');
     const allowed = new Set([
-      'workspace.sqlite',
-      'workspace.sqlite-wal',
-      'workspace.sqlite-shm',
+      WORKSPACE_DATABASE_FILENAME,
+      workspaceWalFilename,
+      workspaceShmFilename,
       'local-access.json',
     ]);
     for (const entry of readdirSync(directory)) {
       const info = lstatSync(join(directory, entry));
-      if (entry === 'workspace.sqlite') existing = true;
+      if (entry === WORKSPACE_DATABASE_FILENAME) existing = true;
       if (entry === 'local-access.json') accessFile = true;
-      if (entry === 'workspace.sqlite-wal' || entry === 'workspace.sqlite-shm') sidecar = true;
+      if (entry === workspaceWalFilename || entry === workspaceShmFilename) sidecar = true;
       if (!allowed.has(entry) || !info.isFile() || info.nlink !== 1)
         throw new Error('数据目录包含旧资料或链接，请使用新的隔离目录');
       if (info.uid !== process.getuid?.() || (info.mode & 0o077) !== 0)
@@ -61,7 +65,7 @@ export function openMapping(directory: string, options: CommitOptions = {}): Map
   if (!existing && sidecar) throw new Error('缺失主库，残留 WAL/SHM 已保留；请先恢复完整副本');
   if (!existing && accessFile) throw new Error('缺失主库，启动凭证原件已保留');
   mkdirSync(directory, { recursive: true, mode: 0o700 });
-  const path = join(directory, 'workspace.sqlite');
+  const path = join(directory, WORKSPACE_DATABASE_FILENAME);
   if (existing) {
     const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
     try {
