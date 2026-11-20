@@ -3,15 +3,23 @@ import { randomUUID } from 'node:crypto';
 import { canonical } from '../domain/canonical.js';
 import { DomainError, requireThat } from '../domain/errors.js';
 import type { AccessService, Principal } from '../services/access.js';
+import { isCardPendingPaste } from './cut.js';
+import { canRestoreCard } from './history.js';
+import { organizeBlockText } from './organize-blocks.js';
+import { canRetryOrganize } from './organize-state.js';
 import { OrganizeStore, type StoredTask } from './organize-store.js';
 import {
   ORGANIZE_MAX_INPUT, OrganizeCancel, OrganizeRequest, OrganizeRetry,
   type OrganizeInput, type OrganizeOutput, type OrganizeSummary, type OrganizeTask, type OrganizeUsage,
 } from './organize-contracts.js';
 
+// Two model calls at 60s each and up to three local preflights at 12s each.
+const ATTEMPT_TIMEOUT_MS = 160_000;
+
 export interface OrganizeModel {
   readonly model: string;
-  generate(job: { taskId: string; attempt: number; input: OrganizeInput }, signal: AbortSignal,
+  resolveDigest(signal: AbortSignal): Promise<string>;
+  generate(job: { taskId: string; attempt: number; input: OrganizeInput; modelDigest: string }, signal: AbortSignal,
     onUsage: (usage: OrganizeUsage) => void):
     Promise<{ result: OrganizeOutput; usage: OrganizeUsage | null }>;
 }
@@ -46,10 +54,19 @@ export class OrganizeTasks {
   private view(projectId: string, task: StoredTask): OrganizeTask {
     const data = structuredClone(task);
     this.expire(data);
-    const { candidateId, deadline, attempts, ...value } = data;
+    const { candidateId, deadline, modelDigest, attempts, ...value } = data;
+    const candidateOnCanvas = value.applied && Boolean(this.store.card(projectId, candidateId));
     return { ...value, attempts: attempts.map(({ retryId, ...attempt }) => attempt),
-      candidateOnCanvas: value.applied && Boolean(this.store.card(projectId, candidateId)),
+      candidateOnCanvas,
+      addAvailable: this.addAvailable(projectId, data, candidateOnCanvas),
       freshness: this.freshness(projectId, task.input) };
+  }
+
+  private addAvailable(projectId: string, task: StoredTask, candidateOnCanvas: boolean): boolean {
+    if (!task.output?.candidate || !['succeeded', 'partial'].includes(task.state)) return false;
+    return !task.applied || (!candidateOnCanvas
+      && !canRestoreCard(this.db, projectId, task.candidateId)
+      && !isCardPendingPaste(this.db, projectId, task.candidateId));
   }
 
   status(projectId: string, actor: Principal) {
@@ -71,33 +88,74 @@ export class OrganizeTasks {
     return this.view(projectId, this.store.get(projectId, id));
   }
 
-  start(projectId: string, raw: unknown, actor: Principal) {
+  private reusableModelTask(projectId: string, request: string, model: string, digest: string) {
+    const current = this.store.forScope(projectId, canonical({ request, model, digest }));
+    if (current) return current;
+    // Legacy keys only named the model. Reuse only a result with a matching observed digest.
+    const legacy = this.store.forScope(projectId, canonical({ request, model }));
+    if (legacy && outputDigest(legacy) === digest) return legacy;
+  }
+
+  async start(projectId: string, raw: unknown, actor: Principal) {
     const input = OrganizeRequest.parse(raw);
     const { requestId, ...selection } = input;
-    const request = canonical({ ...selection, blockIds: [...input.blockIds].sort() });
-    const { task, created } = this.db.transaction(() => {
+    const request = selectionKey(selection);
+    const replay = () => {
       this.authorize(projectId, actor);
       const previous = this.store.request(projectId, requestId);
       if (previous) {
         requireThat(previous.request === request, 'IDEMPOTENCY_MISMATCH', '任务编号已用于不同上下文', 409);
-        return { task: this.store.get(projectId, previous.taskId), created: false };
+        return this.store.get(projectId, previous.taskId);
       }
-      requireThat(input.mode === 'simulate' || this.model, 'ORGANIZE_MODEL_UNCONFIGURED', '真实整理需要配置本机模型', 503);
+    };
+    const before = replay();
+    if (before) return { task: this.view(projectId, before), created: false };
+    const model = input.mode === 'real' ? this.model : undefined;
+    requireThat(input.mode === 'simulate' || model, 'ORGANIZE_MODEL_UNCONFIGURED', '真实整理需要配置本机模型', 503);
+    const freeze = (): OrganizeInput => {
       const source = this.store.card(projectId, input.cardId);
       requireThat(source && source.versionId === input.thoughtVersionId && source.body.versionId === input.bodyVersionId,
         'ORGANIZE_SOURCE_STALE', '原卡已更改或删除，请重新选择要整理的内容', 409);
       const chosen = new Set(input.blockIds);
-      const blocks = source.body.blocks.flatMap(({ id, type, text }) =>
-        chosen.has(id) && type === 'text' && typeof text === 'string' && text.trim() ? [{ id, text }] : []);
-      requireThat(blocks.length === input.blockIds.length && chosen.size === blocks.length,
-        'ORGANIZE_INVALID_SCOPE', '请从当前版本选择有效的文字段落');
+      const blocks = source.body.blocks.flatMap(block => {
+        if (!chosen.has(block.id)) return [];
+        const text = organizeBlockText(block);
+        return text ? [{ id: block.id, text }] : [];
+      });
+      requireThat(blocks.length === input.blockIds.length
+        && chosen.size === blocks.length && new Set(blocks.map(block => block.id)).size === chosen.size,
+        'ORGANIZE_INVALID_SCOPE', '请从当前版本选择有效的正文文字');
       const title = input.includeTitle ? source.title : null;
       const length = (title?.length ?? 0) + blocks.reduce((count, block) => count + block.text.length, 0);
       requireThat((!!title?.trim() || blocks.length > 0) && length <= ORGANIZE_MAX_INPUT,
-        'ORGANIZE_INVALID_SCOPE', '请选择有内容的标题或段落，合计最多 24,000 字符');
-      const model = input.mode === 'real' ? this.model!.model : null;
-      const scope = canonical({ request, model });
-      const cached = this.store.forScope(projectId, scope);
+        'ORGANIZE_INVALID_SCOPE', '请选择有内容的标题或正文块，合计最多 24,000 字符');
+      return {
+        cardId: source.id, thoughtVersionId: source.versionId, bodyVersionId: source.body.versionId,
+        title, blocks, omittedBlockCount: source.body.blocks.length - blocks.length,
+      };
+    };
+    const frozen = freeze();
+    let digest: string | null = null;
+    let preflightError: string | null = null;
+    if (model) {
+      try {
+        digest = await model.resolveDigest(AbortSignal.timeout(12_000));
+      } catch (cause) {
+        preflightError = modelError(cause);
+      }
+    }
+    requireThat(!this.closed, 'ORGANIZE_CLOSED', '工作台正在关闭，请重新打开后重试', 503);
+    const { task, created } = this.db.transaction(() => {
+      const previous = replay();
+      if (previous) return { task: previous, created: false };
+      requireThat(this.freshness(projectId, frozen) === 'current',
+        'ORGANIZE_SOURCE_STALE', '原卡已更改或删除，请重新选择要整理的内容', 409);
+      const scope = model
+        ? canonical({ request, model: model.model, digest, ...(digest === null ? { requestId } : {}) })
+        : canonical({ request, model: null });
+      const cached = model && digest
+        ? this.reusableModelTask(projectId, request, model.model, digest)
+        : this.store.forScope(projectId, scope);
       if (cached) {
         this.store.recordRequest(projectId, requestId, request, cached.id);
         return { task: cached, created: false };
@@ -105,20 +163,19 @@ export class OrganizeTasks {
       const now = new Date().toISOString();
       const task: StoredTask = {
         id: randomUUID(), candidateId: randomUUID(), cardId: input.cardId, mode: input.mode,
-        model,
-        input: {
-          cardId: source.id, thoughtVersionId: source.versionId, bodyVersionId: source.body.versionId,
-          title, blocks, omittedBlockCount: source.body.blocks.length - blocks.length,
-        },
+        model: model?.model ?? null,
+        ...(digest ? { modelDigest: digest } : {}),
+        input: frozen,
         state: 'running', createdAt: now, updatedAt: now, error: null, attempt: 1, output: null, outputAttempt: null,
-        usage: null, applied: false, deadline: Date.now() + 130_000,
+        usage: null, applied: false, deadline: Date.now() + ATTEMPT_TIMEOUT_MS,
         attempts: [{ number: 1, state: 'running', requestedAt: now, finishedAt: null, usage: null, output: null, error: null }],
       };
+      if (preflightError) this.finishAttempt(task, 'failed', null, null, preflightError);
       this.store.create(projectId, scope, task);
       this.store.recordRequest(projectId, requestId, request, task.id);
       return { task, created: true };
     }).immediate();
-    if (created) this.launch(projectId, task);
+    if (created && !preflightError) this.launch(projectId, task, digest);
     return { task: this.view(projectId, task), created };
   }
 
@@ -135,7 +192,7 @@ export class OrganizeTasks {
       requireThat(task.attempt === request.attempt, 'ORGANIZE_ATTEMPT_CHANGED', '任务已更新，请先重新读取', 409);
       requireThat(this.freshness(projectId, task.input) === 'current', 'ORGANIZE_SOURCE_STALE', '原卡已更改或删除，请重新选择整理范围', 409);
       this.expire(task);
-      requireThat(!task.applied && ['failed', 'partial', 'cancelled', 'interrupted'].includes(task.state),
+      requireThat(canRetryOrganize(task),
         'ORGANIZE_NOT_RETRYABLE', '当前任务不能重试', 409);
       requireThat(task.mode === 'simulate' || this.model?.model === task.model, 'ORGANIZE_MODEL_UNCONFIGURED', '请恢复原任务的模型配置，或用当前配置开始新任务', 503);
       task.attempt += 1;
@@ -143,7 +200,7 @@ export class OrganizeTasks {
       task.error = null;
       task.usage = null;
       task.updatedAt = new Date().toISOString();
-      task.deadline = Date.now() + 130_000;
+      task.deadline = Date.now() + ATTEMPT_TIMEOUT_MS;
       task.attempts.push({ number: task.attempt, retryId: request.requestId, state: 'running', requestedAt: task.updatedAt, finishedAt: null, usage: null, output: null, error: null });
       this.store.save(projectId, task);
       return { task, started: true };
@@ -176,14 +233,17 @@ export class OrganizeTasks {
 
   takeCandidate(projectId: string, id: string, attempt: number) {
     const task = this.store.get(projectId, id);
-    requireThat(!task.applied && task.attempt === attempt && ['succeeded', 'partial'].includes(task.state) && task.output?.candidate,
-      'ORGANIZE_RESULT_UNAVAILABLE', '结果已添加、已更新或尚不可添加，请重新审阅', 409);
+    const candidate = task.output?.candidate;
+    requireThat(candidate && task.attempt === attempt
+      && this.addAvailable(projectId, task, task.applied && Boolean(this.store.card(projectId, task.candidateId))),
+      'ORGANIZE_RESULT_UNAVAILABLE', '结果已添加、已有候选可恢复、结果已更新或尚不可添加，请重新审阅', 409);
     requireThat(this.freshness(projectId, task.input) === 'current',
       'ORGANIZE_SOURCE_STALE', '原卡已更改或删除，请重新选择整理范围', 409);
+    if (task.applied) task.candidateId = randomUUID();
     task.applied = true;
     task.updatedAt = new Date().toISOString();
     this.store.save(projectId, task);
-    return { id: task.candidateId, ...task.output.candidate, aiOrigin: { taskId: task.id, mode: task.mode } };
+    return { id: task.candidateId, ...candidate, aiOrigin: { taskId: task.id, mode: task.mode } };
   }
 
   private finishAttempt(task: StoredTask, state: OrganizeTask['state'], usage: OrganizeUsage | null,
@@ -202,13 +262,13 @@ export class OrganizeTasks {
     return true;
   }
 
-  private launch(projectId: string, task: StoredTask) {
-    void this.run(projectId, task).catch(() => {
+  private launch(projectId: string, task: StoredTask, verifiedDigest: string | null = null) {
+    void this.run(projectId, task, verifiedDigest).catch(() => {
       console.error('整理结果未保存；任务超时后可重试');
     });
   }
 
-  private async run(projectId: string, source: StoredTask) {
+  private async run(projectId: string, source: StoredTask, verifiedDigest: string | null) {
     const abort = new AbortController();
     this.pending.set(source.id, { abort, projectId, task: source });
     let output: OrganizeOutput | null = null;
@@ -220,14 +280,38 @@ export class OrganizeTasks {
         const content = [title, ...blocks.map(block => block.text)].filter(Boolean).join('\n\n').trim();
         output = {
           candidate: {
-            title: `模拟整理：${title?.trim().slice(0, 200) || '所选段落'}`,
+            title: `模拟整理：${title?.trim().slice(0, 200) || '所选正文'}`,
             text: content.slice(0, 16_000),
           },
           gaps: content.length > 16_000 ? ['模拟结果达到文字上限，后续文字未显示'] : [],
         };
       } else {
-        ({ result: output, usage } = await this.model!.generate(
-          { taskId: source.id, attempt: source.attempt, input: source.input }, abort.signal, observed => {
+        const model = this.model!;
+        const modelDigest = verifiedDigest ?? await model.resolveDigest(abort.signal);
+        abort.signal.throwIfAborted();
+        const hasResult = Boolean(source.output?.candidate || source.output?.gaps.length);
+        const pinned = source.modelDigest ?? outputDigest(source);
+        requireThat(pinned ? pinned === modelDigest : !hasResult, 'ORGANIZE_MODEL_CHANGED',
+          '本机模型已更新，请用当前配置开始新任务', 409);
+        if (!source.modelDigest) {
+          const { cardId, thoughtVersionId, bodyVersionId, title, blocks } = source.input;
+          const request = selectionKey({
+            mode: source.mode, cardId, thoughtVersionId, bodyVersionId,
+            includeTitle: title !== null, blockIds: blocks.map(block => block.id),
+          });
+          const scope = canonical({ request, model: model.model, digest: modelDigest });
+          this.db.transaction(() => {
+            const task = this.store.get(projectId, source.id);
+            const existing = this.reusableModelTask(projectId, request, model.model, modelDigest);
+            requireThat(!existing || existing.id === task.id, 'ORGANIZE_SCOPE_EXISTS',
+              '当前模型和选中范围已有整理记录，请在记录中查看', 409);
+            task.modelDigest = modelDigest;
+            this.store.setScope(projectId, task.id, scope);
+            this.store.save(projectId, task);
+          }).immediate();
+        }
+        ({ result: output, usage } = await model.generate(
+          { taskId: source.id, attempt: source.attempt, input: source.input, modelDigest }, abort.signal, observed => {
             if (this.closed) return;
             this.db.transaction(() => {
               const task = this.store.get(projectId, source.id);
@@ -239,7 +323,7 @@ export class OrganizeTasks {
           }));
       }
     } catch (cause) {
-      error = cause instanceof DomainError ? cause.message : '整理未完成，请检查本机模型后重试';
+      error = modelError(cause);
     } finally {
       if (this.pending.get(source.id)?.abort === abort) this.pending.delete(source.id);
     }
@@ -283,4 +367,17 @@ export class OrganizeTasks {
     }
     this.pending.clear();
   }
+}
+
+function outputDigest(task: StoredTask): string | undefined {
+  if (!task.output?.candidate && !task.output?.gaps.length) return undefined;
+  return task.attempts.find(attempt => attempt.number === task.outputAttempt)?.usage?.modelDigest?.toLowerCase();
+}
+
+function selectionKey(selection: Omit<OrganizeRequest, 'requestId'>): string {
+  return canonical({ ...selection, blockIds: [...selection.blockIds].sort() });
+}
+
+function modelError(cause: unknown): string {
+  return cause instanceof DomainError ? cause.message : '整理未完成，请检查本机模型后重试';
 }

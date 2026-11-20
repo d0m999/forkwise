@@ -1,12 +1,13 @@
 import { createHash } from 'node:crypto';
 import type { z } from 'zod';
 import { ImageContentImportCheck } from './image-contracts.js';
+import { OrganizeArchiveImportCheck } from './organize-archive.js';
+import { OrganizeOrigin } from './organize-contracts.js';
 import { SECRET_KEYS } from './secret-keys.js';
 import { ShapeContentImportCheck } from './shape-contracts.js';
 import { StrokeContentImportCheck } from './stroke-contracts.js';
 import { TextContentImportCheck } from './text-contracts.js';
 import { readZip } from './zip-store.js';
-import { OrganizeOrigin } from './organize-contracts.js';
 
 export interface PackageFailure {
   code: string;
@@ -355,8 +356,20 @@ function verifyManifest(manifest: Record<string, unknown>, files: Map<string, Bu
   if (typeof manifest.exportedAt !== 'string' || !manifest.exportedAt) fail(failures, 'EXPORTED_AT', 'exportedAt', 'non-empty string', manifest.exportedAt);
   if (typeof manifest.projectId !== 'string' || !manifest.projectId) fail(failures, 'PROJECT_ID', 'projectId', 'non-empty string', manifest.projectId);
   if (typeof manifest.revision !== 'number') fail(failures, 'REVISION', 'revision', 'number', manifest.revision);
-  if (!manifest.extensions || typeof manifest.extensions !== 'object' || Array.isArray(manifest.extensions))
+  if (!isRecord(manifest.extensions)) {
     fail(failures, 'EXTENSIONS', 'extensions', 'object', manifest.extensions);
+  } else if (manifest.extensions.forkwiseOrganize !== undefined) {
+    // 只读取检查结果，导入仍保存原始扩展，包括整理归档里的未知键。
+    const parsed = OrganizeArchiveImportCheck.safeParse(manifest.extensions.forkwiseOrganize, { reportInput: true });
+    if (!parsed.success) {
+      for (const issue of parsed.error.issues.slice(0, 20)) {
+        const suffix = issue.path.map((key) => typeof key === 'number' ? `[${key}]` : `.${String(key)}`).join('');
+        const input = issue.input;
+        const actual = input === null ? 'null' : Array.isArray(input) ? 'array' : typeof input;
+        fail(failures, 'ORGANIZE_ARCHIVE_FIELD', `extensions.forkwiseOrganize${suffix}`, issue.message, actual);
+      }
+    }
+  }
   const projectId = typeof manifest.projectId === 'string' ? manifest.projectId : '';
   const mapping = manifest.mapping;
   if (!isRecord(mapping)) {

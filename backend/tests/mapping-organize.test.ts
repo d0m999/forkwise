@@ -2,14 +2,46 @@ import { expect, it, vi } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import Database from 'better-sqlite3';
+import { canonical } from '../src/domain/canonical.js';
 import { createWorkspaceApp } from '../src/mapping/http.js';
 import { openMapping } from '../src/mapping/storage.js';
 import { inspectPackage } from '../src/mapping/package-verify.js';
 import { OllamaClient } from '../src/services/ollama.js';
 import { localOrganizeModel } from '../src/mapping/organize-ollama.js';
+import { captureCutCommand } from '../src/mapping/cut-command.js';
+import type { StoredTask } from '../src/mapping/organize-store.js';
 
 const origin = 'http://127.0.0.1:8790';
 const tasks = '/api/mapping/projects/p/organize/tasks';
+
+async function withOrganizeWorkspace(
+  transport: typeof fetch,
+  run: (request: (path: string, body?: unknown) => Promise<Response>, directory: string) => Promise<void>,
+) {
+  const directory = mkdtempSync(join(tmpdir(), 'forkwise-organize-'));
+  const mapping = openMapping(directory, {
+    organizeModel: localOrganizeModel(new OllamaClient('local-test:1', 'http://127.0.0.1:11434', transport)),
+  });
+  const app = createWorkspaceApp(mapping, origin, () => new Response(''));
+  const token = mapping.access.issue('human', ['*']);
+  const request = async (path: string, body?: unknown) => app.request(origin + path, {
+    method: body === undefined ? 'GET' : 'POST',
+    headers: { Origin: origin, Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+  });
+  const execute = (command: object) => request('/api/mapping/execute', { projectId: 'p', expected: null, ...command });
+  try {
+    expect((await execute({ commandId: 'project', type: 'project.create', payload: { name: '研究' } })).status).toBe(200);
+    expect((await execute({
+      commandId: 'card', type: 'thought.create', payload: { id: 'c', title: '供应链', text: '', x: 0, y: 0 },
+    })).status).toBe(200);
+    await run(request, directory);
+  } finally {
+    mapping.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+}
 
 it('从真实 HTTP 和 SQLite 审阅模拟结果，再明确新增、重放、撤销和重开', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'forkwise-organize-'));
@@ -114,6 +146,44 @@ it('从真实 HTTP 和 SQLite 审阅模拟结果，再明确新增、重放、�
     const redactedArchive = Buffer.from(await (await request('/api/mapping/projects/imported/export.package', undefined, importedAgent)).arrayBuffer());
     expect(inspectPackage(redactedArchive)).toMatchObject({ ok: true });
     expect(inspectPackage(redactedArchive)).not.toHaveProperty('manifest.extensions.forkwiseOrganize');
+
+    const current = await read();
+    expect((await execute({ commandId: 'undo-after-reopen', type: 'history.undo', expected: current.project.revision, payload: {} })).status).toBe(200);
+    expect((await execute({ ...command, commandId: 'while-redo-available' })).status).toBe(409);
+    expect((await execute({ commandId: 'move-source', type: 'pose.move', expected: current.cards[0].item.versionId,
+      payload: { id: source.id, x: 80, y: 20 },
+    })).status).toBe(200);
+    expect((await (await request('/api/mapping/projects/p/history')).json()).redo).toHaveLength(0);
+    expect(await (await request(tasks, { ...input, requestId: 'new-review' })).json()).toMatchObject({
+      id, applied: true, candidateOnCanvas: false, addAvailable: true,
+    });
+    expect(await (await execute(command)).json()).toEqual(receipt);
+    expect((await read()).cards).toHaveLength(1);
+    expect((await execute({ ...command, commandId: 'explicit-add-after-undo' })).status).toBe(200);
+    const adoptedAgain = await read();
+    expect(adoptedAgain.cards).toHaveLength(2);
+    expect(adoptedAgain.cards[1]).toMatchObject({ aiOrigin: { mode: 'simulate', taskId: id } });
+    expect(adoptedAgain.cards[1].id).not.toBe(result.cards[1].id);
+
+    const candidate = adoptedAgain.cards[1];
+    const cut = captureCutCommand(adoptedAgain, {
+      projectId: 'p', commandId: 'cut-ai', cutId: 'cut-ai', itemIds: [candidate.item.id], groupIds: [], frameIds: [],
+    });
+    expect((await execute(cut)).status).toBe(200);
+    for (let i = 0; i < 40; i++) {
+      expect((await execute({ commandId: `new-${i}`, type: 'thought.create',
+        payload: { id: `new-${i}`, title: '', text: '', x: 0, y: i * 20 },
+      })).status).toBe(200);
+    }
+    const history = await (await request('/api/mapping/projects/p/history')).json();
+    expect(history.undo).not.toContainEqual(expect.objectContaining({ label: 'canvas.cut' }));
+    expect(await (await request(`${tasks}/${id}`)).json()).toMatchObject({ candidateOnCanvas: false, addAvailable: false });
+    expect((await execute({ ...command, commandId: 'candidate-still-on-clipboard' })).status).toBe(409);
+    expect((await execute({ commandId: 'paste-cut-ai', type: 'canvas.paste-cut', expected: { cut: 'cut-ai', cutRevision: 0 },
+      payload: { cutId: 'cut-ai', translation: { x: 20, y: 30 } },
+    })).status).toBe(200);
+    expect((await read()).cards.filter((card: { aiOrigin?: { taskId: string } }) => card.aiOrigin?.taskId === id))
+      .toMatchObject([{ id: candidate.id }]);
   } finally {
     mapping.close();
     rmSync(directory, { recursive: true, force: true });
@@ -253,6 +323,151 @@ it('真实路径先检查本机运行边界，再记录请求、缺口、取消�
   }
 });
 
+it('用实际本机模型摘要去重，保留相同请求编号的原回执', async () => {
+  let digest = 'a'.repeat(64);
+  let online = true;
+  let calls = 0;
+  const transport: typeof fetch = async url => {
+    const path = new URL(String(url)).pathname;
+    if (path === '/api/status') {
+      if (!online) throw new Error('Ollama offline');
+      return Response.json({ cloud: { disabled: true } });
+    }
+    if (path === '/api/tags') return Response.json({ models: [{ name: 'local-test:1', size: 100, digest }] });
+    expect(path).toBe('/api/chat');
+    calls++;
+    return Response.json({
+      model: 'local-test:1', done: true, prompt_eval_count: 10, eval_count: 5,
+      message: { content: JSON.stringify({ candidate: { title: '结果 ' + digest[0], text: '整理正文' }, gaps: [] }) },
+    });
+  };
+  await withOrganizeWorkspace(transport, async (request, directory) => {
+    const card = (await (await request('/api/mapping/projects/p')).json()).cards[0];
+    const start = async (requestId: string) => (await request(tasks, {
+      requestId, mode: 'real', cardId: 'c', thoughtVersionId: card.versionId,
+      bodyVersionId: card.body.versionId, includeTitle: true, blockIds: [],
+    })).json();
+    const first = await start('first');
+    const done = async (id: string, variant: string) => vi.waitFor(async () =>
+      expect(await (await request(`${tasks}/${id}`)).json()).toMatchObject({
+        state: 'succeeded', usage: { modelDigest: variant.repeat(64) },
+        output: { candidate: { title: '结果 ' + variant } },
+      }));
+    await done(first.id, 'a');
+    expect(await start('same-weights')).toMatchObject({ id: first.id });
+
+    // Before digest-specific keys, retry could use new weights while keeping an older candidate.
+    const fixture = new Database(join(directory, 'workspace.sqlite'));
+    try {
+      const row = fixture.prepare('SELECT task FROM mapping_organize_tasks WHERE project_id=? AND id=?')
+        .get('p', first.id) as { task: string };
+      const key = fixture.prepare('SELECT request FROM mapping_organize_requests WHERE project_id=? AND id=?')
+        .get('p', 'first') as { request: string };
+      const legacy = JSON.parse(row.task) as StoredTask;
+      delete legacy.modelDigest;
+      legacy.attempt = 2;
+      legacy.state = 'partial';
+      const usage = { ...legacy.attempts[0]!.usage!, modelDigest: 'b'.repeat(64) };
+      legacy.usage = usage;
+      legacy.attempts.push({ ...legacy.attempts[0]!, number: 2, usage, state: 'partial',
+        output: { candidate: null, gaps: ['只得到新缺口'] },
+      });
+      fixture.prepare('UPDATE mapping_organize_tasks SET scope=?, task=? WHERE project_id=? AND id=?')
+        .run(canonical({ request: key.request, model: legacy.model }), JSON.stringify(legacy), 'p', first.id);
+    } finally {
+      fixture.close();
+    }
+
+    online = false;
+    expect(await start('first')).toMatchObject({ id: first.id });
+    const failed = await start('offline');
+    expect(failed).toMatchObject({ state: 'failed', usage: null });
+    online = true;
+    expect(await start('reuse-legacy-a')).toMatchObject({ id: first.id, outputAttempt: 1 });
+    const retry = await request(`${tasks}/${failed.id}/retry`, { attempt: 1, requestId: 'retry-offline-task' });
+    expect(retry.status).toBe(200);
+    await vi.waitFor(async () => expect(await (await request(`${tasks}/${failed.id}`)).json()).toMatchObject({
+      state: 'failed', attempt: 2, error: '当前模型和选中范围已有整理记录，请在记录中查看', usage: null,
+    }));
+    expect(calls).toBe(1);
+
+    digest = 'b'.repeat(64);
+    expect(await start('first')).toMatchObject({ id: first.id });
+    expect((await request(`${tasks}/${first.id}/retry`, { attempt: 2, requestId: 'retry-legacy-with-b' })).status).toBe(200);
+    await vi.waitFor(async () => expect(await (await request(`${tasks}/${first.id}`)).json()).toMatchObject({
+      state: 'partial', attempt: 3, outputAttempt: 1, error: '本机模型已更新，请用当前配置开始新任务',
+    }));
+    expect(calls).toBe(1);
+    const second = await start('different-weights');
+    expect(second.id).not.toBe(first.id);
+    await done(second.id, 'b');
+    expect(calls).toBe(2);
+    expect(await start('same-new-weights')).toMatchObject({ id: second.id });
+  });
+});
+
+it('无候选且没有缺口的模型响应进入格式修复，最终失败会留下原因与用量', async () => {
+  const transport: typeof fetch = async url => {
+    const path = new URL(String(url)).pathname;
+    if (path === '/api/status') return Response.json({ cloud: { disabled: true } });
+    if (path === '/api/tags') return Response.json({ models: [{ name: 'local-test:1', size: 100, digest: 'a'.repeat(64) }] });
+    expect(path).toBe('/api/chat');
+    return Response.json({
+      model: 'local-test:1', done: true, prompt_eval_count: 10, eval_count: 5,
+      message: { content: JSON.stringify({ candidate: null, gaps: [] }) },
+    });
+  };
+  await withOrganizeWorkspace(transport, async request => {
+    const card = (await (await request('/api/mapping/projects/p')).json()).cards[0];
+    const started = await request(tasks, {
+      requestId: 'empty-result', mode: 'real', cardId: card.id, thoughtVersionId: card.versionId,
+      bodyVersionId: card.body.versionId, includeTitle: true, blockIds: [],
+    });
+    expect(started.status).toBe(201);
+    const { id } = await started.json();
+    await vi.waitFor(async () => expect(await (await request(`${tasks}/${id}`)).json()).toMatchObject({
+      state: 'failed', output: null, error: '一次格式修复后输出仍不符合契约，请人工处理或重试',
+      usage: { cost: null, attempts: [
+        { phase: 'generate', inputTokens: 10, outputTokens: 5 },
+        { phase: 'repair', inputTokens: 10, outputTokens: 5 },
+      ] },
+    }), { timeout: 500 });
+  });
+});
+
+it.each([
+  ['发布候选前', JSON.stringify({ candidate: { title: '替换后的结果', text: '正文' }, gaps: [] })],
+  ['发起格式修复前', '不可解析的响应'],
+])('模型在调用期间换权重时，%s核验摘要并保留已返回用量', async (_, content) => {
+  let digest = 'a'.repeat(64);
+  let calls = 0;
+  const transport: typeof fetch = async url => {
+    const path = new URL(String(url)).pathname;
+    if (path === '/api/status') return Response.json({ cloud: { disabled: true } });
+    if (path === '/api/tags') return Response.json({ models: [{ name: 'local-test:1', size: 100, digest }] });
+    expect(path).toBe('/api/chat');
+    calls++;
+    digest = 'b'.repeat(64);
+    return Response.json({
+      model: 'local-test:1', done: true, prompt_eval_count: 10, eval_count: 5, message: { content },
+    });
+  };
+  await withOrganizeWorkspace(transport, async request => {
+    const card = (await (await request('/api/mapping/projects/p')).json()).cards[0];
+    const started = await request(tasks, {
+      requestId: 'changed-weights', mode: 'real', cardId: card.id, thoughtVersionId: card.versionId,
+      bodyVersionId: card.body.versionId, includeTitle: true, blockIds: [],
+    });
+    expect(started.status).toBe(201);
+    const { id } = await started.json();
+    await vi.waitFor(async () => expect(await (await request(`${tasks}/${id}`)).json()).toMatchObject({
+      state: 'failed', output: null, error: '本机模型在整理期间已更新，请用当前配置开始新任务',
+      usage: { attempts: [{ phase: 'generate', inputTokens: 10, outputTokens: 5 }] },
+    }));
+    expect(calls).toBe(1);
+  });
+});
+
 it('关闭时保留格式修复前已返回的用量与尚未收到的请求记录', async () => {
   let requests = 0;
   const transport: typeof fetch = async (url, options) => {
@@ -283,18 +498,18 @@ it('关闭时保留格式修复前已返回的用量与尚未收到的请求记�
       payload: { id: 'c', title: '本机用量记录', text: '', x: 0, y: 0 },
     }, human);
     const card = mapping.read({ type: 'project', projectId: 'p' }, human).cards[0]!;
-    const { task } = mapping.organize.start('p', {
+    const { task } = await mapping.organize.start('p', {
       requestId: 'start', mode: 'real', cardId: card.id, includeTitle: true, blockIds: [],
       thoughtVersionId: card.versionId, bodyVersionId: card.body.versionId,
     }, human);
     await vi.waitFor(() => expect(requests).toBe(2));
     const now = Date.now();
-    const clock = vi.spyOn(Date, 'now').mockReturnValue(now + 140_000);
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(now + 170_000);
     try {
       const expired = mapping.organize.get('p', task.id, human);
       expect(expired.state).toBe('interrupted');
-      expect(Date.parse(expired.attempts[0]!.finishedAt!)).toBeGreaterThan(now + 120_000);
-      clock.mockReturnValue(now + 150_000);
+      expect(Date.parse(expired.attempts[0]!.finishedAt!)).toBeGreaterThan(now + 150_000);
+      clock.mockReturnValue(now + 180_000);
       expect(mapping.organize.get('p', task.id, human)).toEqual(expired);
     } finally {
       clock.mockRestore();
@@ -307,8 +522,8 @@ it('关闭时保留格式修复前已返回的用量与尚未收到的请求记�
         state: 'interrupted',
         finishedAt: expect.any(String),
         usage: { cost: null, attempts: [
-          { inputTokens: 12, outputTokens: 2, responseReceived: true },
-          { inputTokens: null, outputTokens: null, responseReceived: false },
+          { phase: 'generate', inputTokens: 12, outputTokens: 2, responseReceived: true },
+          { phase: 'repair', inputTokens: null, outputTokens: null, responseReceived: false },
         ] },
       }],
     });

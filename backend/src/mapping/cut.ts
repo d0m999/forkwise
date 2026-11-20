@@ -71,6 +71,20 @@ export function recordCut(db: Database.Database, projectId: string, cutId: strin
     .run(projectId, cutId, randomUUID(), 'eligible', 0, sourceRevision, new Date().toISOString());
   return { cutId, state: 'eligible', revision: 0, sourceRevision };
 }
+
+export function isCardPendingPaste(db: Database.Database, projectId: string, cardId: string): boolean {
+  const receipts = db.prepare(`
+    SELECT change.receipt FROM mapping_cuts cut
+    JOIN mapping_changes change ON change.project_id=cut.project_id AND change.revision=cut.source_revision
+    WHERE cut.project_id=? AND cut.state='eligible'
+  `).iterate(projectId) as Iterable<{ receipt: string }>;
+  for (const { receipt } of receipts) {
+    const change = JSON.parse(receipt) as Change;
+    if (change.cardLifecycleChanges?.some(item => item.before?.id === cardId && !item.after)) return true;
+  }
+  return false;
+}
+
 function advanceCut(db: Database.Database, projectId: string, cutId: string, state: CutState): CutStateView {
   const record = readCut(db, projectId, cutId);
   requireThat(record, 'CUT_NOT_FOUND', '剪切记录不可用，已保留当前画布', 409);

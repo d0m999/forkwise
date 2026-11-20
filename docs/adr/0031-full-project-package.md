@@ -12,7 +12,7 @@ v1 用 `.strict()` 描述既有研究归档，把画布字段塞进 v1 会让旧
 
 ## 清单
 
-顶层：`format` 固定 `forkwise-project`、`schemaVersion` 固定 2、`exportedAt`、`projectId`、`revision`、`research`（v1 对象或 `null`）、`extensions`（本版固定 `{}`）。
+顶层包含 `format`（固定 `forkwise-project`）、`schemaVersion`（固定 2）、`exportedAt`、`projectId`、`revision`、`research`（v1 对象或 `null`）和 `extensions`（对象，可以为空）。`extensions.forkwiseOrganize` 可选，按 `[{ projectId, tasks }]` 保存 AI 整理任务快照，隔离导入与重导出保留原项目号、旧输入版本和任务记录。归档不恢复为可执行的整理任务。
 
 `mapping`：
 
@@ -49,6 +49,8 @@ v1 用 `.strict()` 描述既有研究归档，把画布字段塞进 v1 会让旧
 `npx --no-install --prefix backend tsx scripts/verify-package.ts <path>`。缺路径退出码 2，有失败退出码 1，通过为 0；每行失败是 `代码 路径 expected=… actual=…`。
 
 检查项：容器与清单形状、`format` / `schemaVersion`、`mapping.project` 与顶层身份一致、十一个集合与 `versions` 的 `stored` 逐条对应、`membership` 与 `stack` 重算一致、资源字段与 `id` 唯一、路径形状与 `sha256` 后缀绑定、文件存在与哈希、`assetId` / `requiredAssetIds` / 连线端点 / 容器成员与父级 / 附着目标的引用闭合、文字/形状/笔迹/图片 `content` 的已知字段、归属链无环、`archive` / `editTimes` 的形状、`research` 的 v1 形状与项目 ID、`SECRET_KEYS` 扫描、跨项目 ID 扫描。#47 起跨项目检查收窄为顶层 `projectId`、`mapping.project.id`、`research.project.id` 与变更回执 `projectId`；历史归档和未知内容里的旧项目号按原文保留，见 [ADR 0032](0032-isolated-package-import.md)。
+
+`extensions.forkwiseOrganize` 存在时检查归档分组、任务、输入、输出、尝试历史和用量的已知字段。验证、导入预览与提交共用此检查，形状错误返回 `ORGANIZE_ARCHIVE_FIELD` 和对应字段路径。允许历史结果中的空候选和空缺口，归档内的额外键及未知扩展均原样保留。
 
 验证器不复用导出器的派生实现，也不依赖服务端与数据库。验证器与导出器、导入器共用的只有三类基础设施：`SECRET_KEYS`（与导出器共用，避免脱敏键集两处漂移后校验静默放行）、`zip-store` 的 ZIP 编解码（导出用 `writeZip`，验证用 `readZip`）、`isRecord`（验证器导出、供 `package-import.ts` 复用的记录判定）。内容契约的导入检查 schema（`TextContentImportCheck` 等）与写入侧的 `*ContentSchema` 在同一模块里共用字段定义，导入检查本身只被验证器消费：它让预览与提交按同一份字段形状判断，避免写入契约与校验形状两处漂移；画布投影不读这些 schema，但导入前按同一形状校验，保证投影拿到的 `content` 至少具备它读取的字段。这些 schema 只描述形状、不引入数据库或服务端依赖（见 [ADR 0032](0032-isolated-package-import.md) 的「2026-11-18 审查修复」节）。
 

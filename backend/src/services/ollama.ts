@@ -73,15 +73,22 @@ export class OllamaClient {
     data: unknown,
     signal: AbortSignal,
     images?: string[],
-    onAttempt?: (number: number, usage: ModelUsage, received: boolean) => void,
+    hooks?: {
+      onAttempt: (number: number, usage: ModelUsage, received: boolean) => void;
+      beforeRepair: () => Promise<void>;
+    },
   ) {
     const usage: ModelUsage[] = [];
     let repair = '';
     for (let attempt = 0; attempt < 2; attempt++) {
       signal.throwIfAborted();
+      if (attempt > 0 && hooks) {
+        await hooks.beforeRepair();
+        signal.throwIfAborted();
+      }
       let response: Response;
       try {
-        onAttempt?.(attempt + 1, { inputTokens: null, outputTokens: null, model: this.model }, false);
+        hooks?.onAttempt(attempt + 1, { inputTokens: null, outputTokens: null, model: this.model }, false);
         response = await this.request(this.origin + '/api/chat', {
           method: 'POST',
           redirect: 'error',
@@ -143,7 +150,7 @@ export class OllamaClient {
         model: result.model,
       };
       usage.push(actual);
-      onAttempt?.(attempt + 1, actual, true);
+      hooks?.onAttempt(attempt + 1, actual, true);
       try {
         return {
           result: schema.parse(JSON.parse(result.message.content)),

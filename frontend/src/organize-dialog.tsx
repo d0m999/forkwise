@@ -1,5 +1,7 @@
 import { useLayoutEffect, useEffect, useRef, useState } from 'react';
 import { api, MappingError, type Card, type Command } from './api';
+import { organizeBlockText } from '../../backend/src/mapping/organize-blocks';
+import { canRetryOrganize } from '../../backend/src/mapping/organize-state';
 import type { OrganizeRequest, OrganizeSummary, OrganizeTask } from '../../backend/src/mapping/organize-contracts';
 
 const states: Record<OrganizeTask['state'], string> = {
@@ -7,6 +9,9 @@ const states: Record<OrganizeTask['state'], string> = {
   cancelled: '已取消', interrupted: '运行已中断',
 };
 const modeName = (mode: OrganizeTask['mode']) => mode === 'real' ? '本机模型' : '模拟整理';
+const blockNames: Record<string, string> = {
+  text: '段落', heading: '正文标题', listItem: '列表项', quote: '引用', code: '代码块', table: '表格',
+};
 
 export function OrganizeDialog({ projectId, source, cards, close, onAdded }: {
   projectId: string;
@@ -27,9 +32,12 @@ export function OrganizeDialog({ projectId, source, cards, close, onAdded }: {
   const addRequest = useRef<{ key: string; command: Extract<Command, { type: 'organize.add' }> }>(null);
   const retryRequest = useRef<{ key: string; id: string }>(null);
   const current = cards.find(card => card.id === (task?.cardId ?? source?.id));
-  const blocks = source?.body.blocks.filter(block => block.type === 'text' && block.text?.trim()) ?? [];
+  const blocks = source?.body.blocks.flatMap(block => {
+    const text = organizeBlockText(block);
+    return text ? [{ id: block.id, type: block.type, text }] : [];
+  }) ?? [];
   const chosen = blocks.filter(block => selected.includes(block.id));
-  const length = (title ? source?.title.length ?? 0 : 0) + chosen.reduce((count, block) => count + block.text!.length, 0);
+  const length = (title ? source?.title.length ?? 0 : 0) + chosen.reduce((count, block) => count + block.text.length, 0);
   const freshness = !current ? 'deleted' : task
     ? current.versionId === task.input.thoughtVersionId && current.body.versionId === task.input.bodyVersionId ? task.freshness : 'changed'
     : current.versionId === source?.versionId && current.body.versionId === source.body.versionId ? 'current' : 'changed';
@@ -134,12 +142,16 @@ export function OrganizeDialog({ projectId, source, cards, close, onAdded }: {
     setBusy(true);
     try {
       await api.execute(addRequest.current.command);
-      setTask({ ...task, applied: true, candidateOnCanvas: true });
+      const latest = await api.organizeTask(projectId, task.id);
       await onAdded();
+      addRequest.current = null;
+      setTask(latest);
     } catch (cause) {
       setError(cause instanceof MappingError ? cause.message : '未确认画布更新，请重试或重新打开项目核对');
-      if (cause instanceof MappingError && ['ORGANIZE_SOURCE_STALE', 'ORGANIZE_RESULT_UNAVAILABLE'].includes(cause.code))
+      if (cause instanceof MappingError && ['ORGANIZE_SOURCE_STALE', 'ORGANIZE_RESULT_UNAVAILABLE'].includes(cause.code)) {
+        addRequest.current = null;
         void api.organizeTask(projectId, task.id).then(setTask, () => {});
+      }
     } finally {
       setBusy(false);
     }
@@ -177,17 +189,20 @@ export function OrganizeDialog({ projectId, source, cards, close, onAdded }: {
           {source.title.trim() && <label><input type="checkbox" checked={title} onChange={event => setTitle(event.currentTarget.checked)} />
             <span><strong>卡片标题</strong><span>{source.title}</span></span>
           </label>}
-          {blocks.map((block, index) => <label key={block.id}>
-            <input type="checkbox" checked={selected.includes(block.id)} aria-label={`段落 ${index + 1}`}
-              onChange={event => {
-                const checked = event.currentTarget.checked;
-                setSelected(previous => checked ? [...previous, block.id] : previous.filter(id => id !== block.id));
-              }} />
-            <span><strong>段落 {index + 1}</strong><span>{block.text}</span></span>
-          </label>)}
-          {!source.title.trim() && blocks.length === 0 && <p>请先给这张卡添加标题或文字段落。</p>}
+          {blocks.map((block, index) => {
+            const label = `${blockNames[block.type]} ${index + 1}`;
+            return <label key={block.id}>
+              <input type="checkbox" checked={selected.includes(block.id)} aria-label={label}
+                onChange={event => {
+                  const checked = event.currentTarget.checked;
+                  setSelected(previous => checked ? [...previous, block.id] : previous.filter(id => id !== block.id));
+                }} />
+              <span><strong>{label}</strong><span>{block.text}</span></span>
+            </label>;
+          })}
+          {!source.title.trim() && blocks.length === 0 && <p>请先给这张卡添加标题或正文文字。</p>}
         </fieldset>
-        <p className="organize-muted">本次仅处理勾选的标题与文字段落。{model ? `已配置本机模型 ${model}。` : model === null ? '当前未配置本机真实模型。' : '正在读取模型设置。'}</p>
+        <p className="organize-muted">本次仅处理勾选的标题与正文文字。{model ? `已配置本机模型 ${model}。` : model === null ? '当前未配置本机真实模型。' : '正在读取模型设置。'}</p>
         {length > 24_000 && <p role="alert">选中的文字超过 24,000 字符，请减少范围。</p>}
       </> : task ? <>
         <p role="status" className="organize-status"><strong>{modeName(task.mode)}</strong> {states[task.state]}{task.applied
@@ -205,7 +220,7 @@ export function OrganizeDialog({ projectId, source, cards, close, onAdded }: {
         </section>}
         <details>
           <summary>输入范围与用量</summary>
-          <p>{task.input.title === null ? '未选标题' : `标题：${task.input.title}`}，选了 {task.input.blocks.length} 个段落，另有 {task.input.omittedBlockCount} 个块未处理。</p>
+          <p>{task.input.title === null ? '未选标题' : `标题：${task.input.title}`}，选了 {task.input.blocks.length} 个正文块，另有 {task.input.omittedBlockCount} 个块未处理。</p>
           {task.input.blocks.map(block => <p className="organize-trace" key={block.id}>{block.text}</p>)}
           <p className="organize-trace">标题版本 {task.input.thoughtVersionId}<br />正文版本 {task.input.bodyVersionId}<br />任务 {task.id}</p>
           {task.mode === 'simulate' ? <p>模拟在工作台中生成，无模型用量。</p> : <>
@@ -219,9 +234,12 @@ export function OrganizeDialog({ projectId, source, cards, close, onAdded }: {
                 {!!attempt.output.gaps.length && <ul>{attempt.output.gaps.map((gap, index) => <li key={index}>{gap}</li>)}</ul>}
               </details>}
               {attempt.usage?.modelDigest && <p className="organize-trace">模型摘要 {attempt.usage.modelDigest}</p>}
-              {attempt.usage?.attempts.length ? <ul>{attempt.usage.attempts.map((call, index) =>
-                <li key={index}>{call.model}，{call.responseReceived === false ? '已发起，用量未返回'
-                  : `输入 ${call.inputTokens ?? '未知'}、输出 ${call.outputTokens ?? '未知'} token`}</li>)}</ul>
+              {attempt.usage?.attempts.length ? <ul>{attempt.usage.attempts.map((call, index) => {
+                const phase = call.phase ?? (index === 0 ? 'generate' : 'repair');
+                return <li key={index}>{phase === 'repair' ? '格式修复' : '生成候选'} · {call.model}，
+                  {call.responseReceived === false ? '已发起，用量未返回'
+                    : `输入 ${call.inputTokens ?? '未知'}、输出 ${call.outputTokens ?? '未知'} token`}</li>;
+              })}</ul>
                 : attempt.state === 'running' ? '，正在检查模型' : '，未记录模型调用'}
             </li>)}</ul>
           </>}
@@ -231,9 +249,9 @@ export function OrganizeDialog({ projectId, source, cards, close, onAdded }: {
     <footer>
       {task ? <>
         {task.state === 'running' && <button type="button" disabled={busy} onClick={() => void change('cancel')}>取消任务</button>}
-        {['failed', 'partial', 'cancelled', 'interrupted'].includes(task.state) && !task.applied &&
+        {canRetryOrganize(task) &&
           <button type="button" disabled={busy || stale} onClick={() => void change('retry')}>重试整理</button>}
-        {['succeeded', 'partial'].includes(task.state) && task.output?.candidate && !task.applied &&
+        {(task.addAvailable || addRequest.current?.key === `${task.id}/${task.attempt}`) &&
           <button type="button" className="primary" disabled={busy || stale} onClick={() => void add()}>添加为新卡</button>}
       </> : source && <>
         <button type="button" disabled={busy || stale || !length || length > 24_000 || selected.length > 100 || model === undefined}

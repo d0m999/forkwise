@@ -3,9 +3,10 @@ import { requireThat } from '../domain/errors.js';
 import type { Card } from './contracts.js';
 import type { OrganizeSummary, OrganizeTask } from './organize-contracts.js';
 
-export type StoredTask = Omit<OrganizeTask, 'freshness' | 'candidateOnCanvas' | 'attempts'> & {
+export type StoredTask = Omit<OrganizeTask, 'freshness' | 'candidateOnCanvas' | 'addAvailable' | 'attempts'> & {
   candidateId: string;
   deadline: number;
+  modelDigest?: string;
   attempts: (OrganizeTask['attempts'][number] & { retryId?: string })[];
 };
 
@@ -70,6 +71,10 @@ export class OrganizeStore {
     const row = this.db.prepare('SELECT task FROM mapping_organize_tasks WHERE project_id=? AND scope=?')
       .get(projectId, scope) as { task: string } | undefined;
     return row ? JSON.parse(row.task) as StoredTask : undefined;
+  }
+
+  setScope(projectId: string, id: string, scope: string) {
+    this.db.prepare('UPDATE mapping_organize_tasks SET scope=? WHERE project_id=? AND id=?').run(scope, projectId, id);
   }
 
   create(projectId: string, scope: string, task: StoredTask) {

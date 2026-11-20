@@ -39,6 +39,7 @@ export type OrganizeInput = Pick<OrganizeRequest, 'cardId' | 'thoughtVersionId' 
 export const OrganizeUsage = z.object({
   attempts: z.array(z.object({
     model: z.string(),
+    phase: z.enum(['generate', 'repair']).optional(),
     inputTokens: z.int().nonnegative().nullable(),
     outputTokens: z.int().nonnegative().nullable(),
     responseReceived: z.boolean().optional(),
@@ -72,6 +73,7 @@ export type OrganizeTask = {
   updatedAt: string;
   applied: boolean;
   candidateOnCanvas: boolean;
+  addAvailable: boolean;
   freshness: 'current' | 'changed' | 'deleted';
 };
 export type OrganizeSummary = Pick<OrganizeTask, 'id' | 'cardId' | 'mode' | 'createdAt'>;

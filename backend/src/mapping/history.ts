@@ -83,6 +83,16 @@ function save(db: Database.Database, id: string, stack: Stack) {
     'INSERT INTO mapping_history VALUES(?,?) ON CONFLICT(project_id) DO UPDATE SET value=excluded.value',
   ).run(id, JSON.stringify(stack));
 }
+export function canRestoreCard(db: Database.Database, projectId: string, cardId: string): boolean {
+  const stack = load(db, projectId);
+  return stack.undo.some(action =>
+    (!action.after && action.before && 'body' in action.before && action.before.id === cardId)
+    || action.cardLifecycleChanges?.some(change => change.before?.id === cardId && !change.after))
+    || stack.redo.some(action =>
+      (!action.before && action.after && 'body' in action.after && action.after.id === cardId)
+      || action.cardLifecycleChanges?.some(change => change.after?.id === cardId && !change.before));
+}
+
 export function readHistory(db: Database.Database, project: Project): ProjectHistory {
   const stack = load(db, project.id);
   const summary = (action: StoredAction): HistoryAction => {

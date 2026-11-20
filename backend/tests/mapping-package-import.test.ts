@@ -128,6 +128,89 @@ function syncMembership(manifest: Record<string, unknown>) {
 }
 
 describe('隔离导入完整项目包', () => {
+  it('整理归档的 tasks 为 null 时，校验、预览和提交报告同一路径且不建项目', async () => {
+    const { execute, mapping, human, post, directory, close } = await makeFixture();
+    try {
+      execute({ commandId: 'project', projectId: 'p', type: 'project.create', expected: null, payload: { name: '归档校验' } });
+      const bytes = rewriteManifest(mapping.fullPackage('p', human, ISO), (manifest) => {
+        manifest.extensions = { forkwiseOrganize: [{ projectId: 'p', tasks: null }] };
+      });
+      const base64 = bytes.toString('base64');
+      const before = fingerprint(directory);
+      const failures = verifyPackage(bytes);
+      const preview = await post('/api/mapping/import.preview', { base64 });
+      const submit = await post('/api/mapping/execute', importCommand(base64));
+
+      expect({ failures, previewStatus: preview.status, submitStatus: submit.status }).toMatchObject({
+        failures: [{ code: 'ORGANIZE_ARCHIVE_FIELD', path: 'extensions.forkwiseOrganize[0].tasks', actual: 'null' }],
+        previewStatus: 200,
+        submitStatus: 400,
+      });
+      expect(await preview.json()).toMatchObject({ failures });
+      expect(await submit.json()).toMatchObject({ code: 'INVALID_PACKAGE', details: { failures } });
+      expect(fingerprint(directory)).toEqual(before);
+    } finally {
+      close();
+    }
+  });
+
+  it('历史整理结果、旧来源编号和未知扩展随隔离导入原样往返', async () => {
+    const { execute, mapping, human, post, close } = await makeFixture();
+    try {
+      execute({ commandId: 'project', projectId: 'p', type: 'project.create', expected: null, payload: { name: '历史整理' } });
+      const output = { candidate: null, gaps: [] };
+      const usage = { attempts: [{ model: 'local:old', inputTokens: 15, outputTokens: null }], cost: null };
+      const task = {
+        id: 'old-task', cardId: 'old-card', mode: 'real', model: 'local:old',
+        input: {
+          cardId: 'old-card', thoughtVersionId: 'old-thought', bodyVersionId: 'old-body',
+          title: null, blocks: [{ id: 'old-block', text: '固定输入' }], omittedBlockCount: 0,
+        },
+        state: 'partial', output, outputAttempt: 1, usage,
+        attempts: [{ number: 1, state: 'partial', requestedAt: ISO, finishedAt: ISO, usage, output, error: null }],
+        error: null, attempt: 1, createdAt: ISO, updatedAt: ISO, applied: false, candidateOnCanvas: false,
+        freshness: 'deleted',
+      };
+      const extensions = {
+        forkwiseOrganize: [{
+          projectId: 'old-project',
+          tasks: [task, { ...task, id: 'new-task', addAvailable: false, futureTaskField: { keep: true } }],
+          archiveLabel: '往年整理',
+        }],
+        futureReader: { projectId: 'future-project', assetId: 'future-asset' },
+      };
+      const source = mapping.fullPackage('p', human, ISO);
+      const legacy = rewriteManifest(source, (manifest) => { manifest.extensions = extensions; });
+      const malformed = rewriteManifest(source, (manifest) => {
+        const invalidTask = {
+          ...task,
+          attempts: [{ ...task.attempts[0], output: { ...output, gaps: null } }],
+          addAvailable: 'false',
+        };
+        manifest.extensions = { forkwiseOrganize: [{ projectId: 'old-project', tasks: [invalidTask] }] };
+      });
+      expect(verifyPackage(malformed)).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          code: 'ORGANIZE_ARCHIVE_FIELD', path: 'extensions.forkwiseOrganize[0].tasks[0].attempts[0].output.gaps', actual: 'null',
+        }),
+        expect.objectContaining({
+          code: 'ORGANIZE_ARCHIVE_FIELD', path: 'extensions.forkwiseOrganize[0].tasks[0].addAvailable', actual: 'string',
+        }),
+      ]));
+      expect(verifyPackage(legacy)).toEqual([]);
+      const base64 = legacy.toString('base64');
+      const preview = await post('/api/mapping/import.preview', { base64 });
+      expect(await preview.json()).toMatchObject({ failures: [] });
+      const submit = await post('/api/mapping/execute', importCommand(base64));
+      expect(submit.status).toBe(200);
+      const reexport = mapping.fullPackage('q', human, ISO);
+      expect(verifyPackage(reexport)).toEqual([]);
+      expect(manifestOf(reexport).extensions).toEqual(extensions);
+    } finally {
+      close();
+    }
+  });
+
   it('预览不写库；确认后按包内原文建立新项目，源项目与资源不变', async () => {
     const fixture = await makeFixture();
     const { execute, read, mapping, human, post, directory, close } = fixture;
