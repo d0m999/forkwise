@@ -3,9 +3,9 @@ import { randomUUID } from 'node:crypto';
 import { canonical } from '../domain/canonical.js';
 import { DomainError, requireThat } from '../domain/errors.js';
 import type { AccessService, Principal } from '../services/access.js';
-import { isCardPendingPaste } from './cut.js';
-import { canRestoreCard } from './history.js';
-import { organizeBlockText } from './organize-blocks.js';
+import { hasPendingCardPaste } from './cut.js';
+import { canRestoreAnyCard } from './history.js';
+import { organizeTextBlocks } from './organize-blocks.js';
 import { canRetryOrganize } from './organize-state.js';
 import { OrganizeStore, type StoredTask } from './organize-store.js';
 import {
@@ -24,7 +24,17 @@ export interface OrganizeModel {
     Promise<{ result: OrganizeOutput; usage: OrganizeUsage | null }>;
 }
 
+type StartPlan = Pick<OrganizeRequest, 'requestId' | 'mode'> & {
+  projectId: string;
+  selection: string;
+  input: OrganizeInput;
+  model: string | null;
+  requestedAt: string;
+};
+type StartResult = { task: OrganizeTask; created: boolean };
+
 export class OrganizeTasks {
+  private readonly starting = new Map<string, { plan: StartPlan; abort: AbortController; result: Promise<StartResult> }>();
   private readonly pending = new Map<string, { abort: AbortController; projectId: string; task: StoredTask }>();
   private closed = false;
   private readonly store: OrganizeStore;
@@ -54,19 +64,23 @@ export class OrganizeTasks {
   private view(projectId: string, task: StoredTask): OrganizeTask {
     const data = structuredClone(task);
     this.expire(data);
-    const { candidateId, deadline, modelDigest, attempts, ...value } = data;
-    const candidateOnCanvas = value.applied && Boolean(this.store.card(projectId, candidateId));
+    const { candidateId, cutCandidateIds, deadline, modelDigest, startRequestId, attempts, ...value } = data;
+    const candidateState = this.candidateState(projectId, data);
     return { ...value, attempts: attempts.map(({ retryId, ...attempt }) => attempt),
-      candidateOnCanvas,
-      addAvailable: this.addAvailable(projectId, data, candidateOnCanvas),
+      candidateOnCanvas: candidateState === 'on-canvas',
+      addAvailable: candidateState === 'add',
+      cutCopyAvailable: candidateState === 'copy',
       freshness: this.freshness(projectId, task.input) };
   }
 
-  private addAvailable(projectId: string, task: StoredTask, candidateOnCanvas: boolean): boolean {
-    if (!task.output?.candidate || !['succeeded', 'partial'].includes(task.state)) return false;
-    return !task.applied || (!candidateOnCanvas
-      && !canRestoreCard(this.db, projectId, task.candidateId)
-      && !isCardPendingPaste(this.db, projectId, task.candidateId));
+  private candidateState(projectId: string, task: StoredTask): 'on-canvas' | 'add' | 'copy' | null {
+    const ids = [task.candidateId, ...(task.cutCandidateIds ?? [])];
+    if (task.applied && ids.some(id => this.store.card(projectId, id))) return 'on-canvas';
+    if (!task.output?.candidate || !['succeeded', 'partial'].includes(task.state)) return null;
+    if (!task.applied) return 'add';
+    const candidateIds = new Set(ids);
+    if (canRestoreAnyCard(this.db, projectId, candidateIds)) return null;
+    return hasPendingCardPaste(this.db, projectId, candidateIds) ? 'copy' : 'add';
   }
 
   status(projectId: string, actor: Principal) {
@@ -96,86 +110,125 @@ export class OrganizeTasks {
     if (legacy && outputDigest(legacy) === digest) return legacy;
   }
 
-  async start(projectId: string, raw: unknown, actor: Principal) {
+  async start(projectId: string, raw: unknown, actor: Principal, action: 'start' | 'cancel' = 'start'): Promise<StartResult> {
     const input = OrganizeRequest.parse(raw);
-    const { requestId, ...selection } = input;
-    const request = selectionKey(selection);
-    const replay = () => {
-      this.authorize(projectId, actor);
-      const previous = this.store.request(projectId, requestId);
-      if (previous) {
-        requireThat(previous.request === request, 'IDEMPOTENCY_MISMATCH', '任务编号已用于不同上下文', 409);
-        return this.store.get(projectId, previous.taskId);
-      }
-    };
-    const before = replay();
-    if (before) return { task: this.view(projectId, before), created: false };
+    const { requestId, ...scope } = input;
+    const selection = selectionKey(scope);
+    this.authorize(projectId, actor);
+    const cancelling = action === 'cancel';
+    requireThat(!cancelling || input.mode === 'real', 'ORGANIZE_INVALID_SCOPE', '当前请求无需取消模型预检');
+    const previous = this.replayStart(projectId, requestId, selection);
+    if (previous) {
+      // A request that reused another task never owns that task's running attempt.
+      const task = cancelling && previous.startRequestId === requestId && previous.attempt === 1
+        ? this.cancelAttempt(projectId, previous.id, 1, actor)
+        : this.view(projectId, previous);
+      return { task, created: false };
+    }
+
+    const key = canonical([projectId, requestId]);
+    const pending = this.starting.get(key);
+    if (pending) {
+      requireThat(pending.plan.selection === selection, 'IDEMPOTENCY_MISMATCH', '任务编号已用于不同上下文', 409);
+      if (!cancelling) return { task: (await pending.result).task, created: false };
+    }
     const model = input.mode === 'real' ? this.model : undefined;
     requireThat(input.mode === 'simulate' || model, 'ORGANIZE_MODEL_UNCONFIGURED', '真实整理需要配置本机模型', 503);
-    const freeze = (): OrganizeInput => {
-      const source = this.store.card(projectId, input.cardId);
-      requireThat(source && source.versionId === input.thoughtVersionId && source.body.versionId === input.bodyVersionId,
-        'ORGANIZE_SOURCE_STALE', '原卡已更改或删除，请重新选择要整理的内容', 409);
-      const chosen = new Set(input.blockIds);
-      const blocks = source.body.blocks.flatMap(block => {
-        if (!chosen.has(block.id)) return [];
-        const text = organizeBlockText(block);
-        return text ? [{ id: block.id, text }] : [];
-      });
-      requireThat(blocks.length === input.blockIds.length
-        && chosen.size === blocks.length && new Set(blocks.map(block => block.id)).size === chosen.size,
-        'ORGANIZE_INVALID_SCOPE', '请从当前版本选择有效的正文文字');
-      const title = input.includeTitle ? source.title : null;
-      const length = (title?.length ?? 0) + blocks.reduce((count, block) => count + block.text.length, 0);
-      requireThat((!!title?.trim() || blocks.length > 0) && length <= ORGANIZE_MAX_INPUT,
-        'ORGANIZE_INVALID_SCOPE', '请选择有内容的标题或正文块，合计最多 24,000 字符');
-      return {
-        cardId: source.id, thoughtVersionId: source.versionId, bodyVersionId: source.body.versionId,
-        title, blocks, omittedBlockCount: source.body.blocks.length - blocks.length,
-      };
+    const plan = pending?.plan ?? {
+      projectId, requestId, selection, mode: input.mode, model: model?.model ?? null,
+      requestedAt: new Date().toISOString(), input: this.freezeInput(projectId, input),
     };
-    const frozen = freeze();
-    let digest: string | null = null;
-    let preflightError: string | null = null;
-    if (model) {
-      try {
-        digest = await model.resolveDigest(AbortSignal.timeout(12_000));
-      } catch (cause) {
-        preflightError = modelError(cause);
-      }
+    if (cancelling) {
+      // Commit the cancelled receipt first, including when cancellation arrives before start.
+      const result = this.completeStart(plan, actor, { state: 'cancelled' });
+      pending?.abort.abort();
+      return result;
     }
+    if (!model) return this.completeStart(plan, actor, { state: 'ready', digest: null });
+
+    const abort = new AbortController();
+    const signal = AbortSignal.any([abort.signal, AbortSignal.timeout(12_000)]);
+    const result = this.checkModelAndStart(plan, actor, model, signal).finally(() => this.starting.delete(key));
+    this.starting.set(key, { plan, abort, result });
+    return result;
+  }
+
+  private replayStart(projectId: string, requestId: string, selection: string) {
+    const previous = this.store.request(projectId, requestId);
+    if (!previous) return undefined;
+    requireThat(previous.request === selection, 'IDEMPOTENCY_MISMATCH', '任务编号已用于不同上下文', 409);
+    return this.store.get(projectId, previous.taskId);
+  }
+
+  private freezeInput(projectId: string, input: OrganizeRequest): OrganizeInput {
+    const source = this.store.card(projectId, input.cardId);
+    requireThat(source && source.versionId === input.thoughtVersionId && source.body.versionId === input.bodyVersionId,
+      'ORGANIZE_SOURCE_STALE', '原卡已更改或删除，请重新选择要整理的内容', 409);
+    const chosen = new Set(input.blockIds);
+    const blocks = organizeTextBlocks(source.body.blocks)
+      .filter(block => chosen.has(block.id)).map(({ id, text }) => ({ id, text }));
+    requireThat(blocks.length === input.blockIds.length
+      && chosen.size === blocks.length && new Set(blocks.map(block => block.id)).size === chosen.size,
+      'ORGANIZE_INVALID_SCOPE', '请从当前版本选择有效的正文文字');
+    const title = input.includeTitle ? source.title : null;
+    const length = (title?.length ?? 0) + blocks.reduce((count, block) => count + block.text.length, 0);
+    requireThat((!!title?.trim() || blocks.length > 0) && length <= ORGANIZE_MAX_INPUT,
+      'ORGANIZE_INVALID_SCOPE', '请选择有内容的标题或正文块，合计最多 24,000 字符');
+    return {
+      cardId: source.id, thoughtVersionId: source.versionId, bodyVersionId: source.body.versionId,
+      title, blocks, omittedBlockCount: source.body.blocks.length - blocks.length,
+    };
+  }
+
+  private async checkModelAndStart(plan: StartPlan, actor: Principal, model: OrganizeModel, signal: AbortSignal) {
+    let digest: string;
+    try {
+      digest = await model.resolveDigest(signal);
+      signal.throwIfAborted();
+    } catch (cause) {
+      return this.completeStart(plan, actor, { state: 'failed', error: modelError(cause) });
+    }
+    return this.completeStart(plan, actor, { state: 'ready', digest });
+  }
+
+  private completeStart(plan: StartPlan, actor: Principal, check:
+    { state: 'ready'; digest: string | null } | { state: 'failed'; error: string } | { state: 'cancelled' }): StartResult {
+    const { projectId, requestId, selection, input, mode, model, requestedAt } = plan;
+    const digest = check.state === 'ready' ? check.digest : null;
     requireThat(!this.closed, 'ORGANIZE_CLOSED', '工作台正在关闭，请重新打开后重试', 503);
     const { task, created } = this.db.transaction(() => {
-      const previous = replay();
+      this.authorize(projectId, actor);
+      const previous = this.replayStart(projectId, requestId, selection);
       if (previous) return { task: previous, created: false };
-      requireThat(this.freshness(projectId, frozen) === 'current',
-        'ORGANIZE_SOURCE_STALE', '原卡已更改或删除，请重新选择要整理的内容', 409);
+      if (check.state !== 'cancelled') {
+        requireThat(this.freshness(projectId, input) === 'current',
+          'ORGANIZE_SOURCE_STALE', '原卡已更改或删除，请重新选择要整理的内容', 409);
+      }
       const scope = model
-        ? canonical({ request, model: model.model, digest, ...(digest === null ? { requestId } : {}) })
-        : canonical({ request, model: null });
+        ? canonical({ request: selection, model, digest, ...(digest === null ? { requestId } : {}) })
+        : canonical({ request: selection, model: null });
       const cached = model && digest
-        ? this.reusableModelTask(projectId, request, model.model, digest)
+        ? this.reusableModelTask(projectId, selection, model, digest)
         : this.store.forScope(projectId, scope);
       if (cached) {
-        this.store.recordRequest(projectId, requestId, request, cached.id);
+        this.store.recordRequest(projectId, requestId, selection, cached.id);
         return { task: cached, created: false };
       }
       const now = new Date().toISOString();
       const task: StoredTask = {
-        id: randomUUID(), candidateId: randomUUID(), cardId: input.cardId, mode: input.mode,
-        model: model?.model ?? null,
+        id: randomUUID(), candidateId: randomUUID(), cardId: input.cardId, mode, model, startRequestId: requestId,
         ...(digest ? { modelDigest: digest } : {}),
-        input: frozen,
-        state: 'running', createdAt: now, updatedAt: now, error: null, attempt: 1, output: null, outputAttempt: null,
+        input,
+        state: 'running', createdAt: requestedAt, updatedAt: now, error: null, attempt: 1, output: null, outputAttempt: null,
         usage: null, applied: false, deadline: Date.now() + ATTEMPT_TIMEOUT_MS,
-        attempts: [{ number: 1, state: 'running', requestedAt: now, finishedAt: null, usage: null, output: null, error: null }],
+        attempts: [{ number: 1, state: 'running', requestedAt, finishedAt: null, usage: null, output: null, error: null }],
       };
-      if (preflightError) this.finishAttempt(task, 'failed', null, null, preflightError);
+      if (check.state !== 'ready') this.finishAttempt(task, check.state, null, null, check.state === 'failed' ? check.error : null);
       this.store.create(projectId, scope, task);
-      this.store.recordRequest(projectId, requestId, request, task.id);
+      this.store.recordRequest(projectId, requestId, selection, task.id);
       return { task, created: true };
     }).immediate();
-    if (created && !preflightError) this.launch(projectId, task, digest);
+    if (created && check.state === 'ready') this.launch(projectId, task, digest);
     return { task: this.view(projectId, task), created };
   }
 
@@ -214,6 +267,10 @@ export class OrganizeTasks {
 
   cancel(projectId: string, id: string, raw: unknown, actor: Principal) {
     const { attempt } = OrganizeCancel.parse(raw);
+    return this.cancelAttempt(projectId, id, attempt, actor);
+  }
+
+  private cancelAttempt(projectId: string, id: string, attempt: number, actor: Principal) {
     const task = this.db.transaction(() => {
       this.authorize(projectId, actor);
       const current = this.store.get(projectId, id);
@@ -231,14 +288,15 @@ export class OrganizeTasks {
     return this.view(projectId, task);
   }
 
-  takeCandidate(projectId: string, id: string, attempt: number) {
+  takeCandidate(projectId: string, id: string, attempt: number, copyWhileCut?: true) {
     const task = this.store.get(projectId, id);
     const candidate = task.output?.candidate;
     requireThat(candidate && task.attempt === attempt
-      && this.addAvailable(projectId, task, task.applied && Boolean(this.store.card(projectId, task.candidateId))),
+      && this.candidateState(projectId, task) === (copyWhileCut ? 'copy' : 'add'),
       'ORGANIZE_RESULT_UNAVAILABLE', '结果已添加、已有候选可恢复、结果已更新或尚不可添加，请重新审阅', 409);
     requireThat(this.freshness(projectId, task.input) === 'current',
       'ORGANIZE_SOURCE_STALE', '原卡已更改或删除，请重新选择整理范围', 409);
+    if (copyWhileCut) task.cutCandidateIds = [...(task.cutCandidateIds ?? []), task.candidateId];
     if (task.applied) task.candidateId = randomUUID();
     task.applied = true;
     task.updatedAt = new Date().toISOString();
@@ -289,9 +347,8 @@ export class OrganizeTasks {
         const model = this.model!;
         const modelDigest = verifiedDigest ?? await model.resolveDigest(abort.signal);
         abort.signal.throwIfAborted();
-        const hasResult = Boolean(source.output?.candidate || source.output?.gaps.length);
         const pinned = source.modelDigest ?? outputDigest(source);
-        requireThat(pinned ? pinned === modelDigest : !hasResult, 'ORGANIZE_MODEL_CHANGED',
+        requireThat(pinned ? pinned === modelDigest : !hasOrganizeOutput(source.output), 'ORGANIZE_MODEL_CHANGED',
           '本机模型已更新，请用当前配置开始新任务', 409);
         if (!source.modelDigest) {
           const { cardId, thoughtVersionId, bodyVersionId, title, blocks } = source.input;
@@ -345,6 +402,10 @@ export class OrganizeTasks {
           task.output = output;
           task.outputAttempt = source.attempt;
         }
+        if (!hasOrganizeOutput(task.output)) {
+          task.output = null;
+          task.outputAttempt = null;
+        }
         const state = output?.candidate && !output.gaps.length ? 'succeeded'
           : task.output ? 'partial' : 'failed';
         this.finishAttempt(task, state, usage, output, error);
@@ -355,6 +416,8 @@ export class OrganizeTasks {
 
   close() {
     this.closed = true;
+    for (const { abort } of this.starting.values()) abort.abort();
+    this.starting.clear();
     for (const { abort, projectId, task: source } of this.pending.values()) {
       this.db.transaction(() => {
         const task = this.store.get(projectId, source.id);
@@ -370,8 +433,12 @@ export class OrganizeTasks {
 }
 
 function outputDigest(task: StoredTask): string | undefined {
-  if (!task.output?.candidate && !task.output?.gaps.length) return undefined;
+  if (!hasOrganizeOutput(task.output)) return undefined;
   return task.attempts.find(attempt => attempt.number === task.outputAttempt)?.usage?.modelDigest?.toLowerCase();
+}
+
+function hasOrganizeOutput(output: OrganizeOutput | null): boolean {
+  return Boolean(output?.candidate || output?.gaps.length);
 }
 
 function selectionKey(selection: Omit<OrganizeRequest, 'requestId'>): string {

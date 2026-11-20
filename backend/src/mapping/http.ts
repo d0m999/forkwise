@@ -131,6 +131,10 @@ export function createWorkspaceApp(
     const { task, created } = await mapping.organize.start(c.req.param('id'), await c.req.json(), c.get('principal'));
     return c.json(task, created ? 201 : 200);
   });
+  app.post('/api/mapping/projects/:id/organize/tasks/cancel-start', async (c) => {
+    const { task } = await mapping.organize.start(c.req.param('id'), await c.req.json(), c.get('principal'), 'cancel');
+    return c.json(task);
+  });
   app.get('/api/mapping/projects/:id/organize/tasks/:taskId', (c) =>
     c.json(mapping.organize.get(c.req.param('id'), c.req.param('taskId'), c.get('principal'))));
   app.post('/api/mapping/projects/:id/organize/tasks/:taskId/retry', async (c) =>

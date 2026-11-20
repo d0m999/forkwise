@@ -72,6 +72,8 @@ export const api = {
     : `${organizePath(projectId)}/tasks`),
   organizeStart: (projectId: string, input: OrganizeRequest) =>
     request<OrganizeTask>(`${organizePath(projectId)}/tasks`, input),
+  organizeCancelStart: (projectId: string, input: OrganizeRequest) =>
+    request<OrganizeTask>(`${organizePath(projectId)}/tasks/cancel-start`, input),
   organizeTask: (projectId: string, taskId: string) =>
     request<OrganizeTask>(`${organizePath(projectId)}/tasks/${encodeURIComponent(taskId)}`),
   organizeRetry: (projectId: string, taskId: string, attempt: number, requestId: string) =>

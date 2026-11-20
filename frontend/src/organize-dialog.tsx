@@ -1,6 +1,6 @@
 import { useLayoutEffect, useEffect, useRef, useState } from 'react';
 import { api, MappingError, type Card, type Command } from './api';
-import { organizeBlockText } from '../../backend/src/mapping/organize-blocks';
+import { organizeTextBlocks } from '../../backend/src/mapping/organize-blocks';
 import { canRetryOrganize } from '../../backend/src/mapping/organize-state';
 import type { OrganizeRequest, OrganizeSummary, OrganizeTask } from '../../backend/src/mapping/organize-contracts';
 
@@ -21,6 +21,8 @@ export function OrganizeDialog({ projectId, source, cards, close, onAdded }: {
   onAdded: () => Promise<void>;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
+  const closeButton = useRef<HTMLButtonElement>(null);
+  const cancelStartButton = useRef<HTMLButtonElement>(null);
   const [title, setTitle] = useState(false);
   const [selected, setSelected] = useState<string[]>([]);
   const [model, setModel] = useState<string | null>();
@@ -28,26 +30,33 @@ export function OrganizeDialog({ projectId, source, cards, close, onAdded }: {
   const [task, setTask] = useState<OrganizeTask | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [starting, setStarting] = useState(false);
+  const [cancellingStart, setCancellingStart] = useState(false);
+  const startingRequest = useRef<{ input: OrganizeRequest; cancelRequested: boolean }>(null);
   const startRequest = useRef<{ key: string; id: string }>(null);
   const addRequest = useRef<{ key: string; command: Extract<Command, { type: 'organize.add' }> }>(null);
   const retryRequest = useRef<{ key: string; id: string }>(null);
   const current = cards.find(card => card.id === (task?.cardId ?? source?.id));
-  const blocks = source?.body.blocks.flatMap(block => {
-    const text = organizeBlockText(block);
-    return text ? [{ id: block.id, type: block.type, text }] : [];
-  }) ?? [];
+  const blocks = source ? organizeTextBlocks(source.body.blocks) : [];
   const chosen = blocks.filter(block => selected.includes(block.id));
   const length = (title ? source?.title.length ?? 0 : 0) + chosen.reduce((count, block) => count + block.text.length, 0);
   const freshness = !current ? 'deleted' : task
     ? current.versionId === task.input.thoughtVersionId && current.body.versionId === task.input.bodyVersionId ? task.freshness : 'changed'
     : current.versionId === source?.versionId && current.body.versionId === source.body.versionId ? 'current' : 'changed';
   const stale = !!(source || task) && freshness !== 'current';
+  const addKey = task ? `${task.id}/${task.attempt}` : null;
+  const pendingAdd = addRequest.current?.key === addKey;
 
   useLayoutEffect(() => {
     const element = dialog.current;
     element?.showModal();
     return () => element?.close();
   }, []);
+
+  useLayoutEffect(() => {
+    if (starting) cancelStartButton.current?.focus();
+    else if (!busy && !dialog.current?.contains(document.activeElement)) closeButton.current?.focus();
+  }, [starting, busy]);
 
   useEffect(() => {
     let active = true;
@@ -93,16 +102,54 @@ export function OrganizeDialog({ projectId, source, cards, close, onAdded }: {
     };
     const key = JSON.stringify(input);
     if (startRequest.current?.key !== key) startRequest.current = { key, id: crypto.randomUUID() };
+    const flight = { input: { requestId: startRequest.current.id, ...input }, cancelRequested: false };
+    if (mode === 'real') {
+      startingRequest.current = flight;
+      setStarting(true);
+    }
     setBusy(true);
     setError('');
     try {
-      const next = await api.organizeStart(projectId, { requestId: startRequest.current.id, ...input });
-      setTask(next);
-      setHistory(list => [next, ...list.filter(item => item.id !== next.id)]);
-      startRequest.current = null;
+      const next = await api.organizeStart(projectId, flight.input);
+      if (!flight.cancelRequested) acceptStart(next);
     } catch (cause) {
-      setError(cause instanceof MappingError ? cause.message : '任务回执未确认，可以按相同范围重试');
+      if (!flight.cancelRequested)
+        setError(cause instanceof MappingError ? cause.message : '任务回执未确认，可以按相同范围重试');
     } finally {
+      if (!flight.cancelRequested) {
+        startingRequest.current = null;
+        setStarting(false);
+        setBusy(false);
+      }
+    }
+  }
+
+  function acceptStart(next: OrganizeTask) {
+    setTask(next);
+    setHistory(list => [next, ...list.filter(item => item.id !== next.id)]);
+    startRequest.current = null;
+  }
+
+  async function cancelStart() {
+    const flight = startingRequest.current;
+    if (!flight || cancellingStart) return;
+    flight.cancelRequested = true;
+    setCancellingStart(true);
+    setBusy(true);
+    setError('');
+    try {
+      acceptStart(await api.organizeCancelStart(projectId, flight.input));
+      startingRequest.current = null;
+      setStarting(false);
+    } catch (cause) {
+      if (cause instanceof MappingError && ['ORGANIZE_SOURCE_STALE', 'ORGANIZE_INVALID_SCOPE',
+        'IDEMPOTENCY_MISMATCH', 'ORGANIZE_MODEL_UNCONFIGURED'].includes(cause.code)) {
+        startingRequest.current = null;
+        setStarting(false);
+      }
+      setError(cause instanceof MappingError ? cause.message : '未确认取消结果，请重试取消');
+    } finally {
+      setCancellingStart(false);
       setBusy(false);
     }
   }
@@ -128,14 +175,15 @@ export function OrganizeDialog({ projectId, source, cards, close, onAdded }: {
     }
   }
 
-  async function add() {
-    if (!task || !current) return;
-    const key = `${task.id}/${task.attempt}`;
-    if (addRequest.current?.key !== key) {
-      addRequest.current = { key, command: {
+  async function add(copyWhileCut?: true) {
+    if (!task || !addKey) return;
+    if (addRequest.current?.key !== addKey) {
+      if (!current || stale) return;
+      addRequest.current = { key: addKey, command: {
         commandId: crypto.randomUUID(), projectId, type: 'organize.add', expected: null,
         payload: { taskId: task.id, attempt: task.attempt,
-          x: current.item.pose.x + current.item.pose.width + 24, y: current.item.pose.y },
+          x: current.item.pose.x + current.item.pose.width + 24, y: current.item.pose.y,
+          ...(copyWhileCut ? { copyWhileCut } : {}) },
       } };
     }
     setError('');
@@ -158,19 +206,23 @@ export function OrganizeDialog({ projectId, source, cards, close, onAdded }: {
   }
 
   return <dialog className="organize-dialog" aria-labelledby="organize-heading" ref={dialog}
-    onCancel={event => { event.preventDefault(); if (!busy) close(); }}>
+    onCancel={event => {
+      event.preventDefault();
+      if (starting) void cancelStart();
+      else if (!busy) close();
+    }}>
     <header>
       <div>
         <h2 id="organize-heading">{source ? 'AI 整理' : 'AI 整理记录'}</h2>
         {source && <p className="organize-muted">{source.title || '未命名卡片'}</p>}
       </div>
-      <button type="button" disabled={busy} onClick={close} aria-label="关闭 AI 整理">关闭</button>
+      <button type="button" ref={closeButton} disabled={busy} onClick={close} aria-label="关闭 AI 整理">关闭</button>
     </header>
     <div className="organize-content">
       {stale && <p role="status">{freshness === 'deleted' ? '原卡已删除，仍可查看旧结果。' : '原卡内容已更新。关闭后重新打开，可选择当前内容。'}</p>}
       {error && <p role="alert" className="organize-error">{error}</p>}
       {history.length > 0 && <label className="organize-history">整理记录
-        <select value={task?.id ?? ''} disabled={busy} onChange={event => {
+        <select value={task?.id ?? ''} disabled={busy || starting} onChange={event => {
           const id = event.currentTarget.value;
           setError('');
           if (!id) { setTask(null); return; }
@@ -184,7 +236,7 @@ export function OrganizeDialog({ projectId, source, cards, close, onAdded }: {
         </select>
       </label>}
       {!task && source ? <>
-        <fieldset disabled={stale || busy}>
+        <fieldset disabled={stale || busy || starting}>
           <legend>选择本次处理的内容</legend>
           {source.title.trim() && <label><input type="checkbox" checked={title} onChange={event => setTitle(event.currentTarget.checked)} />
             <span><strong>卡片标题</strong><span>{source.title}</span></span>
@@ -203,6 +255,8 @@ export function OrganizeDialog({ projectId, source, cards, close, onAdded }: {
           {!source.title.trim() && blocks.length === 0 && <p>请先给这张卡添加标题或正文文字。</p>}
         </fieldset>
         <p className="organize-muted">本次仅处理勾选的标题与正文文字。{model ? `已配置本机模型 ${model}。` : model === null ? '当前未配置本机真实模型。' : '正在读取模型设置。'}</p>
+        {starting && <p role="status">{cancellingStart ? '正在确认取消'
+          : startingRequest.current?.cancelRequested ? '取消结果未确认' : '正在检查本机模型'}</p>}
         {length > 24_000 && <p role="alert">选中的文字超过 24,000 字符，请减少范围。</p>}
       </> : task ? <>
         <p role="status" className="organize-status"><strong>{modeName(task.mode)}</strong> {states[task.state]}{task.applied
@@ -218,6 +272,9 @@ export function OrganizeDialog({ projectId, source, cards, close, onAdded }: {
           <h3>资料缺口</h3>
           <ul>{task.output.gaps.map((gap, index) => <li key={index}>{gap}</li>)}</ul>
         </section>}
+        {task.cutCopyAvailable && !stale && !pendingAdd && <p className="organize-muted">
+          之前添加的卡片仍有首次粘贴资格。另建会生成一张独立的候选卡。
+        </p>}
         <details>
           <summary>输入范围与用量</summary>
           <p>{task.input.title === null ? '未选标题' : `标题：${task.input.title}`}，选了 {task.input.blocks.length} 个正文块，另有 {task.input.omittedBlockCount} 个块未处理。</p>
@@ -251,9 +308,15 @@ export function OrganizeDialog({ projectId, source, cards, close, onAdded }: {
         {task.state === 'running' && <button type="button" disabled={busy} onClick={() => void change('cancel')}>取消任务</button>}
         {canRetryOrganize(task) &&
           <button type="button" disabled={busy || stale} onClick={() => void change('retry')}>重试整理</button>}
-        {(task.addAvailable || addRequest.current?.key === `${task.id}/${task.attempt}`) &&
-          <button type="button" className="primary" disabled={busy || stale} onClick={() => void add()}>添加为新卡</button>}
-      </> : source && <>
+        {pendingAdd
+          ? <button type="button" className="primary" disabled={busy} onClick={() => void add()}>确认添加结果</button>
+          : task.cutCopyAvailable
+          ? <button type="button" className="primary" disabled={busy || stale} onClick={() => void add(true)}>另建候选卡</button>
+          : task.addAvailable &&
+            <button type="button" className="primary" disabled={busy || stale} onClick={() => void add()}>添加为新卡</button>}
+      </> : starting
+      ? <button type="button" ref={cancelStartButton} aria-disabled={cancellingStart} onClick={() => void cancelStart()}>取消任务</button>
+      : source && <>
         <button type="button" disabled={busy || stale || !length || length > 24_000 || selected.length > 100 || model === undefined}
           onClick={() => void start('simulate')}>试用模拟整理</button>
         <button type="button" className="primary" disabled={busy || stale || !model || !length || length > 24_000 || selected.length > 100}

@@ -748,7 +748,9 @@ export class Mapping {
           const project = this.project(command.projectId);
           const p = command.type === 'thought.create'
             ? { ...command.payload, aiOrigin: undefined }
-            : { ...this.organize.takeCandidate(project.id, command.payload.taskId, command.payload.attempt), attachment: undefined };
+            : { ...this.organize.takeCandidate(
+              project.id, command.payload.taskId, command.payload.attempt, command.payload.copyWhileCut,
+            ), attachment: undefined };
           requireThat(
             !this.db.prepare('SELECT 1 FROM mapping_card_ids WHERE id=?').get(p.id),
             'ID_CONFLICT',

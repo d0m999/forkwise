@@ -72,7 +72,7 @@ export function recordCut(db: Database.Database, projectId: string, cutId: strin
   return { cutId, state: 'eligible', revision: 0, sourceRevision };
 }
 
-export function isCardPendingPaste(db: Database.Database, projectId: string, cardId: string): boolean {
+export function hasPendingCardPaste(db: Database.Database, projectId: string, cardIds: ReadonlySet<string>): boolean {
   const receipts = db.prepare(`
     SELECT change.receipt FROM mapping_cuts cut
     JOIN mapping_changes change ON change.project_id=cut.project_id AND change.revision=cut.source_revision
@@ -80,7 +80,7 @@ export function isCardPendingPaste(db: Database.Database, projectId: string, car
   `).iterate(projectId) as Iterable<{ receipt: string }>;
   for (const { receipt } of receipts) {
     const change = JSON.parse(receipt) as Change;
-    if (change.cardLifecycleChanges?.some(item => item.before?.id === cardId && !item.after)) return true;
+    if (change.cardLifecycleChanges?.some(item => item.before && !item.after && cardIds.has(item.before.id))) return true;
   }
   return false;
 }

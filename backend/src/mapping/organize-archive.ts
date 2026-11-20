@@ -44,6 +44,7 @@ const Task = z.object({
   applied: z.boolean(),
   candidateOnCanvas: z.boolean(),
   addAvailable: z.boolean().optional(),
+  cutCopyAvailable: z.boolean().optional(),
   freshness: z.enum(['current', 'changed', 'deleted']),
 });
 

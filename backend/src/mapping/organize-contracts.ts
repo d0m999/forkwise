@@ -74,6 +74,7 @@ export type OrganizeTask = {
   applied: boolean;
   candidateOnCanvas: boolean;
   addAvailable: boolean;
+  cutCopyAvailable: boolean;
   freshness: 'current' | 'changed' | 'deleted';
 };
 export type OrganizeSummary = Pick<OrganizeTask, 'id' | 'cardId' | 'mode' | 'createdAt'>;

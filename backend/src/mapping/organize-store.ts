@@ -3,10 +3,12 @@ import { requireThat } from '../domain/errors.js';
 import type { Card } from './contracts.js';
 import type { OrganizeSummary, OrganizeTask } from './organize-contracts.js';
 
-export type StoredTask = Omit<OrganizeTask, 'freshness' | 'candidateOnCanvas' | 'addAvailable' | 'attempts'> & {
+export type StoredTask = Omit<OrganizeTask, 'freshness' | 'candidateOnCanvas' | 'addAvailable' | 'cutCopyAvailable' | 'attempts'> & {
   candidateId: string;
+  cutCandidateIds?: string[];
   deadline: number;
   modelDigest?: string;
+  startRequestId?: string;
   attempts: (OrganizeTask['attempts'][number] & { retryId?: string })[];
 };
 

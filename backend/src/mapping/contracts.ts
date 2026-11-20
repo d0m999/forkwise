@@ -259,6 +259,7 @@ export const MappingCommand = z.discriminatedUnion('type', [
       attempt: z.int().positive(),
       x: z.number().finite(),
       y: z.number().finite(),
+      copyWhileCut: z.literal(true).optional(),
     }).strict(),
   }).strict(),
 ]);

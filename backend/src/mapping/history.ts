@@ -83,23 +83,28 @@ function save(db: Database.Database, id: string, stack: Stack) {
     'INSERT INTO mapping_history VALUES(?,?) ON CONFLICT(project_id) DO UPDATE SET value=excluded.value',
   ).run(id, JSON.stringify(stack));
 }
-export function canRestoreCard(db: Database.Database, projectId: string, cardId: string): boolean {
+function restorableCardIds(action: StoredAction, direction: 'undo' | 'redo'): string[] {
+  const [restore, absent] = direction === 'undo' ? ['before', 'after'] as const : ['after', 'before'] as const;
+  const card = action[restore];
+  return [
+    ...(card && 'body' in card && !action[absent] ? [card.id] : []),
+    ...(action.cardLifecycleChanges ?? []).flatMap(change => {
+      const card = change[restore];
+      return card && !change[absent] ? [card.id] : [];
+    }),
+  ];
+}
+
+export function canRestoreAnyCard(db: Database.Database, projectId: string, cardIds: ReadonlySet<string>): boolean {
   const stack = load(db, projectId);
-  return stack.undo.some(action =>
-    (!action.after && action.before && 'body' in action.before && action.before.id === cardId)
-    || action.cardLifecycleChanges?.some(change => change.before?.id === cardId && !change.after))
-    || stack.redo.some(action =>
-      (!action.before && action.after && 'body' in action.after && action.after.id === cardId)
-      || action.cardLifecycleChanges?.some(change => change.after?.id === cardId && !change.before));
+  return stack.undo.some(action => restorableCardIds(action, 'undo').some(id => cardIds.has(id)))
+    || stack.redo.some(action => restorableCardIds(action, 'redo').some(id => cardIds.has(id)));
 }
 
 export function readHistory(db: Database.Database, project: Project): ProjectHistory {
   const stack = load(db, project.id);
   const summary = (action: StoredAction): HistoryAction => {
-    const deletedCardIds = [...new Set([
-      ...(action.before && 'body' in action.before && !action.after ? [action.before.id] : []),
-      ...(action.cardLifecycleChanges ?? []).flatMap(change => change.before && !change.after ? [change.before.id] : []),
-    ])];
+    const deletedCardIds = [...new Set(restorableCardIds(action, 'undo'))];
     return { id: action.id, label: action.label, target: action.target, actor: action.actor,
       ...(deletedCardIds.length ? { deletedCardIds } : {}) };
   };
