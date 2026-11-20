@@ -26,9 +26,23 @@ import { initializeTags } from './tags.js';
 import { initializeSearchState } from './search-state.js';
 import { initializeCuts } from './cut.js';
 
-export const WORKSPACE_DATABASE_FILENAME = 'workspace.sqlite';
+const WORKSPACE_DATABASE_FILENAME = 'workspace.sqlite';
 const workspaceWalFilename = `${WORKSPACE_DATABASE_FILENAME}-wal`;
 const workspaceShmFilename = `${WORKSPACE_DATABASE_FILENAME}-shm`;
+const workspaceAccessFilename = 'local-access.json';
+const workspaceDataFilenames = new Set([
+  WORKSPACE_DATABASE_FILENAME,
+  workspaceWalFilename,
+  workspaceShmFilename,
+  workspaceAccessFilename,
+]);
+
+export function hasWorkspaceDataEntries(directory: string): boolean {
+  for (const filename of workspaceDataFilenames) {
+    if (lstatSync(join(directory, filename), { throwIfNoEntry: false }) !== undefined) return true;
+  }
+  return false;
+}
 
 // Separate from research.sqlite: opening the workspace never runs legacy migrations,
 // activation recovery, background jobs, or retention cleanup.
@@ -43,18 +57,12 @@ export function openMapping(directory: string, options: CommitOptions = {}): Map
     if (!directoryInfo.isDirectory()) throw new Error('请使用独立的真实数据目录');
     if (directoryInfo.uid !== process.getuid?.() || (directoryInfo.mode & 0o077) !== 0)
       throw new Error('数据目录必须仅归当前本机账户访问（0700）；原权限未修改');
-    const allowed = new Set([
-      WORKSPACE_DATABASE_FILENAME,
-      workspaceWalFilename,
-      workspaceShmFilename,
-      'local-access.json',
-    ]);
     for (const entry of readdirSync(directory)) {
       const info = lstatSync(join(directory, entry));
       if (entry === WORKSPACE_DATABASE_FILENAME) existing = true;
-      if (entry === 'local-access.json') accessFile = true;
+      if (entry === workspaceAccessFilename) accessFile = true;
       if (entry === workspaceWalFilename || entry === workspaceShmFilename) sidecar = true;
-      if (!allowed.has(entry) || !info.isFile() || info.nlink !== 1)
+      if (!workspaceDataFilenames.has(entry) || !info.isFile() || info.nlink !== 1)
         throw new Error('数据目录包含旧资料或链接，请使用新的隔离目录');
       if (info.uid !== process.getuid?.() || (info.mode & 0o077) !== 0)
         throw new Error('数据文件必须仅归当前本机账户访问（0600）；原权限未修改');

@@ -1,9 +1,9 @@
 import { createHash, randomBytes } from 'node:crypto';
-import { closeSync, lstatSync, openSync, readFileSync, realpathSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { closeSync, openSync, readFileSync, realpathSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, resolve, sep } from 'node:path';
 import { parseArgs } from 'node:util';
 import { DomainError, requireThat } from '../src/domain/errors.js';
-import { openMapping, WORKSPACE_DATABASE_FILENAME } from '../src/mapping/storage.js';
+import { hasWorkspaceDataEntries, openMapping } from '../src/mapping/storage.js';
 import type { ContentDelegation } from '../src/services/access.js';
 
 function issueGrant() {
@@ -47,11 +47,8 @@ function issueGrant() {
   const outputDirectory = statSync(outputParent);
   const isSourceWorkspace =
     workspaceDirectory.dev === outputDirectory.dev && workspaceDirectory.ino === outputDirectory.ino;
-  // The primary database marks a workspace even without a running server or local-access.json.
-  const hasWorkspaceDatabase =
-    lstatSync(join(outputParent, WORKSPACE_DATABASE_FILENAME), { throwIfNoEntry: false }) !== undefined;
   requireThat(
-    !isSourceWorkspace && !hasWorkspaceDatabase,
+    !isSourceWorkspace && !hasWorkspaceDataEntries(outputParent),
     'INVALID_SCOPE', '请将令牌输出到工作台数据目录之外', 403,
   );
   const localAccess = JSON.parse(readFileSync(resolve(directory, 'local-access.json'), 'utf8')) as { url?: string };

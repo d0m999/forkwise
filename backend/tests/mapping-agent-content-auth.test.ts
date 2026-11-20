@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import { expect, it } from 'vitest';
@@ -218,6 +218,34 @@ it('签发 CLI 拒绝写入另一工作台的数据目录，另一工作台仍�
     rmSync(temp, { recursive: true });
   }
 }, 20_000);
+
+it.each(['workspace.sqlite-wal', 'workspace.sqlite-shm', 'local-access.json'])(
+  '签发 CLI 拒绝写入主库缺失且仅剩 %s 的待恢复工作台目录',
+  async (filename) => {
+    const source = await contentFixture();
+    const issue = bodyGrantCli(source);
+    const directory = mkdtempSync(join(tmpdir(), 'forkwise-body-recovery-'));
+    try {
+      const residue = join(directory, filename);
+      const bytes = Buffer.from('待恢复的原始内容');
+      writeFileSync(residue, bytes, { mode: 0o600 });
+      const mode = statSync(residue).mode;
+      const grants = source.mapping.access.grants();
+
+      const result = issue(join(directory, 'grant'));
+
+      expect(result.status, result.error?.message ?? result.stderr).toBe(2);
+      expect(result.stderr).toContain('工作台数据目录之外');
+      expect(readdirSync(directory)).toEqual([filename]);
+      expect(readFileSync(residue)).toEqual(bytes);
+      expect(statSync(residue).mode).toBe(mode);
+      expect(source.mapping.access.grants()).toEqual(grants);
+    } finally {
+      rmSync(directory, { recursive: true });
+    }
+  },
+  10_000,
+);
 
 it('签发 CLI 按文件系统顺序解析 --out 中的符号链接和上级目录', async () => {
   const f = await contentFixture();
