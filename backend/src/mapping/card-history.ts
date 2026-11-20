@@ -5,7 +5,14 @@ import { DEFAULT_APPEARANCE } from './presentation-values.js';
 import { reconcileMediaTasks } from './media-tasks.js';
 import { retainCardVersions } from './versions.js';
 
-export function restoreCard(db: Database.Database, projectId: string, change: { before: Card | null; after: Card | null }, type: 'history.undo' | 'history.redo', changedIds: string[]) {
+export function restoreCard(
+  db: Database.Database,
+  projectId: string,
+  change: { before: Card | null; after: Card | null },
+  type: 'history.undo' | 'history.redo',
+  changedIds: string[],
+  { reconcileMedia = true } = {},
+) {
   const identity = change.after ?? change.before!, desired = type === 'history.undo' ? change.before : change.after;
   const row = db.prepare('SELECT value FROM mapping_cards WHERE id=? AND project_id=?').get(identity.id, projectId) as { value: string } | undefined;
   const before = row ? JSON.parse(row.value) as Card : null;
@@ -52,14 +59,14 @@ export function restoreCard(db: Database.Database, projectId: string, change: { 
         versionId: randomUUID(),
       };
     }
-    reconcileMediaTasks(db, projectId, before, after);
+  }
+  if (reconcileMedia) reconcileMediaTasks(db, projectId, before, after);
+  if (after) {
     db.prepare(
       'INSERT INTO mapping_cards VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET value=excluded.value',
     ).run(after.id, projectId, JSON.stringify(after));
     retainCardVersions(db, projectId, after);
-  }
-  else {
-    reconcileMediaTasks(db, projectId, before, null);
+  } else {
     db.prepare('DELETE FROM mapping_cards WHERE id=? AND project_id=?').run(identity.id, projectId);
   }
   return { before, after };

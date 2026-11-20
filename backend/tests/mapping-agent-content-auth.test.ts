@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import { expect, it } from 'vitest';
@@ -246,6 +246,36 @@ it.each(['workspace.sqlite-wal', 'workspace.sqlite-shm', 'local-access.json'])(
   },
   10_000,
 );
+
+it.each(['命名管道', '指向命名管道的符号链接'])('签发 CLI 及时拒绝作为源凭据的%s', async (kind) => {
+  const f = await contentFixture();
+  const issue = bodyGrantCli(f);
+  const temp = mkdtempSync(join(tmpdir(), 'forkwise-body-access-'));
+  try {
+    const access = join(f.directory, 'local-access.json');
+    const fifo = kind === '命名管道' ? access : join(temp, 'source-fifo');
+    const out = join(temp, 'grant');
+    rmSync(access);
+    const created = spawnSync('mkfifo', ['-m', '600', fifo], { encoding: 'utf8', timeout: 5_000 });
+    expect(created.status, created.error?.message ?? created.stderr).toBe(0);
+    if (fifo !== access) symlinkSync(fifo, access);
+
+    const entries = readdirSync(f.directory).sort();
+    const accessEntry = lstatSync(access);
+    const grants = f.mapping.access.grants();
+    const result = issue(out);
+
+    expect(result.status, result.error?.message ?? result.stderr).toBe(1);
+    expect(result.stdout).toBe('');
+    expect(existsSync(out)).toBe(false);
+    expect(readdirSync(f.directory).sort()).toEqual(entries);
+    expect(lstatSync(access)).toMatchObject({ ino: accessEntry.ino, mode: accessEntry.mode });
+    expect(lstatSync(fifo).isFIFO()).toBe(true);
+    expect(f.mapping.access.grants()).toEqual(grants);
+  } finally {
+    rmSync(temp, { recursive: true });
+  }
+}, 12_000);
 
 it('签发 CLI 按文件系统顺序解析 --out 中的符号链接和上级目录', async () => {
   const f = await contentFixture();

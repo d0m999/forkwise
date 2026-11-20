@@ -91,3 +91,108 @@ it('AC6 项目包通过真实 verifier，隔离导入保全正文、对象和历
     rmSync(temp, { recursive: true });
   }
 }, 30_000);
+
+it('隔离导入后正文补丁、卡面测量及补丁撤销重做均不激活原媒体票据', async () => {
+  const source = await contentFixture();
+  const created = await source.post(command('thought.create', null, {
+    id: 'media-card', title: '待处理图片卡', text: '正文', x: 40, y: 50,
+  }));
+  expect(created.status).toBe(200);
+  const sourceCard = source.card('media-card');
+  expect((await source.post(command('text.create', null, {
+    id: 'note', content: { runs: [{ text: '随动批注' }], fontSize: 16, lineHeight: 1.5, align: 'left', widthMode: 'fixed', width: 80 },
+    pose: { x: 40, y: 130, width: 80, height: 24 },
+  }))).status).toBe(200);
+  const sourceNote = source.state().texts![0]!;
+  expect((await source.post(command('attachment.attach', {
+    attachment: null, target: { itemId: sourceCard.item.id, versionId: sourceCard.item.versionId }, containment: null,
+  }, { itemId: sourceNote.item.id, targetItemId: sourceCard.item.id }))).status).toBe(200);
+  const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==';
+  const imageTask = {
+    id: 'image-task', type: 'imageTask', ticket: 'original-image-ticket',
+    name: '原图.png', mime: 'image/png', base64: png, byteLength: Buffer.from(png, 'base64').length,
+    width: 1, height: 1, status: 'queued',
+  };
+  const saved = await source.post(command('body.edit', sourceCard.body.versionId, {
+    id: sourceCard.id, blocks: [...sourceCard.body.blocks, imageTask],
+  }));
+  expect(saved.status).toBe(200);
+  const exported = await source.request(`/api/mapping/projects/p/export.package?revision=${saved.body.revision}`);
+  expect(exported.status).toBe(200);
+  const destination = await contentFixture();
+  const projectId = 'restored';
+  const imported = await destination.post(command('project.import', null, {
+    name: '隔离恢复', base64: Buffer.from(await exported.arrayBuffer()).toString('base64'),
+  }, projectId));
+  expect(imported.status).toBe(200);
+  const cardId = destination.state(projectId).cards.find(card => card.title === sourceCard.title)!.id;
+  const card = () => destination.card(cardId, projectId);
+  const note = () => destination.state(projectId).texts![0]!;
+  const tickets = () => destination.mapping.access.db.prepare(
+    'SELECT ticket, state FROM mapping_media_tickets WHERE project_id=?',
+  ).all(projectId);
+  expect(tickets()).toEqual([]);
+  expect(card().body.blocks[1]).toEqual(imageTask);
+
+  const paragraph = card().body.blocks[0]!;
+  const grant = destination.grant({
+    projectId, cardId, blockId: paragraph.id, bodyVersionId: card().body.versionId,
+    range: { start: 0, end: 2 },
+  });
+  const token = destination.issue([grant], undefined, [projectId]);
+  const result = await destination.post(command('body.patch', grant.bodyVersionId, {
+    id: cardId, blockId: grant.blockId, range: grant.range, text: '',
+  }, projectId), token);
+  expect(result.status).toBe(200);
+  const patchedParagraph = { ...paragraph, text: '' };
+  expect(card().body.blocks).toEqual([patchedParagraph, imageTask]);
+  expect(tickets()).toEqual([]);
+
+  // An intervening edit means the measurement cannot fold into the patch's history entry.
+  const { project } = destination.state(projectId);
+  expect((await destination.post(command('project.rename', project.versionId, { name: '新名称' }, projectId))).status).toBe(200);
+  const measured = card();
+  const heightBefore = measured.item.pose.height;
+  const heightAfter = 48;
+  expect(heightBefore).toBeGreaterThan(heightAfter);
+  const beforeNote = note();
+  const yBefore = beforeNote.item.pose.y;
+  const yAfter = yBefore + (heightAfter - heightBefore) / 2;
+  const layout = await destination.post({ ...command('card.layout', {
+    thought: measured.versionId, body: measured.body.versionId, pose: measured.item.versionId,
+    appearance: measured.appearance?.versionId ?? null, cardTags: measured.cardTags?.versionId ?? null,
+  }, { id: cardId, necessaryHeight: heightAfter }, projectId),
+    followers: [{ kind: 'text', id: beforeNote.id, itemId: beforeNote.item.id, x: beforeNote.item.pose.x, y: yAfter }],
+    expectedFollowers: { [beforeNote.item.id]: beforeNote.item.versionId },
+  });
+  expect(layout.status).toBe(200);
+  expect(card().item.pose.height).toBe(heightAfter);
+  expect(note().item.pose.y).toBe(yAfter);
+  expect(card().body.blocks).toEqual([patchedParagraph, imageTask]);
+  expect(tickets()).toEqual([]);
+
+  await destination.restart();
+  for (const [direction, label, expected, height, y] of [
+    ['undo', 'card.layout', patchedParagraph, heightBefore, yBefore],
+    ['undo', 'project.rename', patchedParagraph, heightBefore, yBefore],
+    ['undo', 'body.patch', paragraph, heightBefore, yBefore],
+    ['redo', 'body.patch', patchedParagraph, heightBefore, yBefore],
+    ['redo', 'project.rename', patchedParagraph, heightBefore, yBefore],
+    ['redo', 'card.layout', patchedParagraph, heightAfter, yAfter],
+  ] as const) {
+    const history = destination.history(projectId);
+    const action = history[direction].at(-1)!;
+    expect(action.label).toBe(label);
+    const travelled = await destination.post(command(`history.${direction}`, history.revision, { actionId: action.id }, projectId));
+    expect(travelled.status).toBe(200);
+    expect(card().body.blocks).toEqual([expected, imageTask]);
+    expect(card().item.pose.height).toBe(height);
+    expect(note().item.pose.y).toBe(y);
+    expect(tickets()).toEqual([]);
+  }
+  const before = destination.snapshot(projectId);
+  expect(await destination.post(command('media.fail', imageTask.ticket, {
+    id: cardId, blockId: imageTask.id, reason: '导入前的请求已结束',
+  }, projectId))).toMatchObject({ status: 409, body: { code: 'MEDIA_TASK_STALE' } });
+  expect(destination.snapshot(projectId)).toEqual(before);
+});

@@ -8,6 +8,7 @@ import { restoreText } from './text.js';
 import { restoreShape } from './shape.js';
 import { restoreStroke } from './stroke.js';
 import { imageTask } from './media-blocks.js';
+import { shouldReconcileCardMediaTasks } from './media-tasks.js';
 import { retainCardVersions } from './versions.js';
 import type Database from 'better-sqlite3';
 import { randomUUID } from 'node:crypto';
@@ -456,7 +457,7 @@ export function travelHistory(
     ({ before, after } = restoreCard(db, project.id, {
       before: action.before && 'body' in action.before ? action.before : null,
       after: action.after && 'body' in action.after ? action.after : null,
-    }, type, action.changedIds));
+    }, type, action.changedIds, { reconcileMedia: shouldReconcileCardMediaTasks(action.label) }));
   } else {
     before = project; after = desired ? { ...desired as Project, versionId: randomUUID(), revision: project.revision + 1 } : null;
     if (after) db.prepare('UPDATE mapping_projects SET name=?,version_id=? WHERE id=?').run(after.name, after.versionId, project.id);

@@ -25,7 +25,7 @@ import type { ShapeVersion } from './shape-contracts.js';
 import type { StrokeVersion } from './stroke-contracts.js';
 import { readTexts, writeText } from './text.js';
 import { attachAnnotation, detachAnnotation, followCardMotions, readAttachments, rejectAttachedPoseMove, releaseAttachments } from './attachment.js';
-import { reconcileMediaTasks, completeMediaTask } from './media-tasks.js';
+import { reconcileMediaTasks, completeMediaTask, shouldReconcileCardMediaTasks } from './media-tasks.js';
 import { completeMediaHistory } from './history.js';
 import { readAsset, saveAsset, validateImageAssets } from './media.js';
 import { buildFullPackage } from './full-package.js';
@@ -1015,7 +1015,13 @@ export class Mapping {
           }
         }
         if (before && 'body' in before || after && 'body' in after) {
-          reconcileMediaTasks(this.db,command.projectId,before&&'body' in before?before:null,after&&'body' in after?after:null);
+          if (shouldReconcileCardMediaTasks(travel?.target.label ?? command.type)) {
+            reconcileMediaTasks(
+              this.db, command.projectId,
+              before && 'body' in before ? before : null,
+              after && 'body' in after ? after : null,
+            );
+          }
           if(after&&'body' in after)this.db.prepare('UPDATE mapping_cards SET value=? WHERE id=? AND project_id=?').run(JSON.stringify(after),after.id,command.projectId);
         }
         if (after && 'body' in after) retainCardVersions(this.db, command.projectId, after);

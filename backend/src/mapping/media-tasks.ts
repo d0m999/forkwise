@@ -9,6 +9,12 @@ export function initializeMediaTasks(db: Database.Database) {
     'CREATE TABLE IF NOT EXISTS mapping_media_tickets(project_id TEXT NOT NULL, ticket TEXT NOT NULL, card_id TEXT NOT NULL, block_id TEXT NOT NULL, state TEXT NOT NULL, request TEXT NOT NULL, PRIMARY KEY(project_id,ticket))',
   );
 }
+
+export function shouldReconcileCardMediaTasks(action: string): boolean {
+  // Text patches and card measurements leave media requests untouched, including during history travel.
+  return action !== 'body.patch' && action !== 'card.layout';
+}
+
 // A retired ticket is never made live by history travel, deletion restoration or
 // a new command. Retrying is an explicit new request on the same block.
 export function reconcileMediaTasks(

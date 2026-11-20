@@ -1,9 +1,9 @@
 import { createHash, randomBytes } from 'node:crypto';
-import { closeSync, openSync, readFileSync, realpathSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { closeSync, openSync, realpathSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, resolve, sep } from 'node:path';
 import { parseArgs } from 'node:util';
 import { DomainError, requireThat } from '../src/domain/errors.js';
-import { hasWorkspaceDataEntries, openMapping } from '../src/mapping/storage.js';
+import { hasWorkspaceDataEntries, openMapping, readWorkspaceAccessFile } from '../src/mapping/storage.js';
 import type { ContentDelegation } from '../src/services/access.js';
 
 function issueGrant() {
@@ -51,7 +51,7 @@ function issueGrant() {
     !isSourceWorkspace && !hasWorkspaceDataEntries(outputParent),
     'INVALID_SCOPE', '请将令牌输出到工作台数据目录之外', 403,
   );
-  const localAccess = JSON.parse(readFileSync(resolve(directory, 'local-access.json'), 'utf8')) as { url?: string };
+  const localAccess = JSON.parse(readWorkspaceAccessFile(directory)) as { url?: string };
   const humanToken = new URLSearchParams(localAccess.url?.split('#')[1]).get('token') ?? '';
   const mapping = openMapping(directory);
   try {

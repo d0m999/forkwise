@@ -11,12 +11,15 @@ import { initializeMedia } from './media.js';
 import Database from 'better-sqlite3';
 import {
   mkdirSync,
+  fstatSync,
   lstatSync,
   readdirSync,
   openSync,
+  readFileSync,
   readSync,
   closeSync,
   constants,
+  type Stats,
 } from 'node:fs';
 import { join, isAbsolute } from 'node:path';
 import { Mapping, type CommitOptions } from './mapping.js';
@@ -44,11 +47,15 @@ export function hasWorkspaceDataEntries(directory: string): boolean {
   return false;
 }
 
-// Separate from research.sqlite: opening the workspace never runs legacy migrations,
-// activation recovery, background jobs, or retention cleanup.
-export function openMapping(directory: string, options: CommitOptions = {}): Mapping {
+function requirePrivateWorkspaceFile(info: Stats) {
+  if (!info.isFile() || info.nlink !== 1)
+    throw new Error('数据目录包含旧资料或链接，请使用新的隔离目录');
+  if (info.uid !== process.getuid?.() || (info.mode & 0o077) !== 0)
+    throw new Error('数据文件必须仅归当前本机账户访问（0600）；原权限未修改');
+}
+
+function inspectWorkspaceDirectory(directory: string) {
   if (!directory || !isAbsolute(directory)) throw new Error('必须显式提供绝对路径的数据目录');
-  const applicationId = 1179472720;
   let existing = false;
   let sidecar = false;
   let accessFile = false;
@@ -62,16 +69,38 @@ export function openMapping(directory: string, options: CommitOptions = {}): Map
       if (entry === WORKSPACE_DATABASE_FILENAME) existing = true;
       if (entry === workspaceAccessFilename) accessFile = true;
       if (entry === workspaceWalFilename || entry === workspaceShmFilename) sidecar = true;
-      if (!workspaceDataFilenames.has(entry) || !info.isFile() || info.nlink !== 1)
+      if (!workspaceDataFilenames.has(entry))
         throw new Error('数据目录包含旧资料或链接，请使用新的隔离目录');
-      if (info.uid !== process.getuid?.() || (info.mode & 0o077) !== 0)
-        throw new Error('数据文件必须仅归当前本机账户访问（0600）；原权限未修改');
+      requirePrivateWorkspaceFile(info);
     }
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
   }
   if (!existing && sidecar) throw new Error('缺失主库，残留 WAL/SHM 已保留；请先恢复完整副本');
   if (!existing && accessFile) throw new Error('缺失主库，启动凭证原件已保留');
+  return { existing, accessFile };
+}
+
+export function readWorkspaceAccessFile(directory: string): string {
+  const { accessFile } = inspectWorkspaceDirectory(directory);
+  if (!accessFile) throw new Error('数据目录缺少启动凭证');
+  const fd = openSync(
+    join(directory, workspaceAccessFilename),
+    constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+  );
+  try {
+    requirePrivateWorkspaceFile(fstatSync(fd));
+    return readFileSync(fd, 'utf8');
+  } finally {
+    closeSync(fd);
+  }
+}
+
+// Separate from research.sqlite: opening the workspace never runs legacy migrations,
+// activation recovery, background jobs, or retention cleanup.
+export function openMapping(directory: string, options: CommitOptions = {}): Mapping {
+  const applicationId = 1179472720;
+  const { existing } = inspectWorkspaceDirectory(directory);
   mkdirSync(directory, { recursive: true, mode: 0o700 });
   const path = join(directory, WORKSPACE_DATABASE_FILENAME);
   if (existing) {
