@@ -18,6 +18,7 @@ const ATTEMPT_TIMEOUT_MS = 160_000;
 
 export interface OrganizeModel {
   readonly model: string;
+  readonly configuredModelDigest?: string;
   resolveDigest(signal: AbortSignal): Promise<string>;
   generate(job: { taskId: string; attempt: number; input: OrganizeInput; modelDigest: string }, signal: AbortSignal,
     onUsage: (usage: OrganizeUsage) => void):
@@ -29,6 +30,7 @@ type StartPlan = Pick<OrganizeRequest, 'requestId' | 'mode'> & {
   selection: string;
   input: OrganizeInput;
   model: string | null;
+  configuredModelDigest: string | undefined;
   requestedAt: string;
 };
 type StartResult = { task: OrganizeTask; created: boolean };
@@ -64,7 +66,7 @@ export class OrganizeTasks {
   private view(projectId: string, task: StoredTask): OrganizeTask {
     const data = structuredClone(task);
     this.expire(data);
-    const { candidateId, cutCandidateIds, deadline, modelDigest, startRequestId, attempts, ...value } = data;
+    const { candidateId, cutCandidateIds, deadline, modelDigest, configuredModelDigest, startRequestId, attempts, ...value } = data;
     const candidateState = this.candidateState(projectId, data);
     return { ...value, attempts: attempts.map(({ retryId, ...attempt }) => attempt),
       candidateOnCanvas: candidateState === 'on-canvas',
@@ -149,9 +151,10 @@ export class OrganizeTasks {
       }
     }
     const model = input.mode === 'real' ? this.model : undefined;
-    requireThat(input.mode === 'simulate' || model, 'ORGANIZE_MODEL_UNCONFIGURED', '真实整理需要配置本机模型', 503);
+    requireThat(input.mode === 'simulate' || model, 'ORGANIZE_MODEL_UNCONFIGURED', '真实整理尚未启用，可先试用模拟整理', 503);
     const plan = pending?.plan ?? {
       projectId, requestId, selection, mode: input.mode, model: model?.model ?? null,
+      configuredModelDigest: model?.configuredModelDigest,
       requestedAt: new Date().toISOString(), input: this.freezeInput(projectId, input),
     };
     if (cancelling) {
@@ -209,7 +212,7 @@ export class OrganizeTasks {
 
   private completeStart(plan: StartPlan, actor: Principal, check:
     { state: 'ready'; digest: string | null } | { state: 'failed'; error: string } | { state: 'cancelled' }): StartResult {
-    const { projectId, requestId, selection, input, mode, model, requestedAt } = plan;
+    const { projectId, requestId, selection, input, mode, model, configuredModelDigest, requestedAt } = plan;
     const digest = check.state === 'ready' ? check.digest : null;
     requireThat(!this.closed, 'ORGANIZE_CLOSED', '工作台正在关闭，请重新打开后重试', 503);
     const { task, created } = this.db.transaction(() => {
@@ -233,7 +236,7 @@ export class OrganizeTasks {
       const now = new Date().toISOString();
       const task: StoredTask = {
         id: randomUUID(), candidateId: randomUUID(), cardId: input.cardId, mode, model, startRequestId: requestId,
-        ...(digest ? { modelDigest: digest } : {}),
+        ...(digest ? { modelDigest: digest } : configuredModelDigest ? { configuredModelDigest } : {}),
         input,
         state: 'running', createdAt: requestedAt, updatedAt: now, error: null, attempt: 1, output: null, outputAttempt: null,
         usage: null, applied: false, deadline: Date.now() + ATTEMPT_TIMEOUT_MS,
@@ -263,7 +266,10 @@ export class OrganizeTasks {
       this.expire(task);
       requireThat(canRetryOrganize(task),
         'ORGANIZE_NOT_RETRYABLE', '当前任务不能重试', 409);
-      requireThat(task.mode === 'simulate' || this.model?.model === task.model, 'ORGANIZE_MODEL_UNCONFIGURED', '请恢复原任务的模型配置，或用当前配置开始新任务', 503);
+      requireThat(task.mode === 'simulate' || this.model?.model === task.model, 'ORGANIZE_MODEL_UNCONFIGURED', '此记录使用的模型当前不可用，无法重试', 503);
+      const configuredDigest = task.mode === 'real' ? this.model?.configuredModelDigest : undefined;
+      requireThat(configuredDigest === undefined || (task.modelDigest ?? task.configuredModelDigest) === configuredDigest,
+        'ORGANIZE_MODEL_CHANGED', '整理任务的模型配置不匹配，请用当前配置开始新任务', 409);
       task.attempt += 1;
       task.state = 'running';
       task.error = null;
@@ -363,9 +369,9 @@ export class OrganizeTasks {
         const model = this.model!;
         const modelDigest = verifiedDigest ?? await model.resolveDigest(abort.signal);
         abort.signal.throwIfAborted();
-        const pinned = source.modelDigest ?? outputDigest(source);
+        const pinned = source.modelDigest ?? outputDigest(source) ?? source.configuredModelDigest;
         requireThat(pinned ? pinned === modelDigest : !hasOrganizeOutput(source.output), 'ORGANIZE_MODEL_CHANGED',
-          '本机模型已更新，请用当前配置开始新任务', 409);
+          '整理模型已更新，请用当前配置开始新任务', 409);
         if (!source.modelDigest) {
           const { cardId, thoughtVersionId, bodyVersionId, title, blocks } = source.input;
           const request = selectionKey({
@@ -379,6 +385,7 @@ export class OrganizeTasks {
             requireThat(!existing || existing.id === task.id, 'ORGANIZE_SCOPE_EXISTS',
               '当前模型和选中范围已有整理记录，请在记录中查看', 409);
             task.modelDigest = modelDigest;
+            delete task.configuredModelDigest;
             this.store.setScope(projectId, task.id, scope);
             this.store.save(projectId, task);
           }).immediate();
@@ -462,5 +469,5 @@ function selectionKey(selection: Omit<OrganizeRequest, 'requestId'>): string {
 }
 
 function modelError(cause: unknown): string {
-  return cause instanceof DomainError ? cause.message : '整理未完成，请检查本机模型后重试';
+  return cause instanceof DomainError ? cause.message : '整理未完成，请稍后重试';
 }

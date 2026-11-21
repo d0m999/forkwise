@@ -11,6 +11,7 @@ export function currentEvaluations(objects, condition) {
   };
 }
 export function attachResearch({
+  canResearch,
   submitTask,
   api,
   run,
@@ -25,6 +26,9 @@ export function attachResearch({
   textReader,
 }) {
   const $ = (s) => document.querySelector(s);
+  $('#research-task-inputs').hidden = !canResearch;
+  $('#research-unavailable').hidden = canResearch;
+  if (canResearch) $('#research-task-title').textContent = '对选定材料进行研究';
   const appendCitations = (parent, citations) => {
     const projectId = getState()?.project.id;
     for (const citation of citations ?? []) {
@@ -106,7 +110,7 @@ export function attachResearch({
       history.textContent =
         job.historyState === 'undone'
           ? '这次研究结果已从图谱撤销，下面保留原任务记录。'
-          : '这次研究已停止执行，下面仅为已完成阶段的记录；继续查证请发起新的研究任务。';
+          : '这次研究已停止执行，下面保留已完成阶段的记录。';
       box.append(history);
     }
     if (job.kind === 'source.sec-history') {

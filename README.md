@@ -23,10 +23,10 @@ npm --prefix frontend ci                # install the open workspace dependencie
 npm --prefix backend/canvas ci          # install the legacy research canvas dependencies
 cd backend && npm ci                    # then install backend dependencies
 npm run build                           # build canvas + backend
-npm start                               # start; defaults to http://127.0.0.1:8787
+FORKWISE_DATA_DIR="$HOME/Library/Application Support/Forkwise/Open Workspace" npm run start:workspace
 ```
 
-Requires Node.js >= 22.22.2 (the first implementation actually used 24.4.1). Real model calls require a local [Ollama](https://ollama.com) instance with an explicitly version-tagged model. See [backend/README.md](backend/README.md) for more runtime and configuration details.
+Requires Node.js >= 22.22.2 (the first implementation actually used 24.4.1). Open the URL in the data directory’s `local-access.json` to try simulated card organization. The legacy research service still starts with `npm start`. The OpenAI integration is pending verification for the target API project. See [backend/README.md](backend/README.md) for more runtime and configuration details.
 
 ## Repository layout
 
@@ -46,7 +46,7 @@ Terminology and domain concepts use [CONTEXT.md](CONTEXT.md) as the single sourc
 - **Backend**: Node.js + [Hono](https://hono.dev), with OpenAPI as the single contract between frontend and backend
 - **Storage**: single-file SQLite (relational tables + built-in FTS5)
 - **Frontend / canvas**: production uses [React Flow](https://reactflow.dev); the prototype stage integrates [Excalidraw](https://excalidraw.com)
-- **Models**: local Ollama (text research + multimodal transcription), with configurable provider adapters
+- **Models**: OpenAI Responses API adapter for on-demand card organization (offline-tested)
 - **Testing**: TypeScript + Vitest, plus separate browser and protocol-level check scripts
 
 ## Documentation

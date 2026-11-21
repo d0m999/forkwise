@@ -36,6 +36,7 @@ export type OrganizeInput = Pick<OrganizeRequest, 'cardId' | 'thoughtVersionId' 
   blocks: { id: string; text: string }[];
   omittedBlockCount: number;
 };
+export const OrganizeProviderRequestId = z.string().max(128).regex(/^req_[a-zA-Z0-9_-]+$/);
 export const OrganizeUsage = z.object({
   attempts: z.array(z.object({
     model: z.string(),
@@ -43,6 +44,7 @@ export const OrganizeUsage = z.object({
     inputTokens: z.int().nonnegative().nullable(),
     outputTokens: z.int().nonnegative().nullable(),
     responseReceived: z.boolean().optional(),
+    providerRequestId: OrganizeProviderRequestId.optional(),
   })),
   cost: z.null(),
   modelDigest: z.string().optional(),

@@ -24,7 +24,8 @@ export function researchOptions(draft) {
     ...(draft.asOf ? { asOf: new Date(draft.asOf).toISOString() } : {}),
   };
 }
-export function textResearchPlan(draft, selected) {
+export function textResearchPlan(draft, selected, startResearch = true) {
+  if (!draft.text.trim() && !startResearch) throw new Error('请填写要保存的观点或材料原文');
   if (!draft.text.trim() && !selected.length) throw new Error('请填写观点原文，或明确选择已有材料');
   if (draft.text.length > 5_000_000) throw new Error('文字材料不能超过 500 万字符');
   const versionId = uid(),
@@ -49,6 +50,7 @@ export function textResearchPlan(draft, selected) {
         ],
       },
     });
+  if (!startResearch) return { label: '保存文字材料', meta: { kind: 'material', draft }, steps };
   const sourceVersionIds = [...selected, ...(steps.length ? [versionId] : [])];
   if (sourceVersionIds.length > 20) throw new Error('每次研究最多选择 20 个材料版本');
   steps.push({

@@ -282,7 +282,7 @@ export class InitialResearchService {
       progress.stage = 'planning';
       save();
       if (!progress.plan) {
-        requireThat(this.research.model, 'PROVIDER_NOT_CONFIGURED', '尚未配置研究模型', 503);
+        requireThat(this.research.model, 'PROVIDER_NOT_CONFIGURED', '本机模型研究已停用', 503);
         progress.catalogVersion = this.publicData.catalog.version;
         const generated = await this.research.model.generate(
           SourcePlan,

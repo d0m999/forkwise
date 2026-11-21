@@ -5,7 +5,6 @@ import { randomBytes } from 'node:crypto';
 import { resolve, join, extname, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createApplication } from './app.js';
-import { OllamaClient, OllamaEvaluator } from './services/ollama.js';
 import { SecClient } from '@forkwise/public-data-core';
 import { recoverActivation } from './services/activate-restore.js';
 
@@ -55,12 +54,6 @@ const metrics: string[] = existsSync(metricsPath)
   : [];
 if (!Array.isArray(metrics) || !metrics.every((v) => typeof v === 'string' && v.trim()))
   throw new Error('metrics.json 应是本人启用的指标名称数组');
-const model = process.env.FORKWISE_OLLAMA_MODEL;
-const researchModel = model ? new OllamaClient(model) : undefined;
-const visionModel = process.env.FORKWISE_OLLAMA_VISION_MODEL
-  ? new OllamaClient(process.env.FORKWISE_OLLAMA_VISION_MODEL)
-  : undefined;
-const agent = researchModel ? new OllamaEvaluator(researchModel) : undefined;
 const publicDataClient = process.env.SEC_USER_AGENT
   ? new SecClient({
       userAgent: process.env.SEC_USER_AGENT,
@@ -73,9 +66,6 @@ const core = createApplication({
   secret,
   metrics,
   importRoots,
-  ...(visionModel ? { visionModel } : {}),
-  ...(agent ? { agent } : {}),
-  ...(researchModel ? { researchModel } : {}),
   ...(publicDataClient ? { publicDataClient } : {}),
 });
 core.jobs.recover();

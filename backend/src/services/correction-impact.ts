@@ -74,6 +74,8 @@ export function enqueueCorrectionImpact(
 ) {
   const repo = tasks.write.repo;
   const scope = correctionScope(repo.snapshot(projectId).objects, previousId, page, artifact);
+  if (!tasks.model && (scope.targetIds.length || scope.conditionIds.length))
+    return { ...scope, jobIds: [], gap: '本机模型已停用，请对照校正后的文字复核相关引用。' };
   let jobIds: string[] = [],
     gap: string | null = null;
   if (scope.targetIds.length) {

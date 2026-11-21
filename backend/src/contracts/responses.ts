@@ -93,7 +93,11 @@ export const JobSummarySchema = JobSchema.omit({
   output: true,
   runToken: true,
 })
-  .extend({ condition: Ref.optional(), executor: z.string().nullable().optional() })
+  .extend({
+    condition: Ref.optional(),
+    executor: z.string().nullable().optional(),
+    retryBlockedByModel: z.boolean(),
+  })
   .openapi('JobSummary');
 export const SyncSchema = z
   .object({

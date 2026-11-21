@@ -249,7 +249,7 @@ export class ManualUpdateService {
         changes,
         message: createdJobId
           ? '材料已保存，已为新增范围排队；个人判断保持。'
-          : '同一材料版本与论证范围已有任务，未重复生成候选；可查看或重试原任务。',
+          : '同一材料版本与论证范围已有任务，未重复生成候选。可查看原任务记录。',
       });
     });
   }

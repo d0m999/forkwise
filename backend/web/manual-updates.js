@@ -2,6 +2,7 @@ import { RequestStore } from './request-store.js';
 import { RequestJournal } from './request-journal.js';
 import { updateEventsView, renderUpdatePreview } from './manual-update-events.js';
 export function attachManualUpdates({
+  canResearch,
   api,
   run,
   getState,
@@ -85,6 +86,7 @@ export function attachManualUpdates({
     sequence++;
     $('[data-preview]').replaceChildren();
     $('[data-confirm]').disabled = true;
+    $('[data-submit]').textContent = '确认范围，保存并分析';
   }
   function mode() {
     $('[data-new]').hidden = fields.mode.value !== 'text';
@@ -240,17 +242,30 @@ export function attachManualUpdates({
   form.onsubmit = (event) => {
     event.preventDefault();
     work(async () => {
+      invalidate();
       const id = projectId,
         body = input(),
-        ticket = ++sequence;
+        ticket = sequence;
       const p = await api(`/projects/${id}/manual-updates/preview`, 'POST', body);
       if (!active(id) || ticket !== sequence) return;
-      preview = p;
-      requestInput = body;
       renderUpdatePreview(p, $('[data-preview]'));
       $('[data-preview]').scrollIntoView({ block: 'nearest' });
+      if (!canResearch && p.estimate.newTaskCount > 0) {
+        $('[data-confirm]').disabled = true;
+        feedback(
+          '本次更新需要新增影响分析，本机模型研究已停用。可在“输入观点 / 材料”中单独保存原文。',
+        );
+        return;
+      }
+      preview = p;
+      requestInput = body;
       $('[data-confirm]').disabled = false;
-      feedback('预览不会保存材料或调用模型；确认后仅分析上述范围。');
+      if (!p.estimate.newTaskCount) $('[data-submit]').textContent = '确认复用已有任务';
+      feedback(
+        p.estimate.newTaskCount
+          ? '确认后将按预览范围保存材料并开始分析。'
+          : '此次更新可复用已有任务，确认后可查看原任务记录。',
+      );
     });
   };
   $('[data-submit]').onclick = () =>

@@ -276,7 +276,7 @@ export function assessmentForm(parent, objects, values, requestOnly, keep, save)
     form,
     'p',
     requestOnly
-      ? '只使用本次选定的证据。定性／混合评估会请求已配置模型；失败保留规则，不产生“未满足”。'
+      ? '只使用本次选定的证据。数值评估按规则计算。'
       : '本人确认独立保存，不改变主张或推导的个人立场。调整候选结论时须补充本人理由。',
   );
   function read() {

@@ -8,6 +8,7 @@ export type StoredTask = Omit<OrganizeTask, 'freshness' | 'candidateOnCanvas' | 
   cutCandidateIds?: string[];
   deadline: number;
   modelDigest?: string;
+  configuredModelDigest?: string;
   startRequestId?: string;
   attempts: (OrganizeTask['attempts'][number] & { retryId?: string })[];
 };

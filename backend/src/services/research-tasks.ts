@@ -320,7 +320,7 @@ export class ResearchTaskService {
         requireThat(
           this.model,
           'PROVIDER_NOT_CONFIGURED',
-          '尚未配置符合要求的模型，所选材料与个人研究保持原样；可用已授权外部 Agent 提交候选',
+          '本机模型研究已停用。可通过已授权的外部 Agent 提交研究候选',
           503,
         );
         requireThat(

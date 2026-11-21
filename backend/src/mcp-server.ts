@@ -260,7 +260,7 @@ export function createMcpServer(transport: ApiTransport) {
     'forkwise_submit_update',
     {
       description:
-        '按刚取得的 previewHash 原子保存材料并为新增范围排队。重复范围复用原任务；冲突须重新预览。候选不能代替个人判断。',
+        '按预览保存材料并复用重复范围的记录。本机模型已停用，新增范围的模型任务无法生成候选。已授权的 Agent 可另行建立外部研究。',
       inputSchema: project.extend({
         request: ManualUpdateRequest,
         idempotencyKey: z.string().min(8).max(128),
@@ -290,7 +290,7 @@ export function createMcpServer(transport: ApiTransport) {
     'forkwise_read_update_tasks',
     {
       description:
-        '分页展开一个手动更新事件的明确目标范围、分析任务和阻塞原因；通过原任务查看建议或重试。',
+        '分页查看手动更新事件的目标范围、分析任务与阻塞原因。可通过原任务查看已保存的建议。',
       inputSchema: project.extend({
         ...UpdatePage.shape,
         eventKey: z.string().regex(/^[a-f0-9]{64}$/),
@@ -463,7 +463,8 @@ export function createMcpServer(transport: ApiTransport) {
   server.registerTool(
     'forkwise_evaluate_condition',
     {
-      description: '显式请求一次条件评估任务。规则/材料版本固定；结果待本人确认。',
+      description:
+        '按固定规则和材料请求数值评估。定性和混合评估的本机模型已停用，已授权的 Agent 可用 forkwise_begin_external_evaluation 提交候选。',
       inputSchema: project.extend({
         idempotencyKey: z.string().min(8).max(128),
         conditionId: Id,
@@ -528,7 +529,8 @@ export function createMcpServer(transport: ApiTransport) {
   server.registerTool(
     'forkwise_control_job',
     {
-      description: '取消任务或显式重试失败/中断任务；取消后的晚到结果不会应用。',
+      description:
+        '取消任务或重试仍有执行器的失败、中断或部分完成任务。retryBlockedByModel 为 true 表示本机模型已停用，请查看已有结果。',
       inputSchema: target.extend({
         action: z.enum(['cancel', 'retry']),
         idempotencyKey: z.string().min(8).max(128),
@@ -621,7 +623,7 @@ export function createMcpServer(transport: ApiTransport) {
     'forkwise_initial_research',
     {
       description:
-        '从明确选择的观点材料开始首次研究：重建候选推理链、规划维护目录内的公开资料、获取并逐项查证。分阶段保存，可取消及重试；不代替个人判断。历史 asOf 只使用当时已取得的来源快照。',
+        '旧首次研究的本机模型已停用。可读取原任务及其阶段结果；新研究可用 forkwise_begin_external_research 建立由已授权 Agent 执行的记录。',
       inputSchema: project.extend({
         idempotencyKey: z.string().min(8).max(128),
         request: InitialResearchInput,
@@ -637,7 +639,7 @@ export function createMcpServer(transport: ApiTransport) {
     'forkwise_research_task',
     {
       description:
-        '对明确选择的材料/目标请求论证重建、材料查证、影响匹配或立场理由草稿。结果保留 AI 归属与实际材料覆盖，不能替代本人判断。',
+        '旧研究任务入口。本机模型已停用，固定检索未命中时仍可记录材料缺口。要生成研究候选，已授权的 Agent 可用 forkwise_begin_external_research。',
       inputSchema: project.extend({
         idempotencyKey: z.string().min(8).max(128),
         request: ResearchTaskInput,
@@ -653,7 +655,7 @@ export function createMcpServer(transport: ApiTransport) {
     'forkwise_transcribe_material',
     {
       description:
-        '请求指定原图或 PDF 页的多模态文字识别；文字与区域仍须本人核对。任务使用已配置本机视觉模型。',
+        '本机自动转写已停用。已获授权的 Agent 可读取原图或指定 PDF 页，并用 forkwise_submit_external_transcription 提交转写。',
       inputSchema: project.extend({
         idempotencyKey: z.string().min(8).max(128),
         request: TranscriptionInput,

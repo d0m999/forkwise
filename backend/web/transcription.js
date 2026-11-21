@@ -108,7 +108,7 @@ export function attachTranscription({ api, run, message, getState, jobs }) {
         crypto.randomUUID(),
       );
       message(
-        `人工校正已另存新版本；旧转写与证据保留。${result.impactAnalysis.jobIds.length ? `已排队 ${result.impactAnalysis.jobIds.length} 项影响分析，请在任务结果审阅候选。` : (result.impactAnalysis.gap ?? '当前没有引用这页的研究对象。')}${result.impactAnalysis.conditionIds.length ? '相关条件确认仍引用旧依据，须重新核对。' : ''}`,
+        `人工校正已另存新版本，旧转写与证据保留。${result.impactAnalysis.jobIds.length ? `已排队 ${result.impactAnalysis.jobIds.length} 项影响分析，可在任务与历史中查看进度。` : (result.impactAnalysis.gap ?? '当前没有引用这页的研究对象。')}${result.impactAnalysis.conditionIds.length ? '相关条件确认仍引用旧依据，须重新核对。' : ''}`,
       );
       dialog.close();
       await jobs();

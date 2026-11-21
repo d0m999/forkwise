@@ -36,7 +36,10 @@
             accept=".json,application/json" /></label
         ><button id="record">记录这次判断</button><button id="grant">授权本项目给 Agent</button
         ><button id="list-grants">查看与撤销 Agent 授权</button>
-        <label><input type="checkbox" id="personal-record-grant">允许 Agent 代录本项目的立场、理由、采用、笔记与条件确认</label>
+        <label
+          ><input type="checkbox" id="personal-record-grant" />允许 Agent
+          代录本项目的立场、理由、采用、笔记与条件确认</label
+        >
         <p>委托证明记录权限；每条记录保留 Agent 执行者，不表示本人逐句核验。</p>
         <div id="grant-list"></div>
         <details id="credential" hidden>
@@ -81,8 +84,8 @@
         <div class="canvas-wrap">
           <iframe id="native-canvas" src="/canvas/index.html" title="见岔研究画布"></iframe>
           <section id="canvas-research-entry" hidden>
-            <strong>从一条观点开始研究</strong>
-            <p>粘贴原文或导入材料，在这里梳理论证、查找依据并继续编辑。</p>
+            <strong>添加研究材料</strong>
+            <p>粘贴观点原文或导入有权使用的文件。</p>
             <button type="button">输入观点与材料</button>
           </section>
         </div>
@@ -201,27 +204,33 @@
           <div id="material-list"></div>
         </details>
         <details>
-          <summary>对选定材料进行研究</summary>
-          <p>使用已配置的本机模型。材料作为数据处理；AI 建议与个人判断分开保存。</p>
-          <select id="task-kind" aria-label="研究任务类型">
-            <option value="initial">首次研究：梳理并公开查证</option>
-            <option value="reconstruct">整理主张与推导</option>
-            <option value="verify">依据所选材料查证</option>
-            <option value="impact">检查新材料影响</option>
-            <option value="stance_draft">起草立场理由</option></select
-          ><button id="choose-task-materials">选择材料版本</button>
-          <div id="task-materials"></div>
-          <label
-            >只研究相关片段（可选，每行一个原文关键词）<textarea
-              id="task-queries"
-              aria-label="材料检索词"
-              placeholder="留空读取所选全文；检索没有命中会保留资料缺口"
-            ></textarea>
-          </label>
-          <label
-            >首次研究的历史查证时点（留空表示现在）<input id="research-as-of" type="datetime-local"
-          /></label>
-          <button id="run-research-task">开始本次研究任务</button>
+          <summary id="research-task-title">材料研究与结果</summary>
+          <p id="research-unavailable">
+            本机模型研究已停用。可查看历史结果，也可通过已授权的外部 Agent 提交研究候选。
+          </p>
+          <div id="research-task-inputs" hidden>
+            <select id="task-kind" aria-label="研究任务类型">
+              <option value="initial">首次研究：梳理并公开查证</option>
+              <option value="reconstruct">整理主张与推导</option>
+              <option value="verify">依据所选材料查证</option>
+              <option value="impact">检查新材料影响</option>
+              <option value="stance_draft">起草立场理由</option></select
+            ><button id="choose-task-materials">选择材料版本</button>
+            <div id="task-materials"></div>
+            <label
+              >只研究相关片段（可选，每行一个原文关键词）<textarea
+                id="task-queries"
+                aria-label="材料检索词"
+                placeholder="留空读取所选全文；检索没有命中会保留资料缺口"
+              ></textarea>
+            </label>
+            <label
+              >首次研究的历史查证时点（留空表示现在）<input
+                id="research-as-of"
+                type="datetime-local"
+            /></label>
+            <button id="run-research-task">开始本次研究任务</button>
+          </div>
           <div id="task-result"></div>
         </details>
         <button id="open-manual-updates" type="button">手动更新与复核</button>
@@ -233,7 +242,7 @@
     </main>
     <dialog id="research-entry" aria-label="输入观点与材料">
       <header>
-        <strong>开始本次研究</strong><button id="entry-close" type="button">返回画布</button>
+        <strong>输入观点与材料</strong><button id="entry-close" type="button">返回画布</button>
       </header>
       <p id="entry-feedback" role="status"></p>
       <p id="entry-request-status" role="status"></p>
@@ -245,7 +254,7 @@
             >观点或材料原文<textarea
               name="text"
               maxlength="5000000"
-              placeholder="粘贴自己或作者的观点。原文会保存为材料，研究结果仍需审阅。"
+              placeholder="粘贴自己或作者的观点，原文将保存为材料。"
             ></textarea>
           </label>
           <details>
@@ -273,7 +282,7 @@
             <summary>导入原文件</summary>
             <p>
               支持 PDF、HTML、PNG 和 JPEG，最多 25
-              MB。先保存解析，再选择可读版本。图片与扫描页须通过原图转写入口取得文字。
+              MB。解析后可在材料版本中阅读原文，或对照原图手工补充文字。
             </p>
             <input
               name="file"
@@ -283,11 +292,11 @@
             />
             <button id="entry-upload" type="button">保存文件并解析</button>
           </details>
-          <details open>
+          <details id="entry-selection" open hidden>
             <summary>选择已有材料</summary>
             <div id="entry-materials"></div>
           </details>
-          <details>
+          <details id="entry-research-options" hidden>
             <summary>研究范围（可选）</summary>
             <label
               >只研究相关片段，每行一个原文关键词<textarea
@@ -299,7 +308,7 @@
             <p>历史研究仅使用当时已记录并取得的材料；刚粘贴或导入的内容不能冒充过去已知。</p>
           </details>
           <div class="entry-actions">
-            <button type="submit">保存并开始研究</button
+            <button type="submit">保存文字材料</button
             ><button id="entry-clear" type="button">清空输入草稿</button>
           </div>
         </fieldset>

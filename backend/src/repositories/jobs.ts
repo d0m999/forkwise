@@ -30,11 +30,32 @@ export interface Job {
   usage: unknown;
   historyState?: WorkflowHistoryState;
 }
+type ModelAvailability = { research: boolean; evaluation: boolean; vision: boolean };
+
+// Identify the executor from the fixed job input without loading source text into a summary.
+const requiredModel = `CASE
+  WHEN json_extract(j.input,'$.external.executor')='external' THEN NULL
+  WHEN j.kind='material.vision' THEN 'vision'
+  WHEN j.kind='condition.agent' THEN 'evaluation'
+  WHEN j.kind='workflow.initial' THEN 'research'
+  WHEN j.kind LIKE 'research.%' THEN CASE
+    WHEN json_type(j.input,'$.retrieval')='object' AND json_array_length(j.input,'$.materials')=0 THEN NULL
+    ELSE 'research' END
+  END`;
+
 export class JobRepository {
   constructor(
     readonly db: Database.Database,
     readonly clock: () => string = () => new Date().toISOString(),
+    readonly models?: ModelAvailability,
   ) {}
+  private blockedByModel(projectId: string, id: string) {
+    if (!this.models) return false;
+    const row = this.db
+      .prepare(`SELECT ${requiredModel} AS model FROM jobs j WHERE j.project_id=? AND j.id=?`)
+      .get(projectId, id) as { model: keyof ModelAvailability | null };
+    return row.model !== null && !this.models[row.model];
+  }
   enqueue(projectId: string, kind: string, input: unknown, dedupeKey: string): Job {
     const existing = this.db
       .prepare('SELECT id FROM jobs WHERE project_id=? AND dedupe_key=?')
@@ -86,7 +107,7 @@ export class JobRepository {
     const rows = this.db
       .prepare(
         `SELECT j.id,j.project_id AS projectId,j.kind,j.state,j.error,j.attempt,j.created_at AS createdAt,j.updated_at AS updatedAt,j.usage,
-        json_extract(j.input,'$.external.executor') AS executor,
+        json_extract(j.input,'$.external.executor') AS executor, ${requiredModel} AS model,
         CASE WHEN j.kind IN ('condition.rule','condition.agent') THEN
           json_object('id',json_extract(j.input,'$.condition.id'),'versionId',json_extract(j.input,'$.condition.contentVersionId'))
         ELSE NULL END AS condition,
@@ -99,12 +120,14 @@ export class JobRepository {
       usage: string | null;
       condition: string | null;
       executor: string | null;
+      model: keyof ModelAvailability | null;
       historyState: WorkflowHistoryState | null;
     })[];
     return rows.map((row) => {
-      const { condition, historyState, ...summary } = row;
+      const { condition, historyState, model, ...summary } = row;
       return {
         ...summary,
+        retryBlockedByModel: Boolean(model && this.models && !this.models[model]),
         ...(historyState ? { historyState } : {}),
         usage: row.usage ? JSON.parse(row.usage) : null,
         ...(condition ? { condition: JSON.parse(condition) } : {}),
@@ -121,10 +144,25 @@ export class JobRepository {
   claim(projectId: string, id: string): Job | null {
     return this.db
       .transaction(() => {
-        const input = this.get(projectId, id).input as { external?: { executor?: string } };
+        const job = this.get(projectId, id);
+        const input = job.input as { external?: { executor?: string } };
         if (input.external?.executor === 'external') return null;
         const group = taskWorkflow(this.db, projectId, id);
         if (group && (!group.applied || group.stopped)) return null;
+        // An earlier release could requeue a partial job just before shutdown.
+        // Leave its last output, usage and attempt intact when the executor is gone.
+        if (
+          job.state === 'queued' &&
+          (job.attempt > 0 || job.output !== null || job.usage !== null) &&
+          this.blockedByModel(projectId, id)
+        ) {
+          this.db
+            .prepare(
+              "UPDATE jobs SET state='interrupted',error=?,updated_at=? WHERE project_id=? AND id=?",
+            )
+            .run('本机模型已停用，原任务记录可继续查看', this.clock(), projectId, id);
+          return null;
+        }
         const runToken = randomUUID();
         const update = this.db
           .prepare(
@@ -224,6 +262,12 @@ export class JobRepository {
           '只有失败、中断或部分完成的任务可以重试',
           409,
         );
+        requireThat(
+          !this.blockedByModel(projectId, id),
+          'MODEL_RETRY_UNAVAILABLE',
+          '本机模型已停用，原任务记录可继续查看',
+          409,
+        );
         this.db
           .prepare(
             "UPDATE jobs SET state='queued',error=NULL,run_token=NULL,updated_at=? WHERE project_id=? AND id=? AND state IN ('failed','interrupted','partial')",
@@ -237,7 +281,7 @@ export class JobRepository {
   recover(): number {
     return this.db
       .prepare(
-        "UPDATE jobs SET state='interrupted',run_token=NULL,error='运行进程已中断，请检查后重试',updated_at=? WHERE state='running'",
+        "UPDATE jobs SET state='interrupted',run_token=NULL,error='运行进程已中断，请查看任务记录',updated_at=? WHERE state='running'",
       )
       .run(this.clock()).changes;
   }

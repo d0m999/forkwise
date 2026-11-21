@@ -8,7 +8,7 @@ const states: Record<OrganizeTask['state'], string> = {
   running: '正在整理', succeeded: '可以审阅', partial: '部分完成', failed: '整理失败',
   cancelled: '已取消', interrupted: '运行已中断',
 };
-const modeName = (mode: OrganizeTask['mode']) => mode === 'real' ? '本机模型' : '模拟整理';
+const modeName = (mode: OrganizeTask['mode']) => mode === 'real' ? '模型整理' : '模拟整理';
 const blockNames: Record<string, string> = {
   text: '段落', heading: '正文标题', listItem: '列表项', quote: '引用', code: '代码块', table: '表格',
 };
@@ -50,6 +50,8 @@ export function OrganizeDialog({ projectId, source, cards, pendingCancellation, 
   const addKey = task ? `${task.id}/${task.attempt}` : null;
   const pendingAdd = addRequest.current?.key === addKey;
   const cancellationRequested = starting && startingRequest.current?.cancelRequested;
+  const canRetry = !!task && canRetryOrganize(task);
+  const retryModelUnavailable = task?.mode === 'real' && (!model || task.model !== model);
 
   useLayoutEffect(() => {
     const element = dialog.current;
@@ -264,13 +266,14 @@ export function OrganizeDialog({ projectId, source, cards, pendingCancellation, 
           })}
           {!source.title.trim() && blocks.length === 0 && <p>请先给这张卡添加标题或正文文字。</p>}
         </fieldset>
-        <p className="organize-muted">本次仅处理勾选的标题与正文文字。{model ? `已配置本机模型 ${model}。` : model === null ? '当前未配置本机真实模型。' : '正在读取模型设置。'}</p>
+        <p className="organize-muted">本次仅处理勾选的标题与正文文字。{model ? `当前模型为 ${model}。` : model === null ? 'OpenAI 尚未启用，可试用模拟整理。' : '正在读取模型设置。'}</p>
         {length > 24_000 && <p role="alert">选中的文字超过 24,000 字符，请减少范围。</p>}
       </> : task ? <>
         <p role="status" className="organize-status"><strong>{modeName(task.mode)}</strong> {states[task.state]}{task.applied
           ? task.candidateOnCanvas ? '，已添加为新卡' : '，新卡已撤销或删除'
           : ''}</p>
         {task.error && <p role="alert" className="organize-error">{task.error}</p>}
+        {canRetry && retryModelUnavailable && model !== undefined && <p className="organize-muted">这条记录使用的模型当前不可用，无法重试。</p>}
         {task.output && task.outputAttempt !== task.attempt && <p className="organize-muted">下方显示第 {task.outputAttempt} 次的结果。</p>}
         {task.output?.candidate && <article className="organize-result">
           <h3>{task.output.candidate.title}</h3>
@@ -311,13 +314,13 @@ export function OrganizeDialog({ projectId, source, cards, pendingCancellation, 
         </details>
       </> : !starting && <p>{model === undefined ? '正在读取整理记录。' : '还没有整理记录。请从卡片的 AI 入口开始整理。'}</p>}
       {starting && <p role="status">{cancellingStart ? '正在确认取消'
-        : cancellationRequested ? '取消结果未确认' : '正在检查本机模型'}</p>}
+        : cancellationRequested ? '取消结果未确认' : '正在检查整理模型'}</p>}
     </div>
     <footer>
       {task ? <>
         {task.state === 'running' && <button type="button" disabled={busy} onClick={() => void change('cancel')}>取消任务</button>}
-        {canRetryOrganize(task) &&
-          <button type="button" disabled={busy || stale} onClick={() => void change('retry')}>重试整理</button>}
+        {canRetry &&
+          <button type="button" disabled={busy || stale || retryModelUnavailable} onClick={() => void change('retry')}>重试整理</button>}
         {pendingAdd
           ? <button type="button" className="primary" disabled={busy} onClick={() => void add()}>确认添加结果</button>
           : task.cutCopyAvailable
@@ -330,7 +333,7 @@ export function OrganizeDialog({ projectId, source, cards, pendingCancellation, 
         <button type="button" disabled={busy || stale || !length || length > 24_000 || selected.length > 100 || model === undefined}
           onClick={() => void start('simulate')}>试用模拟整理</button>
         <button type="button" className="primary" disabled={busy || stale || !model || !length || length > 24_000 || selected.length > 100}
-          onClick={() => void start('real')}>用本机模型整理</button>
+          onClick={() => void start('real')}>用模型整理</button>
       </>}
     </footer>
   </dialog>;

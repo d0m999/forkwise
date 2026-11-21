@@ -99,7 +99,9 @@ export function createApi(
         c.json({ code: 'BODY_TOO_LARGE', data: null, message: '请求过大，请分批导入' }, 413),
     }),
   );
-  app.get('/health', (c) => c.json(ok({ status: 'ok' })));
+  app.get('/health', (c) =>
+    c.json(ok({ status: 'ok', models: controller.evaluation.jobs.models })),
+  );
   const p = '/api/v1';
   app.openapi(
     createRoute({

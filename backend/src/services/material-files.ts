@@ -315,7 +315,7 @@ export class MaterialFileService {
           normalizerVersion: 'image-pending@1',
           page: 1,
           pageCount: 1,
-          gaps: ['原图已保存，尚未配置并验证多模态转写模型；可对照原图补充文字'],
+          gaps: ['原图已保存，文字待转写。可对照原图补充文字'],
         };
     } catch (cause) {
       error = cause;

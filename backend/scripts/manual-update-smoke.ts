@@ -147,7 +147,7 @@ try {
     .waitFor();
   await preview();
   await dialog.locator('[data-preview]').filter({ hasText: '新增分析 0 项' }).waitFor();
-  await dialog.getByRole('button', { name: '确认范围，保存并分析' }).click();
+  await dialog.getByRole('button', { name: '确认复用已有任务' }).click();
   await dialog.locator('[data-feedback]').filter({ hasText: '未重复生成候选' }).waitFor();
   assert.equal(app.jobs.list(project.id).length, 1);
   await dialog.getByRole('button', { name: '展开本次更新' }).click();

@@ -19,8 +19,9 @@ const net = require('node:net');
       ...process.env,
       FORKWISE_PORT: String(port),
       FORKWISE_DATA_DIR: directory,
-      FORKWISE_OLLAMA_MODEL: '',
-      FORKWISE_OLLAMA_VISION_MODEL: '',
+      // These retired settings must be ignored even when the old client would reject them.
+      FORKWISE_OLLAMA_MODEL: 'retired:latest',
+      FORKWISE_OLLAMA_VISION_MODEL: 'retired:latest',
       SEC_USER_AGENT: '',
     },
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -168,7 +169,11 @@ const net = require('node:net');
     await page.locator('#jobs .job').filter({ hasText: 'material.parse：partial' }).waitFor();
     await page.locator('#refresh').click();
     await page.locator('#list-materials').click();
-    await page.locator('#material-list button').filter({ hasText: '原图与转写校正' }).click();
+    const correctImage = page.locator('#material-list button').filter({ hasText: '原图与转写校正' });
+    await correctImage.waitFor();
+    if (await page.locator('#material-list').getByRole('button', { name: '请求本页多模态识别' }).count())
+      throw new Error('材料页仍提供已停用的识别操作');
+    await correctImage.click();
     await page.locator('#transcription-dialog').waitFor({ state: 'visible' });
     await page.locator('#transcription-blocks textarea').fill('Revenue 12');
     await page.locator('#transcription-form input[name=reason]').fill('核对测试图像文字');
@@ -179,8 +184,7 @@ const net = require('node:net');
       .click();
     await page.locator('#transcription-dialog').waitFor({ state: 'hidden' });
     await page.locator('#notice').filter({ hasText: '人工校正已另存' }).waitFor();
-    // Seed only a completed model fixture in this temporary test database.
-    // This validates browser adoption, never real model inference quality.
+    // Seed legacy model output for adoption and partial-result recovery.
     const Database = require('better-sqlite3');
     const fixtureDb = new Database(join(directory, 'research.sqlite'));
     let projectId, target;
@@ -223,6 +227,14 @@ const net = require('node:net');
           now,
           'browser-impact-fixture',
         );
+      fixtureDb.prepare(
+        "INSERT INTO jobs(id,project_id,kind,state,input,output,attempt,created_at,updated_at,dedupe_key) VALUES(?,?,'workflow.initial','partial','{}',?,1,?,?,?)",
+      ).run(
+        'browser-initial-partial',
+        projectId,
+        JSON.stringify({ stage: 'verification', gaps: ['旧研究已保存的范围缺口'] }),
+        now, now, 'browser-initial-partial',
+      );
     } finally {
       fixtureDb.close();
     }
@@ -348,26 +360,58 @@ const net = require('node:net');
     await page.locator('#task-kind').evaluate((el) => {
       el.closest('details').open = true;
     });
-    await page.locator('#task-kind').selectOption('initial');
-    await page.locator('#choose-task-materials').click();
-    await page.locator('#task-materials input').first().check();
-    await page.locator('#run-research-task').click();
-    const initialJob = page.locator('#jobs .job').filter({ hasText: '首次研究：failed' });
+    await page.locator('#research-unavailable').waitFor();
+    if (await page.locator('#run-research-task').isVisible())
+      throw new Error('材料研究仍提供已停用的启动操作');
+    const initialJob = page.locator('#jobs .job').filter({ hasText: '首次研究：partial' });
     await initialJob.waitFor();
+    if (await initialJob.getByRole('button', { name: '重试', exact: true }).count())
+      throw new Error('历史部分完成的模型任务仍可重试');
     await initialJob.getByRole('button', { name: '查看任务结果' }).click();
-    await page.locator('#task-result').filter({ hasText: 'PROVIDER_NOT_CONFIGURED' }).waitFor();
+    await page.locator('#task-result').filter({ hasText: '旧研究已保存的范围缺口' }).waitFor();
+    const jobsBeforeSave = (await api(`/projects/${projectId}/jobs`)).map((j) => j.id);
+    await page.locator('#open-research-entry').click();
+    const entry = page.locator('#research-entry');
+    await entry.locator('[name=text]').fill('仅保存原文的合成样本');
+    let lostSave = false;
+    await page.route('**/api/v1/projects/*/operations', async (route) => {
+      if (!lostSave && route.request().postDataJSON()?.commands?.some((c) => c.op === 'source.import')) {
+        lostSave = true;
+        await route.fetch();
+        await route.abort('failed');
+      } else await route.fallback();
+    });
+    await entry.getByRole('button', { name: '保存文字材料', exact: true }).click();
+    await entry.locator('#entry-request-status').filter({ hasText: '已完成 0 / 1 步' }).waitFor();
     await page.reload();
     await page.locator('#connection').filter({ hasText: '已连接' }).waitFor();
-    await page.locator('#jobs .job').filter({ hasText: '首次研究：failed' }).waitFor();
+    await page.getByRole('button', { name: '恢复研究请求', exact: true }).click();
+    await entry.locator('#entry-recover').click();
+    await entry.locator('#entry-feedback').filter({ hasText: '文字材料已保存' }).waitFor();
+    await entry.locator('#entry-close').click();
+    const afterRecovery = await api(`/projects/${projectId}/state`);
+    const saved = afterRecovery.objects.filter(
+      (e) => e.kind === 'source' && e.data.title === '观点摘录',
+    );
+    if (saved.length !== 1) throw new Error('文字材料未恢复为同一份保存记录');
+    const savedVersion = afterRecovery.objects.find(
+      (e) => e.kind === 'source_version' && e.data.sourceId === saved[0].id,
+    );
+    if ((await api(`/projects/${projectId}/materials/${savedVersion.id}`)).text !== '仅保存原文的合成样本')
+      throw new Error('恢复后的文字材料与提交的原文不符');
+    const jobsAfterSave = (await api(`/projects/${projectId}/jobs`)).map((j) => j.id);
+    if (JSON.stringify(jobsAfterSave) !== JSON.stringify(jobsBeforeSave))
+      throw new Error('单独保存文字材料意外创建了研究任务');
     await page.locator('#object-list button').filter({ hasText: '需求增加' }).first().click();
-    await page.locator('#task-kind').evaluate((el) => {
-      el.closest('details').open = true;
+    const corrected = snapshot.objects.find(
+      (e) => e.kind === 'source_version' && e.data.textOrigin === 'human_correction',
+    );
+    await api(`/projects/${projectId}/research-tasks`, 'POST', {
+      kind: 'verify',
+      sourceVersionIds: [corrected.id],
+      targetIds: [target.id],
+      retrieval: { queries: ['syntheticNeverMatches_4361'], maxCharacters: 80000 },
     });
-    await page.locator('#task-kind').selectOption('verify');
-    await page.locator('#choose-task-materials').click();
-    await page.locator('#task-materials input').first().check();
-    await page.locator('#task-queries').fill('syntheticNeverMatches_4361');
-    await page.locator('#run-research-task').click();
     const scopedJob = page.locator('#jobs .job').filter({ hasText: 'research.verify：succeeded' });
     await scopedJob.waitFor();
     await scopedJob.getByRole('button', { name: '查看任务结果' }).click();
@@ -622,7 +666,7 @@ const net = require('node:net');
       .screenshot({ path: 'artifacts/verification-node-browser.png' });
     if (errors.length) throw new Error(errors.join('\n'));
     console.log(
-      'PASS: 本机 HTTP 服务 + Chromium 原 Excalidraw 画布创建/草稿切换与刷新/编辑/同端点多推导/局部派生/立场/刷新持久化/历史判断/原图上传/人工转写校正/合成 AI 建议采用/外部 Agent 并发草稿保护/Markdown/合成冲突后画布恢复/首次研究入口与失败记录跨刷新保留/材料关键词检索未命中/结构化财务记录及口径显示与原文回查/验证节点候选确认和修改历史/节点草稿切换及刷新保留/并发内容变化后明确复核；无页面异常。仅临时测试数据库，未验证真实模型。',
+      'PASS: 本机 HTTP 服务 + Chromium 原 Excalidraw 画布创建/草稿切换与刷新/编辑/同端点多推导/局部派生/立场/刷新持久化/历史判断/原图上传/人工转写校正/合成 AI 建议采用/外部 Agent 并发草稿保护/Markdown/合成冲突后画布恢复/单独保存文字材料与丢失响应恢复/旧研究部分完成记录可读且无重试/无模型关键词检索未命中/结构化财务记录及口径显示与原文回查/验证节点候选确认和修改历史/节点草稿切换及刷新保留/并发内容变化后明确复核；无页面异常。仅临时测试数据库，未验证真实模型。',
     );
   } catch (error) {
     console.error('Page errors:', errors);

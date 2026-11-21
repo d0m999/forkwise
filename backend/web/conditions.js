@@ -15,6 +15,7 @@ import {
 } from './condition-forms.js';
 
 export function attachConditions({
+  canEvaluate,
   getState,
   getSelected,
   write,
@@ -196,7 +197,10 @@ export function attachConditions({
     else {
       if (draft.evaluationId)
         element(panel, 'p', '基于候选 ' + draft.evaluationId + '；沿用其理由时保留原提出者来历。');
-      assessmentForm(panel, state.objects, draft.values, draft.kind === 'request', update, save);
+      const blocked = draft.kind === 'request' && condition.data.mode !== 'numeric' && !canEvaluate;
+      const fields = blocked ? element(panel, 'fieldset') : panel;
+      if (blocked) fields.disabled = true;
+      assessmentForm(fields, state.objects, draft.values, draft.kind === 'request', update, save);
     }
     const stale = condition && condition.version !== draft.versions[condition.id];
     element(
@@ -325,16 +329,17 @@ export function attachConditions({
         'p',
         '规则已保存；评估任务' + names[job.state] + (job.error ? '：' + job.error : ''),
       );
-      const action = ['failed', 'interrupted'].includes(job.state)
-        ? 'retry'
-        : ['queued', 'running'].includes(job.state)
-          ? 'cancel'
-          : null;
+      const action =
+        ['failed', 'interrupted'].includes(job.state) && !job.retryBlockedByModel
+          ? 'retry'
+          : ['queued', 'running'].includes(job.state)
+            ? 'cancel'
+            : null;
       if (action)
         button(slot, action === 'retry' ? '重试此条件评估' : '取消此条件评估', () =>
           run(async () => {
             await api(
-              '/projects/' + state.project.id + '/jobs/' + job.id + '/' + action,
+              `/projects/${state.project.id}/${job.executor === 'external' ? 'external-research' : 'jobs'}/${job.id}/${action}`,
               'POST',
               undefined,
               crypto.randomUUID(),
@@ -435,7 +440,14 @@ export function attachConditions({
       const task = element(box, 'div');
       task.dataset.conditionTask = c.id;
       button(box, '编辑条件与引用', () => begin('rule', c));
-      button(box, '请求条件评估', () => begin('request', c));
+      if (c.data.mode === 'numeric' || canEvaluate)
+        button(box, '请求条件评估', () => begin('request', c));
+      else
+        element(
+          box,
+          'p',
+          '本机模型评估已停用。可独立记录本人判断，或通过已授权的外部 Agent 提交候选。',
+        );
       button(box, '独立记录本人判断', () => begin('assessment', c));
       if (candidate) button(box, '根据此建议记录判断', () => begin('assessment', c, candidate));
       const history = element(box, 'details');

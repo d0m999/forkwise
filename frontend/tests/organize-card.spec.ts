@@ -1,4 +1,5 @@
 import { expect, place, test } from './writing-board-fixture';
+import type { OrganizeTask } from '../../backend/src/mapping/organize-contracts';
 
 test('AI 整理从卡片菜单选择范围，审阅后添加并在重开保留归属', async ({ page, workspace }, info) => {
   await place(page, '供应链观察');
@@ -8,7 +9,7 @@ test('AI 整理从卡片菜单选择范围，审阅后添加并在重开保留�
   await page.keyboard.press('Enter');
   const dialog = page.getByRole('dialog', { name: 'AI 整理' });
   await expect(dialog).toBeVisible();
-  await expect(dialog.getByRole('button', { name: '用本机模型整理' })).toBeDisabled();
+  await expect(dialog.getByRole('button', { name: '用模型整理' })).toBeDisabled();
   await expect(dialog.getByRole('button', { name: '试用模拟整理' })).toBeDisabled();
   await page.keyboard.press('Escape');
   await expect(dialog).toHaveCount(0);
@@ -17,6 +18,9 @@ test('AI 整理从卡片菜单选择范围，审阅后添加并在重开保留�
   await page.keyboard.press('Tab');
   await expect(dialog.getByRole('checkbox', { name: /卡片标题/ })).toBeFocused();
   await page.keyboard.press('Space');
+  await expect(dialog.getByText(/OpenAI 尚未启用，可试用模拟整理/)).toBeVisible();
+  await expect(dialog.getByRole('button', { name: '用模型整理' })).toBeDisabled();
+  await expect(dialog.getByRole('button', { name: '试用模拟整理' })).toBeEnabled();
   await dialog.getByRole('button', { name: '试用模拟整理' }).click();
   await expect(dialog.getByRole('heading', { name: '模拟整理：供应链观察' })).toBeVisible();
   expect((await workspace.state()).cards).toHaveLength(1);
@@ -48,6 +52,36 @@ test('AI 整理从卡片菜单选择范围，审阅后添加并在重开保留�
   await expect(records.getByText('原卡已删除，仍可查看旧结果。')).toBeVisible();
   await expect(records.getByRole('heading', { name: '模拟整理：供应链观察' })).toBeVisible();
   await expect(records.getByRole('button', { name: '添加为新卡' })).toHaveCount(0);
+});
+
+test('旧模型停用后仍可审阅原候选和选择添加，原模型重试显示停用原因', async ({ page, workspace }) => {
+  await place(page, '历史来源');
+  const { project, cards: [source] } = await workspace.state();
+  const saved = {
+    id: 'legacy-partial', cardId: source!.id, mode: 'real', model: 'qwen2.5:7b', attempt: 1,
+    state: 'partial', createdAt: '2026-10-01T00:00:00Z', updatedAt: '2026-10-01T00:01:00Z',
+    input: { cardId: source!.id, thoughtVersionId: source!.versionId, bodyVersionId: source!.body.versionId,
+      title: source!.title, blocks: [], omittedBlockCount: source!.body.blocks.length },
+    output: { candidate: { title: '旧候选', text: '历史整理结果' }, gaps: ['待补材料'] }, outputAttempt: 1,
+    error: null, usage: null, attempts: [], freshness: 'current',
+    applied: false, candidateOnCanvas: false, addAvailable: true, cutCopyAvailable: false,
+  } satisfies OrganizeTask;
+  const projectPath = `**/api/mapping/projects/${project.id}`;
+  await page.route(`${projectPath}/cards/${source!.id}/organize/tasks`, route => route.fulfill({ json: [
+    { id: saved.id, cardId: saved.cardId, mode: saved.mode, createdAt: saved.createdAt },
+  ] }));
+  await page.route(`${projectPath}/organize/tasks/${saved.id}`, route => route.fulfill({ json: saved }));
+
+  await page.getByRole('button', { name: 'AI', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: 'AI 整理' });
+  await expect(dialog.getByRole('option', { selected: true })).toHaveText(/^模型整理 /);
+  await expect(dialog.getByRole('status')).toHaveText('模型整理 部分完成');
+  await expect(dialog.getByRole('heading', { name: '旧候选' })).toBeVisible();
+  await expect(dialog.getByRole('button', { name: '添加为新卡' })).toBeEnabled();
+  await expect(dialog.getByRole('button', { name: '重试整理' })).toBeDisabled();
+  await expect(dialog.getByText('这条记录使用的模型当前不可用，无法重试。')).toBeVisible();
+  await dialog.getByText('输入范围与用量', { exact: true }).click();
+  await expect(dialog.getByText('模型 qwen2.5:7b。费用未知。')).toBeVisible();
 });
 
 test('无标题卡可整理所选列表和引用，保留未选正文', async ({ page, workspace }) => {
@@ -188,7 +222,7 @@ for (const sourceChanged of [false, true]) test(sourceChanged
   const { project, cards: [card] } = await workspace.state();
   const apiPath = `/api/mapping/projects/${project.id}/organize`;
   const task = {
-    id: 'preflight-cancelled', cardId: card!.id, mode: 'real', model: 'local-test:1', attempt: 1,
+    id: 'preflight-cancelled', cardId: card!.id, mode: 'real', model: 'test-model', attempt: 1,
     input: { cardId: card!.id, thoughtVersionId: card!.versionId, bodyVersionId: card!.body.versionId,
       title: card!.title, blocks: [], omittedBlockCount: card!.body.blocks.length },
     createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), output: null, outputAttempt: null,
@@ -210,9 +244,9 @@ for (const sourceChanged of [false, true]) test(sourceChanged
   const dialog = page.getByRole('dialog', { name: 'AI 整理' });
   await dialog.getByRole('checkbox', { name: /卡片标题/ }).check();
   const started = page.waitForRequest(request => new URL(request.url()).pathname === `${apiPath}/tasks`, { timeout: 5000 });
-  await dialog.getByRole('button', { name: '用本机模型整理' }).click();
+  await dialog.getByRole('button', { name: '用模型整理' }).click();
   const startRequest = await started;
-  await expect(dialog.getByRole('status')).toHaveText('正在检查本机模型', { timeout: 3000 });
+  await expect(dialog.getByRole('status')).toHaveText('正在检查整理模型', { timeout: 3000 });
   await expect(dialog.getByRole('button', { name: '取消任务' })).toBeFocused();
   const cancelling = page.waitForRequest(request => new URL(request.url()).pathname === `${apiPath}/tasks/cancel-start`, { timeout: 5000 });
   await page.keyboard.press('Escape');
@@ -221,7 +255,7 @@ for (const sourceChanged of [false, true]) test(sourceChanged
     await expect(dialog.getByRole('alert')).toHaveText('原卡已更改或删除，请重新选择要整理的内容');
     await expect(dialog.getByRole('button', { name: '取消任务' })).toHaveCount(0);
   } else {
-    await expect(dialog.getByRole('status')).toHaveText('本机模型 已取消');
+    await expect(dialog.getByRole('status')).toHaveText('模型整理 已取消');
   }
   const lateStart = page.waitForResponse(response => response.request() === startRequest, { timeout: 5000 });
   releaseStart();
@@ -230,7 +264,7 @@ for (const sourceChanged of [false, true]) test(sourceChanged
     await expect(dialog.getByRole('alert')).toHaveText('原卡已更改或删除，请重新选择要整理的内容');
     await expect(dialog.getByRole('button', { name: '取消任务' })).toHaveCount(0);
   } else {
-    await expect(dialog.getByRole('status')).toHaveText('本机模型 已取消');
+    await expect(dialog.getByRole('status')).toHaveText('模型整理 已取消');
     await expect(dialog.getByRole('button', { name: '重试整理' })).toBeEnabled();
   }
 });
@@ -273,7 +307,7 @@ for (const reopenFrom of ['卡片', '项目记录']) test(`取消未确认时从
   await place(page, '重试取消');
   const { project } = await workspace.state();
   const apiPath = `/api/mapping/projects/${project.id}/organize`;
-  await page.route(`**${apiPath}/status`, route => route.fulfill({ json: { model: 'local-test:1' } }));
+  await page.route(`**${apiPath}/status`, route => route.fulfill({ json: { model: 'test-model' } }));
   await page.getByRole('button', { name: 'AI', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: 'AI 整理' });
   await dialog.getByRole('checkbox', { name: /卡片标题/ }).check();
@@ -286,7 +320,7 @@ for (const reopenFrom of ['卡片', '项目记录']) test(`取消未确认时从
 
   let releaseStart!: () => void;
   const startHeld = new Promise<void>(resolve => { releaseStart = resolve; });
-  const task = { ...prior, id: 'cancel-receipt', mode: 'real', model: 'local-test:1', state: 'cancelled',
+  const task = { ...prior, id: 'cancel-receipt', mode: 'real', model: 'test-model', state: 'cancelled',
     output: null, outputAttempt: null, addAvailable: false, attempts: [] };
   await page.route(`**${apiPath}/tasks`, async route => {
     if (route.request().method() !== 'POST' || route.request().postDataJSON().mode !== 'real') return route.continue();
@@ -302,7 +336,7 @@ for (const reopenFrom of ['卡片', '项目记录']) test(`取消未确认时从
 
   const started = page.waitForRequest(request => request.method() === 'POST' &&
     new URL(request.url()).pathname === `${apiPath}/tasks`, { timeout: 5000 });
-  await dialog.getByRole('button', { name: '用本机模型整理' }).click();
+  await dialog.getByRole('button', { name: '用模型整理' }).click();
   const startInput = (await started).postDataJSON();
   await dialog.getByRole('button', { name: '取消任务' }).click();
   await expect(dialog.getByRole('status')).toHaveText('取消结果未确认');
@@ -331,7 +365,7 @@ for (const reopenFrom of ['卡片', '项目记录']) test(`取消未确认时从
   await expect(reopened.getByRole('group', { name: '选择本次处理的内容' })).toHaveCount(0);
   await reopened.getByRole('button', { name: '取消任务' }).click();
   releaseStart();
-  await expect(reopened.getByRole('status')).toHaveText('本机模型 已取消');
+  await expect(reopened.getByRole('status')).toHaveText('模型整理 已取消');
   await expect(reopenedHistory).toBeEnabled();
   expect(cancellations).toEqual([startInput, startInput]);
 });

@@ -25,19 +25,7 @@ const origin = `http://127.0.0.1:${port}`;
 // 环境校验先于工作台模块加载：缺目录时立即失败，不因新增映射模块拖慢启动。
 const { openMapping } = await import('./mapping/storage.js');
 const { createWorkspaceApp } = await import('./mapping/http.js');
-const modelName = process.env.FORKWISE_OLLAMA_MODEL;
-let organizeModel: import('./mapping/organize.js').OrganizeModel | undefined;
-if (modelName) {
-  const [{ localOrganizeModel }, { OllamaClient }] = await Promise.all([
-    import('./mapping/organize-ollama.js'), import('./services/ollama.js'),
-  ]);
-  try {
-    organizeModel = localOrganizeModel(new OllamaClient(modelName));
-  } catch {
-    console.warn('本机整理模型配置无效，请提供具体版本标签');
-  }
-}
-const mapping = openMapping(directory, organizeModel ? { organizeModel } : {});
+const mapping = openMapping(directory);
 const types: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',

@@ -123,7 +123,7 @@ export class EvaluationService {
         requireThat(
           this.agent,
           'PROVIDER_NOT_CONFIGURED',
-          '尚未配置符合数据处理要求的模型；规则已保存，可通过外部 Agent 提交候选',
+          '本机模型评估已停用。规则已保存，可通过已授权的外部 Agent 提交候选',
           503,
         );
         if (input.condition.data.mode === 'mixed') {

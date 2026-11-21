@@ -3,6 +3,7 @@ import { RequestJournal, draftFingerprint } from './request-journal.js';
 import { textResearchPlan, fileImportPlan } from './research-entry-plans.js';
 
 export function attachResearchEntry({
+  canResearch,
   api,
   run,
   getState,
@@ -15,6 +16,8 @@ export function attachResearchEntry({
     dialog = $('#research-entry'),
     form = $('#entry-form');
   const journal = new RequestJournal(api, new RequestStore());
+  $('#entry-selection').hidden = $('#entry-research-options').hidden = !canResearch;
+  if (canResearch) form.querySelector('[type="submit"]').textContent = '保存并开始研究';
   const names = [
     'title',
     'text',
@@ -95,7 +98,11 @@ export function attachResearchEntry({
       projectId = id;
       request = null;
       materials(load());
-      feedback('输入仅保存在本机草稿中；开始研究后使用已配置模型处理选定材料。');
+      feedback(
+        canResearch
+          ? '输入先保存在本机草稿中。开始研究后处理选定材料。'
+          : '可保存文字材料或导入文件。本机模型研究已停用。',
+      );
     }
     let record;
     try {
@@ -119,7 +126,7 @@ export function attachResearchEntry({
     $('#entry-request-status').textContent = pending
       ? `${record.label}：已完成 ${record.cursor} / ${record.steps.length} 步。${record.state === 'rejected' ? '服务端明确拒绝本步骤；已完成步骤保留。' + (record.error ?? '') : '结果尚未确认；恢复时先查询原结果，再沿用原请求。'}`
       : record
-        ? `${record.label}：已确认保存。后台任务进度见下方。`
+        ? `${record.label}：已确认保存。`
         : '';
     materials();
     const box = $('#entry-jobs');
@@ -160,7 +167,7 @@ export function attachResearchEntry({
   }
   async function finished(record) {
     if (getState()?.project.id !== record.projectId) return;
-    if (record.meta.kind === 'research') {
+    if (['material', 'research'].includes(record.meta.kind)) {
       const saved = localStorage.getItem(key(record.projectId));
       if (
         saved &&
@@ -180,13 +187,15 @@ export function attachResearchEntry({
     }
     if (record.meta.kind === 'file') form.elements.file.value = '';
     await refresh(true);
-    feedback(
-      record.meta.kind === 'filing'
-        ? '申报正文获取请求已恢复，可在任务结果查看保存正文和实际缺口；研究判断保持。'
-        : record.meta.kind === 'file'
-          ? '原文件已保存并进入解析。解析完成后，明确选择下面的可读材料版本，再开始研究；图片须先转写。'
-          : '研究已排队，候选与查证结果会出现在同一画布；任务完成不表示观点成立。',
-    );
+    const notices = {
+      material: '文字材料已保存，可在“查看材料版本”中阅读原文。',
+      file: '原文件已保存并进入解析，可在“查看材料版本”中阅读原文或手工校正转写。',
+      filing: '申报正文获取请求已恢复，可在任务结果中查看正文和缺口。',
+      research: canResearch
+        ? '研究已排队，可在任务与历史中查看进度和结果。'
+        : '原研究请求已恢复，可在任务与历史中查看记录。',
+    };
+    feedback(notices[record.meta.kind] ?? '原请求已恢复，可查看已保存的记录。');
     message($('#entry-feedback').textContent);
     await update();
   }
@@ -226,7 +235,7 @@ export function attachResearchEntry({
     run(() =>
       execute(async (id) => {
         save();
-        return journal.start(id, textResearchPlan(read(), selected()));
+        return journal.start(id, textResearchPlan(read(), selected(), canResearch));
       }),
     );
   };
@@ -253,7 +262,7 @@ export function attachResearchEntry({
         materials(imported);
         save();
       }
-      feedback('已回到输入；已保存的材料仍可选择，不会重复导入已完成的文字。');
+      feedback('已回到输入，可在“查看材料版本”中阅读已保存的原文。');
       await update();
     });
   $('#entry-clear').onclick = () => {

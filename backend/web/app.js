@@ -21,6 +21,10 @@ if (params.has('token')) {
   history.replaceState(null, '', location.pathname);
 }
 const api = client(sessionStorage.getItem('forkwise-token') ?? '');
+const models = await fetch('/health', { signal: AbortSignal.timeout(5000) })
+  .then(async (response) => (response.ok ? (await response.json()).data?.models : null))
+  .catch(() => null);
+const canResearch = models?.research === true;
 let state = null,
   selected = null,
   layout = { version: 0, data: { positions: {}, drawings: [] } },
@@ -397,7 +401,7 @@ async function jobs() {
     const action =
       job.historyState && job.historyState !== 'applied'
         ? null
-        : ['failed', 'interrupted', 'partial'].includes(job.state)
+        : ['failed', 'interrupted', 'partial'].includes(job.state) && !job.retryBlockedByModel
           ? 'retry'
           : ['running', 'queued'].includes(job.state)
             ? 'cancel'
@@ -837,7 +841,8 @@ canvas = attachCanvas({
       run(() => materials.open(selected));
     } else if (action.task === 'ai') {
       $('#task-kind').closest('details').open = true;
-      $('#choose-task-materials').click();
+      if (canResearch) $('#choose-task-materials').click();
+      else $('#research-unavailable').scrollIntoView({ block: 'nearest' });
     } else if (action.task === 'question') {
       const text = prompt('为当前对象记录待查问题');
       if (text?.trim())
@@ -874,6 +879,7 @@ const materials = attachMaterials({
   jobs,
 });
 conditions = attachConditions({
+  canEvaluate: models?.evaluation === true,
   readCitation: (citation) =>
     citation.kind === 'image'
       ? run(() => materials.readCitation(citation, selected))
@@ -897,6 +903,7 @@ impactReviews = attachImpactReviews({
   showJob: (job) => showJob(job),
 });
 manualUpdates = attachManualUpdates({
+  canResearch,
   api,
   run,
   getState: () => state,
@@ -931,6 +938,7 @@ objectResults = attachObjectResults({
       : textReader.open(citation),
 });
 showJob = attachResearch({
+  canResearch,
   submitTask: (id, endpoint, body, label) => researchEntry.submitTask(id, endpoint, body, label),
   textReader,
   api,
@@ -965,6 +973,7 @@ showJob = attachResearch({
   },
 });
 researchEntry = attachResearchEntry({
+  canResearch,
   api,
   run,
   getState: () => state,

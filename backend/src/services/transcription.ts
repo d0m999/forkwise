@@ -277,7 +277,7 @@ export class TranscriptionService {
       requireThat(
         this.model,
         'VISION_NOT_CONFIGURED',
-        '尚未配置本机多模态模型；原文件保持，可对照原图人工补交文字',
+        '本机自动转写已停用，可对照原图补充文字',
         503,
       );
       const input = TranscriptionInput.parse(job.input),

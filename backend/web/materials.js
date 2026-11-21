@@ -169,22 +169,6 @@ export function attachMaterials({
         compare.textContent = '原图与转写校正';
         compare.onclick = () => run(() => openTranscription(version));
         item.append(compare);
-        const ocr = document.createElement('button');
-        ocr.textContent = '请求本页多模态识别';
-        ocr.onclick = () =>
-          run(async () => {
-            const page = Number(prompt('输入原文件页码；截图填 1', '1'));
-            if (!Number.isInteger(page) || page < 1) return;
-            await api(
-              `/projects/${state.project.id}/transcriptions`,
-              'POST',
-              { sourceVersionId: version.id, page },
-              uid(),
-            );
-            message('已创建本页转写任务，结果与个人判断分开保存');
-            await jobs();
-          });
-        item.append(ocr);
         const download = document.createElement('button');
         download.textContent = '下载原文件';
         download.onclick = () =>

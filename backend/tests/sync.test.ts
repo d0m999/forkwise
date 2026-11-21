@@ -4,6 +4,46 @@ import { syncProject, readWorkspace } from '../src/services/sync.js';
 import { AssetService } from '../src/services/assets.js';
 import { JobRepository } from '../src/repositories/jobs.js';
 
+it('停用模型只阻止依赖该模型的内部任务重试', () => {
+  const t = setup();
+  const jobs = new JobRepository(t.db, undefined, {
+    research: false,
+    evaluation: false,
+    vision: false,
+  });
+  const cases = [
+    ['workflow.initial', {}, true],
+    ['research.reconstruct', { materials: [{}] }, true],
+    ['condition.agent', {}, true],
+    ['material.vision', {}, true],
+    ['research.verify', { retrieval: {}, materials: [] }, false],
+    ['research.verify', { external: { executor: 'external' } }, false],
+    ['condition.rule', {}, false],
+    ['material.parse', {}, false],
+    ['source.sec', {}, false],
+    ['source.sec-filing', {}, false],
+    ['source.sec-history', {}, false],
+  ] as const;
+  try {
+    const expected = new Map(
+      cases.map(([kind, input, blocked], i) => {
+        const job = jobs.enqueue(t.project.id, kind, input, String(i));
+        return [job.id, blocked];
+      }),
+    );
+    for (const row of jobs.summaries(t.project.id)) {
+      expect(row.retryBlockedByModel).toBe(expected.get(row.id));
+      if (row.executor === 'external') continue;
+      const active = jobs.claim(t.project.id, row.id)!;
+      jobs.finish(active, 'failed', null, '合成失败');
+      if (expected.get(row.id)) expect(() => jobs.retry(t.project.id, row.id)).toThrow('已停用');
+      else expect(jobs.retry(t.project.id, row.id).state).toBe('queued');
+    }
+  } finally {
+    t.db.close();
+  }
+});
+
 it('连续同步包含跨调用者变化和删除，布局单独变化不影响图谱修订', () => {
   const t = setup();
   try {

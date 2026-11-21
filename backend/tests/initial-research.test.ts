@@ -1,7 +1,7 @@
 import { initialResearchFixture as fixture } from './fixtures/initial-research.js';
 import { randomUUID } from 'node:crypto';
 import { readLayout } from '../src/repositories/layout.js';
-import { it, expect } from 'vitest';
+import { it, expect, vi } from 'vitest';
 import { rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { createApplication } from '../src/app.js';
@@ -131,6 +131,44 @@ it('子任务已被并行调度领取时父任务让出执行，不重复调用�
     expect(f.calls.reconstruct).toBe(1);
   } finally {
     f.close();
+  }
+});
+
+it('停用模型后重开旧研究，等待资料子任务时归零的尝试仍保留进度和规划用量', async () => {
+  const f = fixture();
+  let reopened: ReturnType<typeof createApplication> | undefined;
+  try {
+    const job = f.app.initialResearch.request(f.p.id, human, 'before-model-retirement', {
+      sourceVersionIds: ['sv'],
+    });
+    // Another worker owns the SEC child when the parent saves its plan and yields.
+    vi.spyOn(f.app.publicData, 'run').mockImplementationOnce(
+      async (projectId, id) => f.app.jobs.claim(projectId, id)!,
+    );
+    const checkpoint = await f.app.initialResearch.run(f.p.id, job.id);
+    expect(checkpoint).toMatchObject({
+      state: 'queued',
+      attempt: 0,
+      output: { stage: 'acquisition' },
+      usage: { planningAttempts: [{ attempt: 1, usage: { inputTokens: 10, cost: null } }] },
+    });
+    f.app.db.close();
+    reopened = createApplication({
+      database: join(f.directory, 'test.sqlite'),
+      origin: 'http://127.0.0.1:8787',
+    });
+    reopened.jobs.recover();
+    await reopened.initialResearch.drain();
+    expect(reopened.jobs.get(f.p.id, job.id)).toMatchObject({
+      state: 'interrupted',
+      attempt: 0,
+      output: checkpoint.output,
+      usage: checkpoint.usage,
+    });
+  } finally {
+    reopened?.db.close();
+    if (f.app.db.open) f.app.db.close();
+    rmSync(f.directory, { recursive: true, force: true });
   }
 });
 

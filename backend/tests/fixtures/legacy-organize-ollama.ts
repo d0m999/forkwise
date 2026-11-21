@@ -1,17 +1,14 @@
 import { z } from 'zod';
-import { DomainError, requireThat } from '../domain/errors.js';
-import { OllamaClient } from '../services/ollama.js';
-import { OrganizeOutput, type OrganizeUsage } from './organize-contracts.js';
-import type { OrganizeModel } from './organize.js';
+import { DomainError, requireThat } from '../../src/domain/errors.js';
+import { OllamaClient } from '../../src/services/ollama.js';
+import type { OrganizeUsage } from '../../src/mapping/organize-contracts.js';
+import { ORGANIZE_PURPOSE, OrganizeCandidateOutput } from '../../src/mapping/organize-model-output.js';
+import type { OrganizeModel } from '../../src/mapping/organize.js';
 
 const CloudStatus = z.object({ cloud: z.object({ disabled: z.literal(true) }) });
 const Models = z.object({ models: z.array(z.object({
   name: z.string(), digest: z.string().regex(/^[a-f0-9]{64}$/i), size: z.int().nonnegative(),
 })) });
-const CandidateOutput = OrganizeOutput.refine(output => output.candidate !== null || output.gaps.length > 0, {
-  path: ['gaps'],
-  message: '没有候选时须说明资料缺口',
-});
 
 export function localOrganizeModel(client: OllamaClient): OrganizeModel {
   async function resolveDigest(signal: AbortSignal) {
@@ -46,8 +43,7 @@ export function localOrganizeModel(client: OllamaClient): OrganizeModel {
         requireThat(await resolveDigest(signal) === modelDigest, 'ORGANIZE_MODEL_CHANGED',
           '本机模型在整理期间已更新，请用当前配置开始新任务', 409);
       };
-      const answer = await client.generate(CandidateOutput,
-        '把已授权的卡片文字整理成一张可读的候选卡。以自己的话重组结构，标明推断和资料缺口，只用传入文字，不补充外部事实或生成引用。无法整理时返回空候选并解释缺口。任务只返回候选，不改原卡，也不触发任何动作。',
+      const answer = await client.generate(OrganizeCandidateOutput, ORGANIZE_PURPOSE,
         { taskId, attempt, title: input.title, blocks: input.blocks }, signal, undefined,
         {
           beforeRepair: confirmDigest,

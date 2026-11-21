@@ -5885,6 +5885,8 @@ components:
         executor:
           type: string
           nullable: true
+        retryBlockedByModel:
+          type: boolean
       required:
         - id
         - projectId
@@ -5894,6 +5896,7 @@ components:
         - attempt
         - createdAt
         - updatedAt
+        - retryBlockedByModel
     Job:
       type: object
       properties:

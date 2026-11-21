@@ -76,22 +76,9 @@ const { chromium } = require('/Users/d0m999/.cache/codex-runtimes/codex-primary-
     await form.getByRole('button', { name: '保存本人条件判断' }).click();
     await form.waitFor({ state: 'hidden' });
     assert.ok((await state()).objects.some(e => e.kind === 'evaluation' && e.data.evaluator === 'human' && !e.data.basedOn));
-    await condition(c.id).getByRole('button', { name: '请求条件评估' }).click();
-    form = condition(c.id).locator('.condition-assessment');
-    await form.locator('input[value=e2]').check();
-    await form.getByRole('button', { name: '使用所选材料发起评估' }).click();
-    await form.waitFor({ state: 'hidden' });
-    for (let i = 0; i < 100; i++) {
-      const jobs = await api(path + '/jobs');
-      if (jobs.some(j => j.state === 'failed')) {
-        const job = await api(path + '/jobs/' + jobs[0].id);
-        assert.deepEqual(job.input.evidence.map(e => e.id), ['e2']); break;
-      }
-      if (i === 99) throw new Error('模型未配置的失败状态未出现'); await delay();
-    }
-    await condition(c.id).locator('[data-condition-task]').filter({ hasText: '规则已保存；评估任务失败' }).waitFor();
-    await condition(c.id).getByRole('button', { name: '重试此条件评估' }).click();
-    await condition(c.id).locator('[data-condition-task]').filter({ hasText: '规则已保存；评估任务失败' }).waitFor();
+    await condition(c.id).getByText(/本机模型评估已停用/).waitFor();
+    assert.equal(await condition(c.id).getByRole('button', { name: '请求条件评估' }).count(), 0);
+    assert.ok(!(await api(path + '/jobs')).some(j => j.kind === 'condition.agent'));
     assert.equal((await state()).objects.find(e => e.id === c.id).data.description, '渠道需求持续改善');
     await condition(c.id).getByRole('button', { name: '编辑条件与引用' }).click();
     form = condition(c.id).locator('.condition-editor');
@@ -169,7 +156,7 @@ const { chromium } = require('/Users/d0m999/.cache/codex-runtimes/codex-primary-
     mkdirSync('artifacts', { recursive: true });
     await page.locator('aside.details').screenshot({ path: 'artifacts/conditions-browser.png' });
     assert.deepEqual(errors, []);
-    console.log('PASS: 条件创建/共享引用/局部派生/独立人工判断/明确材料范围/模型未配置失败/数值计算/改判理由/阈值自动重算/旧确认隔离/草稿刷新/并发复核/历史回查。仅合成材料与隔离数据库，无真实模型或来源验收。');
+    console.log('PASS: 条件创建/共享引用/局部派生/独立人工判断/已停用模型评估入口关闭/按所选证据数值计算/改判理由/阈值自动重算/旧确认隔离/草稿刷新/并发复核/历史回查。仅合成材料与隔离数据库。');
   } catch (e) {
     if (page) console.error('界面状态:', await page.locator('#notice').textContent(), await page.locator('#conditions').textContent());
     console.error('页面错误:', errors);

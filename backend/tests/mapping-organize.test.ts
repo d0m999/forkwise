@@ -8,7 +8,7 @@ import { createWorkspaceApp } from '../src/mapping/http.js';
 import { openMapping } from '../src/mapping/storage.js';
 import { inspectPackage } from '../src/mapping/package-verify.js';
 import { OllamaClient } from '../src/services/ollama.js';
-import { localOrganizeModel } from '../src/mapping/organize-ollama.js';
+import { localOrganizeModel } from './fixtures/legacy-organize-ollama.js';
 import { captureCutCommand } from '../src/mapping/cut-command.js';
 import type { StoredTask } from '../src/mapping/organize-store.js';
 import type { AccessService } from '../src/services/access.js';
@@ -477,7 +477,7 @@ it('用实际本机模型摘要去重，保留相同请求编号的原回执', a
       message: { content: JSON.stringify({ candidate: { title: '结果 ' + digest[0], text: '整理正文' }, gaps: [] }) },
     });
   };
-  await withOrganizeWorkspace(transport, async (request, directory) => {
+  await withOrganizeWorkspace(transport, async (request, directory, reopen) => {
     const card = (await (await request('/api/mapping/projects/p')).json()).cards[0];
     const start = async (requestId: string) => (await request(tasks, {
       requestId, mode: 'real', cardId: 'c', thoughtVersionId: card.versionId,
@@ -531,7 +531,7 @@ it('用实际本机模型摘要去重，保留相同请求编号的原回执', a
     expect(await start('first')).toMatchObject({ id: first.id });
     expect((await request(`${tasks}/${first.id}/retry`, { attempt: 2, requestId: 'retry-legacy-with-b' })).status).toBe(200);
     await vi.waitFor(async () => expect(await (await request(`${tasks}/${first.id}`)).json()).toMatchObject({
-      state: 'partial', attempt: 3, outputAttempt: 1, error: '本机模型已更新，请用当前配置开始新任务',
+      state: 'partial', attempt: 3, outputAttempt: 1, error: '整理模型已更新，请用当前配置开始新任务',
     }));
     expect(calls).toBe(1);
     const second = await start('different-weights');
@@ -539,6 +539,22 @@ it('用实际本机模型摘要去重，保留相同请求编号的原回执', a
     await done(second.id, 'b');
     expect(calls).toBe(2);
     expect(await start('same-new-weights')).toMatchObject({ id: second.id });
+
+    const saved = await start('first');
+    reopen();
+    expect(await start('first')).toEqual(saved);
+    const disabled = await request(`${tasks}/${first.id}/retry`, { attempt: 3, requestId: 'retry-retired-model' });
+    expect(disabled.status).toBe(503);
+    expect(await disabled.json()).toMatchObject({ code: 'ORGANIZE_MODEL_UNCONFIGURED' });
+    expect(await (await request(`${tasks}/${first.id}`)).json()).toEqual(saved);
+    const add = await request('/api/mapping/execute', { commandId: 'add-legacy', projectId: 'p',
+      type: 'organize.add', expected: null, payload: { taskId: first.id, attempt: 3, x: 300, y: 20 } });
+    expect(add.status).toBe(200);
+    const project = await (await request('/api/mapping/projects/p')).json();
+    expect(project.cards).toContainEqual(expect.objectContaining({
+      title: '结果 a', aiOrigin: { mode: 'real', taskId: first.id },
+    }));
+    expect(calls).toBe(2);
   });
 });
 

@@ -25,9 +25,9 @@ export function updateEventsView({
     queued: '等待处理',
     running: '处理中',
     succeeded: '分析完成',
-    failed: '失败，可从任务重试',
+    failed: '失败',
     partial: '部分完成',
-    interrupted: '中断，可从任务重试',
+    interrupted: '中断',
     cancelled: '已取消',
   };
   let sequence = 0;

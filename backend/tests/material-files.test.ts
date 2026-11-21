@@ -50,7 +50,7 @@ it('HTML 原文件独立保存，提取不执行脚本，定位/原文件/历史
     b.db.close();
   }
 });
-it('原图先保存，OCR 未配置明确部分完成；失败解析仍可下载原文件', async () => {
+it('原图先保存并标记文字待转写，失败解析仍可下载原文件', async () => {
   const a = createApplication({ database: ':memory:', origin: 'http://127.0.0.1:8787' });
   try {
     const p = a.write.createProject(human, 'image-project', { name: '图片' });
@@ -79,7 +79,7 @@ it('原图先保存，OCR 未配置明确部分完成；失败解析仍可下载
     await a.files.drain();
     const job = a.jobs.get(p.id, uploaded.job.id);
     expect(job.state).toBe('partial');
-    expect(job.error).toContain('尚未配置');
+    expect(job.error).toContain('文字待转写');
     expect(a.files.file(p.id, uploaded.fileId).bytes).toEqual(png);
     const malformed = a.files.upload(p.id, human, 'bad-pdf-file', {
       sourceId: 's',

@@ -33,7 +33,11 @@ export function createApplication(options: {
 }) {
   const db = openDatabase(options.database);
   const repo = new ResearchRepository(db);
-  const jobs = new JobRepository(db);
+  const jobs = new JobRepository(db, undefined, {
+    research: Boolean(options.researchModel),
+    evaluation: Boolean(options.agent),
+    vision: Boolean(options.visionModel),
+  });
   const evaluation = new EvaluationService(repo, jobs, () => options.metrics ?? [], options.agent);
   const search = new SearchRepository(repo);
   const write = new GraphWriteService(
