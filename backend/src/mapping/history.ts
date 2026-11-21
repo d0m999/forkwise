@@ -363,7 +363,8 @@ export function travelHistory(
   const attachmentChanges = restoreAttachments(db, project.id, action.attachmentChanges ?? [], type);
   (type === 'history.undo' ? stack.redo : stack.undo).push(action);
   save(db, project.id, stack);
-  return { ...restored, attachmentChanges, target: { ...action.target, label: action.label } };
+  const changedIds = [...new Set([...restored.changedIds, ...attachmentChanges.map(change => (change.after ?? change.before!).id)])];
+  return { ...restored, changedIds, attachmentChanges, target: { ...action.target, label: action.label } };
 }
 
 function restoreHistoryAction(

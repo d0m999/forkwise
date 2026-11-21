@@ -363,6 +363,8 @@ export function ProjectSearch({
         disabled
       )
         return;
+      const modals = window.document.querySelectorAll('dialog:modal, [role="dialog"][aria-modal="true"]');
+      if ([...modals].some((modal) => modal !== dialog.current)) return;
       if (
         (event.target as Element).closest(
           ".body-editor, [contenteditable=true], input, textarea",

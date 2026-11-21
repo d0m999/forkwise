@@ -38,6 +38,7 @@ export function importDialogOpen() {
 type Phase = 'idle' | 'verifying' | 'submitting';
 type Attempt = { commandId: string; projectId: string; name: string };
 const settledAttempt = 'settled';
+const attemptPrefix = 'forkwise:import-attempt:v1:';
 
 function readAttempt(key: string): Attempt | null {
   const raw = sessionStorage.getItem(key);
@@ -62,13 +63,17 @@ export function ImportPackage({ disabled, onImported }: {
   // 迟到的预览结果属于已经关闭或已被替换的那一次选择，直接丢弃。
   const selection = useRef(0);
   const [open, setOpen] = useState(false);
-  const [source, setSource] = useState<{ fileName: string; base64: string; key: string; preview: ImportPreview } | null>(null);
+  const [source, setSource] = useState<{
+    fileName: string; base64: string; attemptKey: string; preview: ImportPreview; retryReadFailed: boolean;
+  } | null>(null);
   const [name, setName] = useState('');
   const [phase, setPhase] = useState<Phase>('idle');
   const [message, setMessage] = useState('');
   const [failures, setFailures] = useState<string[]>([]);
   const verifying = phase === 'verifying';
   const submitting = phase === 'submitting';
+  const canSubmit = source !== null && !source.retryReadFailed && !source.preview.failures.length &&
+    !submitting && !disabled && !!name.trim();
 
   useEffect(() => {
     if (failures.length) failureRef.current?.focus({ preventScroll: true });
@@ -135,13 +140,20 @@ export function ImportPackage({ disabled, onImported }: {
     try {
       const base64 = await readBase64(file);
       if (ticket !== selection.current) return;
-      const key = await fingerprint(base64);
+      const attemptKey = attemptPrefix + (await fingerprint(base64));
       if (ticket !== selection.current) return;
       const preview = await api.previewImport(base64);
       if (ticket !== selection.current) return;
-      setSource({ fileName: file.name, base64, key, preview });
-      setName(preview.suggestedName);
-      setMessage('');
+      let pending: Attempt | null = null;
+      let retryReadFailed = false;
+      try {
+        pending = preview.failures.length ? null : readAttempt(attemptKey);
+      } catch {
+        retryReadFailed = true;
+      }
+      setSource({ fileName: file.name, base64, attemptKey, preview, retryReadFailed });
+      setName(pending?.name ?? preview.suggestedName);
+      setMessage(retryReadFailed ? '浏览器无法读取导入重试记录。请检查浏览器的会话存储，关闭预览后重新选择项目包。' : '');
     } catch (error) {
       if (ticket !== selection.current) return;
       setMessage(error instanceof Error ? error.message : '所选文件无法读取');
@@ -152,9 +164,9 @@ export function ImportPackage({ disabled, onImported }: {
 
   async function submit(event: FormEvent) {
     event.preventDefault();
-    if (!source || submitting || disabled || !name.trim() || source.preview.failures.length) return;
+    if (!canSubmit) return;
     const trimmed = name.trim();
-    const key = `forkwise:import-attempt:v1:${source.key}`;
+    const key = source.attemptKey;
     let previous: Attempt | null;
     let attempt: Attempt;
     setFailures([]);
@@ -269,6 +281,7 @@ export function ImportPackage({ disabled, onImported }: {
                   id="import-name"
                   maxLength={240}
                   value={name}
+                  readOnly={source.retryReadFailed}
                   onChange={(event) => setName(event.target.value)}
                   onKeyDown={(event) => {
                     if (event.nativeEvent.isComposing && event.key === 'Enter') event.preventDefault();
@@ -343,7 +356,7 @@ export function ImportPackage({ disabled, onImported }: {
                   <button type="button" disabled={submitting} onClick={close}>取消</button>
                   <button
                     type="submit"
-                    disabled={submitting || disabled || !name.trim() || source.preview.failures.length > 0}
+                    disabled={!canSubmit}
                   >
                     {submitting ? '正在导入…' : '导入为新研究'}
                   </button>

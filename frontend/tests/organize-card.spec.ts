@@ -336,8 +336,16 @@ test('覆盖剪贴板且剪切退出撤销历史后可以另建候选卡', async
   expect(replacement?.aiOrigin).toEqual(candidate!.aiOrigin);
 });
 
-for (const reopenFrom of ['卡片', '刷新后从卡片', '项目记录', '存储拒写的卡片', '无法清除旧记录的卡片']) test(`取消未确认时从${reopenFrom}重开，仍能按原请求取消`, async ({ page, workspace }) => {
+for (const reopenFrom of ['卡片', '刷新后从卡片', '旧记录损坏后刷新从卡片', '项目记录', '存储拒写的卡片', '无法清除旧记录的卡片']) test(`取消未确认时从${reopenFrom}重开，仍能按原请求取消`, async ({ page, workspace }) => {
   await place(page, '重试取消');
+  const corruptStorage = reopenFrom === '旧记录损坏后刷新从卡片';
+  const reloadFromCard = corruptStorage || reopenFrom === '刷新后从卡片';
+  if (corruptStorage) {
+    await page.evaluate(() => sessionStorage.setItem('forkwise.organize-cancellation.v1', '['));
+    await page.reload();
+    await expect(page.getByRole('status')).toHaveText('已保存到本机');
+    await page.getByRole('button', { name: '重试取消', exact: true }).click();
+  }
   const storageDenied = reopenFrom === '存储拒写的卡片';
   const cannotClear = reopenFrom === '无法清除旧记录的卡片';
   const denyStorage = (operation: 'setItem' | 'removeItem') => page.evaluate(method => {
@@ -390,7 +398,7 @@ for (const reopenFrom of ['卡片', '刷新后从卡片', '项目记录', '存�
   await expect(history).toBeDisabled({ timeout: 3000 });
   await dialog.getByRole('button', { name: '关闭 AI 整理' }).click();
   await expect(dialog).toHaveCount(0);
-  if (reopenFrom === '刷新后从卡片') {
+  if (reloadFromCard) {
     await page.reload();
     await expect(page.getByRole('status')).toHaveText('已保存到本机');
     await page.getByRole('button', { name: '重试取消', exact: true }).click();
@@ -446,7 +454,9 @@ for (const reopenFrom of ['卡片', '刷新后从卡片', '项目记录', '存�
   }
 });
 
-test('项目整理记录在甲卡取消未确认时仍可查看已删除的乙卡记录并恢复乙卡请求', async ({ page, workspace }) => {
+for (const reloadWithReadFailure of [false, true]) test(reloadWithReadFailure
+  ? '刷新时取消记录读取失败，存储恢复后取消乙卡仍能按原请求确认甲卡'
+  : '项目整理记录在甲卡取消未确认时仍可查看已删除的乙卡记录并恢复乙卡请求', async ({ page, workspace }) => {
   const titleA = '待确认的甲卡';
   const titleB = '之后删除的乙卡';
   await place(page, titleA);
@@ -490,6 +500,20 @@ test('项目整理记录在甲卡取消未确认时仍可查看已删除的乙�
 
   try {
     for (const title of [titleA, titleB]) {
+      if (title === titleB && reloadWithReadFailure) {
+        await page.addInitScript(() => {
+          const getItem = Storage.prototype.getItem;
+          Storage.prototype.getItem = function (key) {
+            if (this === sessionStorage && key === 'forkwise.organize-cancellation.v1')
+              throw new DOMException('暂时无法读取取消记录', 'SecurityError');
+            return getItem.call(this, key);
+          };
+          document.addEventListener('restore-cancellation-storage', () => { Storage.prototype.getItem = getItem; }, { once: true });
+        });
+        await page.reload();
+        await expect(page.getByRole('status')).toHaveText('已保存到本机');
+        await page.evaluate(() => document.dispatchEvent(new Event('restore-cancellation-storage')));
+      }
       await openCard(title);
       if (title === titleB) {
         await expect(dialog.getByRole('heading', { name: `模拟整理：${titleB}` })).toBeVisible();

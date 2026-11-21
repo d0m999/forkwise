@@ -209,6 +209,35 @@ test('预览校验后导入隔离研究：取消无副作用、确认后逐项�
 });
 
 
+test('请求未送达时刷新并重选同一包，直接重试按上次输入的名称导入', async ({ page, workspace }) => {
+  await place(page, '名称恢复卡');
+  const packagePath = await exportPackage(page);
+  const before = await projectsOf(page, workspace.origin);
+  const attempts: { commandId: string; projectId: string; name: string }[] = [];
+  await page.route('**/api/mapping/execute', async route => {
+    const body = route.request().postDataJSON();
+    if (body.type !== 'project.import') return route.continue();
+    attempts.push({ commandId: body.commandId, projectId: body.projectId, name: body.payload.name });
+    if (attempts.length === 1) return route.abort();
+    await route.continue();
+  });
+
+  const { dialog } = await openPackage(page, packagePath);
+  await dialog.getByLabel('新研究名称').fill('我填写的研究名称');
+  await dialog.getByRole('button', { name: '导入为新研究', exact: true }).click();
+  await expect(dialog.getByText('响应未收到', { exact: false })).toBeVisible();
+  expect(await projectsOf(page, workspace.origin)).toEqual(before);
+
+  await page.reload();
+  const reopened = await openPackage(page, packagePath);
+  await expect(reopened.dialog.getByLabel('新研究名称')).toHaveValue('我填写的研究名称');
+  await reopened.dialog.getByRole('button', { name: '导入为新研究', exact: true }).click();
+  await expect(page.getByRole('tab', { selected: true })).toContainText('我填写的研究名称');
+  expect(attempts).toHaveLength(2);
+  expect(attempts[1]).toEqual(attempts[0]);
+  expect(await projectsOf(page, workspace.origin)).toHaveLength(before.length + 1);
+});
+
 test('响应丢失后刷新并重选同包同名，用原命令和项目编号重试只建一个项目', async ({ page, workspace }) => {
   test.setTimeout(120000);
   await place(page, '重试卡');
@@ -254,7 +283,7 @@ test('响应丢失后刷新并重选同包同名，用原命令和项目编号�
   }
   await page.reload();
   const reopened = await openPackage(page, packagePath);
-  await reopened.dialog.getByLabel('新研究名称').fill('重试导入');
+  await expect(reopened.dialog.getByLabel('新研究名称')).toHaveValue('重试导入');
   await reopened.dialog.getByRole('button', { name: '导入为新研究', exact: true }).click();
   await expect(page.getByRole('tab', { selected: true })).toContainText('重试导入');
   const projects = await projectsOf(page, workspace.origin);
@@ -346,6 +375,27 @@ test('导入结果未知或重试无权限时保留请求，确定性拒绝后�
   expect(attempts[3]!.projectId).not.toBe(attempts[0]!.projectId);
   expect(attempts[3]!.commandId).not.toBe(attempts[0]!.commandId);
   expect((await projectsOf(page, workspace.origin)).filter((project) => project.name === '服务拒绝后重新导入')).toHaveLength(1);
+});
+
+test('导入重试记录暂时不可读时，仍可查看只读预览', async ({ page, workspace }) => {
+  const packagePath = await exportPackage(page);
+  const before = await projectsOf(page, workspace.origin);
+  await page.evaluate(() => {
+    const original = Storage.prototype.getItem;
+    Storage.prototype.getItem = function (key) {
+      if (this === sessionStorage && key.startsWith('forkwise:import-attempt:v1:'))
+        throw new DOMException('暂时无法读取导入记录', 'SecurityError');
+      return original.call(this, key);
+    };
+  });
+
+  const { dialog } = await openPackage(page, packagePath);
+  await expect(dialog.getByText('浏览器无法读取导入重试记录', { exact: false })).toBeVisible();
+  await expect(dialog.getByRole('region', { name: '导入范围' })).toBeVisible({ timeout: 3000 });
+  await expect(dialog.getByRole('region', { name: '导入缺口' })).toBeVisible();
+  await expect(dialog.getByRole('region', { name: '身份映射' })).toBeVisible();
+  await expect(dialog.getByRole('button', { name: '导入为新研究', exact: true })).toBeDisabled();
+  expect(await projectsOf(page, workspace.origin)).toEqual(before);
 });
 
 test('会话存储拒写时不发送导入，已导入但清理失败时仍能打开项目', async ({ page, workspace }) => {

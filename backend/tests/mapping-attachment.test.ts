@@ -160,6 +160,7 @@ it('观察附着、解绑与删卡历史时，报告批注关系实际写入的�
     expect(change.domains).toHaveLength(lifecycle ? 4 : 1);
     expect(change.domains).toEqual(expect.arrayContaining(lifecycle ? [relation, ...cardDomains] : [relation]));
     expect(change.deletedIds).not.toContain(note.item.id);
+    return change;
   };
   const travel = (type: 'history.undo' | 'history.redo') => () => f.run({ type, expected: f.state().project.revision, payload: {} });
   observeWrite(() => attach(f, note.item.id), true);
@@ -172,8 +173,8 @@ it('观察附着、解绑与删卡历史时，报告批注关系实际写入的�
   observeWrite(travel('history.undo'), true);
   observeWrite(() => f.run({ type: 'thought.delete', expected: { thought: card.versionId, body: card.body.versionId,
     pose: card.item.versionId, appearance: null }, payload: { id: card.id } }), false, true);
-  observeWrite(travel('history.undo'), true, true);
-  observeWrite(travel('history.redo'), false, true);
+  expect(observeWrite(travel('history.undo'), true, true).changedIds).toContain(note.item.id);
+  expect(observeWrite(travel('history.redo'), false, true).changedIds).toContain(note.item.id);
 });
 
 it('旧历史回执能确定独立附着域，混合删除缺明细时从固定快照恢复', () => {
