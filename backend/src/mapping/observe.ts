@@ -22,6 +22,12 @@ function delta(change: Change): Delta {
   for (const c of change.frameChanges ?? []) add('frame', (c.after ?? c.before!).id);
   for (const c of change.groupChanges ?? []) add('group', (c.after ?? c.before!).id);
   for (const c of change.containmentChanges ?? []) add('containment', (c.after ?? c.before!).id);
+  for (const c of change.attachmentChanges ?? []) {
+    if (c.before?.versionId !== c.after?.versionId) add('attachment', (c.after ?? c.before!).id);
+  }
+  // 旧版独立附着动作的历史回执保存了目标批注身份，足以恢复变化域。
+  if (!change.attachmentChanges && (change.historyTarget?.label === 'attachment.attach' || change.historyTarget?.label === 'attachment.detach'))
+    add('attachment', change.historyTarget.id);
   const objects = [
     ['text', [...(change.textChanges ?? []), ...(change.textChange ? [change.textChange] : [])]],
     ['shape', [...(change.shapeChanges ?? []), ...(change.shapeChange ? [change.shapeChange] : [])]],
@@ -43,6 +49,7 @@ function delta(change: Change): Delta {
     if (c.before?.item.versionId !== c.after?.item.versionId) add('pose', value.item.id);
     if (c.before?.appearance?.versionId !== c.after?.appearance?.versionId) add('appearance', 'appearance:' + value.id);
     if (c.before?.cardTags?.versionId !== c.after?.cardTags?.versionId) add('cardTags', 'cardTags:' + value.id);
+    if (c.before?.attachments?.versionId !== c.after?.attachments?.versionId) add('attachments', 'attachments:' + value.id);
   }
   for (const c of change.cardChanges ?? []) {
     if (c.before.item.versionId !== c.after.item.versionId) add('pose', c.after.item.id);
@@ -54,6 +61,24 @@ function delta(change: Change): Delta {
   const order = new Map(change.changedIds.map((id, index) => [id, index]));
   domains.sort((a, b) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0));
   return { ...change, domains, deletedIds: change.deletedIds ?? [] };
+}
+
+const attachmentLifecycleActions = new Set([
+  'thought.delete', 'text.delete', 'shape.delete', 'image.delete', 'stroke.delete', 'group.delete',
+  'canvas.delete-selection', 'canvas.cut', 'canvas.paste-cut',
+]);
+
+function hasIncompleteAttachmentHistory(db: Database.Database, change: Change): boolean {
+  if (change.attachmentChanges !== undefined || !change.historyTarget) return false;
+  const label = change.historyTarget.label;
+  // 文字编辑组可用删除收尾，仍保留 text.edit 的动作名。
+  const deletedEditedText = label === 'text.edit' && [...(change.textChanges ?? []), ...(change.textChange ? [change.textChange] : [])]
+    .some(c => !c.before || !c.after);
+  if (!deletedEditedText && !attachmentLifecycleActions.has(label)) return false;
+  // 首次删卡也有 historyTarget，但原始删除回执本来就会记录实际解绑。
+  if (label === 'thought.delete' && db.prepare("SELECT 1 FROM mapping_receipts WHERE project_id=? AND command_id=? AND json_extract(request,'$.type')='thought.delete'").get(change.projectId, change.commandId)) return false;
+  // 旧混合历史缺少解绑明细。项目从未产生附着版本时，仍能完整读取该动作。
+  return !!db.prepare("SELECT 1 FROM mapping_versions WHERE project_id=? AND domain='attachment' LIMIT 1").get(change.projectId);
 }
 
 // Called inside Mapping's authorized SQLite read transaction. Cache is read-only.
@@ -122,7 +147,8 @@ export function observeChanges(
     !reason &&
     (changes.some((c, i) => c.revision !== query.afterRevision + i + 1) ||
       (changes.length < query.limit + 1 &&
-        changes.length !== pinned.revision - query.afterRevision))
+        changes.length !== pinned.revision - query.afterRevision) ||
+      changes.slice(0, query.limit).some(change => hasIncompleteAttachmentHistory(db, change)))
   )
     reason = 'CHANGE_GAP';
   if (reason && query.snapshot) pinned = read();

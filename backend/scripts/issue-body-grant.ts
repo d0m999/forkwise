@@ -1,10 +1,9 @@
-import { createHash, randomBytes } from 'node:crypto';
-import { closeSync, openSync, realpathSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
-import { basename, dirname, join, resolve, sep } from 'node:path';
+import { resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { DomainError, requireThat } from '../src/domain/errors.js';
-import { hasWorkspaceDataEntries, openMapping, readWorkspaceAccessFile } from '../src/mapping/storage.js';
+import { openMapping, readWorkspaceAccessFile } from '../src/mapping/storage.js';
 import type { ContentDelegation } from '../src/services/access.js';
+import { grantOutputPath, issueGrantFile } from './grant-output.js';
 
 function issueGrant() {
   const { values } = parseArgs({
@@ -39,18 +38,7 @@ function issueGrant() {
     range: { start: Number(start), end: Number(end) },
   };
   const directory = resolve(dataDir);
-  requireThat(!out.endsWith(sep), 'INVALID_SCOPE', '--out 必须指向文件', 403);
-  // Native realpath resolves symlinks before traversing subsequent '..' segments.
-  const outputParent = realpathSync.native(dirname(out));
-  const outputPath = join(outputParent, basename(out));
-  const workspaceDirectory = statSync(directory);
-  const outputDirectory = statSync(outputParent);
-  const isSourceWorkspace =
-    workspaceDirectory.dev === outputDirectory.dev && workspaceDirectory.ino === outputDirectory.ino;
-  requireThat(
-    !isSourceWorkspace && !hasWorkspaceDataEntries(outputParent),
-    'INVALID_SCOPE', '请将令牌输出到工作台数据目录之外', 403,
-  );
+  const outputPath = grantOutputPath(directory, out);
   const localAccess = JSON.parse(readWorkspaceAccessFile(directory)) as { url?: string };
   const humanToken = new URLSearchParams(localAccess.url?.split('#')[1]).get('token') ?? '';
   const mapping = openMapping(directory);
@@ -58,20 +46,10 @@ function issueGrant() {
     const human = mapping.access.authenticate(humanToken);
     mapping.access.human(human);
     mapping.access.project(human, project);
-    const token = randomBytes(32).toString('base64url');
-    const hash = createHash('sha256').update(token).digest('hex');
-    const fd = openSync(outputPath, 'wx', 0o600);
-    try {
+    const hashPrefix = issueGrantFile(outputPath, token => {
       mapping.access.issue('agent', [project], lifetime, token, [], undefined, [scope]);
-      writeFileSync(fd, token + '\n');
-    } catch (error) {
-      mapping.access.revoke(hash);
-      unlinkSync(outputPath);
-      throw error;
-    } finally {
-      closeSync(fd);
-    }
-    console.log(hash.slice(0, 12));
+    });
+    console.log(hashPrefix);
   } finally {
     mapping.close();
   }

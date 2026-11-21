@@ -1,7 +1,6 @@
-import { openSync, readFileSync, writeSync, closeSync, chmodSync } from 'node:fs';
-import { resolve } from 'node:path';
-import { createHash, randomBytes } from 'node:crypto';
-import { openMapping } from '../src/mapping/storage.js';
+import { DomainError } from '../src/domain/errors.js';
+import { openMapping, readWorkspaceAccessFile } from '../src/mapping/storage.js';
+import { grantOutputPath, issueGrantFile } from './grant-output.js';
 import {
   LAYOUT_FIELDS,
   LAYOUT_OPERATIONS,
@@ -60,16 +59,15 @@ if (!Number.isFinite(hours) || hours <= 0) {
   process.exit(2);
 }
 
-const accessFile = resolve(dataDir, 'local-access.json');
 let humanToken: string;
+let outputPath: string;
 try {
-  const recorded = JSON.parse(readFileSync(accessFile, 'utf8')) as { url?: string };
-  const match = /#token=([^&]+)/.exec(recorded.url ?? '');
-  if (!match) throw new Error('local-access.json 不含 token');
-  humanToken = decodeURIComponent(match[1]!);
+  outputPath = grantOutputPath(dataDir, out);
+  const recorded = JSON.parse(readWorkspaceAccessFile(dataDir)) as { url?: string };
+  humanToken = new URLSearchParams(recorded.url?.split('#')[1]).get('token') ?? '';
 } catch (error) {
-  console.error(`无法读取本机启动凭证 ${accessFile}：${(error as Error).message}`);
-  process.exit(1);
+  console.error(error instanceof DomainError ? error.message : '无法读取本机启动凭证或令牌输出目录');
+  process.exit(error instanceof DomainError ? 2 : 1);
 }
 
 const mapping = openMapping(dataDir);
@@ -93,27 +91,23 @@ try {
       objectIds,
       fields,
     };
-    const token = randomBytes(32).toString('base64url');
-    mapping.access.issue('agent', [projectId], hours * 60 * 60 * 1000, token, [projectId], [scope]);
-
-    const fd = openSync(out, 'w', 0o600);
-    try {
-      writeSync(fd, token + '\n');
-    } finally {
-      closeSync(fd);
-    }
-    chmodSync(out, 0o600);
+    const hashPrefix = issueGrantFile(outputPath, token => {
+      mapping.access.issue('agent', [projectId], hours * 60 * 60 * 1000, token, [], [scope]);
+    });
     console.log(
       JSON.stringify({
         issued: true,
         projectId,
         scope,
         tokenFile: out,
-        tokenSha256Prefix: createHash('sha256').update(token).digest('hex').slice(0, 12),
+        tokenSha256Prefix: hashPrefix,
         expiresInHours: hours,
       }),
     );
   }
+} catch (error) {
+  console.error(error instanceof DomainError ? error.message : '签发布局授权失败');
+  process.exitCode = 1;
 } finally {
   mapping.close();
 }

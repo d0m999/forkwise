@@ -1,19 +1,20 @@
 import { serve } from '@hono/node-server';
 import { Hono } from 'hono';
-import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, unlinkSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { resolve, join, extname, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createApplication } from './app.js';
 import { SecClient } from '@forkwise/public-data-core';
 import { recoverActivation } from './services/activate-restore.js';
+import { inspectLegacyCredentials, writeLegacyAccessFile } from './services/legacy-credentials.js';
 
 const port = Number(process.env.FORKWISE_PORT ?? 8787);
 if (!Number.isInteger(port) || port < 1024 || port > 65535)
   throw new Error('FORKWISE_PORT 必须是 1024–65535 的端口');
 const origin = `http://127.0.0.1:${port}`;
 const directory = resolve(process.env.FORKWISE_DATA_DIR ?? '.data');
-mkdirSync(directory, { recursive: true, mode: 0o700 });
+const existingSecret = inspectLegacyCredentials(directory);
 const lock = join(directory, 'server.pid');
 if (existsSync(lock)) {
   const pid = Number(readFileSync(lock, 'utf8'));
@@ -30,11 +31,9 @@ if (existsSync(lock)) {
 }
 writeFileSync(lock, String(process.pid), { flag: 'wx', mode: 0o600 });
 recoverActivation(directory);
-const secretPath = join(directory, 'session.key');
-if (!existsSync(secretPath))
-  writeFileSync(secretPath, randomBytes(32), { flag: 'wx', mode: 0o600 });
-const secret = readFileSync(secretPath);
-if (secret.length !== 32) throw new Error('本机会话密钥损坏');
+const secret = existingSecret ?? randomBytes(32);
+if (!existingSecret)
+  writeFileSync(join(directory, 'session.key'), secret, { flag: 'wx', mode: 0o600 });
 const metricsPath = join(directory, 'metrics.json');
 const importRootsPath = join(directory, 'import-roots.json');
 const importRoots: Record<string, string[]> = existsSync(importRootsPath)
@@ -69,11 +68,8 @@ const core = createApplication({
   ...(publicDataClient ? { publicDataClient } : {}),
 });
 core.jobs.recover();
-const token = core.access.issue('human', ['*']);
 const accessPath = join(directory, 'local-access.json');
-writeFileSync(accessPath, JSON.stringify({ url: `${origin}/#token=${token}`, origin, token }), {
-  mode: 0o600,
-});
+writeLegacyAccessFile(accessPath, origin, () => core.access.issue('human', ['*']));
 const root = new Hono();
 const webRoot = fileURLToPath(new URL('../web/', import.meta.url));
 for (const [url, name, type] of [

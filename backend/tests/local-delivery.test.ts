@@ -661,6 +661,49 @@ it('材料分页有界、固定指纹、UTF-16 不拆字符，HTML 和转写锚�
     f.app.db.close();
   }
 });
+it('材料分页返回同页全部 1001 个 HTML 锚点，跨页段落在两页均可定位', async () => {
+  const f = fixture();
+  try {
+    const html = '<html><body><p>首段</p>' + '<p>行</p>'.repeat(999) + '<p>末</p></body></html>';
+    const uploaded = f.app.controller.importFile(f.principal, f.project.id, randomUUID(), {
+      source: { title: '密集段落', publisher: '', rights: 'authorized' },
+      file: {
+        name: 'dense.html',
+        mime: 'text/html',
+        base64: Buffer.from(html).toString('base64'),
+        publishedAt: null,
+      },
+    });
+    await f.app.files.drain();
+    const parsed = f.app.jobs.get(f.project.id, uploaded.job.id);
+    expect(parsed.state).toBe('succeeded');
+    const { sourceVersionId } = parsed.output as { sourceVersionId: string };
+    const url = `${origin}/api/v1/projects/${f.project.id}/materials/${sourceVersionId}/segments`;
+    const headers = { Authorization: `Bearer ${f.token}` };
+    const first = await f.app.app.request(`${url}?limit=1`, { headers });
+    expect(first.status).toBe(200);
+    const page = (await first.json()).data;
+    expect(page).toMatchObject({
+      text: '首',
+      nextStart: 1,
+      anchors: [{ start: 0, end: 2, domPath: 'body/p[0]/#text[0]' }],
+    });
+    const second = await f.app.app.request(`${url}?start=${page.nextStart}`, { headers });
+    expect(second.status).toBe(200);
+    const rest = (await second.json()).data;
+    expect(rest.text).toBe('段\n' + '行\n'.repeat(999) + '末');
+    expect(rest.nextStart).toBeNull();
+    expect(rest.anchors).toHaveLength(1001);
+    expect(rest.anchors[0]).toEqual(page.anchors[0]);
+    expect(rest.anchors.at(-1)).toMatchObject({
+      start: 2001,
+      end: 2002,
+      domPath: 'body/p[1000]/#text[0]',
+    });
+  } finally {
+    f.app.db.close();
+  }
+});
 it('绘图只有一份规范数据，普通箭头不建推导；位置、版本冲突与多命令回滚', () => {
   const f = fixture();
   try {

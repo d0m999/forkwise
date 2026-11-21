@@ -7,35 +7,6 @@ import type {
   SessionCapabilities,
 } from '../services/access.js';
 
-// Every command that can change where an existing object sits. Agents may only
-// use the ones listed in SUPPORTED; the rest are rejected instead of silently
-// inheriting the older blanket delegation.
-const LAYOUT_COMMANDS = new Set([
-  'pose.move',
-  'pose.batch',
-  'canvas.move',
-  'canvas.move-selection',
-  'canvas.layer',
-  'group.move',
-  'group.rotate90',
-  'group.scale',
-  'frame.move',
-  'frame.resize',
-  'text.move',
-  'text.transform',
-  'text.layout',
-  'shape.move',
-  'shape.transform',
-  'image.transform',
-  'image.crop',
-  'image.rotate',
-  'card.layout',
-  'card.edit',
-  'connector.move',
-  'connector.path',
-  'connector.reconnect',
-]);
-
 const SUPPORTED: Record<string, { fields: readonly LayoutField[] }> = {
   'pose.move': { fields: ['x', 'y'] },
   'pose.batch': { fields: ['x', 'y', 'width', 'height'] },
@@ -94,8 +65,10 @@ export function requireLayoutWrite(
   command: { type: string; projectId: string; payload: unknown },
   capabilities: SessionCapabilities,
 ): void {
-  if (principal.actor.type === 'human') return;
-  if (!LAYOUT_COMMANDS.has(command.type)) return;
+  // 正文补丁已由独立的正文范围校验。旧的一般委托继续沿用项目编辑权限。
+  if (principal.actor.type === 'human' || command.type === 'body.patch') return;
+  const supported = SUPPORTED[command.type];
+  if (!supported && capabilities.layoutDelegations === undefined) return;
   const targets = targetsOf(command);
 
   // Read each target once: existence, project ownership and the changed-field
@@ -117,12 +90,8 @@ export function requireLayoutWrite(
   const delegations = Array.isArray(capabilities.layoutDelegations)
     ? capabilities.layoutDelegations
     : undefined;
-  // Older sessions keep their previous reach for unsupported geometry commands,
-  // but pose.move / pose.batch always need a grant; undefined is deny, not full.
-  if (delegations === undefined && !SUPPORTED[command.type]) return;
   const scope = delegations?.find((candidate) => candidate.projectId === command.projectId);
   requireThat(scope, 'LAYOUT_DELEGATION_REQUIRED', '此会话没有该项目的布局写入授权', 403);
-  const supported = SUPPORTED[command.type];
   requireThat(
     supported,
     'LAYOUT_OPERATION_UNSUPPORTED',

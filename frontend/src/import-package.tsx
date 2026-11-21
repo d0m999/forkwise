@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { api, MappingError } from './api';
+import { UNKNOWN_RESULT_CODES } from '../../backend/src/mapping/recovery-contract';
 import type { ImportPreview } from '../../backend/src/mapping/package-import';
 import type { PackageFailure } from '../../backend/src/mapping/package-verify';
 
@@ -36,6 +37,17 @@ export function importDialogOpen() {
 // 只校验的预览是只读的，随时可以退出；已提交的请求不能再被 Esc 打断。
 type Phase = 'idle' | 'verifying' | 'submitting';
 type Attempt = { commandId: string; projectId: string; name: string };
+const settledAttempt = 'settled';
+
+function readAttempt(key: string): Attempt | null {
+  const raw = sessionStorage.getItem(key);
+  if (raw === null || raw === settledAttempt) return null;
+  const value = JSON.parse(raw);
+  if (typeof value?.commandId !== 'string' || !value.commandId ||
+      typeof value.projectId !== 'string' || !value.projectId ||
+      typeof value.name !== 'string' || !value.name) throw new Error('导入重试记录不完整');
+  return { commandId: value.commandId, projectId: value.projectId, name: value.name };
+}
 
 export function ImportPackage({ disabled, onImported }: {
   disabled: boolean;
@@ -47,8 +59,6 @@ export function ImportPackage({ disabled, onImported }: {
   const closeButton = useRef<HTMLButtonElement>(null);
   const dialogRef = useRef<HTMLFormElement>(null);
   const failureRef = useRef<HTMLElement>(null);
-  // 未确认的导入请求按包保留：换个文件看看不会丢掉上一次待重试的 commandId。
-  const attempts = useRef(new Map<string, Attempt>());
   // 迟到的预览结果属于已经关闭或已被替换的那一次选择，直接丢弃。
   const selection = useRef(0);
   const [open, setOpen] = useState(false);
@@ -144,50 +154,69 @@ export function ImportPackage({ disabled, onImported }: {
     event.preventDefault();
     if (!source || submitting || disabled || !name.trim() || source.preview.failures.length) return;
     const trimmed = name.trim();
-    const previous = attempts.current.get(source.key);
-    const sameRequest = previous?.name === trimmed;
-    const commandId = sameRequest ? previous!.commandId : crypto.randomUUID();
-    const projectId = previous ? previous.projectId : crypto.randomUUID();
-    attempts.current.set(source.key, { commandId, projectId, name: trimmed });
-    setPhase('submitting');
-    setMessage('');
+    const key = `forkwise:import-attempt:v1:${source.key}`;
+    let previous: Attempt | null;
+    let attempt: Attempt;
     setFailures([]);
     try {
+      previous = readAttempt(key);
+      if (previous?.name === trimmed) {
+        attempt = previous;
+      } else {
+        attempt = { commandId: crypto.randomUUID(), projectId: previous?.projectId ?? crypto.randomUUID(), name: trimmed };
+        sessionStorage.setItem(key, JSON.stringify(attempt));
+      }
+    } catch {
+      setMessage('浏览器无法读取或保存导入重试记录，本次请求未发送。请检查浏览器的会话存储后重试。');
+      return;
+    }
+    setPhase('submitting');
+    setMessage('');
+    let refusal: MappingError | undefined;
+    try {
       await api.execute({
-        commandId,
-        projectId,
+        commandId: attempt.commandId,
+        projectId: attempt.projectId,
         type: 'project.import',
         expected: null,
         payload: { name: trimmed, base64: source.base64 },
       });
-      attempts.current.delete(source.key);
-      setOpen(false);
-      setSource(null);
-      setPhase('idle');
-      requestAnimationFrame(() => trigger.current?.focus({ preventScroll: true }));
-      onImported(projectId);
     } catch (error) {
-      if (error instanceof MappingError && error.code === 'ID_CONFLICT') {
-        // 上一次响应丢失后已提交，或用户改名后重提；项目编号已经存在时直接打开它，不再建第二个。
-        attempts.current.delete(source.key);
-        setOpen(false);
-        setSource(null);
-        setPhase('idle');
-        onImported(projectId);
+      if (!(error instanceof MappingError)) {
+        setMessage('响应未收到，原请求已保留；重试会使用同一命令编号，不会重复建项目。');
         return;
       }
-      if (error instanceof MappingError && (error.status ?? 0) < 500) {
-        attempts.current.delete(source.key);
-        setMessage(error.message);
-        setFailures(failureLines(error));
-      } else if (error instanceof MappingError) {
-        setMessage('服务端暂时未确认结果，原请求已保留；重试会复用同一命令编号，已提交时只返回原回执。');
-        setFailures(failureLines(error));
-      } else {
-        setMessage('响应未收到，原请求已保留；重试会使用同一命令编号，不会重复建项目。');
+      setFailures(failureLines(error));
+      // 权限检查先于回执查询；重试被拒时，上次提交的结果仍未确认。
+      const retryDenied = previous && (error.status === 401 || error.status === 403);
+      if (!error.status || error.status < 400 || error.status >= 500 || UNKNOWN_RESULT_CODES.includes(error.code) || retryDenied) {
+        setMessage(`${error.message}。原请求已保留；重试会复用同一命令编号，已提交时只返回原回执。`);
+        return;
       }
+      // 改名重提也可能命中已导入项目，此时直接打开原项目。
+      if (error.code !== 'ID_CONFLICT') refusal = error;
     } finally {
       setPhase('idle');
+    }
+    if (refusal) setMessage(refusal.message);
+    try {
+      sessionStorage.removeItem(key);
+      if (!refusal) {
+        setOpen(false);
+        requestAnimationFrame(() => trigger.current?.focus({ preventScroll: true }));
+      }
+    } catch {
+      const result = refusal?.message ?? '项目已导入';
+      try {
+        sessionStorage.setItem(key, settledAttempt);
+        setMessage(`${result}。浏览器未能清除导入重试记录，已将这次请求标记为结束。`);
+      } catch {
+        setMessage(`${result}。浏览器无法清除或更新重试记录。要再次导入此包，请关闭此标签页并从工作台入口重新打开。`);
+      }
+    }
+    if (!refusal) {
+      setSource(null);
+      onImported(attempt.projectId);
     }
   }
 

@@ -8,6 +8,7 @@ import {
 import { createPortal } from "react-dom";
 import { useViewport } from "@xyflow/react";
 import { CardIcon } from "./card-icons";
+import { AddAttachmentButton } from "./card-attachment-list";
 import type { Card } from "./api";
 import { LayerMenu, type LayerMenuProps } from "./layer-menu";
 
@@ -25,6 +26,7 @@ export function CardMenu({
   onEdit,
   onBody,
   onAI,
+  onAddAttachment,
   onDelete,
   onRemoveFromGroup,
   onAppearance,
@@ -37,6 +39,7 @@ export function CardMenu({
   onEdit: () => void;
   onBody: () => void;
   onAI: () => void;
+  onAddAttachment: (file: File) => void;
   onDelete: () => void;
   onRemoveFromGroup?: (() => void) | undefined;
   onAppearance: (value: Appearance) => void;
@@ -285,6 +288,7 @@ export function CardMenu({
               >
                 打开写字板
               </button>
+              <AddAttachmentButton blocked={blocked} onAdd={file => { close(); onAddAttachment(file); }} />
               <button disabled={blocked} onClick={() => { close(false); onDelete(); }}>删除卡片</button>
               {onRemoveFromGroup && <button disabled={blocked} onClick={event => { event.stopPropagation(); close(false); onRemoveFromGroup(); }}>移出组合</button>}
             </>

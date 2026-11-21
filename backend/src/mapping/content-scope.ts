@@ -31,8 +31,7 @@ export function requireContentWrite(actor: Principal, command: Command, capabili
       'CONTENT_OPERATION_UNSUPPORTED', 'Agent 修改正文须提交已授权区间的补丁', 403,
     );
     if (delegations === undefined) return;
-    // A separate layout grant still goes through the full layout and
-    // project edit checks. Neither delegation widens the other.
+    // 混合委托的布局操作由布局范围校验项目、对象和字段。
     requireThat(
       (command.type === 'pose.move' || command.type === 'pose.batch') &&
         capabilities.layoutDelegations?.some(scope => scope.projectId === command.projectId),

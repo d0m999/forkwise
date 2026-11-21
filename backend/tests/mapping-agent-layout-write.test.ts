@@ -180,6 +180,59 @@ it('AC2 Agent 读取同快照与 Pose 版本后经真实 MCP/HTTP 写入，SQLit
   expect(f.state().project.revision).toBe(index.revision + 1);
 });
 
+it('MCP 批量移动卡片与附着批注，缺少随动或批注版本过期时整批拒绝', async () => {
+  const f = await fixture(2);
+  const target = f.card('c1').item;
+  f.execute({
+    type: 'text.create',
+    expected: null,
+    payload: {
+      id: 'note',
+      content: { runs: [{ text: '批注' }], fontSize: 16, lineHeight: 1.5, align: 'left', widthMode: 'fixed', width: 80 },
+      pose: { x: 40, y: 30, width: 80, height: 24 },
+    },
+  });
+  const note = f.state().texts![0]!;
+  f.execute({
+    type: 'attachment.attach',
+    expected: { attachment: null, containment: null, target: { itemId: target.id, versionId: target.versionId } },
+    payload: { itemId: note.item.id, targetItemId: target.id },
+  });
+
+  const move = (follow: Record<string, unknown>) => {
+    const { cards } = f.state();
+    return f.call('forkwise_move_cards', {
+      projectId: 'p',
+      commandId: randomUUID(),
+      expected: Object.fromEntries(cards.map(({ id, item }) => [id, item.versionId])),
+      poses: cards.map(({ id, item }) => ({
+        cardId: id, ...item.pose, x: item.pose.x + 10, y: item.pose.y + 20,
+      })),
+      ...follow,
+    });
+  };
+  const follower = { kind: 'text', id: note.id, itemId: note.item.id, x: 50, y: 50 };
+  const expectedFollowers = { [note.item.id]: note.item.versionId };
+  const before = f.state();
+  const moved = await move({ followers: [follower], expectedFollowers });
+  expect(moved.isError, moved.content[0]?.text).not.toBe(true);
+  const after = f.state();
+  expect(after.cards.map(({ item }) => item.pose)).toMatchObject([{ x: 20, y: 40 }, { x: 20, y: 40 }]);
+  expect(after.texts![0]!.item.pose).toMatchObject({ x: 50, y: 50 });
+  expect(after.project.revision).toBe(before.project.revision + 1);
+  expect(after.attachments).toEqual(before.attachments);
+  const history = f.history();
+
+  const missing = await move({});
+  expect(missing).toMatchObject({ isError: true, structuredContent: { error: { status: 400, code: 'ATTACHMENT_NOT_MOVED' } } });
+  expect(f.state()).toEqual(after);
+  expect(f.history()).toEqual(history);
+  const stale = await move({ followers: [{ ...follower, x: 60, y: 70 }], expectedFollowers });
+  expect(stale).toMatchObject({ isError: true, structuredContent: { error: { status: 409, code: 'VERSION_CONFLICT' } } });
+  expect(f.state()).toEqual(after);
+  expect(f.history()).toEqual(history);
+});
+
 it('AC3 过期版本、已删除目标、跨项目与越对象逐类拒绝，失败前后无任何写入', async () => {
   const f = await fixture();
   const first = f.card('c1');

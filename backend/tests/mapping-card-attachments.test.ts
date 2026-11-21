@@ -96,6 +96,9 @@ it('拖入建卡和附件同一次写入，缺资产不留下卡片，撤销只�
     const count = f.assets();
     f.run('history.undo', {}, created.project.revision);
     expect(f.read().cards).toEqual([]);
+    const lifecycle = f.mapping.observe({ projectId: 'p', afterRevision: before.project.revision }, f.actor);
+    expect(lifecycle.changes).toHaveLength(2);
+    for (const change of lifecycle.changes) expect(change.domains).toContainEqual({ domain: 'attachments', id: card.attachments!.id });
     expect(f.assets()).toBe(count);
     expect(f.mapping.read({ type: 'asset', projectId: 'p', id: 'file' }, f.actor).base64).toBe(pdf);
   } finally { f.close(); }
@@ -107,6 +110,7 @@ it('撤销把附件版本写回之前的值，重做写回当时的值，删卡�
     f.run('project.create', { name: '项目' });
     f.run('thought.create', { id: 'a', title: '甲', text: '', x: 10, y: 20 });
     f.run('asset.save', { id: 'file', name: '说明.pdf', mime: 'application/pdf', base64: pdf, kind: 'file' });
+    const initialRevision = f.read().project.revision;
     f.run('card.attachment.add', { id: 'a', assetId: 'file', name: '说明.pdf' }, { attachments: null });
     const added = f.read().cards[0]!;
     const addedVersion = added.attachments!.versionId;
@@ -124,6 +128,14 @@ it('撤销把附件版本写回之前的值，重做写回当时的值，删卡�
     const current = f.read().cards[0]!;
     f.run('thought.delete', { id: 'a' }, { thought: current.versionId, body: current.body.versionId, pose: current.item.versionId, appearance: null });
     expect(f.read().cards).toEqual([]);
+    const deletedRevision = f.read().project.revision;
+    f.run('history.undo', {}, deletedRevision);
+    f.run('history.redo', {}, f.read().project.revision);
+    const feed = f.mapping.observe({ projectId: 'p', afterRevision: initialRevision }, f.actor);
+    const domain = { domain: 'attachments', id: added.attachments!.id };
+    expect(feed.changes.map(c => c.domains).slice(0, 4)).toEqual([[domain], [domain], [domain], [domain]]);
+    expect(feed.changes.map(c => c.domains).slice(4)).toHaveLength(3);
+    for (const change of feed.changes.slice(4)) expect(change.domains).toContainEqual(domain);
     expect(f.mapping.read({ type: 'asset', projectId: 'p', id: 'file' }, f.actor).base64).toBe(pdf);
     expect(f.assets()).toBe(count);
   } finally { f.close(); }
@@ -149,6 +161,8 @@ it('同项目复制共享资产身份，跨项目同身份异内容新建资产�
       },
     }, f.actor);
     const copied = f.read().cards.find(card => card.id === 'copy')!;
+    const copyFeed = f.mapping.observe({ projectId: 'p', afterRevision: f.read().project.revision - 1 }, f.actor);
+    expect(copyFeed.changes[0]?.domains).toContainEqual({ domain: 'attachments', id: copied.attachments!.id });
     expect(copied.attachments!.items.map(item => item.assetId)).toEqual(['shared']);
     expect(copied.attachments!.items[0]!.name).toBe('报告.pdf');
     expect(copied.attachments!.items[0]!.id).not.toBe(source.attachments!.items[0]!.id);
@@ -164,6 +178,8 @@ it('同项目复制共享资产身份，跨项目同身份异内容新建资产�
       },
     }, f.actor);
     const pasted = f.mapping.read({ type: 'project', projectId: 'q' }, f.actor).cards.find(card => card.id === 'pasted')!;
+    const pasteFeed = f.mapping.observe({ projectId: 'q', afterRevision: f.read('q').project.revision - 1 }, f.actor);
+    expect(pasteFeed.changes[0]?.domains).toContainEqual({ domain: 'attachments', id: pasted.attachments!.id });
     expect(pasted.attachments!.items[0]!.assetId).not.toBe('shared');
     expect(f.mapping.read({ type: 'asset', projectId: 'q', id: pasted.attachments!.items[0]!.assetId }, f.actor)).toMatchObject({ base64: pdf, kind: 'file' });
     expect(f.mapping.read({ type: 'asset', projectId: 'q', id: 'shared' }, f.actor).base64).toBe(other);
@@ -177,6 +193,8 @@ it('同项目复制共享资产身份，跨项目同身份异内容新建资产�
       },
     }, f.actor);
     expect(f.mapping.read({ type: 'project', projectId: 'q' }, f.actor).cards.find(card => card.id === 'plain')!.attachments).toBeUndefined();
+    const oldPacketFeed = f.mapping.observe({ projectId: 'q', afterRevision: f.read('q').project.revision - 1 }, f.actor);
+    expect(oldPacketFeed.changes[0]!.domains.some(value => value.domain === 'attachments')).toBe(false);
     expect(CanvasClipboardSchema.safeParse({
       kind: 'forkwise-canvas-snapshot', version: 1,
       objects: [{ kind: 'card', sourceId: 'source', itemId: 'item', stack: 1, title: '旧', blocks: [{ id: 'w', type: 'text', text: '正文' }], tagIds: null, appearance: null, pose }],

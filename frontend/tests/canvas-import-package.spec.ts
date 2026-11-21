@@ -209,97 +209,208 @@ test('预览校验后导入隔离研究：取消无副作用、确认后逐项�
 });
 
 
-test('响应丢失后用原 commandId 重试只建一个项目', async ({ page, workspace }) => {
+test('响应丢失后刷新并重选同包同名，用原命令和项目编号重试只建一个项目', async ({ page, workspace }) => {
   test.setTimeout(120000);
   await place(page, '重试卡');
-  const downloadPromise = page.waitForEvent('download');
-  await page.getByRole('button', { name: '导出', exact: true }).click();
-  await page.getByRole('menuitem', { name: '下载完整项目包（ZIP）', exact: true }).click();
-  const download = await downloadPromise;
-  const packagePath = await download.path();
-  expect(packagePath).not.toBeNull();
+  const packagePath = await exportPackage(page);
   const tabsBefore = await page.getByRole('tab').count();
   let dropped = false;
-  const importCommandIds: string[] = [];
+  const attempts: { commandId: string; projectId: string }[] = [];
   await page.route('**/api/mapping/execute', async (route) => {
-    const body = route.request().postDataJSON() as { type?: string; commandId?: string } | null;
-    if (body?.type === 'project.import' && body.commandId) importCommandIds.push(body.commandId);
+    const body = route.request().postDataJSON();
+    if (body?.type === 'project.import') attempts.push({ commandId: body.commandId, projectId: body.projectId });
     if (!dropped && body?.type === 'project.import') {
       dropped = true;
-      await route.fetch();
+      expect((await route.fetch()).ok()).toBe(true);
       await route.abort('failed');
       return;
     }
     await route.continue();
   });
-  const { dialog } = await openPackage(page, packagePath!);
+  const { dialog } = await openPackage(page, packagePath);
   await dialog.getByLabel('新研究名称').fill('重试导入');
   await dialog.getByRole('button', { name: '导入为新研究', exact: true }).click();
   await expect(dialog.getByText('响应未收到', { exact: false })).toBeVisible();
   // 服务端已提交、客户端没收到响应；此时项目已经存在，重试只能复用原回执。
   expect((await projectsOf(page, workspace.origin)).length).toBe(tabsBefore + 1);
+  const stored = await page.evaluate(() => Object.values(sessionStorage).join(''));
+  expect(stored).not.toContain(readFileSync(packagePath).toString('base64'));
   await dialog.getByRole('button', { name: '取消', exact: true }).click();
-  // 换看另一个包不会丢掉上一份待确认的请求：再回到原包时仍按原 commandId 重试。
+  // 另一份包可以独立导入，且不会清除第一份包的待确认请求。
   const isolated = mkdtempSync(join(tmpdir(), 'forkwise-import-other-'));
   try {
     const otherPath = join(isolated, 'other.zip');
-    const files = readZip(readFileSync(packagePath!));
+    const files = readZip(readFileSync(packagePath));
     const otherManifest = JSON.parse(files.get('forkwise-project.json')!.toString('utf8')) as Record<string, any>;
     otherManifest.mapping.project.name = '另一个包';
     files.set('forkwise-project.json', Buffer.from(JSON.stringify(otherManifest)));
     writeFileSync(otherPath, writeZip([...files].map(([name, data]) => ({ name, data }))));
     const switched = await openPackage(page, otherPath);
     await expect(switched.dialog.getByLabel('新研究名称')).toHaveValue('另一个包');
-    await switched.dialog.getByRole('button', { name: '取消', exact: true }).click();
-    await expect(switched.dialog).toHaveCount(0);
+    await switched.dialog.getByRole('button', { name: '导入为新研究', exact: true }).click();
+    await expect(page.getByRole('tab', { selected: true })).toContainText('另一个包');
   } finally {
     rmSync(isolated, { recursive: true, force: true });
   }
-  const reopened = await openPackage(page, packagePath!);
+  await page.reload();
+  const reopened = await openPackage(page, packagePath);
   await reopened.dialog.getByLabel('新研究名称').fill('重试导入');
   await reopened.dialog.getByRole('button', { name: '导入为新研究', exact: true }).click();
   await expect(page.getByRole('tab', { selected: true })).toContainText('重试导入');
-  await expect(page.getByRole('tab')).toHaveCount(tabsBefore + 1);
   const projects = await projectsOf(page, workspace.origin);
   expect(projects.filter((project) => project.name === '重试导入')).toHaveLength(1);
-  // 两次提交必须复用同一 commandId；只复用 projectId 会走 ID_CONFLICT，也能通过上面的项目数断言。
-  expect(importCommandIds).toHaveLength(2);
-  expect(importCommandIds[1]).toBe(importCommandIds[0]);
+  await expect(page.getByRole('tab')).toHaveCount(tabsBefore + 2);
+  expect(attempts).toHaveLength(3);
+  expect(attempts[1]!.projectId).not.toBe(attempts[0]!.projectId);
+  expect(attempts[1]!.commandId).not.toBe(attempts[0]!.commandId);
+  expect(attempts[2]).toEqual(attempts[0]);
+  // 原回执已确认，再次明确导入同包同名属于新的请求。
+  const next = await openPackage(page, packagePath);
+  await next.dialog.getByLabel('新研究名称').fill('重试导入');
+  await next.dialog.getByRole('button', { name: '导入为新研究', exact: true }).click();
+  await expect(page.getByRole('tab')).toHaveCount(tabsBefore + 3);
+  expect(attempts[3]!.projectId).not.toBe(attempts[0]!.projectId);
+  expect(attempts[3]!.commandId).not.toBe(attempts[0]!.commandId);
   await page.unroute('**/api/mapping/execute');
 });
 
-test('响应丢失后改名重试时 ID_CONFLICT 直接打开已导入项目', async ({ page, workspace }) => {
+test('响应丢失后刷新并改名重试时 ID_CONFLICT 直接打开已导入项目', async ({ page, workspace }) => {
   test.setTimeout(120000);
   await place(page, '改名重试卡');
-  const downloadPromise = page.waitForEvent('download');
-  await page.getByRole('button', { name: '导出', exact: true }).click();
-  await page.getByRole('menuitem', { name: '下载完整项目包（ZIP）', exact: true }).click();
-  const download = await downloadPromise;
-  const packagePath = await download.path();
-  expect(packagePath).not.toBeNull();
+  const packagePath = await exportPackage(page);
   const tabsBefore = await page.getByRole('tab').count();
-  let dropped = false;
+  const attempts: { commandId: string; projectId: string }[] = [];
   await page.route('**/api/mapping/execute', async (route) => {
-    const body = route.request().postDataJSON() as { type?: string } | null;
-    if (!dropped && body?.type === 'project.import') {
-      dropped = true;
-      await route.fetch();
-      await route.abort('failed');
-      return;
+    const body = route.request().postDataJSON();
+    if (body?.type === 'project.import') {
+      attempts.push({ commandId: body.commandId, projectId: body.projectId });
+      if (attempts.length === 1) {
+        expect((await route.fetch()).ok()).toBe(true);
+        await route.abort('failed');
+        return;
+      }
     }
     await route.continue();
   });
-  const { dialog } = await openPackage(page, packagePath!);
+  const { dialog } = await openPackage(page, packagePath);
   await dialog.getByLabel('新研究名称').fill('改名导入');
   await dialog.getByRole('button', { name: '导入为新研究', exact: true }).click();
   await expect(dialog.getByText('响应未收到', { exact: false })).toBeVisible();
-  await dialog.getByLabel('新研究名称').fill('另一个名字');
-  await dialog.getByRole('button', { name: '导入为新研究', exact: true }).click();
+  await page.reload();
+  const reopened = await openPackage(page, packagePath);
+  await reopened.dialog.getByLabel('新研究名称').fill('另一个名字');
+  await reopened.dialog.getByRole('button', { name: '导入为新研究', exact: true }).click();
   await expect(page.getByRole('tab', { selected: true })).toContainText('改名导入');
   await expect(page.getByRole('tab')).toHaveCount(tabsBefore + 1);
   const projects = await projectsOf(page, workspace.origin);
   expect(projects.filter((project) => project.name === '另一个名字')).toHaveLength(0);
+  expect(attempts).toHaveLength(2);
+  expect(attempts[1]!.projectId).toBe(attempts[0]!.projectId);
+  expect(attempts[1]!.commandId).not.toBe(attempts[0]!.commandId);
   await page.unroute('**/api/mapping/execute');
+});
+
+test('导入结果未知或重试无权限时保留请求，确定性拒绝后再次导入使用新编号', async ({ page, workspace }) => {
+  const packagePath = await exportPackage(page);
+  const attempts: { commandId: string; projectId: string }[] = [];
+  await page.route('**/api/mapping/execute', async (route) => {
+    const body = route.request().postDataJSON();
+    if (body?.type === 'project.import') {
+      attempts.push({ commandId: body.commandId, projectId: body.projectId });
+      if (attempts.length === 1)
+        return route.fulfill({ status: 503, json: { code: 'SAVE_FAILED', message: '暂时不可用' } });
+      if (attempts.length === 2)
+        return route.fulfill({ status: 403, json: { code: 'FORBIDDEN', message: '当前无权读取回执' } });
+      if (attempts.length === 3)
+        return route.fulfill({ status: 400, json: { code: 'INVALID_PACKAGE', message: '完整项目包校验未通过' } });
+    }
+    await route.continue();
+  });
+  const { dialog } = await openPackage(page, packagePath);
+  await dialog.getByLabel('新研究名称').fill('服务拒绝后重新导入');
+  await dialog.getByRole('button', { name: '导入为新研究', exact: true }).click();
+  await expect(dialog.getByRole('alert')).toContainText('原请求已保留');
+  await page.reload();
+  const reopened = await openPackage(page, packagePath);
+  await reopened.dialog.getByLabel('新研究名称').fill('服务拒绝后重新导入');
+  const submit = reopened.dialog.getByRole('button', { name: '导入为新研究', exact: true });
+  await submit.click();
+  await expect(reopened.dialog.getByRole('alert')).toContainText('当前无权读取回执');
+  await submit.click();
+  await expect(reopened.dialog.getByRole('alert')).toContainText('完整项目包校验未通过');
+  await submit.click();
+  await expect(page.getByRole('tab', { selected: true })).toContainText('服务拒绝后重新导入');
+  expect(attempts).toHaveLength(4);
+  expect(attempts[1]).toEqual(attempts[0]);
+  expect(attempts[2]).toEqual(attempts[0]);
+  expect(attempts[3]!.projectId).not.toBe(attempts[0]!.projectId);
+  expect(attempts[3]!.commandId).not.toBe(attempts[0]!.commandId);
+  expect((await projectsOf(page, workspace.origin)).filter((project) => project.name === '服务拒绝后重新导入')).toHaveLength(1);
+});
+
+test('会话存储拒写时不发送导入，已导入但清理失败时仍能打开项目', async ({ page, workspace }) => {
+  const packagePath = await exportPackage(page);
+  const tabsBefore = await page.getByRole('tab').count();
+  let requests = 0;
+  page.on('request', (request) => {
+    if (request.url().endsWith('/api/mapping/execute') && request.postDataJSON()?.type === 'project.import') requests++;
+  });
+  const { dialog } = await openPackage(page, packagePath);
+  await dialog.getByLabel('新研究名称').fill('会话存储测试');
+  await page.evaluate(() => {
+    const original = Storage.prototype.setItem;
+    Storage.prototype.setItem = function(key, value) {
+      if (this === sessionStorage) throw new DOMException('导入记录无法保存', 'QuotaExceededError');
+      original.call(this, key, value);
+    };
+  });
+  await dialog.getByRole('button', { name: '导入为新研究', exact: true }).click();
+  await expect(dialog.getByRole('alert')).toContainText('本次请求未发送');
+  expect(requests).toBe(0);
+  expect(await projectsOf(page, workspace.origin)).toHaveLength(tabsBefore);
+
+  await page.reload();
+  const reopened = await openPackage(page, packagePath);
+  await reopened.dialog.getByLabel('新研究名称').fill('会话存储测试');
+  await page.evaluate(() => {
+    const original = Storage.prototype.removeItem;
+    Storage.prototype.removeItem = function(key) {
+      if (this === sessionStorage) throw new DOMException('导入记录无法清除', 'SecurityError');
+      original.call(this, key);
+    };
+  });
+  await reopened.dialog.getByRole('button', { name: '导入为新研究', exact: true }).click();
+  await expect(reopened.dialog).toContainText('项目已导入。浏览器未能清除导入重试记录');
+  await expect(page.getByRole('tab', { selected: true })).toContainText('会话存储测试');
+  expect(requests).toBe(1);
+  const firstProjects = await projectsOf(page, workspace.origin);
+  expect(firstProjects).toHaveLength(tabsBefore + 1);
+
+  // 刷新恢复正常存储；上次导入已确认，此次明确提交应再建一份同名研究。
+  await page.reload();
+  const next = await openPackage(page, packagePath);
+  await next.dialog.getByLabel('新研究名称').fill('会话存储测试');
+  await page.route('**/api/mapping/execute', async (route) => {
+    if (route.request().postDataJSON()?.type !== 'project.import') return route.continue();
+    const response = await route.fetch();
+    expect(response.ok()).toBe(true);
+    // 新请求已提交；在回执送达前禁用全部会话存储，仍须打开项目并说明恢复限制。
+    await page.evaluate(() => {
+      Object.defineProperty(window, 'sessionStorage', {
+        get() { throw new DOMException('会话存储不可用', 'SecurityError'); },
+      });
+    });
+    await route.fulfill({ response });
+  });
+  await next.dialog.getByRole('button', { name: '导入为新研究', exact: true }).click();
+  await expect(next.dialog).toContainText('浏览器无法清除或更新重试记录');
+  await expect(next.dialog).toContainText('关闭此标签页并从工作台入口重新打开');
+  expect(requests).toBe(2);
+  const projects = await projectsOf(page, workspace.origin);
+  expect(projects.filter((project) => project.name === '会话存储测试')).toHaveLength(2);
+  expect(projects).toHaveLength(tabsBefore + 2);
+  const secondCopy = projects.find((project) => !firstProjects.some((first) => first.id === project.id))!;
+  await expect(page.getByRole('tab', { selected: true })).toHaveAttribute('title', secondCopy.id);
 });
 
 test('导入对话框打开期间撤销快捷键不改动源研究', async ({ page, workspace }) => {

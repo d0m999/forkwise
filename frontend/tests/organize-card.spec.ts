@@ -336,8 +336,20 @@ test('覆盖剪贴板且剪切退出撤销历史后可以另建候选卡', async
   expect(replacement?.aiOrigin).toEqual(candidate!.aiOrigin);
 });
 
-for (const reopenFrom of ['卡片', '项目记录']) test(`取消未确认时从${reopenFrom}重开，仍能按原请求取消`, async ({ page, workspace }) => {
+for (const reopenFrom of ['卡片', '刷新后从卡片', '项目记录', '存储拒写的卡片', '无法清除旧记录的卡片']) test(`取消未确认时从${reopenFrom}重开，仍能按原请求取消`, async ({ page, workspace }) => {
   await place(page, '重试取消');
+  const storageDenied = reopenFrom === '存储拒写的卡片';
+  const cannotClear = reopenFrom === '无法清除旧记录的卡片';
+  const denyStorage = (operation: 'setItem' | 'removeItem') => page.evaluate(method => {
+    const original = Storage.prototype[method];
+    Storage.prototype[method] = function (this: Storage, key: string, ...args: string[]) {
+      if (this === window.sessionStorage && key === 'forkwise.organize-cancellation.v1')
+        throw new DOMException('标签页存储拒绝更改', 'SecurityError');
+      return Reflect.apply(original, this, [key, ...args]);
+    };
+  }, operation);
+  if (storageDenied) await denyStorage('setItem');
+  const storageWarning = '当前标签页无法保存这次取消请求，请保持页面打开并重试取消。';
   const { project } = await workspace.state();
   const apiPath = `/api/mapping/projects/${project.id}/organize`;
   await page.route(`**${apiPath}/status`, route => route.fulfill({ json: { model: 'test-model' } }));
@@ -373,9 +385,16 @@ for (const reopenFrom of ['卡片', '项目记录']) test(`取消未确认时从
   const startInput = (await started).postDataJSON();
   await dialog.getByRole('button', { name: '取消任务' }).click();
   await expect(dialog.getByRole('status')).toHaveText('取消结果未确认');
+  if (storageDenied) await expect(dialog.getByRole('alert')).toContainText(storageWarning, { timeout: 3000 });
+  else await expect(dialog.getByText(storageWarning, { exact: false })).toHaveCount(0);
   await expect(history).toBeDisabled({ timeout: 3000 });
   await dialog.getByRole('button', { name: '关闭 AI 整理' }).click();
   await expect(dialog).toHaveCount(0);
+  if (reopenFrom === '刷新后从卡片') {
+    await page.reload();
+    await expect(page.getByRole('status')).toHaveText('已保存到本机');
+    await page.getByRole('button', { name: '重试取消', exact: true }).click();
+  }
   if (reopenFrom === '项目记录') {
     await place(page, '另一张卡', 480, 340);
     await page.getByRole('button', { name: 'AI', exact: true }).click();
@@ -393,12 +412,140 @@ for (const reopenFrom of ['卡片', '项目记录']) test(`取消未确认时从
   const reopened = page.getByRole('dialog', { name: reopenFrom === '项目记录' ? 'AI 整理记录' : 'AI 整理', exact: true });
   const reopenedHistory = reopened.getByRole('combobox', { name: '整理记录' });
   await expect(reopened.getByRole('status')).toHaveText('取消结果未确认', { timeout: 3000 });
-  if (reopenFrom === '项目记录') await expect(reopened.getByText('原卡：重试取消')).toBeVisible();
-  await expect(reopenedHistory).toBeDisabled();
+  if (storageDenied) await expect(reopened.getByRole('alert')).toContainText(storageWarning);
+  if (reopenFrom === '项目记录') {
+    await expect(reopened.getByText('原卡：重试取消')).toBeVisible();
+    await expect(reopenedHistory).toBeEnabled();
+  } else {
+    await expect(reopenedHistory).toBeDisabled();
+  }
   await expect(reopened.getByRole('group', { name: '选择本次处理的内容' })).toHaveCount(0);
+  expect(cancellations).toEqual([startInput]);
+  if (reopenFrom === '刷新后从卡片' || cannotClear) await denyStorage('removeItem');
+  if (cannotClear) await denyStorage('setItem');
   await reopened.getByRole('button', { name: '取消任务' }).click();
   releaseStart();
   await expect(reopened.getByRole('status')).toHaveText('模型整理 已取消');
+  await expect(reopened.getByText(storageWarning, { exact: false })).toHaveCount(0);
+  if (cannotClear) {
+    await expect(reopened.getByRole('alert')).toContainText('当前标签页无法清除旧记录，刷新后可能再次显示“取消结果未确认”。', { timeout: 3000 });
+    await expect(reopened.getByRole('button', { name: '取消任务' })).toHaveCount(0);
+  } else await expect(reopened.getByRole('alert')).toHaveCount(0);
   await expect(reopenedHistory).toBeEnabled();
   expect(cancellations).toEqual([startInput, startInput]);
+  if (reopenFrom === '刷新后从卡片') {
+    await page.route(`**/cards/${task.cardId}/organize/tasks`, route => route.fulfill({ json: [task, prior] }));
+    await page.route(`**${apiPath}/tasks/${task.id}`, route => route.fulfill({ json: task }));
+    await reopened.getByRole('button', { name: '关闭 AI 整理' }).click();
+    await page.reload();
+    await expect(page.getByRole('status')).toHaveText('已保存到本机');
+    await page.getByRole('button', { name: '重试取消', exact: true }).click();
+    await page.getByRole('button', { name: 'AI', exact: true }).click();
+    await expect(dialog.getByRole('status')).toHaveText('模型整理 已取消', { timeout: 3000 });
+    expect(cancellations).toEqual([startInput, startInput]);
+  }
+});
+
+test('项目整理记录在甲卡取消未确认时仍可查看已删除的乙卡记录并恢复乙卡请求', async ({ page, workspace }) => {
+  const titleA = '待确认的甲卡';
+  const titleB = '之后删除的乙卡';
+  await place(page, titleA);
+  await place(page, titleB, 480, 340);
+  const { project, cards } = await workspace.state();
+  const cardB = cards.find(card => card.title === titleB)!;
+  const apiPath = `/api/mapping/projects/${project.id}/organize`;
+  await page.route(`**${apiPath}/status`, route => route.fulfill({ json: { model: 'test-model' } }));
+
+  const dialog = page.getByRole('dialog', { name: 'AI 整理', exact: true });
+  const openCard = async (title: string) => {
+    await page.getByRole('button', { name: title, exact: true }).click();
+    await page.getByRole('button', { name: 'AI', exact: true }).click();
+  };
+  await openCard(titleB);
+  await dialog.getByRole('checkbox', { name: /卡片标题/ }).check();
+  const simulated = page.waitForResponse(response => response.request().method() === 'POST' &&
+    new URL(response.url()).pathname === `${apiPath}/tasks`, { timeout: 5000 });
+  await dialog.getByRole('button', { name: '试用模拟整理' }).click();
+  const prior = await (await simulated).json();
+  await expect(dialog.getByRole('heading', { name: `模拟整理：${titleB}` })).toBeVisible();
+  await dialog.getByRole('button', { name: '关闭 AI 整理' }).click();
+
+  let releaseStarts!: () => void;
+  const heldStarts = new Promise<void>(resolve => { releaseStarts = resolve; });
+  const starts: unknown[] = [];
+  const cancellations: { cardId: string }[] = [];
+  await page.route(`**${apiPath}/tasks`, async route => {
+    if (route.request().method() !== 'POST') return route.continue();
+    starts.push(route.request().postDataJSON());
+    await heldStarts;
+    await route.abort();
+  });
+  await page.route(`**${apiPath}/tasks/cancel-start`, route => {
+    const input = route.request().postDataJSON();
+    cancellations.push(input);
+    if (input.cardId !== cardB.id || cancellations.filter(item => item.cardId === cardB.id).length === 1) return route.abort();
+    return route.fulfill({ json: { ...prior, id: 'cancelled-b', mode: 'real', model: 'test-model',
+      state: 'cancelled', freshness: 'deleted', output: null, outputAttempt: null, addAvailable: false, attempts: [] } });
+  });
+
+  try {
+    for (const title of [titleA, titleB]) {
+      await openCard(title);
+      if (title === titleB) {
+        await expect(dialog.getByRole('heading', { name: `模拟整理：${titleB}` })).toBeVisible();
+        await dialog.getByRole('combobox', { name: '整理记录' }).selectOption('');
+      }
+      await dialog.getByRole('checkbox', { name: /卡片标题/ }).check();
+      await dialog.getByRole('button', { name: '用模型整理' }).click();
+      await expect.poll(() => starts.length).toBe(title === titleA ? 1 : 2);
+      await dialog.getByRole('button', { name: '取消任务' }).click();
+      await expect(dialog.getByRole('alert')).toHaveText('未确认取消结果，请重试取消');
+      await dialog.getByRole('button', { name: '关闭 AI 整理' }).click();
+    }
+
+    await workspace.execute(page, {
+      commandId: crypto.randomUUID(), projectId: project.id, type: 'thought.delete',
+      expected: { thought: cardB.versionId, body: cardB.body.versionId, pose: cardB.item.versionId, appearance: null },
+      payload: { id: cardB.id },
+    });
+    await expect(page.getByRole('button', { name: titleB, exact: true })).toHaveCount(0);
+    await page.getByRole('button', { name: '项目导航' }).click();
+    await page.getByRole('button', { name: 'AI 整理记录', exact: true }).press('Enter', { timeout: 5000 });
+    const records = page.getByRole('dialog', { name: 'AI 整理记录', exact: true });
+    const history = records.getByRole('combobox', { name: '整理记录' });
+    await expect(records.getByText(`原卡：${titleA}`)).toBeVisible();
+    await records.getByRole('button', { name: '取消任务' }).click();
+    await expect(records.getByRole('alert')).toHaveText('未确认取消结果，请重试取消');
+
+    let releaseRead!: () => void;
+    const heldRead = new Promise<void>(resolve => { releaseRead = resolve; });
+    await page.route(`**${apiPath}/tasks/${prior.id}`, async route => {
+      await heldRead;
+      await route.continue();
+    });
+    try {
+      await history.selectOption(prior.id, { timeout: 3000 });
+      await expect(history).toBeDisabled();
+      await page.keyboard.press('Escape');
+    } finally {
+      releaseRead();
+    }
+    await expect(records.getByRole('heading', { name: `模拟整理：${titleB}` })).toBeVisible();
+    await expect(records.getByText('原卡已删除，仍可查看旧结果。')).toBeVisible();
+    await expect(records.getByRole('button', { name: '添加为新卡' })).toBeDisabled();
+    expect(cancellations).toEqual([starts[0], starts[1], starts[0]]);
+
+    const pendingB = `取消结果未确认 · 原卡已删除（${cardB.id.slice(0, 8)}）`;
+    await history.selectOption({ label: pendingB });
+    await expect(records.getByRole('status')).toHaveText('取消结果未确认');
+    await records.getByRole('button', { name: '取消任务' }).click();
+    await expect(records.getByText('模型整理 已取消', { exact: true })).toBeVisible();
+    expect(cancellations).toEqual([starts[0], starts[1], starts[0], starts[1]]);
+    expect(starts).toHaveLength(2);
+    await expect(history.getByRole('option', { name: pendingB })).toHaveCount(0);
+    await history.selectOption({ label: `取消结果未确认 · ${titleA}` });
+    await expect(records.getByText(`原卡：${titleA}`)).toBeVisible();
+  } finally {
+    releaseStarts();
+  }
 });

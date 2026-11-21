@@ -2,6 +2,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { ApiTransport } from '../mcp-server.js';
 import { ApiTransportError } from '../api-transport-error.js';
+import { FollowerFields } from './attachment-contracts.js';
 import { ObserveQuerySchema } from './observe-contracts.js';
 import { BodyPatchCommand, BodyPatchPayload, MAX_AGENT_BATCH_POSES, TagCommandSchema } from './contracts.js';
 
@@ -194,12 +195,13 @@ export function registerCompactMapTool(server: McpServer, transport: ApiTranspor
     'forkwise_move_cards',
     {
       description:
-        '在明确的项目布局委托内批量移动已有卡片。每张卡都要给出当前 Pose 版本与目标 x/y/width/height；任何一个目标无权限、已删除、版本过期或字段超范围时整批拒绝，不产生部分移动。与本人界面共用同一 execute。',
+        '在明确的项目布局委托内批量移动已有卡片。每张卡都要给出当前 Pose 版本与目标 x/y/width/height。卡片中心移动时，从同一快照的 attachment-index 和批注索引读取其全部附着批注，在 followers 中提交随卡片中心平移后的绝对坐标，在 expectedFollowers 中按批注 itemId 提交其当前 Pose 版本。任何一个目标无权限、已删除、版本过期或字段超范围时整批拒绝。与本人界面共用同一 execute。',
       inputSchema: z
         .object({
           projectId: z.string().min(1).max(160),
           commandId: z.string().min(8).max(160),
           expected: z.record(z.string().min(1).max(160), z.string().min(1).max(160)),
+          ...FollowerFields,
           poses: z
             .array(
               z
@@ -218,13 +220,15 @@ export function registerCompactMapTool(server: McpServer, transport: ApiTranspor
         .strict(),
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
-    async ({ projectId, commandId, expected, poses }) => {
+    async ({ projectId, commandId, expected, poses, followers, expectedFollowers }) => {
       try {
         const response = await transport.call('/api/mapping/execute', 'POST', {
           commandId,
           projectId,
           type: 'pose.batch',
           expected,
+          followers,
+          expectedFollowers,
           payload: {
             poses: poses.map((pose) => ({
               id: pose.cardId,

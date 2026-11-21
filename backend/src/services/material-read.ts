@@ -39,9 +39,9 @@ export function readMaterialPage(
     .prepare('SELECT data FROM parsed_artifacts WHERE project_id=? AND source_version_id=?')
     .get(projectId, id) as { data: string } | undefined;
   const artifact = row ? JSON.parse(row.data) : {};
-  const anchors = (artifact.regions ?? artifact.blocks ?? [])
-    .filter((r: { start: number; end: number }) => r.start < end && r.end > start)
-    .slice(0, 1000);
+  const anchors = (artifact.regions ?? artifact.blocks ?? []).filter(
+    (r: { start: number; end: number }) => r.start < end && r.end > start,
+  );
   const segment = text.slice(start, end);
   return {
     sourceVersionId: id,

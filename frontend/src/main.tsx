@@ -104,7 +104,7 @@ import { useCardResize } from "./card-resize";
 import { InlineTitle } from "./inline-title";
 import { CardMenu } from "./card-menu";
 import { OrganizeDialog } from "./organize-dialog";
-import type { OrganizeRequest } from "../../backend/src/mapping/organize-contracts";
+import { organizeCancellationJournal } from "./organize-cancellation-recovery";
 import { bodyPreviewText, useCardPresentation } from "./card-presentation";
 import { useCardLayoutSave } from "./card-layout-save";
 import { useAppearanceSave, type AppearanceInput } from "./appearance-save";
@@ -139,6 +139,8 @@ type CardData = {
   onOpenAttachment: (assetId: string) => void;
   onRemoveAttachment: (attachmentId: string) => void;
   onAddAttachment: (file: File) => void;
+  attachmentTargets: Card[];
+  onCopyAttachment: (targetId: string, item: NonNullable<Card['attachments']>['items'][number]) => void;
   onCanvasChoice: () => void;
   onDelete: () => void;
   onRemoveFromGroup?: (() => void) | undefined;
@@ -188,6 +190,7 @@ function ThoughtCard({ data, selected }: NodeProps<Node<CardData>>) {
           onEdit={data.onEdit}
           onBody={data.onBody}
           onAI={data.onAI}
+          onAddAttachment={data.onAddAttachment}
           onDelete={data.onDelete}
           onRemoveFromGroup={data.onRemoveFromGroup}
           onAppearance={data.onAppearance}
@@ -234,7 +237,8 @@ function ThoughtCard({ data, selected }: NodeProps<Node<CardData>>) {
       {data.card.aiOrigin && <span className="card-ai-origin">
         {data.card.aiOrigin.mode === 'simulate' ? '模拟整理' : 'AI 候选'}
       </span>}
-      <CardAttachmentList card={data.card} blocked={data.historyBlocked} onOpen={data.onOpenAttachment} onRemove={data.onRemoveAttachment} onAdd={data.onAddAttachment} />
+      <CardAttachmentList card={data.card} projectCards={data.attachmentTargets} blocked={data.historyBlocked}
+        onOpen={data.onOpenAttachment} onRemove={data.onRemoveAttachment} onAdd={data.onAddAttachment} onCopy={data.onCopyAttachment} />
       <CardTagSummary card={data.card} tags={data.tags} onOpen={data.onBody} />
       {text && data.appearanceValue.showPreview && (
         <div
@@ -335,7 +339,10 @@ function Workspace() {
   >({});
   const [projects, setProjects] = useState<Project[]>([]);
   const [organizing, setOrganizing] = useState<{ projectId: string; source?: Card } | null>(null);
-  const pendingOrganizeCancellations = useRef(new Map<string, { projectId: string; request: OrganizeRequest }>());
+  const [organizeCancellations, setOrganizeCancellations] = useState(() => {
+    const saved = organizeCancellationJournal.read();
+    return { pending: saved, saved };
+  });
   const authority = useRef<ProjectState | null>(null);
   const [selectedConnectors, setSelectedConnectors] = useState<string[]>([]);
   const selectedFrameIds = frameSelection?.projectId === state?.project.id && frameSelection?.generation === canvasSelection.generation()
@@ -749,7 +756,7 @@ function Workspace() {
       if (event.isComposing || event.keyCode === 229 || composition.current)
         return;
       const target = event.target as HTMLElement;
-      if (target.closest("dialog.project-search, dialog.shape-appearance-dialog, dialog.organize-dialog")) return;
+      if (target.closest("dialog.project-search, dialog.shape-appearance-dialog, dialog.organize-dialog, dialog.attachment-copy-dialog")) return;
       // 导入对话框是模态表单，不是原生 <dialog>：打开期间画布动作历史一律不动。
       // 这里直接返回、不 preventDefault，名称输入框的原生撤销照常生效。
       if (importDialogOpen()) return;
@@ -2890,6 +2897,14 @@ function Workspace() {
   const cardOnlySelection = canvasSelection.value.targets.length > 0 && canvasSelection.value.targets.every((target) =>
     target.kind === "item" && state?.cards.some((card) => card.item.id === target.itemId),
   );
+  function addAttachment(projectId: string, targetId: string, assetId: string, name: string) {
+    const current = authority.current;
+    const target = current?.cards.find(value => value.id === targetId);
+    if (current?.project.id !== projectId || !target) return;
+    return action({ commandId: crypto.randomUUID(), projectId, type: 'card.attachment.add',
+      expected: { attachments: target.attachments?.versionId ?? null },
+      payload: { id: target.id, assetId, name } });
+  }
   const nodes: Node<CardData>[] = (state?.cards ?? []).map((card) => ({
     id: card.item.id,
     selected: selection.includes(card.item.id),
@@ -2964,20 +2979,19 @@ function Workspace() {
           expected: { attachments: target.attachments.versionId },
           payload: { id: target.id, attachmentId } });
       },
+      attachmentTargets: state!.cards,
+      onCopyAttachment: (targetId, item) => {
+        if (!busy && !historyBlocked) void addAttachment(state!.project.id, targetId, item.assetId, item.name);
+      },
       onAddAttachment: (file) => {
         const current = authority.current;
-        const target = current?.cards.find(value => value.id === card.id);
-        if (!current || !target?.attachments || busy || historyBlocked) return;
+        if (!current || current.project.id !== state?.project.id || busy || historyBlocked) return;
         void (async () => {
           try {
             const payload = await fileAssetPayload(file);
             const assetId = crypto.randomUUID();
             await api.execute({ commandId: crypto.randomUUID(), projectId: current.project.id, type: 'asset.save', expected: null, payload: { id: assetId, ...payload, kind: 'file' } });
-            const latest = authority.current?.cards.find(value => value.id === card.id);
-            if (!latest?.attachments || authority.current?.project.id !== current.project.id) return;
-            await action({ commandId: crypto.randomUUID(), projectId: current.project.id, type: 'card.attachment.add',
-              expected: { attachments: latest.attachments.versionId },
-              payload: { id: latest.id, assetId, name: payload.name } });
+            await addAttachment(current.project.id, card.id, assetId, payload.name);
           } catch (error) { fail(error instanceof Error ? error : new Error('未能添加附件')); }
         })();
       },
@@ -3053,10 +3067,10 @@ function Workspace() {
       {recoveryError && <p style={{ margin: 0 }}>{recoveryError}</p>}
     </div>
   );
-  const pendingOrganizeCancellation = organizing
-    ? Array.from(pendingOrganizeCancellations.current.values()).find(({ projectId, request }) =>
-      projectId === organizing.projectId && (!organizing.source || request.cardId === organizing.source.id))?.request
-    : undefined;
+  const pendingOrganizeCancellations = organizing
+    ? [...organizeCancellations.pending.values()].filter(({ projectId, request }) =>
+      projectId === organizing.projectId && (!organizing.source || request.cardId === organizing.source.id)).map(({ request }) => request)
+    : [];
   return (
     <div
       className="workspace"
@@ -3079,10 +3093,15 @@ function Workspace() {
       {organizing && organizing.projectId === state?.project.id &&
         <OrganizeDialog projectId={organizing.projectId} {...(organizing.source ? { source: organizing.source } : {})}
           cards={state.cards}
-          pendingCancellation={pendingOrganizeCancellation}
+          pendingCancellations={pendingOrganizeCancellations}
+          isCancellationSaved={id => organizeCancellations.saved.has(id)}
           onPendingCancellationChange={(request, status) => {
-            if (status === 'pending') pendingOrganizeCancellations.current.set(request.requestId, { projectId: organizing.projectId, request });
-            else pendingOrganizeCancellations.current.delete(request.requestId);
+            const next = new Map(organizeCancellations.pending);
+            if (status === 'pending') next.set(request.requestId, { projectId: organizing.projectId, request });
+            else next.delete(request.requestId);
+            const written = organizeCancellationJournal.write(next);
+            setOrganizeCancellations(previous => ({ pending: next, saved: written ? next : previous.saved }));
+            return written;
           }}
           close={() => setOrganizing(null)}
           onAdded={async () => { await refresh(organizing.projectId); }} />}
@@ -3458,7 +3477,7 @@ function Workspace() {
               marqueeSelection.retire();
             }}
           >
-            <Background gap={24} color="#dce0e7" />
+            <Background gap={24} color="var(--canvas-grid-color)" />
             <Controls showInteractive={false} />
             <ViewportPortal>
               <CanvasFrames drawMemberIds={frameDrawMemberIds} dropCandidateId={frameDropCandidate} key={`${state.project.id}:${frameEditorEpoch}`} state={state} preview={framePreview} selectedId={exportVisual ? null : selectedFrameId} selectedIds={exportVisual ? [] : selectedFrameIds} choose={chooseFrame}

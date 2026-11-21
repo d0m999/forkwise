@@ -277,8 +277,9 @@ export class Mapping {
         const command = input && typeof input === 'object' && 'type' in input && input.type === 'body.patch'
           ? parseBodyPatch(input)
           : MappingCommand.parse(input);
-        const contentRestricted = actor.actor.type === 'agent' && capabilities.contentDelegations !== undefined;
-        if (command.type === 'body.patch' || contentRestricted)
+        const scopedAgent = actor.actor.type === 'agent' &&
+          (capabilities.layoutDelegations !== undefined || capabilities.contentDelegations !== undefined);
+        if (command.type === 'body.patch' || scopedAgent)
           this.access.project(actor, command.projectId);
         else
           this.access.mappingWrite(actor, command.projectId, capabilities);
@@ -324,8 +325,6 @@ export class Mapping {
         // A stored receipt records an already committed command. A narrowed
         // layout or content grant still permits replay by the original actor.
         requireContentWrite(actor, command, capabilities);
-        if (contentRestricted && command.type !== 'body.patch')
-          this.access.mappingWrite(actor, command.projectId, capabilities);
         if (actor.actor.type === 'agent' && command.type === 'pose.batch') {
           requireThat(
             command.payload.poses.length <= MAX_AGENT_BATCH_POSES,
@@ -601,6 +600,7 @@ export class Mapping {
           frameChanges = travel.frameChanges;
           groupChanges = travel.groupChanges;
           containmentChanges = travel.containmentChanges;
+          attachmentChanges = travel.attachmentChanges;
           connectorChanges = travel.connectorChanges;
           cardChanges = travel.cardChanges;
           cardLifecycleChanges = travel.cardLifecycleChanges;
@@ -1107,7 +1107,7 @@ export class Mapping {
           ...(textChanges ? { textChanges } : {}),
           ...(cardChanges ? { cardChanges } : {}),
           ...(cardLifecycleChanges ? { cardLifecycleChanges } : {}),
-          ...(attachmentChanges?.length ? { attachmentChanges } : {}),
+          ...(attachmentChanges ? { attachmentChanges } : {}),
           ...(cutOuterEnds ? { cutOuterEnds } : {}),
           actor: actor.actor,
           writtenAt: new Date().toISOString(),

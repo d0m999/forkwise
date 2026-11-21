@@ -51,6 +51,11 @@ function cardByItem(db: Database.Database, projectId: string, itemId: string) {
   return cards.find(card => card.item.id === itemId) ?? null;
 }
 
+function readMembership(db: Database.Database, projectId: string, itemId: string): Containment | null {
+  const row = db.prepare('SELECT value FROM mapping_containment WHERE project_id=? AND item_id=?').get(projectId, itemId) as { value: string } | undefined;
+  return row ? JSON.parse(row.value) as Containment : null;
+}
+
 export function attachAnnotation(db: Database.Database, command: Extract<AttachmentCommand, { type: 'attachment.attach' }>) {
   const { projectId, payload, expected } = command;
   const annotation = readAnnotation(db, projectId, payload.itemId);
@@ -58,8 +63,7 @@ export function attachAnnotation(db: Database.Database, command: Extract<Attachm
   const card = cardByItem(db, projectId, payload.targetItemId);
   requireThat(card, 'INVALID_COMMAND', '附着目标只支持卡片', 400);
   requireThat(expected.target.itemId === payload.targetItemId, 'INVALID_COMMAND', '附着目标与预期不一致', 400);
-  const membership = (db.prepare('SELECT value FROM mapping_containment WHERE project_id=? ORDER BY rowid').all(projectId) as { value: string }[])
-    .map(row => JSON.parse(row.value) as Containment).find(value => value.id === payload.itemId) ?? null;
+  const membership = readMembership(db, projectId, payload.itemId);
   requireThat(expected.containment === (membership?.versionId ?? null), 'VERSION_CONFLICT', '批注归属已更新，请重新读取', 409);
   requireThat(!membership?.parent, 'INVALID_COMMAND', '该批注在框架或组合内，需先移出', 400);
   const current = readAttachments(db, projectId).find(value => value.id === payload.itemId) ?? null;
@@ -187,18 +191,21 @@ export function releaseAttachments(db: Database.Database, projectId: string, rem
 }
 
 export function restoreAttachments(db: Database.Database, projectId: string, changes: readonly AttachmentChange[], type: 'history.undo' | 'history.redo'): AttachmentChange[] {
-  return changes.map(change => {
+  const restored: AttachmentChange[] = [];
+  for (const change of changes) {
     const desired = type === 'history.undo' ? change.before : change.after;
     const identity = change.after ?? change.before!;
     const current = readAttachments(db, projectId).find(value => value.id === identity.id) ?? null;
-    if (desired?.target) {
+    if (desired?.target && !readMembership(db, projectId, identity.id)?.parent) {
       const after: Attachment = { ...desired, versionId: randomUUID() };
       writeAttachment(db, projectId, after);
-      return { before: current, after };
+      restored.push({ before: current, after });
+    } else if (current) {
+      deleteAttachment(db, projectId, identity.id);
+      restored.push({ before: current, after: null });
     }
-    if (current) deleteAttachment(db, projectId, identity.id);
-    return { before: current, after: null };
-  });
+  }
+  return restored;
 }
 
 export function restorePastedAttachments(db: Database.Database, projectId: string, changes: readonly AttachmentChange[] | undefined, restoredItemIds: ReadonlySet<string>, restoredCardItemIds: ReadonlySet<string>): AttachmentChange[] {
@@ -207,7 +214,7 @@ export function restorePastedAttachments(db: Database.Database, projectId: strin
   const present = readAttachments(db, projectId);
   for (const change of changes) {
     const before = change.before;
-    if (!before?.target || change.after) continue;
+    if (!before?.target || change.after || readMembership(db, projectId, before.id)?.parent) continue;
     const annotationPresent = restoredItemIds.has(before.id) || readAnnotation(db, projectId, before.id) !== null;
     const targetPresent = restoredCardItemIds.has(before.target.itemId) || cardByItem(db, projectId, before.target.itemId) !== null;
     if (!annotationPresent || !targetPresent || present.some(value => value.id === before.id) || written.some(value => value.after?.id === before.id)) continue;

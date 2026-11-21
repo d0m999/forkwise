@@ -141,6 +141,72 @@ it('删除卡片保留批注并解绑，撤销后附着回来；删除批注只�
   expect(f.state().cards).toHaveLength(1);
 });
 
+it('观察附着、解绑与删卡历史时，报告批注关系实际写入的前后版本', () => {
+  const f = fixture();
+  const card = f.state().cards[0]!, note = f.state().texts![0]!;
+  const relation = { domain: 'attachment', id: note.item.id };
+  const cardDomains = [
+    { domain: 'thought', id: card.id }, { domain: 'body', id: card.body.id }, { domain: 'pose', id: card.item.id },
+  ];
+  const observeWrite = (write: () => unknown, expectAttached: boolean, lifecycle = false) => {
+    const initial = f.state();
+    write();
+    const current = f.state();
+    expect(current.attachments).toHaveLength(expectAttached ? 1 : 0);
+    const feed = f.mapping.observe({ projectId: 'p', afterRevision: initial.project.revision }, f.human);
+    expect(feed.changes).toHaveLength(1);
+    const change = feed.changes[0]!;
+    expect(change.attachmentChanges).toEqual([{ before: initial.attachments?.[0] ?? null, after: current.attachments?.[0] ?? null }]);
+    expect(change.domains).toHaveLength(lifecycle ? 4 : 1);
+    expect(change.domains).toEqual(expect.arrayContaining(lifecycle ? [relation, ...cardDomains] : [relation]));
+    expect(change.deletedIds).not.toContain(note.item.id);
+  };
+  const travel = (type: 'history.undo' | 'history.redo') => () => f.run({ type, expected: f.state().project.revision, payload: {} });
+  observeWrite(() => attach(f, note.item.id), true);
+  observeWrite(travel('history.undo'), false);
+  observeWrite(travel('history.redo'), true);
+  observeWrite(() => f.run({ type: 'attachment.detach', expected: { attachment: f.state().attachments![0]!.versionId,
+    target: { itemId: card.item.id, versionId: card.item.versionId } }, payload: { itemId: note.item.id } }), false);
+  observeWrite(travel('history.undo'), true);
+  observeWrite(travel('history.redo'), false);
+  observeWrite(travel('history.undo'), true);
+  observeWrite(() => f.run({ type: 'thought.delete', expected: { thought: card.versionId, body: card.body.versionId,
+    pose: card.item.versionId, appearance: null }, payload: { id: card.id } }), false, true);
+  observeWrite(travel('history.undo'), true, true);
+  observeWrite(travel('history.redo'), false, true);
+});
+
+it('旧历史回执能确定独立附着域，混合删除缺明细时从固定快照恢复', () => {
+  const f = fixture();
+  const card = f.state().cards[0]!, note = f.state().texts![0]!;
+  attach(f, note.item.id);
+  const oldUndo = f.run({ type: 'history.undo', expected: f.state().project.revision, payload: {} });
+  f.run({ type: 'history.redo', expected: oldUndo.revision, payload: {} });
+  f.run({ type: 'thought.delete', expected: { thought: card.versionId, body: card.body.versionId, pose: card.item.versionId, appearance: null }, payload: { id: card.id } });
+  const restored = f.run({ type: 'history.undo', expected: f.state().project.revision, payload: {} });
+  const db = new Database(join(f.directory, 'workspace.sqlite'));
+  try {
+    db.prepare("UPDATE mapping_changes SET receipt=json_remove(receipt, '$.attachmentChanges') WHERE project_id=? AND revision IN (?,?)").run('p', oldUndo.revision, restored.revision);
+  } finally { db.close(); }
+  const known = f.mapping.observe({ projectId: 'p', afterRevision: oldUndo.revision - 1, limit: 1 }, f.human);
+  expect(known.changes[0]?.domains).toEqual([{ domain: 'attachment', id: note.item.id }]);
+  const reset = f.mapping.observe({ projectId: 'p', afterRevision: restored.revision - 1 }, f.human);
+  expect(reset).toMatchObject({ status: 'RESET_REQUIRED', changes: [], revision: restored.revision, recovery: { type: 'map', view: 'index', snapshot: reset.snapshot } });
+  const refreshed = f.mapping.read({ type: 'map', view: 'attachment-index', projectId: 'p', snapshot: reset.snapshot }, f.human);
+  expect(refreshed.items).toMatchObject([{ id: note.item.id, targetItemId: card.item.id }]);
+  expect(f.mapping.observe({ projectId: 'p', afterRevision: reset.revision, baseSnapshot: reset.snapshot }, f.human)).toMatchObject({ status: 'OK', changes: [] });
+  const host = f.state().cards[0]!;
+  const detach = f.run({ type: 'attachment.detach', expected: { attachment: f.state().attachments![0]!.versionId,
+    target: { itemId: host.item.id, versionId: host.item.versionId } }, payload: { itemId: note.item.id } });
+  const removed = f.run({ type: 'thought.delete', expected: { thought: host.versionId, body: host.body.versionId,
+    pose: host.item.versionId, appearance: null }, payload: { id: host.id } });
+  f.run({ type: 'history.undo', expected: removed.revision, payload: {} });
+  const plain = f.mapping.observe({ projectId: 'p', afterRevision: detach.revision }, f.human);
+  expect(plain.status).toBe('OK');
+  expect(plain.changes).toHaveLength(2);
+  expect(plain.changes.flatMap(change => change.domains).some(value => value.domain === 'attachment')).toBe(false);
+});
+
 it('附着索引与契约、工具描述中的视图名一致', () => {
   const contractViews = CompactQuerySchema.options.map(option => option.shape.view.value);
   const mcp = readFileSync(new URL('../src/mapping/compact-mcp.ts', import.meta.url), 'utf8');
@@ -354,6 +420,52 @@ it('回源粘贴把已附着批注放回分区范围时不再获得分区归属'
   expect(f.state().attachments?.find(value => value.id === restored.item.id)?.target?.itemId).toBe(card.item.id);
   expect(f.state().containment?.find(value => value.id === restored.item.id)?.parent ?? null).toBeNull();
   expect(f.state().containment?.find(value => value.id === card.item.id)?.parent).toMatchObject({ kind: 'frame' });
+});
+
+it.each(['frame', 'group'] as const)('只剪切卡片后批注已加入 %s，粘回和重做都保留新归属', (kind) => {
+  const f = fixture();
+  const card = f.state().cards[0]!, note = f.state().texts![0]!, shape = f.state().shapes![0]!;
+  const free = f.state().strokes![0]!;
+  attach(f, note.item.id);
+  attach(f, free.item.id);
+  f.run(captureCutCommand(f.state(), { commandId: randomUUID(), projectId: 'p', cutId: 'cut', itemIds: [card.item.id], groupIds: [], frameIds: [] }));
+  if (kind === 'frame') {
+    f.run({ type: 'frame.create', expected: { frame: null, groups: {}, containment: { [note.item.id]: null }, poses: { [note.item.id]: note.item.versionId } },
+      payload: { id: 'frame', itemIds: [note.item.id], pose: { x: 39, y: 29, width: 82, height: 26 } } });
+  } else {
+    f.run({ type: 'group.create', expected: { groups: { g: null }, containment: { [note.item.id]: null, [shape.item.id]: null } },
+      payload: { id: 'g', itemIds: [note.item.id, shape.item.id] } });
+  }
+  const membership = f.state().containment!.find(value => value.id === note.item.id)!;
+  expect(membership.parent?.kind).toBe(kind);
+  const paste = f.run({ type: 'canvas.paste-cut', expected: { cut: 'cut', cutRevision: 0 }, payload: { cutId: 'cut', translation: { x: 2000, y: 2000 } } });
+  const expectRestored = () => {
+    const state = f.state();
+    expect(state.cards[0]!.id).toBe(card.id);
+    expect(state.containment!.find(value => value.id === note.item.id)).toEqual(membership);
+    expect(state.attachments).toMatchObject([{ id: free.item.id, target: { itemId: card.item.id } }]);
+  };
+  expectRestored();
+  const undo = f.run({ type: 'history.undo', expected: paste.revision, payload: {} });
+  expect(f.state().attachments).toEqual([]);
+  f.run({ type: 'history.redo', expected: undo.revision, payload: {} });
+  expectRestored();
+  const deltas = f.mapping.observe({ projectId: 'p', afterRevision: paste.revision - 1 }, f.human);
+  expect(deltas.changes.map(change => change.domains.filter(value => value.domain === 'attachment'))).toEqual(
+    Array(3).fill([{ domain: 'attachment', id: free.item.id }]),
+  );
+  // 旧版粘贴历史多记了一条附着。升级后重做该动作也应尊重批注现有归属。
+  const beforeLegacy = f.run({ type: 'history.undo', expected: f.state().project.revision, payload: {} });
+  const db = new Database(join(f.directory, 'workspace.sqlite'));
+  try {
+    const extra = { before: null, after: { id: note.item.id, versionId: randomUUID(), target: { itemId: card.item.id } } };
+    db.prepare("UPDATE mapping_history SET value=json_insert(value,'$.redo[#-1].attachmentChanges[#]',json(?)) WHERE project_id=?").run(JSON.stringify(extra), 'p');
+  } finally { db.close(); }
+  f.run({ type: 'history.redo', expected: beforeLegacy.revision, payload: {} });
+  expectRestored();
+  const replay = f.mapping.observe({ projectId: 'p', afterRevision: beforeLegacy.revision }, f.human).changes[0]!;
+  expect(replay.attachmentChanges).toHaveLength(1);
+  expect(replay.domains.filter(value => value.domain === 'attachment')).toEqual([{ domain: 'attachment', id: free.item.id }]);
 });
 
 it('canvas.move-selection 与 group.move 缺随动批注同样拒绝，带齐后只平移一次', () => {

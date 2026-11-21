@@ -8,6 +8,7 @@ const EXPORT_IGNORED_CONTROLS = [
   '.frame-resize-overlay', '.canvas-group-tools', '.connector-endpoint', '.connector-entry', '.alignment-guide',
   '.image-crop', '.image-resize', '.shape-resize', '.canvas-gif-control', '.gif-toggle', '.shape-text-actions', '.shape-appearance-dialog',
   '.card-attachments button[aria-label^="解除 "]',
+  '.card-attachments button[aria-label^="复制 "]',
   '.card-attachments button[aria-label="添加附件"]',
   '.card-attachments button[aria-label="收起附件"]',
   '.card-attachments button[aria-label^="还有 "]',
