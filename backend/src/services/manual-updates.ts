@@ -210,6 +210,7 @@ export class ManualUpdateService {
         });
       }
       let createdJobId: string | null = null;
+      let message = '同一材料版本与论证范围已有任务，未重复生成候选。可查看原任务记录。';
       if (p.newTargetIds.length) {
         const update = {
           schemaVersion: 1 as const,
@@ -240,6 +241,9 @@ export class ManualUpdateService {
           update,
         );
         createdJobId = job.id;
+        message = this.research.model
+          ? '材料已保存，已为新增范围排队；个人判断保持。'
+          : '材料与所选目标已保存。本机模型研究已停用，无法生成本次影响建议。';
       }
       return ManualUpdateResult.parse({
         eventKey: p.eventKey,
@@ -247,9 +251,7 @@ export class ManualUpdateService {
         createdJobId,
         existingJobIds: p.existingJobIds,
         changes,
-        message: createdJobId
-          ? '材料已保存，已为新增范围排队；个人判断保持。'
-          : '同一材料版本与论证范围已有任务，未重复生成候选。可查看原任务记录。',
+        message,
       });
     });
   }

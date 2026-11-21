@@ -24,7 +24,8 @@ const port = (listener.address() as { port: number }).port;
 await new Promise<void>((r, j) => listener.close((e) => (e ? j(e) : r())));
 const directory = mkdtempSync(join(tmpdir(), 'forkwise-manual-update-')),
   origin = `http://127.0.0.1:${port}`;
-const app = createApplication({
+const withoutModel = process.argv.includes('--without-model');
+const options: Parameters<typeof createApplication>[0] = {
   database: join(directory, 'test.sqlite'),
   origin,
   researchModel: {
@@ -52,7 +53,9 @@ const app = createApplication({
       };
     },
   },
-});
+};
+if (withoutModel) delete options.researchModel;
+const app = createApplication(options);
 const project = app.write.createProject(human, randomUUID(), { name: '手动更新浏览器隔离研究' }),
   state = () => app.repo.snapshot(project.id);
 const write = (commands: any[]) =>
@@ -77,7 +80,7 @@ const server = serve({ fetch: root.fetch, hostname: '127.0.0.1', port }),
   token = app.access.issue('human', ['*']);
 let browser: any, page: any;
 const errors: string[] = [];
-try {
+async function run() {
   browser = await chromium.launch({ channel: 'chrome', headless: true });
   page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
   page.on('pageerror', (e: Error) => errors.push(e.message));
@@ -88,7 +91,8 @@ try {
   const dialog = page.locator('#manual-update-dialog');
   await dialog.locator('[name=scopeLabel]').fill('合成公司经营变化');
   await dialog.locator('[name=sourceId]').selectOption('source');
-  await dialog.locator('[name=text]').fill('新增披露显示需求范围有限。');
+  const text = '  新增披露显示需求范围有限。\n';
+  await dialog.locator('[name=text]').fill(text);
   await dialog.locator('[name=coverage]').selectOption('full');
   await dialog.locator('[data-targets] input[value=a]').check();
   await dialog.locator('[data-targets] input[value=i]').check();
@@ -96,7 +100,7 @@ try {
   await page.reload();
   await page.locator('#connection').filter({ hasText: '已连接' }).waitFor();
   await open();
-  assert.equal(await dialog.locator('[name=text]').inputValue(), '新增披露显示需求范围有限。');
+  assert.equal(await dialog.locator('[name=text]').inputValue(), text);
   const preview = async () => {
     const response = page.waitForResponse(
       (r: any) => r.url().endsWith('/manual-updates/preview') && r.status() === 200,
@@ -117,6 +121,65 @@ try {
   assert.equal(app.jobs.list(project.id).length, 0);
   assert.equal(state().objects.filter((e) => e.kind === 'source_version').length, 0);
   assert.match(await dialog.locator('[data-preview]').innerText(), /新增分析 2 项/);
+  if (withoutModel) {
+    assert.match(await dialog.locator('[data-feedback]').innerText(), /本机模型研究已停用/);
+    await dialog.getByRole('button', { name: '确认范围，保存更新' }).click();
+    await dialog
+      .locator('[data-feedback]')
+      .filter({ hasText: /已保存.*模型研究已停用/ })
+      .waitFor();
+    await app.researchTasks.drain();
+    await page.reload();
+    await page.locator('#connection').filter({ hasText: '已连接' }).waitFor();
+    await open();
+    const row = dialog.locator('.update-event');
+    await row.getByText('1 批分析 · 0 条建议 · 0 批处理中 · 1 批待处理', { exact: true }).waitFor();
+    const [response] = await Promise.all([
+      page.waitForResponse((r: any) => new URL(r.url()).pathname.endsWith('/tasks') && r.ok()),
+      row.getByRole('button', { name: '展开本次更新' }).click(),
+    ]);
+    const { items } = (await response.json()).data;
+    assert.equal(items.length, 1);
+    const [task] = items;
+    assert.equal(task.state, 'failed');
+    assert.deepEqual(task.targetIds, ['a', 'i']);
+    assert.equal(task.scopeLabel, '合成公司经营变化');
+    assert.match(task.error, /本机模型研究已停用/);
+    await row.getByText(task.error, { exact: true }).waitFor();
+    const versions = state().objects.filter((e) => e.kind === 'source_version');
+    assert.equal(versions.length, 1);
+    assert.equal(versions[0]!.id, task.sourceVersionId);
+    assert.equal(versions[0]!.data.sourceId, 'source');
+    await row.getByRole('button', { name: '阅读此次材料' }).click();
+    const reader = page.getByRole('dialog', { name: '材料原文阅读' });
+    await reader.locator('[data-text]').filter({ hasText: text.trim() }).waitFor();
+    assert.equal(await reader.locator('[data-text]').textContent(), text);
+    await reader.getByRole('button', { name: '返回画布' }).click();
+    await dialog.locator('[name=mode]').selectOption('existing');
+    await dialog.locator('[name=sourceVersionId]').selectOption(task.sourceVersionId);
+    await preview();
+    await dialog.getByRole('button', { name: '确认复用已有任务' }).click();
+    await dialog.locator('[data-feedback]').filter({ hasText: '未重复生成候选' }).waitFor();
+    assert.equal(app.jobs.list(project.id).length, 1);
+    await page.route('**/api/v1/model-capabilities', (route: any) => route.abort());
+    await page.reload();
+    await page.locator('#connection').filter({ hasText: '已连接' }).waitFor();
+    await open();
+    await dialog.locator('[name=mode]').selectOption('text');
+    await dialog.locator('[name=text]').fill('能力读取失败时取得的新版披露。');
+    await preview();
+    assert.match(await dialog.locator('[data-feedback]').innerText(), /本机模型能力尚未确认/);
+    await dialog.getByRole('button', { name: '确认范围，保存更新' }).click();
+    await dialog
+      .locator('[data-feedback]')
+      .filter({ hasText: /已保存.*模型研究已停用/ })
+      .waitFor();
+    assert.equal(errors.length, 0, errors.join('\n'));
+    console.log(
+      'PASS: 模型停用时提交新原文，刷新后保留原来源、精确原文、选定目标、更新事件与分析停用原因，再次使用材料版本复用原任务；能力读取失败时仍可保存，并从回执确认分析已停用。',
+    );
+    return;
+  }
   mkdirSync('artifacts', { recursive: true });
   await page.screenshot({ path: 'artifacts/manual-update-preview.png', fullPage: true });
   let lose = true;
@@ -177,6 +240,9 @@ try {
   console.log(
     'PASS: 更新草稿跨刷新、预览无副作用、原文与目标范围、成功响应丢失后原请求恢复、同版本重复分析去重、事件归集及复核入口、前提并发冲突原子拒绝与草稿保留、重新预览和 390px 窄窗；仅临时数据和合成模型。',
   );
+}
+try {
+  await run();
 } catch (error) {
   console.log(
     'VISIBLE_FEEDBACK',

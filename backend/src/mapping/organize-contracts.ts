@@ -42,6 +42,7 @@ export const OrganizeUsage = z.object({
     model: z.string(),
     phase: z.enum(['generate', 'repair']).optional(),
     inputTokens: z.int().nonnegative().nullable(),
+    cachedInputTokens: z.int().nonnegative().nullish(),
     outputTokens: z.int().nonnegative().nullable(),
     responseReceived: z.boolean().optional(),
     providerRequestId: OrganizeProviderRequestId.optional(),

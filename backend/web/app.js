@@ -20,11 +20,18 @@ if (params.has('token')) {
   sessionStorage.setItem('forkwise-token', params.get('token'));
   history.replaceState(null, '', location.pathname);
 }
-const api = client(sessionStorage.getItem('forkwise-token') ?? '');
-const models = await fetch('/health', { signal: AbortSignal.timeout(5000) })
-  .then(async (response) => (response.ok ? (await response.json()).data?.models : null))
-  .catch(() => null);
-const canResearch = models?.research === true;
+window.addEventListener('hashchange', () => {
+  if (new URLSearchParams(location.hash.slice(1)).has('token')) location.reload();
+});
+const token = sessionStorage.getItem('forkwise-token');
+const api = client(token ?? '');
+$('#research-unavailable').hidden = true;
+const models = token ? await api('/model-capabilities').catch(() => null) : null;
+const canResearch = models?.research;
+if (!models) {
+  $('#research-unavailable').textContent = '尚未读取本机模型状态。连接后刷新页面可重试。';
+  $('#connection').textContent = '尚未连接本机后端';
+}
 let state = null,
   selected = null,
   layout = { version: 0, data: { positions: {}, drawings: [] } },
@@ -124,7 +131,9 @@ async function projects(select) {
     impactReviews?.onStateChange();
     manualUpdates?.onStateChange();
   }
-  $('#connection').textContent = '已连接本机后端';
+  $('#connection').textContent = models
+    ? '已连接本机后端'
+    : '已连接本机后端 · 模型状态读取失败，刷新页面可重试';
 }
 async function refresh(preserveDraft = false) {
   if (!state) return;
@@ -879,7 +888,7 @@ const materials = attachMaterials({
   jobs,
 });
 conditions = attachConditions({
-  canEvaluate: models?.evaluation === true,
+  canEvaluate: models?.evaluation,
   readCitation: (citation) =>
     citation.kind === 'image'
       ? run(() => materials.readCitation(citation, selected))
@@ -986,6 +995,10 @@ researchEntry = attachResearchEntry({
   },
 });
 await run(async () => {
+  if (!token) {
+    message('请从本机启动入口打开研究工作台。');
+    return;
+  }
   await projects();
   const pending = JSON.parse(sessionStorage.getItem('forkwise-pending') ?? 'null');
   if (pending) {

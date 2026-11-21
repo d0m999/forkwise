@@ -84,6 +84,39 @@ test('旧模型停用后仍可审阅原候选和选择添加，原模型重试�
   await expect(dialog.getByText('模型 qwen2.5:7b。费用未知。')).toBeVisible();
 });
 
+test('审阅 OpenAI 回执时逐次显示缓存命中与供应商请求号', async ({ page, workspace }) => {
+  await place(page, '回执样例');
+  const { project, cards: [source] } = await workspace.state();
+  const model = 'openai/gpt-4.1-mini-2025-04-14';
+  const createdAt = '2026-11-21T00:00:00Z';
+  const history = { id: 'openai-receipt', mode: 'real', createdAt, cardId: source!.id } as const;
+  const counts = { model, inputTokens: 2048, outputTokens: 18, responseReceived: true };
+  const usage = { cost: null, attempts: [
+    { ...counts, phase: 'generate', cachedInputTokens: 1024, providerRequestId: 'req_first' },
+    { ...counts, phase: 'repair', cachedInputTokens: 0, providerRequestId: 'req_second' },
+  ] } as const;
+  const path = `**/api/mapping/projects/${project.id}`;
+  await page.route(`${path}/cards/${source!.id}/organize/tasks`, route => route.fulfill({ json: [history] }));
+  await page.route(`${path}/organize/tasks/${history.id}`, route => route.fulfill({ json: {
+    ...history, model, attempt: 2, state: 'failed', updatedAt: createdAt,
+    input: { cardId: source!.id, thoughtVersionId: source!.versionId, bodyVersionId: source!.body.versionId,
+      title: source!.title, blocks: [], omittedBlockCount: 0 },
+    output: null, outputAttempt: null, error: null, usage, freshness: 'current',
+    attempts: [
+      { number: 1, state: 'failed', requestedAt: createdAt, finishedAt: createdAt, error: null, output: null,
+        usage: { cost: null, attempts: [{ ...counts, phase: 'generate' }] } },
+      { number: 2, state: 'failed', requestedAt: createdAt, finishedAt: createdAt, error: null, output: null, usage },
+    ],
+    applied: false, candidateOnCanvas: false, addAvailable: false, cutCopyAvailable: false,
+  } }));
+  await page.getByRole('button', { name: 'AI', exact: true }).click();
+  const details = page.getByRole('dialog', { name: 'AI 整理' }).locator('details').filter({ hasText: '输入范围与用量' });
+  await details.locator('summary').first().click();
+  await expect(details.getByText(/缓存命中 1024 token.*req_first/)).toBeVisible({ timeout: 3000 });
+  await expect(details.getByText(/缓存命中 0 token.*req_second/)).toBeVisible();
+  await expect(details.getByText(/缓存命中未知/)).toBeVisible();
+});
+
 test('无标题卡可整理所选列表和引用，保留未选正文', async ({ page, workspace }) => {
   await place(page, '');
   await page.getByRole('button', { name: '编辑正文', exact: true }).click();

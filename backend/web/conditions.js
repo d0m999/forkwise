@@ -446,7 +446,9 @@ export function attachConditions({
         element(
           box,
           'p',
-          '本机模型评估已停用。可独立记录本人判断，或通过已授权的外部 Agent 提交候选。',
+          canEvaluate === false
+            ? '本机模型评估已停用。可独立记录本人判断，或通过已授权的外部 Agent 提交候选。'
+            : '尚未读取本机模型状态。可独立记录本人判断，或刷新页面后重试。',
         );
       button(box, '独立记录本人判断', () => begin('assessment', c));
       if (candidate) button(box, '根据此建议记录判断', () => begin('assessment', c, candidate));

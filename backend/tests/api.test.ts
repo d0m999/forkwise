@@ -1,10 +1,17 @@
 import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { parse } from 'yaml';
 import { createApplication } from '../src/app.js';
 import { statement } from './helpers.js';
 
 const origin = 'http://127.0.0.1:8787';
-function fixture() {
-  const t = createApplication({ database: ':memory:', origin });
+function fixture(
+  models: Pick<
+    Parameters<typeof createApplication>[0],
+    'researchModel' | 'agent' | 'visionModel'
+  > = {},
+) {
+  const t = createApplication({ database: ':memory:', origin, ...models });
   const token = t.access.issue('human', ['*']);
   const request = (
     path: string,
@@ -25,6 +32,71 @@ function fixture() {
   return { ...t, token, request };
 }
 describe('真实 HTTP 请求契约与访问保护', () => {
+  it('无需会话的存活检查只返回服务状态', async () => {
+    const t = fixture();
+    try {
+      const response = await t.app.request(origin + '/health');
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({ code: 'OK', data: { status: 'ok' }, message: '' });
+    } finally {
+      t.db.close();
+    }
+  });
+  it('旧研究模型能力要求会话并按实际配置逐项返回', async () => {
+    const unused = async () => {
+      throw new Error('读取能力不应调用模型');
+    };
+    const configurations = [
+      { models: {}, expected: { research: false, evaluation: false, vision: false } },
+      {
+        models: { researchModel: { generate: unused }, visionModel: { generate: unused } },
+        expected: { research: true, evaluation: false, vision: true },
+      },
+      {
+        models: { agent: { evaluate: unused } },
+        expected: { research: false, evaluation: true, vision: false },
+      },
+    ];
+    for (const { models, expected } of configurations) {
+      const t = fixture(models);
+      try {
+        const path = '/api/v1/model-capabilities';
+        const unauthenticated = await t.app.request(origin + path);
+        expect(unauthenticated.status).toBe(401);
+        expect((await unauthenticated.json()).code).toBe('UNAUTHORIZED');
+        const response = await t.request(path);
+        expect(response.status).toBe(200);
+        expect(await response.json()).toEqual({ code: 'OK', data: expected, message: '' });
+      } finally {
+        t.db.close();
+      }
+    }
+  });
+  it('运行时 OpenAPI 与提交的 YAML 都声明会话和三个布尔能力', async () => {
+    const t = fixture();
+    try {
+      const runtime = await (await t.request('/api/v1/openapi.json')).json();
+      const published = parse(readFileSync(new URL('../openapi.yaml', import.meta.url), 'utf8'));
+      for (const spec of [runtime, published]) {
+        const get = spec.paths['/api/v1/model-capabilities']?.get;
+        expect(get).toBeDefined();
+        expect(get.security ?? spec.security).toEqual([{ LocalSession: [] }]);
+        expect(get.responses[401]).toBeDefined();
+        const schema = get.responses[200].content['application/json'].schema;
+        expect(schema.properties.data).toMatchObject({
+          type: 'object',
+          properties: {
+            research: { type: 'boolean' },
+            evaluation: { type: 'boolean' },
+            vision: { type: 'boolean' },
+          },
+          required: ['research', 'evaluation', 'vision'],
+        });
+      }
+    } finally {
+      t.db.close();
+    }
+  });
   it('创建项目、事务操作、刷新读取和公开契约一致', async () => {
     const t = fixture();
     try {

@@ -15,6 +15,7 @@ export function attachManualUpdates({
 }) {
   const journal = new RequestJournal(api, new RequestStore()),
     dialog = document.createElement('dialog');
+  const confirmLabel = canResearch ? '确认范围，保存并分析' : '确认范围，保存更新';
   dialog.id = 'manual-update-dialog';
   dialog.setAttribute('aria-label', '手动更新与复核');
   dialog.innerHTML = `<header><strong>手动更新与复核</strong><button type="button" data-close>返回画布</button></header>
@@ -28,7 +29,7 @@ export function attachManualUpdates({
     <label data-existing hidden>已保存的材料版本<select name="sourceVersionId"><option value="">请选择材料版本</option></select></label>
     <fieldset data-targets><legend>仅匹配明确选择的主张与推导</legend></fieldset>
     <button type="submit">预览更新范围与用量</button></form>
-    <section data-preview></section><fieldset data-confirm disabled><button type="button" data-submit>确认范围，保存并分析</button></fieldset>
+    <section data-preview></section><fieldset data-confirm disabled><button type="button" data-submit>${confirmLabel}</button></fieldset>
     <h2>已保存的更新</h2><button type="button" data-reload>刷新更新记录</button><section data-events></section>`;
   document.body.append(dialog);
   const $ = (s) => dialog.querySelector(s),
@@ -86,7 +87,7 @@ export function attachManualUpdates({
     sequence++;
     $('[data-preview]').replaceChildren();
     $('[data-confirm]').disabled = true;
-    $('[data-submit]').textContent = '确认范围，保存并分析';
+    $('[data-submit]').textContent = confirmLabel;
   }
   function mode() {
     $('[data-new]').hidden = fields.mode.value !== 'text';
@@ -250,22 +251,19 @@ export function attachManualUpdates({
       if (!active(id) || ticket !== sequence) return;
       renderUpdatePreview(p, $('[data-preview]'));
       $('[data-preview]').scrollIntoView({ block: 'nearest' });
-      if (!canResearch && p.estimate.newTaskCount > 0) {
-        $('[data-confirm]').disabled = true;
-        feedback(
-          '本次更新需要新增影响分析，本机模型研究已停用。可在“输入观点 / 材料”中单独保存原文。',
-        );
-        return;
-      }
       preview = p;
       requestInput = body;
       $('[data-confirm]').disabled = false;
-      if (!p.estimate.newTaskCount) $('[data-submit]').textContent = '确认复用已有任务';
-      feedback(
-        p.estimate.newTaskCount
-          ? '确认后将按预览范围保存材料并开始分析。'
-          : '此次更新可复用已有任务，确认后可查看原任务记录。',
-      );
+      if (!p.estimate.newTaskCount) {
+        $('[data-submit]').textContent = '确认复用已有任务';
+        feedback('此次更新可复用已有任务，确认后可查看原任务记录。');
+      } else if (canResearch === false) {
+        feedback('确认后将保存材料与所选目标。本机模型研究已停用，无法生成本次影响建议。');
+      } else if (canResearch) {
+        feedback('确认后将按预览范围保存材料并开始分析。');
+      } else {
+        feedback('确认后将保存材料与所选目标。本机模型能力尚未确认，可在更新记录中查看分析状态。');
+      }
     });
   };
   $('[data-submit]').onclick = () =>
@@ -274,7 +272,7 @@ export function attachManualUpdates({
       const id = projectId;
       try {
         const record = await journal.start(id, {
-          label: '保存材料并分析更新',
+          label: '保存手动更新',
           meta: { kind: 'update' },
           steps: [
             {

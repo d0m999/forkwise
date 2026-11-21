@@ -30,7 +30,7 @@ it('用 OpenAI 协议替身从 Mapping 请求整理，只发送所选正文并�
       id: 'resp_fixture', model, status: 'completed', created_at: 1, error: null, incomplete_details: null,
       output: [{ type: 'message', id: 'msg_fixture', role: 'assistant', phase: 'final_answer', status: 'completed',
         content: [{ type: 'output_text', text: JSON.stringify({ candidate, gaps: [] }), annotations: [] }] }],
-      usage: { input_tokens: 74, output_tokens: 19, total_tokens: 93 },
+      usage: { input_tokens: 74, input_tokens_details: { cached_tokens: 32 }, output_tokens: 19, total_tokens: 93 },
     }, { headers: { 'x-request-id': `req_openai_fixture_${vendorProjects.length}` } });
   });
   const directory = mkdtempSync(join(tmpdir(), 'forkwise-openai-workspace-'));
@@ -79,7 +79,7 @@ it('用 OpenAI 协议替身从 Mapping 请求整理，只发送所选正文并�
       mode: 'real', model: modelName, state: 'succeeded', output: { candidate, gaps: [] },
       input: { title: null, omittedBlockCount: 1, blocks: [{ id: selectedId, text: selectedText }] },
       attempts: [{ usage: { cost: null, attempts: [{
-        phase: 'generate', inputTokens: 74, outputTokens: 19, responseReceived: true,
+        phase: 'generate', inputTokens: 74, cachedInputTokens: 32, outputTokens: 19, responseReceived: true,
         providerRequestId: 'req_openai_fixture_1',
       }] } }],
     }));
@@ -135,11 +135,53 @@ it('用 OpenAI 协议替身从 Mapping 请求整理，只发送所选正文并�
     expect(inspectPackage(Buffer.from(await archive.arrayBuffer()))).toMatchObject({
       ok: true, manifest: { extensions: { forkwiseOrganize: [{ projectId, tasks: expect.arrayContaining([
         expect.objectContaining({ id, model: modelName, applied: true,
-          usage: expect.objectContaining({ attempts: [expect.objectContaining({ providerRequestId: 'req_openai_fixture_1' })] }) }),
+          usage: expect.objectContaining({ attempts: [expect.objectContaining({ providerRequestId: 'req_openai_fixture_1', cachedInputTokens: 32 })] }) }),
         expect.objectContaining({ id: secondTask.id, model: modelName, applied: false }),
       ]) }] } },
     });
     expect(external).toHaveBeenCalledTimes(2);
+  } finally {
+    mapping.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+it('响应体未读完就关闭 Mapping，重开仍能看到收到的请求编号', async () => {
+  let readingBody!: () => void;
+  const bodyStarted = new Promise<void>(resolve => { readingBody = resolve; });
+  const external = vi.fn<typeof fetch>(async (_url, init) => new Response(new ReadableStream<Uint8Array>({
+    start(controller) {
+      init!.signal!.addEventListener('abort', () => controller.error(init!.signal!.reason), { once: true });
+    },
+    pull() { readingBody(); },
+  }, { highWaterMark: 0 }), { headers: { 'x-request-id': 'req_blocked_body' } }));
+  const directory = mkdtempSync(join(tmpdir(), 'forkwise-openai-interrupted-'));
+  let mapping = openMapping(directory, { organizeModel: openAIOrganizeModel({
+    apiKey: 'test-key', projectId: 'proj_fixture', model: 'gpt-4.1-mini-2025-04-14',
+  }, external) });
+  const token = mapping.access.issue('human', ['*']);
+  const human = mapping.access.authenticate(token);
+  try {
+    mapping.execute({ projectId: 'p', commandId: 'project', expected: null, type: 'project.create',
+      payload: { name: '样例' } }, human);
+    mapping.execute({ projectId: 'p', commandId: 'card', expected: null, type: 'thought.create',
+      payload: { id: 'c', title: '标题', text: '', x: 0, y: 0 } }, human);
+    const [card] = mapping.read({ type: 'project', projectId: 'p' }, human).cards;
+    const { task } = await mapping.organize.start('p', {
+      requestId: 'start', mode: 'real', cardId: 'c', thoughtVersionId: card!.versionId,
+      bodyVersionId: card!.body.versionId, includeTitle: true, blockIds: [],
+    }, human);
+    await bodyStarted;
+    mapping.close();
+    mapping = openMapping(directory);
+    const receipt = { attempts: [{
+      phase: 'generate', responseReceived: true, providerRequestId: 'req_blocked_body',
+      inputTokens: null, outputTokens: null,
+    }] };
+    expect(mapping.organize.get('p', task.id, mapping.access.authenticate(token))).toMatchObject({
+      state: 'interrupted', usage: receipt, attempts: [{ state: 'interrupted', usage: receipt }],
+    });
+    expect(external).toHaveBeenCalledOnce();
   } finally {
     mapping.close();
     rmSync(directory, { recursive: true, force: true });

@@ -1,3 +1,5 @@
+import { element, labelOf } from './condition-forms.js';
+
 export function attachTranscription({ api, run, message, getState, jobs }) {
   const $ = (s) => document.querySelector(s),
     dialog = $('#transcription-dialog');
@@ -5,6 +7,44 @@ export function attachTranscription({ api, run, message, getState, jobs }) {
     image = null,
     blobUrl = null,
     blocks = [];
+  function showImpact(parent, artifact) {
+    const impact = artifact.impactAnalysis;
+    if (!impact) {
+      if (artifact.verified)
+        element(parent, 'p', '此校正版本未保存复核清单，当时受影响的对象未知。');
+      return;
+    }
+    const { targetIds, conditionIds, jobIds, gap } = impact;
+    if (targetIds.length || conditionIds.length) {
+      element(parent, 'p', '校正时需要复核的对象（名称取自当前项目）');
+      const list = element(parent, 'ul');
+      const byId = new Map(getState().objects.map((object) => [object.id, object]));
+      const kinds = { statement: '主张', inference: '推导关系', condition: '条件' };
+      for (const [ids, missingKind] of [
+        [targetIds, '研究对象'],
+        [conditionIds, '条件'],
+      ]) {
+        for (const id of ids) {
+          const object = byId.get(id);
+          const name = object && labelOf(object);
+          const label = name && name !== id ? `${name}（${id}）` : id;
+          element(
+            list,
+            'li',
+            object
+              ? `${kinds[object.kind]} · ${label}`
+              : `${missingKind} · ${id}（当前项目中已找不到此对象）`,
+          );
+        }
+      }
+    } else if (!gap) {
+      element(parent, 'p', '校正时没有引用这页的研究对象。');
+    }
+    if (conditionIds.length) element(parent, 'p', '相关条件确认仍引用旧依据，须重新核对。');
+    if (gap) element(parent, 'p', gap);
+    if (jobIds.length)
+      element(parent, 'p', `已记录 ${jobIds.length} 项影响分析，可在任务与历史中查看。`);
+  }
   const redraw = () => {
     if (!image) return;
     const canvas = $('#transcription-image');
@@ -107,9 +147,8 @@ export function attachTranscription({ api, run, message, getState, jobs }) {
         },
         crypto.randomUUID(),
       );
-      message(
-        `人工校正已另存新版本，旧转写与证据保留。${result.impactAnalysis.jobIds.length ? `已排队 ${result.impactAnalysis.jobIds.length} 项影响分析，可在任务与历史中查看进度。` : (result.impactAnalysis.gap ?? '当前没有引用这页的研究对象。')}${result.impactAnalysis.conditionIds.length ? '相关条件确认仍引用旧依据，须重新核对。' : ''}`,
-      );
+      message('人工校正已另存新版本，旧转写与证据保留。');
+      showImpact($('#notice'), result.artifact);
       dialog.close();
       await jobs();
     });
@@ -154,6 +193,9 @@ export function attachTranscription({ api, run, message, getState, jobs }) {
     redraw();
     $('#transcription-status').textContent =
       `第 ${page} 页 · ${artifact.verified ? '人工已核对版本' : '文字与定位仍需对照核对'}。区域坐标以左上角为原点，0–1 表示原图宽高比例。`;
+    const impactBox = $('#transcription-impact');
+    impactBox.replaceChildren();
+    showImpact(impactBox, artifact);
     dialog.showModal();
   };
 }

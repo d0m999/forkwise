@@ -306,7 +306,10 @@ export function OrganizeDialog({ projectId, source, cards, pendingCancellation, 
                 const phase = call.phase ?? (index === 0 ? 'generate' : 'repair');
                 return <li key={index}>{phase === 'repair' ? '格式修复' : '生成候选'} · {call.model}，
                   {call.responseReceived === false ? '已发起，用量未返回'
-                    : `输入 ${call.inputTokens ?? '未知'}、输出 ${call.outputTokens ?? '未知'} token`}</li>;
+                    : `输入 ${call.inputTokens ?? '未知'}、输出 ${call.outputTokens ?? '未知'} token`}
+                  {call.responseReceived !== false && call.model.startsWith('openai/') &&
+                    (call.cachedInputTokens == null ? '，缓存命中未知' : `，缓存命中 ${call.cachedInputTokens} token`)}
+                  {call.providerRequestId && `，请求号 ${call.providerRequestId}`}</li>;
               })}</ul>
                 : attempt.state === 'running' ? '，正在检查模型' : '，未记录模型调用'}
             </li>)}</ul>

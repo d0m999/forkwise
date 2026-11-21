@@ -33,11 +33,12 @@ export function createApplication(options: {
 }) {
   const db = openDatabase(options.database);
   const repo = new ResearchRepository(db);
-  const jobs = new JobRepository(db, undefined, {
+  const models = {
     research: Boolean(options.researchModel),
     evaluation: Boolean(options.agent),
     vision: Boolean(options.visionModel),
-  });
+  };
+  const jobs = new JobRepository(db, undefined, models);
   const evaluation = new EvaluationService(repo, jobs, () => options.metrics ?? [], options.agent);
   const search = new SearchRepository(repo);
   const write = new GraphWriteService(
@@ -90,7 +91,7 @@ export function createApplication(options: {
     options.database === ':memory:'
       ? undefined
       : new MaintenanceService(write, dirname(options.database));
-  const app = createApi(controller, options.origin, maintenance);
+  const app = createApi(controller, options.origin, models, maintenance);
   return {
     app,
     db,

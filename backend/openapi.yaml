@@ -8617,6 +8617,88 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+  /api/v1/model-capabilities:
+    get:
+      summary: 读取旧研究工作台的模型可用性
+      responses:
+        "200":
+          description: 操作成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  code:
+                    type: string
+                    enum:
+                      - OK
+                  data:
+                    type: object
+                    properties:
+                      research:
+                        type: boolean
+                      evaluation:
+                        type: boolean
+                      vision:
+                        type: boolean
+                    required:
+                      - research
+                      - evaluation
+                      - vision
+                  message:
+                    type: string
+                required:
+                  - code
+                  - data
+                  - message
+        "400":
+          description: 业务或权限错误
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: 业务或权限错误
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: 业务或权限错误
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: 业务或权限错误
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: 业务或权限错误
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: 业务或权限错误
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: 业务或权限错误
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "503":
+          description: 业务或权限错误
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
   /api/v1/projects/{projectId}/state:
     get:
       parameters:

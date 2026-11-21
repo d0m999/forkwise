@@ -1,5 +1,5 @@
 import { expect, it, vi } from 'vitest';
-import type { OrganizeInput, OrganizeUsage } from '../src/mapping/organize-contracts.js';
+import { OrganizeUsage, type OrganizeInput } from '../src/mapping/organize-contracts.js';
 import { openAIOrganizeModel } from '../src/mapping/organize-openai.js';
 
 const config = { apiKey: 'test-api-key', projectId: 'proj_test', model: 'gpt-5-mini-2025-08-07' };
@@ -48,7 +48,7 @@ it('通过真实 SDK 按项目发出一次严格结构化请求，只发送所�
       { type: 'reasoning', id: 'rs_test', summary: [] },
       assistantMessage({ type: 'output_text', text: JSON.stringify(output), annotations: [] }, { phase: 'final_answer' }),
     ],
-    usage: { input_tokens: 0, output_tokens: 0 },
+    usage: { input_tokens: 0, input_tokens_details: { cached_tokens: 0 }, output_tokens: 0 },
   }));
   const model = openAIOrganizeModel(config, request);
   const onUsage = vi.fn();
@@ -62,7 +62,7 @@ it('通过真实 SDK 按项目发出一次严格结构化请求，只发送所�
     result: output,
     usage: { cost: null, modelDigest: digest, attempts: [{
       model: 'openai/' + config.model, phase: 'generate',
-      inputTokens: 0, outputTokens: 0, responseReceived: true,
+      inputTokens: 0, cachedInputTokens: 0, outputTokens: 0, responseReceived: true,
     }] },
   });
   expect(model.model).toBe('openai/' + config.model);
@@ -97,9 +97,16 @@ it('通过真实 SDK 按项目发出一次严格结构化请求，只发送所�
     expect(options!.body).not.toContain(privateValue);
   }
   expect(onUsage.mock.calls.map(([usage]) => usage.attempts.at(-1))).toEqual([
-    { model: model.model, phase: 'generate', inputTokens: null, outputTokens: null, responseReceived: false },
-    { model: model.model, phase: 'generate', inputTokens: 0, outputTokens: 0, responseReceived: true },
+    { model: model.model, phase: 'generate', inputTokens: null, cachedInputTokens: null, outputTokens: null, responseReceived: false },
+    { model: model.model, phase: 'generate', inputTokens: null, cachedInputTokens: null, outputTokens: null, responseReceived: true },
+    { model: model.model, phase: 'generate', inputTokens: 0, cachedInputTokens: 0, outputTokens: 0, responseReceived: true },
   ]);
+});
+
+it('兼容缺少缓存输入量的旧回执并保留新回执中的实测值', () => {
+  const legacy = { model: 'history-model', inputTokens: 23, outputTokens: 3 };
+  const usage = { cost: null, attempts: [legacy, { ...legacy, cachedInputTokens: 10 }] };
+  expect(OrganizeUsage.parse(usage)).toEqual(usage);
 });
 
 it('忽略中间解说并按顺序拼接最终答复，生成一次即得到候选', async () => {
@@ -115,7 +122,7 @@ it('忽略中间解说并按顺序拼接最终答复，生成一次即得到候�
   }));
   await expect(run(openAIOrganizeModel(config, request))).resolves.toMatchObject({
     result: output,
-    usage: { attempts: [{ phase: 'generate', inputTokens: 22, outputTokens: 7 }] },
+    usage: { attempts: [{ phase: 'generate', inputTokens: 22, cachedInputTokens: null, outputTokens: 7 }] },
   });
   expect(request).toHaveBeenCalledOnce();
 });
@@ -144,6 +151,7 @@ it('空候选必须说明缺口，格式修复保留两次用量并重用同一�
     (attempt: OrganizeUsage['attempts'][number]) => [attempt.phase, attempt.responseReceived],
   ))).toEqual([
     [['generate', false]],
+    [['generate', true]],
     [['generate', true]],
     [['generate', true], ['repair', false]],
     [['generate', true], ['repair', true]],
@@ -198,7 +206,7 @@ it('协议无效时仍保留供应商已返回的实际用量，缺失值留空'
   }));
 });
 
-it('生成与修复各记录实际响应头的请求编号，429 保留已完成的生成用量', async () => {
+it('格式修复遇到 429 后重试同一阶段，逐次保留各自的请求编号和用量', async () => {
   const generated = response(remoteSecret);
   generated.headers.set('x-request-id', 'req_generate_test');
   const request = vi.fn<typeof fetch>()
@@ -206,12 +214,14 @@ it('生成与修复各记录实际响应头的请求编号，429 保留已完成
     .mockResolvedValueOnce(Response.json({
       error: { type: 'rate_limit', code: 'rate_limit', message: remoteSecret },
     }, { status: 429, headers: { 'x-request-id': 'req_repair_test' } }));
+  const repaired = response();
+  repaired.headers.set('x-request-id', 'req_repair_retry');
+  request.mockResolvedValueOnce(repaired);
   const onUsage = vi.fn();
 
-  await expect(run(openAIOrganizeModel(config, request), onUsage)).rejects.toMatchObject({
-    code: 'PROVIDER_UNAVAILABLE', details: null,
-  });
-  expect(request).toHaveBeenCalledTimes(2);
+  await expect(run(openAIOrganizeModel(config, request), onUsage)).resolves.toMatchObject({ result: output });
+  expect(request).toHaveBeenCalledTimes(3);
+  expect(request.mock.calls[1]![1]!.body).toBe(request.mock.calls[2]![1]!.body);
   expect(onUsage).toHaveBeenLastCalledWith(expect.objectContaining({
     attempts: [
       expect.objectContaining({
@@ -222,11 +232,30 @@ it('生成与修复各记录实际响应头的请求编号，429 保留已完成
         phase: 'repair', inputTokens: null, outputTokens: null,
         responseReceived: true, providerRequestId: 'req_repair_test',
       }),
+      expect.objectContaining({
+        phase: 'repair', inputTokens: 22, outputTokens: 7,
+        responseReceived: true, providerRequestId: 'req_repair_retry',
+      }),
     ],
   }));
 });
 
-it.each([401, 429, 503])('HTTP %s 只发送一次请求，错误正文和凭据不进入整理结果', async status => {
+it.each(['code', 'type'])('HTTP 429 在 error.%s 标记配额耗尽时保留编号且直接结束', async field => {
+  const request = vi.fn<typeof fetch>().mockResolvedValueOnce(Response.json({
+    error: { [field]: 'insufficient_quota', message: remoteSecret },
+  }, { status: 429, headers: { 'x-request-id': 'req_quota' } })).mockResolvedValueOnce(response());
+  const onUsage = vi.fn();
+  await expect(run(openAIOrganizeModel(config, request), onUsage)).rejects.toMatchObject({
+    code: 'PROVIDER_UNAVAILABLE', message: 'OpenAI 整理请求失败，未生成候选', details: null,
+  });
+  expect(request).toHaveBeenCalledOnce();
+  expect(onUsage.mock.lastCall?.[0]).toMatchObject({ attempts: [{
+    responseReceived: true, providerRequestId: 'req_quota', inputTokens: null, outputTokens: null,
+  }] });
+  expect(JSON.stringify(onUsage.mock.calls)).not.toContain(remoteSecret);
+});
+
+it.each([401, 403, 503])('HTTP %s 只发送一次请求，错误正文和凭据不进入整理结果', async status => {
   const request = vi.fn<typeof fetch>().mockResolvedValueOnce(Response.json({
     error: { type: 'provider_error', code: 'invalid', message: remoteSecret + config.apiKey },
   }, { status, headers: { 'x-request-id': 'req_invalid/value' } }));
@@ -243,8 +272,12 @@ it.each([401, 429, 503])('HTTP %s 只发送一次请求，错误正文和凭据�
   expect(onUsage.mock.lastCall?.[0].attempts[0]).not.toHaveProperty('providerRequestId');
 });
 
-it('传输失败时保留未知用量且不重试', async () => {
-  const request = vi.fn<typeof fetch>().mockRejectedValueOnce(new TypeError(remoteSecret + config.apiKey));
+it.each([
+  new TypeError(remoteSecret + config.apiKey),
+  new TypeError('fetch failed', { cause: new Error('unexpected redirect') }),
+  new TypeError('fetch failed', { cause: Object.assign(new Error(), { code: 'CERT_HAS_EXPIRED' }) }),
+])('永久错误和未知异常均保留未知用量并直接结束', async error => {
+  const request = vi.fn<typeof fetch>().mockRejectedValueOnce(error);
   const onUsage = vi.fn();
   await expect(run(openAIOrganizeModel(config, request), onUsage)).rejects.toMatchObject({
     code: 'PROVIDER_UNAVAILABLE', message: 'OpenAI 整理请求失败，未生成候选', details: null,
@@ -253,6 +286,72 @@ it('传输失败时保留未知用量且不重试', async () => {
   expect(onUsage).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
     attempts: [expect.objectContaining({ inputTokens: null, outputTokens: null, responseReceived: false })],
   }));
+});
+
+it.each([
+  new TypeError('fetch failed'),
+  ...['ECONNRESET', 'UND_ERR_CONNECT_TIMEOUT', 'ETIMEDOUT', 'UND_ERR_HEADERS_TIMEOUT'].map(code =>
+    new TypeError('fetch failed', { cause: Object.assign(new Error(code), { code }) })),
+])('阶段期限内连接中断或传输超时则退避再发送，保留首次未知用量', async error => {
+  const request = vi.fn<typeof fetch>().mockRejectedValueOnce(error).mockResolvedValueOnce(response());
+  await expect(run(openAIOrganizeModel(config, request))).resolves.toMatchObject({
+    result: output, usage: { attempts: [
+      { phase: 'generate', responseReceived: false, inputTokens: null, outputTokens: null },
+      { phase: 'generate', responseReceived: true, inputTokens: 22, outputTokens: 7 },
+    ] },
+  });
+  expect(request).toHaveBeenCalledTimes(2);
+  expect(request.mock.calls[1]![1]!.signal).toBe(request.mock.calls[0]![1]!.signal);
+});
+
+it.each(['UND_ERR_SOCKET', 'UND_ERR_BODY_TIMEOUT'])('读响应体时遇到 %s，重发保留首个请求编号和未知用量', async code => {
+  const error = Object.assign(new Error(code), { code });
+  const interrupted = new Response(new ReadableStream({ start(controller) { controller.error(error); } }),
+    { headers: { 'x-request-id': 'req_interrupted' } });
+  const request = vi.fn<typeof fetch>().mockResolvedValueOnce(interrupted).mockResolvedValueOnce(response());
+  await expect(run(openAIOrganizeModel(config, request))).resolves.toMatchObject({
+    result: output, usage: { attempts: [
+      { responseReceived: true, providerRequestId: 'req_interrupted', inputTokens: null, outputTokens: null },
+      { responseReceived: true, inputTokens: 22, outputTokens: 7 },
+    ] },
+  });
+  expect(request).toHaveBeenCalledTimes(2);
+});
+
+it('持续限流按 Retry-After 退避，只补发一次并留下两次记录', async () => {
+  const starts: number[] = [];
+  const request = vi.fn<typeof fetch>(async () => {
+    starts.push(performance.now());
+    return new Response(null, { status: 429, headers: { 'retry-after': '1', 'x-request-id': 'req_' + starts.length } });
+  });
+  const onUsage = vi.fn();
+  await expect(run(openAIOrganizeModel(config, request), onUsage)).rejects.toMatchObject({ code: 'PROVIDER_UNAVAILABLE' });
+  expect(starts).toHaveLength(2);
+  expect(starts[1]! - starts[0]!).toBeGreaterThanOrEqual(980);
+  expect(onUsage.mock.lastCall?.[0]).toMatchObject({ attempts: [
+    { phase: 'generate', providerRequestId: 'req_1' }, { phase: 'generate', providerRequestId: 'req_2' },
+  ] });
+});
+
+it('Retry-After 的 HTTP 日期超过本阶段预算就结束', async () => {
+  const request = vi.fn<typeof fetch>(async () => new Response(null, {
+    status: 429, headers: { 'retry-after': new Date(Date.now() + 120_000).toUTCString() },
+  }));
+  await expect(run(openAIOrganizeModel(config, request))).rejects.toMatchObject({ code: 'PROVIDER_UNAVAILABLE' });
+  expect(request).toHaveBeenCalledOnce();
+});
+
+it('等待限流退避时取消立即结束并保留已收到的响应头', async () => {
+  const controller = new AbortController();
+  const request = vi.fn<typeof fetch>(async () => {
+    setImmediate(() => controller.abort());
+    return new Response(null, { status: 429, headers: { 'retry-after': '20', 'x-request-id': 'req_cancelled' } });
+  });
+  const onUsage = vi.fn();
+  await expect(run(openAIOrganizeModel(config, request), onUsage, controller.signal))
+    .rejects.toMatchObject({ code: 'ORGANIZE_CANCELLED' });
+  expect(request).toHaveBeenCalledOnce();
+  expect(onUsage.mock.lastCall?.[0]).toMatchObject({ attempts: [{ responseReceived: true, providerRequestId: 'req_cancelled' }] });
 });
 
 it('拦截别名、无效日期、空凭据、无效项目和任务快照变更，全部不发请求', async () => {
@@ -333,7 +432,7 @@ it('取消已收到无效候选的任务时保留实际用量且跳过付费修�
   }));
 });
 
-it('每次调用绑定 60 秒超时，超时保留未知用量且不发第二次请求', async () => {
+it('整理阶段绑定 60 秒超时，超时保留未知用量且不发第二次请求', async () => {
   const controller = new AbortController();
   const clock = vi.spyOn(AbortSignal, 'timeout').mockReturnValue(controller.signal);
   const request = vi.fn<typeof fetch>(async (_url, init) => {

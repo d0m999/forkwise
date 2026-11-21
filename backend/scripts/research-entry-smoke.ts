@@ -71,8 +71,29 @@ try {
   page.on('request', (r: any) => {
     if (/^https:\/\//.test(r.url())) external.push(r.url());
   });
+  await page.goto(origin);
+  await page.locator('#notice').filter({ hasText: '本机启动入口' }).waitFor();
+  assert.doesNotMatch(await page.locator('#research-unavailable').textContent(), /已停用/);
+  await page.route('**/api/v1/model-capabilities', (route: any) => route.abort('failed'), {
+    times: 1,
+  });
   await page.goto(origin + '/#token=' + token);
+  await page.locator('#connection').filter({ hasText: '模型状态读取失败' }).waitFor();
+  await page.locator('#open-manual-updates').click();
+  await page.locator('#manual-update-dialog [data-close]').click();
+  await page.locator('#new-project [name=name]').fill('模型状态未知时手工保存');
+  await page.locator('#new-project button').click();
+  await page.locator('#notice').filter({ hasText: '新项目已保存' }).waitFor();
+  const manualProject = await page.locator('#project').inputValue();
+  await page.locator('#open-research-entry').click();
+  await page.locator('#entry-form [name=text]').fill('只保存这段文字。');
+  await page.getByRole('button', { name: '保存文字材料', exact: true }).click();
+  await page.locator('#entry-feedback').filter({ hasText: '文字材料已保存' }).waitFor();
+  assert.equal((await api(manualProject, '/jobs')).length, 0);
+  await page.reload();
   await page.locator('#connection').filter({ hasText: '已连接' }).waitFor();
+  await page.locator('#project').selectOption(f.p.id);
+  await page.locator('#research-task-title').filter({ hasText: '对选定材料进行研究' }).waitFor();
   await page.locator('#canvas-research-entry button').click();
   const dialog = page.getByRole('dialog', { name: '输入观点与材料' });
   const text = 'CIK 1 本季营收增长，明年利润可能翻倍。';

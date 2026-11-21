@@ -55,9 +55,15 @@ const json = (schema: z.ZodType) => ({
   required: true,
   content: { 'application/json': { schema } },
 });
+const modelCapabilities = z.object({
+  research: z.boolean(),
+  evaluation: z.boolean(),
+  vision: z.boolean(),
+});
 export function createApi(
   controller: ResearchController,
   origin: string,
+  models: z.infer<typeof modelCapabilities>,
   maintenance?: MaintenanceService,
 ) {
   const app = new OpenAPIHono<Env>({
@@ -99,9 +105,7 @@ export function createApi(
         c.json({ code: 'BODY_TOO_LARGE', data: null, message: '请求过大，请分批导入' }, 413),
     }),
   );
-  app.get('/health', (c) =>
-    c.json(ok({ status: 'ok', models: controller.evaluation.jobs.models })),
-  );
+  app.get('/health', (c) => c.json(ok({ status: 'ok' })));
   const p = '/api/v1';
   app.openapi(
     createRoute({
@@ -110,6 +114,15 @@ export function createApi(
       responses: output(z.array(ProjectSchema)),
     }),
     (c) => c.json(ok(controller.projects(c.get('principal')))),
+  );
+  app.openapi(
+    createRoute({
+      method: 'get',
+      path: `${p}/model-capabilities`,
+      summary: '读取旧研究工作台的模型可用性',
+      responses: output(modelCapabilities),
+    }),
+    (c) => c.json(ok(models)),
   );
   app.openapi(
     createRoute({

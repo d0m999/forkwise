@@ -101,7 +101,9 @@ export function attachResearchEntry({
       feedback(
         canResearch
           ? '输入先保存在本机草稿中。开始研究后处理选定材料。'
-          : '可保存文字材料或导入文件。本机模型研究已停用。',
+          : canResearch === false
+            ? '可保存文字材料或导入文件。本机模型研究已停用。'
+            : '可保存文字材料或导入文件。尚未读取本机模型状态，刷新页面可重试。',
       );
     }
     let record;
@@ -235,7 +237,7 @@ export function attachResearchEntry({
     run(() =>
       execute(async (id) => {
         save();
-        return journal.start(id, textResearchPlan(read(), selected(), canResearch));
+        return journal.start(id, textResearchPlan(read(), selected(), canResearch === true));
       }),
     );
   };
