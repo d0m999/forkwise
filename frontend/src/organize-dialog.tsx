@@ -18,7 +18,7 @@ export function OrganizeDialog({ projectId, source, cards, pendingCancellation, 
   source?: Card;
   cards: Card[];
   pendingCancellation: OrganizeRequest | undefined;
-  onPendingCancellationChange: (request: OrganizeRequest | null) => void;
+  onPendingCancellationChange: (request: OrganizeRequest, status: 'pending' | 'settled') => void;
   close: () => void;
   onAdded: () => Promise<void>;
 }) {
@@ -138,24 +138,24 @@ export function OrganizeDialog({ projectId, source, cards, pendingCancellation, 
     const flight = startingRequest.current;
     if (!flight || cancellingStart) return;
     flight.cancelRequested = true;
-    onPendingCancellationChange(flight.input);
+    onPendingCancellationChange(flight.input, 'pending');
     setCancellingStart(true);
     setBusy(true);
     setError('');
+    let settled = false;
     try {
       acceptStart(await api.organizeCancelStart(projectId, flight.input));
-      onPendingCancellationChange(null);
-      startingRequest.current = null;
-      setStarting(false);
+      settled = true;
     } catch (cause) {
-      if (cause instanceof MappingError && ['ORGANIZE_SOURCE_STALE', 'ORGANIZE_INVALID_SCOPE',
-        'IDEMPOTENCY_MISMATCH', 'ORGANIZE_MODEL_UNCONFIGURED'].includes(cause.code)) {
-        onPendingCancellationChange(null);
+      settled = cause instanceof MappingError && ['ORGANIZE_SOURCE_STALE', 'ORGANIZE_INVALID_SCOPE',
+        'IDEMPOTENCY_MISMATCH', 'ORGANIZE_MODEL_UNCONFIGURED'].includes(cause.code);
+      setError(cause instanceof MappingError ? cause.message : '未确认取消结果，请重试取消');
+    } finally {
+      if (settled) {
+        onPendingCancellationChange(flight.input, 'settled');
         startingRequest.current = null;
         setStarting(false);
       }
-      setError(cause instanceof MappingError ? cause.message : '未确认取消结果，请重试取消');
-    } finally {
       setCancellingStart(false);
       setBusy(false);
     }

@@ -335,7 +335,7 @@ function Workspace() {
   >({});
   const [projects, setProjects] = useState<Project[]>([]);
   const [organizing, setOrganizing] = useState<{ projectId: string; source?: Card } | null>(null);
-  const pendingOrganizeCancellations = useRef(new Map<string, OrganizeRequest>());
+  const pendingOrganizeCancellations = useRef(new Map<string, { projectId: string; request: OrganizeRequest }>());
   const authority = useRef<ProjectState | null>(null);
   const [selectedConnectors, setSelectedConnectors] = useState<string[]>([]);
   const selectedFrameIds = frameSelection?.projectId === state?.project.id && frameSelection?.generation === canvasSelection.generation()
@@ -2943,9 +2943,7 @@ function Workspace() {
           if (!(await flush())) return;
           const saved = authority.current?.cards.find(item => item.id === source.id);
           if (saved && authority.current?.project.id === current.project.id) {
-            const projectId = current.project.id;
-            const pending = pendingOrganizeCancellations.current.get(projectId);
-            setOrganizing(!pending || pending.cardId === saved.id ? { projectId, source: saved } : { projectId });
+            setOrganizing({ projectId: current.project.id, source: saved });
           }
         })();
       },
@@ -3055,6 +3053,10 @@ function Workspace() {
       {recoveryError && <p style={{ margin: 0 }}>{recoveryError}</p>}
     </div>
   );
+  const pendingOrganizeCancellation = organizing
+    ? Array.from(pendingOrganizeCancellations.current.values()).find(({ projectId, request }) =>
+      projectId === organizing.projectId && (!organizing.source || request.cardId === organizing.source.id))?.request
+    : undefined;
   return (
     <div
       className="workspace"
@@ -3077,10 +3079,10 @@ function Workspace() {
       {organizing && organizing.projectId === state?.project.id &&
         <OrganizeDialog projectId={organizing.projectId} {...(organizing.source ? { source: organizing.source } : {})}
           cards={state.cards}
-          pendingCancellation={pendingOrganizeCancellations.current.get(organizing.projectId)}
-          onPendingCancellationChange={request => {
-            if (request) pendingOrganizeCancellations.current.set(organizing.projectId, request);
-            else pendingOrganizeCancellations.current.delete(organizing.projectId);
+          pendingCancellation={pendingOrganizeCancellation}
+          onPendingCancellationChange={(request, status) => {
+            if (status === 'pending') pendingOrganizeCancellations.current.set(request.requestId, { projectId: organizing.projectId, request });
+            else pendingOrganizeCancellations.current.delete(request.requestId);
           }}
           close={() => setOrganizing(null)}
           onAdded={async () => { await refresh(organizing.projectId); }} />}

@@ -1,5 +1,4 @@
 import { expect, place, test } from './writing-board-fixture';
-import { captureCutCommand } from '../../backend/src/mapping/cut-command';
 
 test('AI 整理从卡片菜单选择范围，审阅后添加并在重开保留归属', async ({ page, workspace }, info) => {
   await place(page, '供应链观察');
@@ -236,7 +235,8 @@ for (const sourceChanged of [false, true]) test(sourceChanged
   }
 });
 
-test('剪切退出撤销历史后可以另建候选卡', async ({ page, workspace }) => {
+test('覆盖剪贴板且剪切退出撤销历史后可以另建候选卡', async ({ page, workspace }) => {
+  await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
   await place(page, '候选来源');
   await page.getByRole('button', { name: 'AI', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: 'AI 整理' });
@@ -245,12 +245,15 @@ test('剪切退出撤销历史后可以另建候选卡', async ({ page, workspac
   await dialog.getByRole('button', { name: '添加为新卡' }).click();
   await expect(dialog.getByText('已添加为新卡', { exact: false })).toBeVisible();
   await dialog.getByRole('button', { name: '关闭 AI 整理' }).click();
-  const state = await workspace.state();
-  const { project, cards: [, candidate] } = state;
-  await workspace.execute(page, captureCutCommand(state, {
-    projectId: project.id, commandId: crypto.randomUUID(), cutId: crypto.randomUUID(),
-    itemIds: [candidate!.item.id], groupIds: [], frameIds: [],
-  }));
+  const { project, cards: [, candidate] } = await workspace.state();
+  await page.getByRole('button', { name: '模拟整理：候选来源', exact: true }).click();
+  await page.keyboard.press('ControlOrMeta+x');
+  await expect.poll(async () => (await workspace.state()).cards.map(card => card.id)).not.toContain(candidate!.id);
+  await expect.poll(() => page.evaluate(async () => (await navigator.clipboard.read()).flatMap(item => item.types)))
+    .toContain('web application/x-forkwise-canvas');
+  await page.evaluate(() => navigator.clipboard.writeText('其他内容'));
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe('其他内容');
+  expect(await page.evaluate(async () => (await navigator.clipboard.read()).flatMap(item => item.types))).toEqual(['text/plain']);
   for (let index = 0; index < 40; index++) {
     await workspace.execute(page, {
       commandId: crypto.randomUUID(), projectId: project.id, type: 'thought.create', expected: null,
@@ -286,7 +289,7 @@ for (const reopenFrom of ['卡片', '项目记录']) test(`取消未确认时从
   const task = { ...prior, id: 'cancel-receipt', mode: 'real', model: 'local-test:1', state: 'cancelled',
     output: null, outputAttempt: null, addAvailable: false, attempts: [] };
   await page.route(`**${apiPath}/tasks`, async route => {
-    if (route.request().method() !== 'POST') return route.continue();
+    if (route.request().method() !== 'POST' || route.request().postDataJSON().mode !== 'real') return route.continue();
     await startHeld;
     await route.fulfill({ json: task });
   });
@@ -307,6 +310,14 @@ for (const reopenFrom of ['卡片', '项目记录']) test(`取消未确认时从
   await dialog.getByRole('button', { name: '关闭 AI 整理' }).click();
   await expect(dialog).toHaveCount(0);
   if (reopenFrom === '项目记录') {
+    await place(page, '另一张卡', 480, 340);
+    await page.getByRole('button', { name: 'AI', exact: true }).click();
+    const selection = dialog.getByRole('group', { name: '选择本次处理的内容' });
+    await expect(selection.getByText('另一张卡', { exact: true })).toBeVisible({ timeout: 3000 });
+    await selection.getByRole('checkbox', { name: /卡片标题/ }).check();
+    await dialog.getByRole('button', { name: '试用模拟整理' }).click();
+    await expect(dialog.getByRole('heading', { name: '模拟整理：另一张卡' })).toBeVisible();
+    await dialog.getByRole('button', { name: '关闭 AI 整理' }).click();
     await page.getByRole('button', { name: '项目导航' }).click();
     await page.getByRole('button', { name: 'AI 整理记录', exact: true }).press('Enter', { timeout: 5000 });
   } else {
