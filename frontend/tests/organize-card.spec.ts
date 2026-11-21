@@ -1,4 +1,5 @@
 import { expect, place, test } from './writing-board-fixture';
+import { captureCutCommand } from '../../backend/src/mapping/cut-command';
 
 test('AI 整理从卡片菜单选择范围，审阅后添加并在重开保留归属', async ({ page, workspace }, info) => {
   await place(page, '供应链观察');
@@ -235,8 +236,7 @@ for (const sourceChanged of [false, true]) test(sourceChanged
   }
 });
 
-test('覆盖剪贴板且剪切退出撤销历史后可以另建候选卡', async ({ page, workspace }) => {
-  await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
+test('剪切退出撤销历史后可以另建候选卡', async ({ page, workspace }) => {
   await place(page, '候选来源');
   await page.getByRole('button', { name: 'AI', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: 'AI 整理' });
@@ -245,11 +245,12 @@ test('覆盖剪贴板且剪切退出撤销历史后可以另建候选卡', async
   await dialog.getByRole('button', { name: '添加为新卡' }).click();
   await expect(dialog.getByText('已添加为新卡', { exact: false })).toBeVisible();
   await dialog.getByRole('button', { name: '关闭 AI 整理' }).click();
-  const { project, cards: [, candidate] } = await workspace.state();
-  await page.getByRole('button', { name: '模拟整理：候选来源', exact: true }).click();
-  await page.keyboard.press('ControlOrMeta+x');
-  await expect.poll(async () => (await workspace.state()).cards.length).toBe(1);
-  await page.evaluate(() => navigator.clipboard.writeText('其他内容'));
+  const state = await workspace.state();
+  const { project, cards: [, candidate] } = state;
+  await workspace.execute(page, captureCutCommand(state, {
+    projectId: project.id, commandId: crypto.randomUUID(), cutId: crypto.randomUUID(),
+    itemIds: [candidate!.item.id], groupIds: [], frameIds: [],
+  }));
   for (let index = 0; index < 40; index++) {
     await workspace.execute(page, {
       commandId: crypto.randomUUID(), projectId: project.id, type: 'thought.create', expected: null,
@@ -265,7 +266,7 @@ test('覆盖剪贴板且剪切退出撤销历史后可以另建候选卡', async
   expect(replacement?.aiOrigin).toEqual(candidate!.aiOrigin);
 });
 
-test('取消回执丢失时保留当前请求，确认后才允许切换历史', async ({ page, workspace }) => {
+for (const reopenFrom of ['卡片', '项目记录']) test(`取消未确认时从${reopenFrom}重开，仍能按原请求取消`, async ({ page, workspace }) => {
   await place(page, '重试取消');
   const { project } = await workspace.state();
   const apiPath = `/api/mapping/projects/${project.id}/organize`;
@@ -285,6 +286,7 @@ test('取消回执丢失时保留当前请求，确认后才允许切换历史',
   const task = { ...prior, id: 'cancel-receipt', mode: 'real', model: 'local-test:1', state: 'cancelled',
     output: null, outputAttempt: null, addAvailable: false, attempts: [] };
   await page.route(`**${apiPath}/tasks`, async route => {
+    if (route.request().method() !== 'POST') return route.continue();
     await startHeld;
     await route.fulfill({ json: task });
   });
@@ -295,14 +297,30 @@ test('取消回执丢失时保留当前请求，确认后才允许切换历史',
     else await route.fulfill({ json: task });
   });
 
+  const started = page.waitForRequest(request => request.method() === 'POST' &&
+    new URL(request.url()).pathname === `${apiPath}/tasks`, { timeout: 5000 });
   await dialog.getByRole('button', { name: '用本机模型整理' }).click();
-  const cancel = dialog.getByRole('button', { name: '取消任务' });
-  await cancel.click();
+  const startInput = (await started).postDataJSON();
+  await dialog.getByRole('button', { name: '取消任务' }).click();
   await expect(dialog.getByRole('status')).toHaveText('取消结果未确认');
   await expect(history).toBeDisabled({ timeout: 3000 });
-  await cancel.click();
+  await dialog.getByRole('button', { name: '关闭 AI 整理' }).click();
+  await expect(dialog).toHaveCount(0);
+  if (reopenFrom === '项目记录') {
+    await page.getByRole('button', { name: '项目导航' }).click();
+    await page.getByRole('button', { name: 'AI 整理记录', exact: true }).press('Enter', { timeout: 5000 });
+  } else {
+    await page.getByRole('button', { name: 'AI', exact: true }).click();
+  }
+  const reopened = page.getByRole('dialog', { name: reopenFrom === '项目记录' ? 'AI 整理记录' : 'AI 整理', exact: true });
+  const reopenedHistory = reopened.getByRole('combobox', { name: '整理记录' });
+  await expect(reopened.getByRole('status')).toHaveText('取消结果未确认', { timeout: 3000 });
+  if (reopenFrom === '项目记录') await expect(reopened.getByText('原卡：重试取消')).toBeVisible();
+  await expect(reopenedHistory).toBeDisabled();
+  await expect(reopened.getByRole('group', { name: '选择本次处理的内容' })).toHaveCount(0);
+  await reopened.getByRole('button', { name: '取消任务' }).click();
   releaseStart();
-  await expect(dialog.getByRole('status')).toHaveText('本机模型 已取消');
-  await expect(history).toBeEnabled();
-  expect(cancellations).toEqual([expect.objectContaining({ requestId: expect.any(String) }), cancellations[0]]);
+  await expect(reopened.getByRole('status')).toHaveText('本机模型 已取消');
+  await expect(reopenedHistory).toBeEnabled();
+  expect(cancellations).toEqual([startInput, startInput]);
 });

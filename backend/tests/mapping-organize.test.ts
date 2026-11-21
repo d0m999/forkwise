@@ -11,13 +11,15 @@ import { OllamaClient } from '../src/services/ollama.js';
 import { localOrganizeModel } from '../src/mapping/organize-ollama.js';
 import { captureCutCommand } from '../src/mapping/cut-command.js';
 import type { StoredTask } from '../src/mapping/organize-store.js';
+import type { AccessService } from '../src/services/access.js';
 
 const origin = 'http://127.0.0.1:8790';
 const tasks = '/api/mapping/projects/p/organize/tasks';
 
 async function withOrganizeWorkspace(
   transport: typeof fetch,
-  run: (request: (path: string, body?: unknown) => Promise<Response>, directory: string, reopen: () => void) => Promise<void>,
+  run: (request: (path: string, body?: unknown, auth?: string) => Promise<Response>,
+    directory: string, reopen: () => void, access: AccessService) => Promise<void>,
 ) {
   const directory = mkdtempSync(join(tmpdir(), 'forkwise-organize-'));
   let mapping = openMapping(directory, {
@@ -25,9 +27,9 @@ async function withOrganizeWorkspace(
   });
   let app = createWorkspaceApp(mapping, origin, () => new Response(''));
   const token = mapping.access.issue('human', ['*']);
-  const request = async (path: string, body?: unknown) => app.request(origin + path, {
+  const request = async (path: string, body?: unknown, auth = token) => app.request(origin + path, {
     method: body === undefined ? 'GET' : 'POST',
-    headers: { Origin: origin, Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    headers: { Origin: origin, Authorization: `Bearer ${auth}`, 'Content-Type': 'application/json' },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   });
   const execute = (command: object) => request('/api/mapping/execute', { projectId: 'p', expected: null, ...command });
@@ -40,7 +42,7 @@ async function withOrganizeWorkspace(
       mapping.close();
       mapping = openMapping(directory);
       app = createWorkspaceApp(mapping, origin, () => new Response(''));
-    });
+    }, mapping.access);
   } finally {
     mapping.close();
     rmSync(directory, { recursive: true, force: true });
@@ -376,7 +378,7 @@ it('预检中的开始请求可以取消，迟到预检不会发正文', async (
       model: 'local-test:1', done: true, message: { content: JSON.stringify({ candidate: null, gaps: ['缺口'] }) },
     });
   };
-  await withOrganizeWorkspace(transport, async (request, _directory, reopen) => {
+  await withOrganizeWorkspace(transport, async (request, _directory, reopen, access) => {
     const card = (await (await request('/api/mapping/projects/p')).json()).cards[0];
     const input = {
       requestId: 'preflight', mode: 'real', cardId: card.id, thoughtVersionId: card.versionId,
@@ -385,7 +387,11 @@ it('预检中的开始请求可以取消，迟到预检不会发正文', async (
     const starting = request(tasks, input);
     await checking;
     const replay = request(tasks, input);
+    const secondToken = access.issue('human', ['p']);
+    const secondSession = access.authenticate(secondToken);
+    const replayFromSecondSession = request(tasks, input, secondToken);
     const mismatch = await request(tasks, { ...input, includeTitle: false });
+    access.revoke(secondSession.tokenHash);
     const cancelled = await request(`${tasks}/cancel-start`, input);
     finishCheck();
     const [original, duplicate] = await Promise.all([starting, replay]);
@@ -394,6 +400,9 @@ it('预检中的开始请求可以取消，迟到预检不会发正文', async (
     expect(task).toMatchObject({ state: 'cancelled', attempt: 1, usage: null, attempts: [{ state: 'cancelled', usage: null }] });
     expect(await original.json()).toMatchObject({ id: task.id, state: 'cancelled' });
     expect(await duplicate.json()).toMatchObject({ id: task.id, state: 'cancelled' });
+    const denied = await replayFromSecondSession;
+    expect(denied.status).toBe(401);
+    expect(await denied.json()).toMatchObject({ code: 'UNAUTHORIZED' });
     expect(await (await request(tasks, input)).json()).toEqual(task);
     expect(mismatch.status).toBe(409);
     expect(chats).toBe(0);
@@ -411,6 +420,42 @@ it('预检中的开始请求可以取消，迟到预检不会发正文', async (
     await vi.waitFor(async () => expect(await (await request(`${tasks}/${active.id}`)).json()).toMatchObject({ state: 'partial' }));
     reopen();
     expect(await (await request(tasks, input)).json()).toEqual(task);
+  });
+});
+
+it('预检拒绝时也会先复核等待回执的会话', async () => {
+  let beginCheck!: () => void;
+  let finishCheck!: () => void;
+  const checking = new Promise<void>(resolve => { beginCheck = resolve; });
+  const checkReleased = new Promise<void>(resolve => { finishCheck = resolve; });
+  await withOrganizeWorkspace(async () => {
+    beginCheck();
+    await checkReleased;
+    return new Response(null, { status: 503 });
+  }, async (request, _directory, _reopen, access) => {
+    const card = (await (await request('/api/mapping/projects/p')).json()).cards[0];
+    const input = {
+      requestId: 'preflight-stale', mode: 'real', cardId: card.id, thoughtVersionId: card.versionId,
+      bodyVersionId: card.body.versionId, includeTitle: true, blockIds: [],
+    };
+    const secondToken = access.issue('human', ['p']);
+    const secondSession = access.authenticate(secondToken);
+    const starting = request(tasks, input);
+    await checking;
+    const waiting = request(tasks, input, secondToken);
+    try {
+      const edit = await request('/api/mapping/execute', { commandId: 'edit-source', projectId: 'p',
+        type: 'thought.title', expected: card.versionId, payload: { id: card.id, title: '已更改' } });
+      expect(edit.status).toBe(200);
+      access.revoke(secondSession.tokenHash);
+    } finally {
+      finishCheck();
+    }
+    const [current, revoked] = await Promise.all([starting, waiting]);
+    expect(current.status).toBe(409);
+    expect(await current.json()).toMatchObject({ code: 'ORGANIZE_SOURCE_STALE' });
+    expect(revoked.status).toBe(401);
+    expect(await revoked.json()).toMatchObject({ code: 'UNAUTHORIZED' });
   });
 });
 

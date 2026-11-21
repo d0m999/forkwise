@@ -110,7 +110,15 @@ export class OrganizeTasks {
     if (legacy && outputDigest(legacy) === digest) return legacy;
   }
 
-  async start(projectId: string, raw: unknown, actor: Principal, action: 'start' | 'cancel' = 'start'): Promise<StartResult> {
+  start(projectId: string, raw: unknown, actor: Principal): Promise<StartResult> {
+    return this.handleStartRequest(projectId, raw, actor, 'start');
+  }
+
+  async cancelStart(projectId: string, raw: unknown, actor: Principal): Promise<OrganizeTask> {
+    return (await this.handleStartRequest(projectId, raw, actor, 'cancel')).task;
+  }
+
+  private async handleStartRequest(projectId: string, raw: unknown, actor: Principal, action: 'start' | 'cancel'): Promise<StartResult> {
     const input = OrganizeRequest.parse(raw);
     const { requestId, ...scope } = input;
     const selection = selectionKey(scope);
@@ -130,7 +138,15 @@ export class OrganizeTasks {
     const pending = this.starting.get(key);
     if (pending) {
       requireThat(pending.plan.selection === selection, 'IDEMPOTENCY_MISMATCH', '任务编号已用于不同上下文', 409);
-      if (!cancelling) return { task: (await pending.result).task, created: false };
+      if (!cancelling) {
+        let taskId: string;
+        try {
+          taskId = (await pending.result).task.id;
+        } finally {
+          this.authorize(projectId, actor);
+        }
+        return { task: this.view(projectId, this.store.get(projectId, taskId)), created: false };
+      }
     }
     const model = input.mode === 'real' ? this.model : undefined;
     requireThat(input.mode === 'simulate' || model, 'ORGANIZE_MODEL_UNCONFIGURED', '真实整理需要配置本机模型', 503);

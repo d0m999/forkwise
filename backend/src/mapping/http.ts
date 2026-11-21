@@ -132,7 +132,7 @@ export function createWorkspaceApp(
     return c.json(task, created ? 201 : 200);
   });
   app.post('/api/mapping/projects/:id/organize/tasks/cancel-start', async (c) => {
-    const { task } = await mapping.organize.start(c.req.param('id'), await c.req.json(), c.get('principal'), 'cancel');
+    const task = await mapping.organize.cancelStart(c.req.param('id'), await c.req.json(), c.get('principal'));
     return c.json(task);
   });
   app.get('/api/mapping/projects/:id/organize/tasks/:taskId', (c) =>

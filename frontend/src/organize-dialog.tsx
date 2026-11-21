@@ -13,10 +13,12 @@ const blockNames: Record<string, string> = {
   text: '段落', heading: '正文标题', listItem: '列表项', quote: '引用', code: '代码块', table: '表格',
 };
 
-export function OrganizeDialog({ projectId, source, cards, close, onAdded }: {
+export function OrganizeDialog({ projectId, source, cards, pendingCancellation, onPendingCancellationChange, close, onAdded }: {
   projectId: string;
   source?: Card;
   cards: Card[];
+  pendingCancellation: OrganizeRequest | undefined;
+  onPendingCancellationChange: (request: OrganizeRequest | null) => void;
   close: () => void;
   onAdded: () => Promise<void>;
 }) {
@@ -30,13 +32,14 @@ export function OrganizeDialog({ projectId, source, cards, close, onAdded }: {
   const [task, setTask] = useState<OrganizeTask | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  const [starting, setStarting] = useState(false);
+  const [starting, setStarting] = useState(Boolean(pendingCancellation));
   const [cancellingStart, setCancellingStart] = useState(false);
-  const startingRequest = useRef<{ input: OrganizeRequest; cancelRequested: boolean }>(null);
+  const startingRequest = useRef(pendingCancellation ? { input: pendingCancellation, cancelRequested: true } : null);
   const startRequest = useRef<{ key: string; id: string }>(null);
   const addRequest = useRef<{ key: string; command: Extract<Command, { type: 'organize.add' }> }>(null);
   const retryRequest = useRef<{ key: string; id: string }>(null);
-  const current = cards.find(card => card.id === (task?.cardId ?? source?.id));
+  const cardId = task?.cardId ?? startingRequest.current?.input.cardId ?? source?.id;
+  const current = cards.find(card => card.id === cardId);
   const blocks = source ? organizeTextBlocks(source.body.blocks) : [];
   const chosen = blocks.filter(block => selected.includes(block.id));
   const length = (title ? source?.title.length ?? 0 : 0) + chosen.reduce((count, block) => count + block.text.length, 0);
@@ -46,6 +49,7 @@ export function OrganizeDialog({ projectId, source, cards, close, onAdded }: {
   const stale = !!(source || task) && freshness !== 'current';
   const addKey = task ? `${task.id}/${task.attempt}` : null;
   const pendingAdd = addRequest.current?.key === addKey;
+  const cancellationRequested = starting && startingRequest.current?.cancelRequested;
 
   useLayoutEffect(() => {
     const element = dialog.current;
@@ -62,11 +66,11 @@ export function OrganizeDialog({ projectId, source, cards, close, onAdded }: {
     let active = true;
     void Promise.all([api.organizeStatus(projectId), api.organizeList(projectId, source?.id)]).then(async ([status, list]) => {
       if (!active) return;
-      setHistory(list);
+      setHistory(previous => [...previous, ...list.filter(item => !previous.some(saved => saved.id === item.id))]);
       const latest = list[0] ? await api.organizeTask(projectId, list[0].id) : null;
       if (!active) return;
       setModel(status.model);
-      setTask(previous => previous ?? latest);
+      if (!startingRequest.current?.cancelRequested) setTask(previous => previous ?? latest);
     }).catch(() => {
       if (active) setError('无法读取整理设置和任务，请关闭后重新打开');
     });
@@ -134,16 +138,19 @@ export function OrganizeDialog({ projectId, source, cards, close, onAdded }: {
     const flight = startingRequest.current;
     if (!flight || cancellingStart) return;
     flight.cancelRequested = true;
+    onPendingCancellationChange(flight.input);
     setCancellingStart(true);
     setBusy(true);
     setError('');
     try {
       acceptStart(await api.organizeCancelStart(projectId, flight.input));
+      onPendingCancellationChange(null);
       startingRequest.current = null;
       setStarting(false);
     } catch (cause) {
       if (cause instanceof MappingError && ['ORGANIZE_SOURCE_STALE', 'ORGANIZE_INVALID_SCOPE',
         'IDEMPOTENCY_MISMATCH', 'ORGANIZE_MODEL_UNCONFIGURED'].includes(cause.code)) {
+        onPendingCancellationChange(null);
         startingRequest.current = null;
         setStarting(false);
       }
@@ -215,6 +222,9 @@ export function OrganizeDialog({ projectId, source, cards, close, onAdded }: {
       <div>
         <h2 id="organize-heading">{source ? 'AI 整理' : 'AI 整理记录'}</h2>
         {source && <p className="organize-muted">{source.title || '未命名卡片'}</p>}
+        {!source && cancellationRequested && <p className="organize-muted">
+          {current ? `原卡：${current.title || '未命名卡片'}` : '原卡已删除'}
+        </p>}
       </div>
       <button type="button" ref={closeButton} disabled={busy} onClick={close} aria-label="关闭 AI 整理">关闭</button>
     </header>
@@ -235,7 +245,7 @@ export function OrganizeDialog({ projectId, source, cards, close, onAdded }: {
           </option>)}
         </select>
       </label>}
-      {!task && source ? <>
+      {!task && source && !cancellationRequested ? <>
         <fieldset disabled={stale || busy || starting}>
           <legend>选择本次处理的内容</legend>
           {source.title.trim() && <label><input type="checkbox" checked={title} onChange={event => setTitle(event.currentTarget.checked)} />
@@ -255,8 +265,6 @@ export function OrganizeDialog({ projectId, source, cards, close, onAdded }: {
           {!source.title.trim() && blocks.length === 0 && <p>请先给这张卡添加标题或正文文字。</p>}
         </fieldset>
         <p className="organize-muted">本次仅处理勾选的标题与正文文字。{model ? `已配置本机模型 ${model}。` : model === null ? '当前未配置本机真实模型。' : '正在读取模型设置。'}</p>
-        {starting && <p role="status">{cancellingStart ? '正在确认取消'
-          : startingRequest.current?.cancelRequested ? '取消结果未确认' : '正在检查本机模型'}</p>}
         {length > 24_000 && <p role="alert">选中的文字超过 24,000 字符，请减少范围。</p>}
       </> : task ? <>
         <p role="status" className="organize-status"><strong>{modeName(task.mode)}</strong> {states[task.state]}{task.applied
@@ -301,7 +309,9 @@ export function OrganizeDialog({ projectId, source, cards, close, onAdded }: {
             </li>)}</ul>
           </>}
         </details>
-      </> : <p>{model === undefined ? '正在读取整理记录。' : '还没有整理记录。请从卡片的 AI 入口开始整理。'}</p>}
+      </> : !starting && <p>{model === undefined ? '正在读取整理记录。' : '还没有整理记录。请从卡片的 AI 入口开始整理。'}</p>}
+      {starting && <p role="status">{cancellingStart ? '正在确认取消'
+        : cancellationRequested ? '取消结果未确认' : '正在检查本机模型'}</p>}
     </div>
     <footer>
       {task ? <>
