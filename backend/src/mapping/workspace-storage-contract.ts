@@ -1,0 +1,3 @@
+export const WORKSPACE_DATABASE_FILENAME = 'workspace.sqlite';
+export const WORKSPACE_APPLICATION_ID = 1179472720;
+export const WORKSPACE_DATABASE_VERSION = 1;

@@ -19,13 +19,20 @@ const port = Number(process.env.FORKWISE_PORT ?? 8790);
 if (!Number.isInteger(port) || port < 1024 || port > 65535)
   throw new Error('FORKWISE_PORT 必须为 1024–65535');
 const webRoot = resolve(fileURLToPath(new URL('../workspace/', import.meta.url)));
-if (!existsSync(resolve(webRoot, 'index.html')))
+if (!existsSync(resolve(webRoot, 'index.html')) || !existsSync(resolve(webRoot, 'build-info.json')))
   throw new Error('开放工作台尚未构建，请先运行 npm run build:workspace；旧入口未改变');
+const { version } = JSON.parse(readFileSync(resolve(webRoot, 'build-info.json'), 'utf8')) as { version: string };
 const origin = `http://127.0.0.1:${port}`;
 // 环境校验先于工作台模块加载：缺目录时立即失败，不因新增映射模块拖慢启动。
 const { openMapping } = await import('./mapping/storage.js');
 const { createWorkspaceApp } = await import('./mapping/http.js');
-const mapping = openMapping(directory);
+const mapping = openMapping(directory, {
+  workspaceBackup: {
+    version,
+    recipient: process.env.FORKWISE_BACKUP_RECIPIENT,
+    identityFile: process.env.FORKWISE_BACKUP_IDENTITY,
+  },
+});
 const types: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
@@ -59,7 +66,7 @@ const server = serve({ fetch: app.fetch, hostname: '127.0.0.1', port }, () => {
     ftruncateSync(fd, 0);
     writeFileSync(fd, JSON.stringify({ url: `${origin}/#token=${token}`, origin }));
     console.log(
-      `见岔开放工作台：${origin}（仅本机）。请用本机账户打开 ${accessPath} 中的 url；凭证不会输出到日志。`,
+      `见岔开放工作台 ${version}：${origin}（仅本机）。请用本机账户打开 ${accessPath} 中的 url；凭证不会输出到日志。`,
     );
   } catch {
     console.error('无法写入仅本人可读的启动凭证，已停止新入口；原入口未改变');

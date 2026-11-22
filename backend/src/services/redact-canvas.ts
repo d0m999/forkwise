@@ -2,6 +2,12 @@ import { createHash } from 'node:crypto';
 import type { LayoutData } from '../contracts/layout.js';
 import type { z } from 'zod';
 
+export function isRestrictedCanvasImage(dataURL: unknown, hashes: ReadonlySet<string>) {
+  const match = typeof dataURL === 'string' &&
+    /^data:image\/(?:png|jpeg|gif|webp);base64,([A-Za-z0-9+/=]+)$/.exec(dataURL);
+  return !!match && hashes.has(createHash('sha256').update(Buffer.from(match[1]!, 'base64')).digest('hex'));
+}
+
 /** Remove byte-identical copies of known restricted files from portable canvas assets. */
 export function redactCanvasImages(data: z.infer<typeof LayoutData>, hashes: Set<string>) {
   const copy = structuredClone(data),
@@ -9,13 +15,7 @@ export function redactCanvasImages(data: z.infer<typeof LayoutData>, hashes: Set
   if (!files || !hashes.size) return copy;
   const removed = new Set<string>();
   for (const [id, file] of Object.entries(files)) {
-    const match =
-      typeof file.dataURL === 'string' &&
-      /^data:image\/(?:png|jpeg|gif|webp);base64,([A-Za-z0-9+/=]+)$/.exec(file.dataURL);
-    if (
-      match &&
-      hashes.has(createHash('sha256').update(Buffer.from(match[1]!, 'base64')).digest('hex'))
-    ) {
+    if (isRestrictedCanvasImage(file.dataURL, hashes)) {
       delete files[id];
       removed.add(id);
     }

@@ -10,6 +10,7 @@ import { SnapshotMenu } from "./snapshot-menu";
 import { ExportMenu } from "./export-menu";
 import { ImportPackage, importDialogOpen } from "./import-package";
 import { WorkspaceGuide } from "./workspace-guide";
+import { WorkspaceBackup } from "./workspace-backup";
 import { renderCanvasPng, type CanvasExportVisual } from "./canvas-export";
 import { useCanvasImageInput } from "./canvas-image-input";
 import { droppedFilePlan, fileAssetPayload, runDroppedFiles } from "./canvas-drop";
@@ -299,6 +300,7 @@ function Workspace() {
   const [launchReady, setLaunchReady] = useState(false);
   const [launchEmpty, setLaunchEmpty] = useState(false);
   const guideDialog = useRef<HTMLDialogElement>(null);
+  const backupDialog = useRef<HTMLDialogElement>(null);
   const navigation = useRef<HTMLButtonElement>(null);
   const [attachTarget, setAttachTarget] = useState<string | null>(null);
   useEffect(() => {
@@ -761,7 +763,7 @@ function Workspace() {
       if (event.isComposing || event.keyCode === 229 || composition.current)
         return;
       const target = event.target as HTMLElement;
-      if (target.closest("dialog.project-search, dialog.shape-appearance-dialog, dialog.organize-dialog, dialog.attachment-copy-dialog")) return;
+      if (backupDialog.current?.open || target.closest("dialog.project-search, dialog.shape-appearance-dialog, dialog.organize-dialog, dialog.attachment-copy-dialog")) return;
       // 导入对话框是模态表单，不是原生 <dialog>：打开期间画布动作历史一律不动。
       // 这里直接返回、不 preventDefault，名称输入框的原生撤销照常生效。
       if (importDialogOpen()) return;
@@ -1313,6 +1315,7 @@ function Workspace() {
         event.isComposing ||
         event.keyCode === 229 ||
         composition.current ||
+        backupDialog.current?.open ||
         (event.target as HTMLElement).closest(
           "input, textarea, [contenteditable=true], dialog.organize-dialog",
         )
@@ -2613,7 +2616,7 @@ function Workspace() {
       if (!(event.metaKey || event.ctrlKey) || event.altKey || event.repeat || event.isComposing || event.keyCode === 229) return;
       const key = event.key.toLowerCase();
       if (key !== "c" && key !== "d" && key !== "x") return;
-      if (editing(event.target) || busy || historyBlocked || composition.current || pendingAction.current) return;
+      if (backupDialog.current?.open || editing(event.target) || busy || historyBlocked || composition.current || pendingAction.current) return;
       const current = authority.current;
       if (!current) return;
       const canAct = key === "x"
@@ -2625,7 +2628,7 @@ function Workspace() {
       if (key === "x") void cutSelection(); else if (key === "c") void copySelection(); else void duplicateSelection();
     };
     const paste = (event: ClipboardEvent) => {
-      if (editing(event.target) || busy || historyBlocked || composition.current || pendingAction.current) return;
+      if (backupDialog.current?.open || editing(event.target) || busy || historyBlocked || composition.current || pendingAction.current) return;
       const data = event.clipboardData;
       const raw = data?.getData(CANVAS_CLIPBOARD_TYPE);
       if (raw) { event.preventDefault(); event.stopPropagation(); void pasteSnapshot(raw); return; }
@@ -3209,6 +3212,7 @@ function Workspace() {
             onMouseDown={event => event.preventDefault()} onClick={openGuide}>画布引导</button>}
           {state && <button onClick={() => setOrganizing({ projectId: state.project.id })}
             disabled={busy || historyBlocked} aria-haspopup="dialog">AI 整理记录</button>}
+          {launchReady && <WorkspaceBackup dialog={backupDialog} disabled={!!attachTarget || guideEditInProgress} />}
           {projects.map((project) => (
             <button
               key={project.id}

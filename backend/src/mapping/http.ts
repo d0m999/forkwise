@@ -74,7 +74,8 @@ export function createWorkspaceApp(
   const smallBody = bodyLimit({ maxSize: 1_000_000, onError: tooLarge });
   const executeBody = bodyLimit({ maxSize: EXECUTE_BODY_LIMIT, onError: tooLarge });
   app.use('/api/*', async (c, next) => {
-    if (c.req.method === 'POST' && (c.req.path === '/api/mapping/execute' || c.req.path === '/api/mapping/import.preview')) return next();
+    if (c.req.method === 'POST' && (c.req.path === '/api/mapping/execute' ||
+      c.req.path === '/api/mapping/import.preview' || c.req.path === '/api/workspace/backup/restore')) return next();
     return smallBody(c, next);
   });
   app.post('/api/session', (c) => {
@@ -97,6 +98,22 @@ export function createWorkspaceApp(
     mapping.saveWorkspaceGuide(preference, c.get('principal'));
     return c.body(null, 204);
   });
+  const backup = mapping.backup;
+  if (backup) {
+    app.get('/api/workspace/backup', (c) => c.json(backup.status(c.get('principal'))));
+    app.post('/api/workspace/backup/download', async (c) => {
+      const { body, filename, size } = await backup.create(c.get('principal'));
+      return c.body(body, 200, {
+        'Content-Type': 'application/octet-stream',
+        'Content-Length': String(size),
+        'Content-Disposition': `attachment; filename="${filename}"`,
+      });
+    });
+    app.post('/api/workspace/backup/restore', async (c) => {
+      requireThat(c.req.header('content-type') === 'application/octet-stream', 'BACKUP_FILE_REQUIRED', '请选择一个已加密的工作台备份文件。', 400);
+      return c.json(await backup.restore(c.get('principal'), c.req.raw.body), 201);
+    });
+  }
   app.get('/api/mapping/projects', (c) =>
     c.json(mapping.read({ type: 'projects' }, c.get('principal'))),
   );
@@ -156,7 +173,7 @@ export function createWorkspaceApp(
       asset = mapping.read({ type: 'asset', projectId: c.req.param('id'), id: c.req.param('assetId') }, c.get('principal'));
     } catch (error) {
       if (error instanceof DomainError && error.code === 'MEDIA_NOT_PERSISTED')
-        throw new DomainError('NOT_FOUND', '资产不存在或不属于本项目', 404);
+        throw new DomainError('NOT_FOUND', '原件缺失或不属于本项目', 404);
       throw error;
     }
     const bytes = new Uint8Array(Buffer.from(asset.base64, 'base64'));

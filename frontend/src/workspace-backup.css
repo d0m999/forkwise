@@ -1,0 +1,49 @@
+.workspace-backup {
+  box-sizing: border-box;
+  width: min(34rem, calc(100% - var(--search-compact-gutter)));
+  max-height: calc(100dvh - var(--search-compact-gutter));
+  padding: var(--search-space-xl);
+  border: var(--search-border-width) solid var(--card-menu-border);
+  border-radius: var(--search-radius-12);
+  color: var(--canvas-chrome-ink);
+  background: var(--card-color-ffffff);
+  box-shadow: var(--body-overlay-shadow);
+  overflow-y: auto;
+}
+.workspace-backup::backdrop { background: var(--search-backdrop); }
+.workspace-backup > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--body-overlay-inset);
+}
+.workspace-backup h2 { margin: 0; font-size: var(--search-font-18); }
+.workspace-backup h3 { margin: 0; font-size: var(--canvas-chrome-heading-font-size); }
+.workspace-backup p { margin: var(--body-section-gap) 0; line-height: var(--search-line-20); }
+.workspace-backup section {
+  border-top: var(--search-border-width) solid var(--card-menu-border);
+  margin-top: var(--body-overlay-inset);
+  padding-top: var(--body-overlay-inset);
+}
+.workspace-backup button { display: inline-block; width: auto; }
+.workspace-backup button:focus-visible,
+.workspace-backup input:focus-visible {
+  outline: var(--body-focus-outline-width) solid var(--editor-focus);
+  outline-offset: var(--body-focus-outline-offset);
+}
+.workspace-backup label { display: grid; gap: var(--search-control-gap); margin: var(--search-space-md) 0; }
+.workspace-backup input { max-width: 100%; }
+.workspace-backup-version { color: var(--canvas-chrome-muted); }
+.workspace-backup-result {
+  margin-top: var(--search-space-md);
+  padding: var(--search-space-xs) var(--search-space-md);
+  background: var(--search-selected);
+  border-radius: var(--search-radius-6);
+}
+.workspace-backup-result code { overflow-wrap: anywhere; }
+.workspace-backup [role="status"]:not(:empty) { margin-top: var(--search-space-md); }
+.workspace-backup [role="alert"] {
+  margin: var(--search-space-md) 0 0;
+  padding: var(--search-space-sm);
+  background: var(--search-warning);
+}

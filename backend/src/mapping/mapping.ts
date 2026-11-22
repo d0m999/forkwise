@@ -1,15 +1,15 @@
 import { resizeFrame } from './frame-resize.js';
 import { updateFrameParents, validateSpatial } from './frame-membership.js';
 import { planContainerConnectorRemoval, applyContainerConnectorRemoval } from './container-connector-lifecycle.js';
-import { createFrame, deleteFrame, editFrame, moveFrame, readFrames } from './frame.js';
+import { createFrame, deleteFrame, editFrame, moveFrame } from './frame.js';
 import type { FrameRecord } from './frame-contracts.js';
 import { removeMember, ungroup, removeDeletedMember, groupOutcome, deleteGroup } from './group-lifecycle.js';
 import { deleteSelection } from './selection-delete.js';
-import { createGroup, moveGroup, moveSelection, readGroups, readContainment } from './group.js';
+import { createGroup, moveGroup, moveSelection, readGroups } from './group.js';
 import { scaleGroup, rotateGroup } from './group-geometry.js';
 import type { GroupRecord, Containment } from './group-contracts.js';
 import type { CanvasConnector } from './connector-contracts.js';
-import { createConnector, reconnectConnector, changeConnectorPath, moveConnector, styleConnector, reverseConnectors, labelConnector, deleteConnector, prepareIncidentConnectorDeletion, applyIncidentConnectorDeletion, readConnectors } from './connector.js';
+import { createConnector, reconnectConnector, changeConnectorPath, moveConnector, styleConnector, reverseConnectors, labelConnector, deleteConnector, prepareIncidentConnectorDeletion, applyIncidentConnectorDeletion } from './connector.js';
 import { cropImage, createImage, readImages, transformImage, rotateImage, deleteImage } from './image.js';
 import type { ImageVersion } from './image-contracts.js';
 import { moveCanvas } from './canvas-move.js';
@@ -19,12 +19,12 @@ import { cutCanvas, freezeOuterEnds, pasteCut, readCutState, recordCut } from '.
 import type { CutStateView } from './cut-contracts.js';
 import { duplicateCanvas } from './snapshot-duplicate.js';
 import { nextCreatedOrder } from './created-order.js';
-import { createStroke, deleteStroke, readStrokes } from './stroke.js';
+import { createStroke, deleteStroke } from './stroke.js';
 import { createShape, deleteShape, editShape, moveShape, readShapes, transformShape } from './shape.js';
 import type { ShapeVersion } from './shape-contracts.js';
 import type { StrokeVersion } from './stroke-contracts.js';
 import { readTexts, writeText } from './text.js';
-import { attachAnnotation, detachAnnotation, followCardMotions, readAttachments, rejectAttachedPoseMove, releaseAttachments } from './attachment.js';
+import { attachAnnotation, detachAnnotation, followCardMotions, rejectAttachedPoseMove, releaseAttachments } from './attachment.js';
 import { reconcileMediaTasks, completeMediaTask, shouldReconcileCardMediaTasks } from './media-tasks.js';
 import { completeMediaHistory } from './history.js';
 import { readAsset, saveAsset, validateImageAssets } from './media.js';
@@ -62,6 +62,8 @@ import { requireLayoutWrite } from './layout-scope.js';
 import { parseBodyPatch, patchedBlocks, requireContentWrite } from './content-scope.js';
 import { requireThat } from '../domain/errors.js';
 import { OrganizeTasks, type OrganizeModel } from './organize.js';
+import { readProjectState } from './project-state.js';
+import { WorkspaceBackup, type WorkspaceBackupSettings } from './workspace-backup.js';
 import {
   MappingCommand,
   MAX_AGENT_BATCH_POSES,
@@ -83,6 +85,7 @@ export type WorkspaceGuidePreference = 'skipped' | 'completed';
 
 export interface CommitOptions {
   organizeModel?: OrganizeModel;
+  workspaceBackup?: WorkspaceBackupSettings;
   // Local asset I/O seam for hosts and fault tests; never accepted from HTTP.
   searchAssetReader?: SearchAssetReader;
   compact?: CompactOptions;
@@ -93,6 +96,7 @@ export interface CommitOptions {
 export class Mapping {
   readonly access: AccessService;
   readonly organize: OrganizeTasks;
+  readonly backup?: WorkspaceBackup;
   private readonly compact: CompactMaps;
   private readonly searchLibraries: SearchLibraries;
   constructor(
@@ -100,6 +104,7 @@ export class Mapping {
     private readonly options: CommitOptions = {},
   ) {
     this.access = new AccessService(db);
+    if (options.workspaceBackup) this.backup = new WorkspaceBackup(db, this.access, options.workspaceBackup);
     this.organize = new OrganizeTasks(db, this.access, options.organizeModel);
     this.compact = new CompactMaps(db, options.compact);
     this.searchLibraries = new SearchLibraries(options.searchAssetReader);
@@ -230,14 +235,7 @@ export class Mapping {
       }
       const project = this.project(query.projectId);
       if (query.type === 'history') return readHistory(this.db, project);
-      const cards = (
-        this.db
-          .prepare(
-            'SELECT c.value FROM mapping_cards c JOIN mapping_card_ids i ON i.id=c.id WHERE c.project_id=? ORDER BY i.rowid',
-          )
-          .all(query.projectId) as { value: string }[]
-      ).map((row) => JSON.parse(row.value) as Card);
-      return { project, cards, frames: readFrames(this.db, project.id), groups: readGroups(this.db, project.id), containment: readContainment(this.db, project.id), attachments: readAttachments(this.db, project.id), connectors: readConnectors(this.db, project.id), images: readImages(this.db, project.id), tags: readTags(this.db, project.id), texts: readTexts(this.db, project.id), shapes: readShapes(this.db, project.id), strokes: readStrokes(this.db, project.id) };
+      return readProjectState(this.db, project);
     })();
   }
 
