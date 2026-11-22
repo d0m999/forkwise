@@ -90,6 +90,13 @@ export function createWorkspaceApp(
     });
     return c.json({ authorized: true });
   });
+  app.get('/api/workspace/guide', (c) =>
+    c.json({ preference: mapping.readWorkspaceGuide(c.get('principal')) }));
+  app.put('/api/workspace/guide', async (c) => {
+    const { preference } = z.object({ preference: z.enum(['skipped', 'completed']) }).strict().parse(await c.req.json());
+    mapping.saveWorkspaceGuide(preference, c.get('principal'));
+    return c.body(null, 204);
+  });
   app.get('/api/mapping/projects', (c) =>
     c.json(mapping.read({ type: 'projects' }, c.get('principal'))),
   );

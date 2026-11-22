@@ -408,12 +408,13 @@ export function ParagraphEditor({
     observer.observe(editor);
     return () => observer.disconnect();
   }, [blocks, supported, readingRevision]);
+  const keepSearchReading = '.body-find, [data-workspace-guide]';
   const wasSearching = useRef(false), deferredSearchCursor = useRef<string | undefined>(undefined);
   useEffect(() => {
     const leave = (event: Event) => {
       if (!deferredSearchCursor.current || wasSearching.current) return;
       const target = event.target;
-      if (target instanceof Node && !element.current?.contains(target) && !(target instanceof Element && target.closest('.body-find'))) leaveSearchEditing();
+      if (target instanceof Node && !element.current?.contains(target) && !(target instanceof Element && target.closest(keepSearchReading))) leaveSearchEditing();
     };
     const moved = () => {
       if (!deferredSearchCursor.current || wasSearching.current || !element.current) return;
@@ -1997,7 +1998,7 @@ export function ParagraphEditor({
         }}
         onBlur={event => {
           onFinish();
-          if (!wasSearching.current && !(event.relatedTarget as Element | null)?.closest('.body-find')) leaveSearchEditing();
+          if (!wasSearching.current && !(event.relatedTarget as Element | null)?.closest(keepSearchReading)) leaveSearchEditing();
         }}
         onDragOver={event=>{if(event.dataTransfer.types.includes('Files')){event.preventDefault();event.currentTarget.dataset.fileDrop='true';}}}
         onDragLeave={event=>{delete event.currentTarget.dataset.fileDrop;}}

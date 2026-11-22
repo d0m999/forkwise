@@ -9,6 +9,7 @@ import { nextPaste, pasteTranslation, type PasteSequence } from "./canvas-snapsh
 import { SnapshotMenu } from "./snapshot-menu";
 import { ExportMenu } from "./export-menu";
 import { ImportPackage, importDialogOpen } from "./import-package";
+import { WorkspaceGuide } from "./workspace-guide";
 import { renderCanvasPng, type CanvasExportVisual } from "./canvas-export";
 import { useCanvasImageInput } from "./canvas-image-input";
 import { droppedFilePlan, fileAssetPayload, runDroppedFiles } from "./canvas-drop";
@@ -295,6 +296,10 @@ function draftKey(projectId: string, cardId: string, field: Draft["field"]) {
 }
 function Workspace() {
   const [state, setState] = useState<ProjectState | null>(null);
+  const [launchReady, setLaunchReady] = useState(false);
+  const [launchEmpty, setLaunchEmpty] = useState(false);
+  const guideDialog = useRef<HTMLDialogElement>(null);
+  const navigation = useRef<HTMLButtonElement>(null);
   const [attachTarget, setAttachTarget] = useState<string | null>(null);
   useEffect(() => {
     if (!attachTarget) return;
@@ -2324,7 +2329,10 @@ function Workspace() {
   useEffect(() => {
     let active = true;
     void authorizeLocalSession()
-      .then(() => api.projects())
+      .then(() => {
+        if (active) setLaunchReady(true);
+        return api.projects();
+      })
       .then(async (all) => {
         if (!active) return;
         setProjects(all);
@@ -2336,6 +2344,7 @@ function Workspace() {
         }
         if (active) {
           setStatus(scanRecovery() ? "有待恢复的未确认草稿" : "已保存到本机");
+          setLaunchEmpty(!first);
         }
       })
       .catch((e) => {
@@ -3071,6 +3080,13 @@ function Workspace() {
     ? [...organizeCancellations.pending.values()].filter(({ projectId, request }) =>
       projectId === organizing.projectId && (!organizing.source || request.cardId === organizing.source.id)).map(({ request }) => request)
     : [];
+  // Opening a modal shifts focus, which would end these editing rounds.
+  const guideEditInProgress = !!editing || !!connectorLabel.session || frameMove.hasKeyboardResize() ||
+    texts.nodes.some(node => node.data.editing) ||
+    !!(state && currentBody && draftView[draftKey(state.project.id, currentBody.id, 'body')]);
+  function openGuide() {
+    if (!guideEditInProgress && !composition.current) guideDialog.current?.showModal();
+  }
   return (
     <div
       className="workspace"
@@ -3078,6 +3094,7 @@ function Workspace() {
       data-revision={state?.project.revision}
       onClickCapture={event => {
         const target = event.target as Element;
+        if (target.closest('[data-workspace-guide]')) return;
         if (connectorLabel.currentSession() && !connectorLabelHistoryBusy && !target.closest('.connector-label-session') &&
           (!target.closest('.connector-tools') || target.closest('.connector-label-position input')) &&
           (target.closest('.react-flow__controls') || !target.closest('.react-flow__node, .react-flow__pane, .canvas-connector, .connector-label'))) {
@@ -3085,6 +3102,8 @@ function Workspace() {
         }
       }}
     >
+      <WorkspaceGuide ready={launchReady} showInvitation={launchEmpty && !state && !nav} editInProgress={guideEditInProgress}
+        open={openGuide} dialog={guideDialog} navigation={navigation} />
       {syncNotice && (
         <div className="recovery-error" aria-live="polite">
           {syncNotice}
@@ -3122,8 +3141,11 @@ function Workspace() {
           重做
         </button>
         <button
+          ref={navigation}
           aria-label="项目导航"
           aria-expanded={nav}
+          data-workspace-guide
+          onMouseDown={event => event.preventDefault()}
           onClick={() => setNav(!nav)}
         >
           见岔
@@ -3182,6 +3204,9 @@ function Workspace() {
               {pinned ? "取消固定" : "固定"}
             </button>
           </div>
+          {launchReady && <button type="button" aria-haspopup="dialog" data-workspace-guide aria-disabled={guideEditInProgress}
+            title={guideEditInProgress ? '结束当前操作后可查看引导' : undefined}
+            onMouseDown={event => event.preventDefault()} onClick={openGuide}>画布引导</button>}
           {state && <button onClick={() => setOrganizing({ projectId: state.project.id })}
             disabled={busy || historyBlocked} aria-haspopup="dialog">AI 整理记录</button>}
           {projects.map((project) => (

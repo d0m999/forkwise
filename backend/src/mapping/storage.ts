@@ -134,6 +134,7 @@ export function openMapping(directory: string, options: CommitOptions = {}): Map
     db.pragma('busy_timeout = 5000');
     db.exec(`
       CREATE TABLE IF NOT EXISTS sessions(token_hash TEXT PRIMARY KEY, actor_id TEXT NOT NULL, type TEXT NOT NULL, projects TEXT NOT NULL, expires_at TEXT NOT NULL, capabilities TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS workspace_guide(slot INTEGER PRIMARY KEY CHECK(slot = 1), preference TEXT NOT NULL CHECK(preference IN ('skipped', 'completed')));
       CREATE TABLE IF NOT EXISTS mapping_projects(id TEXT PRIMARY KEY, name TEXT NOT NULL, version_id TEXT NOT NULL, revision INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS mapping_cards(id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES mapping_projects(id), value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS mapping_receipts(project_id TEXT NOT NULL REFERENCES mapping_projects(id), command_id TEXT NOT NULL, actor_id TEXT NOT NULL, request TEXT NOT NULL, receipt TEXT NOT NULL, PRIMARY KEY(project_id, command_id));

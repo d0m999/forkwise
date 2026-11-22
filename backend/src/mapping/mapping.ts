@@ -79,6 +79,8 @@ import {
   type MediaAsset,
 } from './contracts.js';
 
+export type WorkspaceGuidePreference = 'skipped' | 'completed';
+
 export interface CommitOptions {
   organizeModel?: OrganizeModel;
   // Local asset I/O seam for hosts and fault tests; never accepted from HTTP.
@@ -105,6 +107,25 @@ export class Mapping {
   close() {
     this.organize.close();
     this.db.close();
+  }
+
+  readWorkspaceGuide(actor: Principal): WorkspaceGuidePreference | null {
+    this.access.validate(actor);
+    this.access.human(actor);
+    this.access.project(actor, '*');
+    const row = this.db.prepare('SELECT preference FROM workspace_guide WHERE slot = 1').get() as
+      { preference: WorkspaceGuidePreference } | undefined;
+    return row?.preference ?? null;
+  }
+
+  saveWorkspaceGuide(preference: WorkspaceGuidePreference, actor: Principal): void {
+    this.db.transaction(() => {
+      this.access.validate(actor);
+      this.access.human(actor);
+      this.access.project(actor, '*');
+      this.db.prepare(`INSERT INTO workspace_guide(slot, preference) VALUES (1, ?)
+        ON CONFLICT(slot) DO UPDATE SET preference = excluded.preference WHERE preference = 'skipped'`).run(preference);
+    })();
   }
 
   read(query: SearchQuery, actor: Principal): Promise<SearchResult>;

@@ -327,7 +327,7 @@ export function useCanvasTexts(
     const outside = (event: PointerEvent) => {
       if (event.button !== 0 || !current.current) return;
       if (
-        !(event.target as Element).closest(".canvas-text-input, .text-actions")
+        !(event.target as Element).closest(".canvas-text-input, .text-actions, [data-workspace-guide]")
       )
         void finish();
     };
