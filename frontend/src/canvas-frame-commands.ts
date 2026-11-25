@@ -1,4 +1,4 @@
-import { captureSpatial, frameDescendants, frameRoots, containsRect, frameCreationParent, frameDrawMembers } from '../../backend/src/mapping/frame-spatial';
+import { captureSpatial, frameDescendants, frameRoots, containsRect, frameCreationParent, frameDrawMembers, frameResizePlan } from '../../backend/src/mapping/frame-spatial';
 import { captureOptionalContainerEndpoints } from '../../backend/src/mapping/container-endpoints';
 import type { Command, ProjectState } from './api';
 import type { CanvasFrame } from '../../backend/src/mapping/frame-contracts';
@@ -42,13 +42,24 @@ export function createFrameSelectionCommand(state: ProjectState, selection: Canv
   return command;
 }
 
-export function frameSelectionRect(state: ProjectState, selected: ReadonlySet<string>): FrameRect | null {
+export function frameSelectionRect(state: ProjectState, selected: ReadonlySet<string>, padding = 24): FrameRect | null {
   const poses = canvasItems(state).filter(value => selected.has(value.item.id)).map(value => value.item.pose);
   if (!poses.length || poses.length !== selected.size) return null;
-  const x = Math.min(...poses.map(pose => pose.x)) - 24, y = Math.min(...poses.map(pose => pose.y)) - 24;
-  const right = Math.max(...poses.map(pose => pose.x + pose.width)) + 24;
-  const bottom = Math.max(...poses.map(pose => pose.y + pose.height)) + 24;
+  const x = Math.min(...poses.map(pose => pose.x)) - padding, y = Math.min(...poses.map(pose => pose.y)) - padding;
+  const right = Math.max(...poses.map(pose => pose.x + pose.width)) + padding;
+  const bottom = Math.max(...poses.map(pose => pose.y + pose.height)) + padding;
   return { x, y, width: right - x, height: bottom - y };
+}
+
+export function sameFrameResizeMembership(before: ProjectState, projected: ProjectState, frameId: string, rect: FrameRect) {
+  const original = frameResizePlan(before, frameId, rect);
+  const after = frameResizePlan({ ...projected, ...(projected.groups ? {
+    groups: projected.groups.map(group => ({
+      ...group, bounds: frameSelectionRect(projected, new Set(group.memberItemIds), 0) ?? group.bounds,
+    })),
+  } : {}) }, frameId, rect);
+  return after.attach.length === original.attach.length && after.attach.every(id => original.attach.includes(id)) &&
+    after.release.length === original.release.length && after.release.every(id => original.release.includes(id));
 }
 
 export function frameMovingItemIds(state: ProjectState, frame: CanvasFrame) {

@@ -76,6 +76,7 @@ test("默认短卡在写字板首次保存两段后提供有限正文预览，�
   await expect(preview).toHaveCount(0);
   await editor.fill("关闭预览后保存的全文");
   await expect.poll(async () => (await state()).body.blocks.map(block => block.text)).toEqual(["关闭预览后保存的全文"]);
+  await expect(page.getByRole("status")).toHaveText("已保存到本机");
   const saved = await state();
   await workspace.restart();
   await workspace.open(page);

@@ -9,7 +9,8 @@ type FrameCommand = Extract<Command, { type: 'frame.edit' | 'frame.move' | 'fram
 type Execute = (command: FrameCommand, onDone: () => void, endEditing?: () => void) => void;
 
 export function useFrameMove({ state, blocked, point, execute }: {
-  state: ProjectState | null; blocked: boolean; point: (client: Point) => Point; execute: Execute;
+  state: ProjectState | null; blocked: boolean; point: (client: Point) => Point;
+  execute: (command: FrameCommand, done: () => void, snapshot: ProjectState) => void;
 }) {
   const latest = useRef({ state, blocked, point, execute });
   latest.current = { state, blocked, point, execute };
@@ -54,7 +55,7 @@ export function useFrameMove({ state, blocked, point, execute }: {
         ? { commandId: crypto.randomUUID(), projectId: current.state.project.id, type: 'frame.resize', expected: current.frame.versionId,
           placement: { expected: captureSpatial(current.state, { rect: current.rect!, frameId: current.frame.id }) }, payload: { id: current.frame.id, pose: current.rect! } }
         : moveFrameCommand(current.state, current.frame, current.dx, current.dy, latest.current.point({ x: event.clientX, y: event.clientY }));
-      latest.current.execute(command, () => setPositions({}));
+      latest.current.execute(command, () => setPositions({}), current.state);
     };
     window.addEventListener('pointermove', move);
     window.addEventListener('pointerup', up);
@@ -68,7 +69,7 @@ export function useFrameMove({ state, blocked, point, execute }: {
       if (key === 'Enter') {
         const current = keyboard.current; keyboard.current = null; setMembershipPreview(null);
         if (current) latest.current.execute({ commandId: crypto.randomUUID(), projectId: current.state.project.id, type: 'frame.resize',
-          expected: current.frame.versionId, placement: { expected: captureSpatial(current.state, { rect: current.rect, frameId: current.frame.id }) }, payload: { id: current.frame.id, pose: current.rect } }, () => setPositions({}));
+          expected: current.frame.versionId, placement: { expected: captureSpatial(current.state, { rect: current.rect, frameId: current.frame.id }) }, payload: { id: current.frame.id, pose: current.rect } }, () => setPositions({}), current.state);
         return;
       }
       const current = keyboard.current ?? { state: latest.current.state, frame, corner, rect: frame.pose };

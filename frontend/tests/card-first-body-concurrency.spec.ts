@@ -1,6 +1,7 @@
 import { test, expect, place } from './writing-board-fixture';
 import type { Page } from '@playwright/test';
 import type { Command, Receipt } from '../../backend/src/mapping/contracts';
+import { createFrameCommand } from '../src/canvas-frame-commands';
 
 function holdFirstBody(page: Page, cardId: string, afterCommit = false) {
   let release!: () => void;
@@ -228,8 +229,8 @@ for (const detach of [false, true]) {
   });
 }
 
-for (const observeFirst of [true, false]) {
-  test(`删除附着文字在${observeFirst ? '观察读回早于正文回执' : '正文回执早于读回'}时使用同一已确认派生版本`, async ({ page, workspace }) => {
+for (const [observeFirst, clearAgain] of [[true, false], [false, false], [false, true]]) {
+  test(`删除附着文字在${observeFirst ? '观察读回早于正文回执' : clearAgain ? '首写回执后、清空回执前' : '正文回执早于读回'}时使用已确认的派生版本`, async ({ page, workspace }) => {
     await place(page, '短标题', 40, 95);
     const state = await workspace.state(), projectId = state.project.id, card = state.cards[0]!;
     await workspace.execute(page, { commandId: crypto.randomUUID(), projectId, type: 'text.create', expected: null,
@@ -265,14 +266,83 @@ for (const observeFirst of [true, false]) {
         await expect.poll(() => reading).toBe(true);
         await expect(page.locator('.workspace')).toHaveAttribute('data-revision', String(before.project.revision));
       }
+      const secondWrite = clearAgain ? page.waitForResponse(r => r.url().endsWith('/api/mapping/execute') &&
+        r.request().postDataJSON()?.type === 'body.edit' && r.request().postDataJSON().payload.blocks?.every((block: { text?: string }) => !block.text)) : null;
+      if (secondWrite) await page.getByRole('textbox', { name: '卡片正文', exact: true }).fill('');
       const deletion = page.waitForResponse(r => r.url().endsWith('/api/mapping/execute') && r.request().postDataJSON()?.type === 'text.delete', { timeout: 7000 });
       await page.getByRole('button', { name: '删除文字', exact: true }).click();
       gate.release();
       releaseRead();
+      const derivedReceipt: Receipt = secondWrite ? await (await secondWrite).json() : gate.receipt()!;
       const saved = await deletion;
       expect(saved.status()).toBe(200);
-      expect(saved.request().postDataJSON().expected.pose).toBe(gate.receipt()!.derivedPoseVersions![note.item.id]!.after);
+      expect(saved.request().postDataJSON().expected.pose).toBe(derivedReceipt.derivedPoseVersions![note.item.id]!.after);
       expect((await workspace.state()).texts).toEqual([]);
     } finally { gate.release(); releaseRead(); await page.unrouteAll({ behavior: 'wait' }); }
   });
 }
+
+for (const peerWidth of [290, 315]) {
+  test(`确认调宽保持操作时看到的290px，对方宽度为${peerWidth}px`, async ({ page, workspace }) => {
+    await place(page, '短标题');
+    const before = await workspace.state(), projectId = before.project.id, card = before.cards[0]!;
+    await page.getByRole('button', { name: '写字板', exact: true }).click();
+    const gate = holdFirstBody(page, card.id);
+    await gate.installed;
+    try {
+      await page.getByRole('textbox', { name: '卡片正文', exact: true }).fill('首次保存');
+      await expect.poll(gate.started).toBe(true);
+      await page.getByRole('button', { name: '调整卡片尺寸：右', exact: true }).press('ArrowRight');
+      await workspace.execute(page, { commandId: crypto.randomUUID(), projectId, type: 'pose.batch',
+        expected: { [card.id]: card.item.versionId }, payload: { poses: [{ id: card.id, ...card.item.pose, width: peerWidth }] } });
+      gate.release();
+      await expect(page.getByRole('alert')).toContainText('布局已更新');
+      const compared = await workspace.state();
+      const response = page.waitForResponse(r => r.url().endsWith('/api/mapping/execute') && r.request().postDataJSON()?.type === 'pose.batch');
+      await page.getByRole('button', { name: '确认保留本次位置', exact: true }).click();
+      const accepted = await response;
+      expect(accepted.status()).toBe(200);
+      await expect(page.getByRole('status')).toHaveText('已保存到本机');
+      const after = await workspace.state();
+      expect(after.cards[0]!.item.pose).toEqual({ ...card.item.pose, width: 290, height: 160 });
+      expect(after.cards[0]!.item.heightPolicy?.manualHeight).toBeNull();
+      if (peerWidth === 290) {
+        expect(await accepted.json()).toMatchObject({ changedIds: [] });
+        expect(after.project.revision).toBe(compared.project.revision);
+      }
+    } finally { gate.release(); await page.unrouteAll({ behavior: 'wait' }); }
+  });
+}
+
+test('拖缩分区时清空正文改变成员计划，保留原分区并要求重新预览', async ({ page, workspace }) => {
+  const projectId = (await workspace.state()).project.id;
+  await workspace.execute(page, { commandId: crypto.randomUUID(), projectId, type: 'thought.create', expected: null,
+    payload: { id: 'member', title: '分区内有正文', text: '将要清空的正文', x: 130, y: 100 } });
+  const state = await workspace.state(), card = state.cards[0]!;
+  await workspace.execute(page, createFrameCommand(state, [card.item.id], { x: 80, y: 70, width: 430, height: 285 }));
+  await page.reload();
+  await page.locator('.thought-card').getByRole('button', { name: '编辑正文', exact: true }).click();
+  await page.getByRole('button', { name: '分区1', exact: true }).click();
+  const before = await workspace.state();
+  const gate = holdFirstBody(page, card.id);
+  await gate.installed;
+  try {
+    await page.getByRole('textbox', { name: '卡片正文', exact: true }).fill('');
+    await expect.poll(gate.started).toBe(true);
+    const handle = page.getByRole('button', { name: '调整分区范围：上边缘', exact: true });
+    const box = (await handle.boundingBox())!;
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2 + 100, { steps: 6 });
+    await page.mouse.up();
+    gate.release();
+    await expect.poll(async () => (await workspace.state()).cards[0]!.item.pose.height).toBeLessThan(70);
+    await expect.poll(async () =>
+      (await page.getByRole('alert').count()) > 0 || (await workspace.state()).frames![0]!.pose.y !== before.frames![0]!.pose.y,
+    ).toBe(true);
+    const after = await workspace.state();
+    expect(after.frames).toEqual(before.frames);
+    expect(after.containment).toEqual(before.containment);
+    await expect(page.getByRole('alert')).toContainText('请重新预览分区范围');
+  } finally { gate.release(); await page.unrouteAll({ behavior: 'wait' }); }
+});

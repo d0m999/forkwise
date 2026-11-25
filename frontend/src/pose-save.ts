@@ -260,7 +260,17 @@ export function usePoseSave(
     } else {
       const poses = cards.map((card, index) => {
         const requested = prior.payload.poses[index]!;
-        return current.resize ? current.resize(card.item.pose) : { ...card.item.pose, x: requested.x, y: requested.y };
+        if (!current.resize) return { ...card.item.pose, x: requested.x, y: requested.y };
+        const initial = current.cards[index]!.item.pose;
+        const gesture = current.resize(initial);
+        // Confirmation keeps the adjustments the user already made. Apply
+        // those axes once, retaining the compared values on untouched axes.
+        return {
+          width: gesture.width !== initial.width ? requested.width : card.item.pose.width,
+          height: gesture.height !== initial.height ? requested.height : card.item.pose.height,
+          x: gesture.x !== initial.x ? requested.x : card.item.pose.x,
+          y: gesture.y !== initial.y ? requested.y : card.item.pose.y,
+        };
       });
       current.command = { ...common, type: 'pose.batch',
         expected: Object.fromEntries(cards.map(card => [card.id, card.item.versionId])),

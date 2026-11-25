@@ -52,6 +52,13 @@ export function captureSelectionDeletion(state: ProjectState, selection: CanvasS
         line.start.kind === 'bound' && (line.start.targetKind ?? 'item') === 'item' && ids.has(line.start.itemId) || line.end.kind === 'bound' && (line.end.targetKind ?? 'item') === 'item' && ids.has(line.end.itemId),
       ).map(line => [line.id, line.versionId])),
     } };
+  function advanceConfirmedPreview() {
+    if (!derived) return;
+    for (const [id, expected] of Object.entries(command.expected.items)) {
+      if (expected.kind !== 'card') expected.pose = derived.version(command.projectId, id, expected.pose);
+    }
+  }
+  advanceConfirmedPreview();
   const cards = state.cards.filter(value => ids.has(value.item.id)).map(value => ({ value, intent: captureCardDeletion(state, value.id, derived)! }));
   const acknowledgedCommands = new Set<string>();
   let valid = true;
@@ -124,9 +131,7 @@ export function captureSelectionDeletion(state: ProjectState, selection: CanvasS
     seal() {
       if (!valid) return false;
       if (sealed) return true;
-      if (derived) for (const [id, expected] of Object.entries(command.expected.items)) {
-        if (expected.kind !== 'card') expected.pose = derived.version(command.projectId, id, expected.pose);
-      }
+      advanceConfirmedPreview();
       for (const card of cards) {
         if (!card.intent.seal()) return false;
         const { connectors: _connectors, membership: _membership, ...domains } = card.intent.command().expected;

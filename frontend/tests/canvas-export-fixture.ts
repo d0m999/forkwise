@@ -51,7 +51,8 @@ export async function seedCanvasExportSample(page: Page, workspace: Workspace) {
   const inner = createFrameSelectionCommand(state, { targets: [{ kind: 'item', itemId: top.item.id }], enteredGroupId: null })!;
   await workspace.execute(page, inner);
   state = await workspace.state();
-  await execute({ type: 'attachment.attach', expected: { attachment: null, target: { itemId: bottom.item.id, versionId: bottom.item.versionId }, containment: null }, payload: { itemId: annotation.item.id, targetItemId: bottom.item.id } });
+  const attachmentTarget = state.cards.find(card => card.id === bottom.id)!;
+  await execute({ type: 'attachment.attach', expected: { attachment: null, target: { itemId: attachmentTarget.item.id, versionId: attachmentTarget.item.versionId }, containment: null }, payload: { itemId: annotation.item.id, targetItemId: bottom.item.id } });
   await execute({ type: 'connector.create', expected: null, payload: { id: 'export-connector', start: { kind: 'bound', itemId: bottom.item.id, side: 'right' }, end: { kind: 'bound', itemId: top.item.id, side: 'left' }, path: 'straight' } });
   state = await workspace.state();
   await execute({ type: 'connector.label', expected: state.connectors![0]!.versionId, payload: { id: 'export-connector', label: { text: '后续观察', position: 0.5, fontSize: 16, color: '#626e81', bold: false } } });
@@ -59,5 +60,5 @@ export async function seedCanvasExportSample(page: Page, workspace: Workspace) {
   await page.reload();
   await page.getByRole('status').filter({ hasText: '已保存到本机' }).waitFor();
   state = await workspace.state();
-  return { state, bottom, top, annotation, independentImage, outerId: outer.payload.id, innerId: inner.payload.id };
+  return { state, bottom: state.cards.find(card => card.id === bottom.id)!, top, annotation, independentImage, outerId: outer.payload.id, innerId: inner.payload.id };
 }

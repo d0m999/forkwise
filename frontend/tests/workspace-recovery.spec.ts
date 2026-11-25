@@ -1408,10 +1408,16 @@ test("S5-R3 损坏原串与已提交未确认正文共存，重开明确重试�
     expect(changes).toHaveLength(1);
     expect(changes[0].projectId).toBe(projectId);
     expect(changes[0].actor).toEqual({ id: "local-owner", type: "human" });
-    expect(changes[0].domains).toEqual([{ domain: "body", id: card.body.id }]);
+    expect(changes[0].domains).toEqual([{ domain: "body", id: card.body.id }, { domain: "pose", id: card.item.id }]);
     expect(changes[0].before.body.versionId).toBe(original.expected);
     expect(changes[0].after.body.versionId).toBe(responses[0].body.versions.body);
     expect(changes[0].after.body.blocks[0].text).toBe(text);
+    expect(changes[0].before.item.versionId).toBe(card.item.versionId);
+    expect(changes[0].after.item.versionId).toBe(responses[0].body.versions.pose);
+    expect(changes[0].after.item.pose).toEqual({ ...card.item.pose, height: 160 });
+    expect(responses[0].body.derivedPoseVersions[card.item.id]).toEqual({
+      before: card.item.versionId, after: changes[0].after.item.versionId,
+    });
     await page.reload();
     await expect(page.getByRole("tab", { selected: true })).toHaveAttribute("title", projectId);
     await expect(restore).toHaveCount(0);

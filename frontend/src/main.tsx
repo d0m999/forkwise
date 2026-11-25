@@ -1,4 +1,4 @@
-import { captureSpatial, frameCandidate, frameCreationParent } from '../../backend/src/mapping/frame-spatial';
+import { captureSpatial, frameCandidate, frameCreationParent, spatialItems } from '../../backend/src/mapping/frame-spatial';
 import { canvasPlainText } from "./canvas-paste";
 import { CANVAS_CLIPBOARD_TYPE, canCopySelection, canCutSelection, captureClipboard, clipboardAssetIds, clipboardCenter, clipboardLibrary, copiedSelection, duplicatePlan, parseClipboard, pastePlan, restoredCopyRefs } from "./canvas-snapshot";
 import { captureCutCommand } from "../../backend/src/mapping/cut-command";
@@ -35,7 +35,7 @@ import { useCanvasMarquee } from './canvas-selection-boundary';
 import { captureMemberDeletion, ungroupSelectionCommand, createGroupCommand, removeMemberCommand, ungroupCommand } from './canvas-group-commands';
 import { CanvasGroups } from './canvas-groups';
 import { CanvasFrames, useFrameMove } from './canvas-frames';
-import { createFrameCommand, createFrameSelectionCommand, deleteFrameCommand, frameItemsInRect, frameSelectionRect, type FrameRect } from './canvas-frame-commands';
+import { createFrameCommand, createFrameSelectionCommand, deleteFrameCommand, frameItemsInRect, frameSelectionRect, sameFrameResizeMembership, type FrameRect } from './canvas-frame-commands';
 import { attachmentPreviewPositions } from './attachment-follow';
 import { useGroupGeometry } from './group-geometry';
 import { CanvasTextNode } from './canvas-text';
@@ -2720,8 +2720,20 @@ function Workspace() {
   }, done, intent, discard), previewPoseAcks);
   const frameMove = useFrameMove({ state, blocked: busy || historyBlocked || composition.current || !!pendingAction.current,
     point: client => flow.screenToFlowPosition(client, { snapToGrid: false }),
-    execute: async (command, done) => {
-      const confirmed = await action(command, undefined, { onSettled: done });
+    execute: async (command, done, snapshot) => {
+      const confirmed = await action(command, undefined, { onSettled: done, ...(command.type === 'frame.resize' ? {
+        beforeSubmit: async () => {
+          try {
+            const projected = await previewPoseAcks.project(snapshot, new Set(spatialItems(snapshot).map(value => value.item.id)));
+            if (authority.current?.project.id !== command.projectId) return false;
+            if (projected !== snapshot && !sameFrameResizeMembership(snapshot, projected, command.payload.id, command.payload.pose)) {
+              fail(new Error('卡片布局已更新，请重新预览分区范围'));
+              return false;
+            }
+            return true;
+          } catch (failure) { fail(failure); return false; }
+        },
+      } : {}) });
       if (!confirmed && pendingAction.current?.command.commandId !== command.commandId) done();
     } });
   const groupGeometry = useGroupGeometry({ state, selection: canvasSelection.value, current: () => authority.current,

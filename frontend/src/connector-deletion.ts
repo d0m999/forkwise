@@ -21,6 +21,12 @@ export function captureCardDeletion(state: ProjectState, cardId: string, derived
   const expected: CardDeleteCommand['expected'] = { thought: card.versionId, body: card.body.versionId,
     pose: card.item.versionId, appearance: card.appearance?.versionId ?? null,
     cardTags: card.cardTags?.versionId ?? null, ...facts };
+  function advanceConfirmedPreview() {
+    if (!derived) return;
+    expected.pose = derived.version(projectId, itemId, expected.pose);
+    derived.updateCardDomains(projectId, cardId, expected);
+  }
+  advanceConfirmedPreview();
   let request: CardDeleteCommand | null = null;
   let sealed = false, valid = true;
   const acknowledged = new Set<string>();
@@ -86,10 +92,7 @@ export function captureCardDeletion(state: ProjectState, cardId: string, derived
     seal() {
       if (!valid) return false;
       if (!sealed) {
-        if (derived) {
-          expected.pose = derived.version(projectId, itemId, expected.pose);
-          derived.updateCardDomains(projectId, cardId, expected);
-        }
+        advanceConfirmedPreview();
         command().expected = structuredClone(expected); sealed = true;
       }
       return true;
