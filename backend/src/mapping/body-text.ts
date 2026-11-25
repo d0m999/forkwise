@@ -25,7 +25,9 @@ export function bodyText(body: Pick<Card['body'], 'blocks'>): string {
 }
 
 export function hasPreviewText(body: Pick<Card['body'], 'blocks'>): boolean {
-  return body.blocks.some(block => typeof block.text === 'string' && block.text.trim().length > 0);
+  return body.blocks.some(block =>
+    block.type !== 'imageTask' && block.type !== 'pendingImage' && blockPlainText(block).trim().length > 0,
+  );
 }
 
 export function blockPlainText(block: Block): string {

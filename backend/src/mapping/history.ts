@@ -14,6 +14,7 @@ import type Database from 'better-sqlite3';
 import { randomUUID } from 'node:crypto';
 import type { Card, Change, Command, HistoryAction, Project, ProjectHistory } from './contracts.js';
 import { requireThat } from '../domain/errors.js';
+import { canonical } from '../domain/canonical.js';
 import { restoreGeometry } from './geometry.js';
 import { bodyContentUnchanged } from './body.js';
 import { restoreTag, restoreTagCards } from './tags.js';
@@ -303,17 +304,23 @@ export function recordAction(
       previous.strokeChanges = foldPoseChange(previous.strokeChanges, change.strokeChanges);
     }
     const before = previous.before;
-    if (
-      before &&
-      'body' in before &&
-      'body' in after &&
-      ((command.type === 'thought.title' &&
-        previous.label === 'thought.title' &&
-        before.title === after.title) ||
-        (command.type === 'body.edit' &&
-          bodyContentUnchanged(before.body.blocks, after.body.blocks)))
-    )
-      stack.undo.pop();
+    if (before && 'body' in before && 'body' in after) {
+      if (command.type === 'thought.title' && previous.label === 'thought.title' && before.title === after.title)
+        stack.undo.pop();
+      if (command.type === 'body.edit' && bodyContentUnchanged(before.body.blocks, after.body.blocks)) {
+        const oldPolicy = before.item.heightPolicy, newPolicy = after.item.heightPolicy;
+        const sameCardGeometry = canonical(before.item.pose) === canonical(after.item.pose) &&
+          oldPolicy?.manualHeight === newPolicy?.manualHeight &&
+          oldPolicy?.necessaryHeight === newPolicy?.necessaryHeight &&
+          (oldPolicy?.previewFloor ?? 0) === (newPolicy?.previewFloor ?? 0);
+        const sameFollowerGeometry = [
+          ...(previous.textChanges ?? []), ...(previous.shapeChanges ?? []),
+          ...(previous.imageChanges ?? []), ...(previous.strokeChanges ?? []),
+        ].every(({ before, after }) => canonical(before?.item.pose) === canonical(after?.item.pose));
+        if (sameCardGeometry && sameFollowerGeometry) stack.undo.pop();
+        else previous.changedIds = previous.changedIds.filter(id => id !== after.body.id);
+      }
+    }
   } else
     stack.undo.push({
       session,

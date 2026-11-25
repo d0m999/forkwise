@@ -9,6 +9,7 @@ import {
   type ProjectState,
 } from "./api";
 import { batchMotions, followerFields } from "./attachment-follow";
+import type { DerivedPoseAcknowledgements } from './derived-pose-acknowledgements';
 
 type Position = { x: number; y: number };
 type Pose = Card["item"]["pose"];
@@ -23,6 +24,8 @@ interface Pending {
   command: GeometryCommand;
   order?: MoveOrder;
   followState: ProjectState | null;
+  resize?: (pose: Pose) => Pose;
+  sealed?: boolean;
 }
 
 // One completed gesture owns one command. Body ACKs cannot clear its preview.
@@ -30,6 +33,7 @@ export function usePoseSave(
   refresh: (projectId: string) => Promise<ProjectState>,
   acknowledged?: (command: GeometryCommand, receipt: Receipt) => void,
   readState?: () => ProjectState | null,
+  derived?: DerivedPoseAcknowledgements,
 ) {
   const [positions, setPositions] = useState<Record<string, Pose>>({});
   const previewPoses = useRef<Record<string, Pose>>({});
@@ -59,6 +63,35 @@ export function usePoseSave(
         if (current.order && !(await current.order.beforeSubmit()))
           throw new Error("请先确认此移动之前的正文保存，再重试布局保存");
         try {
+          if (!current.sealed && derived) {
+            const command = current.command;
+            if (command.type === 'pose.move') {
+              command.expected = derived.version(command.projectId, current.cards[0]!.item.id, command.expected);
+            } else if (current.followState) {
+              const targetIds = new Set(current.cards.map(card => card.item.id));
+              const followerIds = (current.followState.attachments ?? []).flatMap(row =>
+                row.target && targetIds.has(row.target.itemId) ? [row.id] : []);
+              const state = await derived.project(current.followState, new Set([...targetIds, ...followerIds]));
+              if (state !== current.followState) {
+                const cards = current.cards.map(card => state.cards.find(value => value.id === card.id)!);
+                const poses = cards.map((card, index) => {
+                  const original = current.cards[index]!.item.pose;
+                  const requested = command.payload.poses[index]!;
+                  return current.resize ? current.resize(card.item.pose) : {
+                    ...card.item.pose, x: card.item.pose.x + requested.x - original.x,
+                    y: card.item.pose.y + requested.y - original.y,
+                  };
+                });
+                command.expected = Object.fromEntries(cards.map(card => [card.id, card.item.versionId]));
+                command.payload.poses = cards.map((card, index) => ({ id: card.id, ...poses[index]! }));
+                delete command.followers;
+                delete command.expectedFollowers;
+                Object.assign(command, followerFields(state, batchMotions(cards, poses), new Set()));
+              }
+            }
+            derived.updatePlacement(command);
+            current.sealed = true;
+          }
           const receipt = await api.execute(current.command);
           acknowledged?.(current.command, receipt);
         } finally {
@@ -162,10 +195,11 @@ export function usePoseSave(
       setPositions((previous) => ({ ...previous, [itemId]: pose }));
     }
   }
-  function finish(position?: Position, pointer?: Position) {
+  function finish(position?: Position, pointer?: Position, resize?: (pose: Pose) => Pose) {
     const current = gesture.current;
     if (!current) return;
     gesture.current = null;
+    if (resize) current.resize = resize;
     if (pointer && current.command.placement) current.command.placement.point = pointer;
     setDragging(false);
     const anchor = current.cards[0]!;

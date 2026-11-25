@@ -4,6 +4,7 @@ import type { Command, ProjectState } from "./api";
 import { canvasItems, selectedItemIds, type CanvasSelection } from './canvas-selection';
 import { followerFields } from './attachment-follow';
 import type { CanvasMoveIntent } from './canvas-move-conflict';
+import type { DerivedPoseAcknowledgements } from './derived-pose-acknowledgements';
 type Point = { x: number; y: number };
 type Target = {
   kind: "card" | "text" | "shape" | "image" | "stroke";
@@ -15,6 +16,7 @@ export function useCanvasMove(
   state: ProjectState | null,
   selection: CanvasSelection,
   enqueue: Enqueue,
+  derived?: DerivedPoseAcknowledgements,
 ) {
   const [positions, setPositions] = useState<Record<string, Point>>({});
   const gesture = useRef<{
@@ -108,7 +110,6 @@ export function useCanvasMove(
     const dx = point.x - current.anchor.item.pose.x, dy = point.y - current.anchor.item.pose.y;
     const motions = current.targets.flatMap(value => value.kind === 'card' && (dx !== 0 || dy !== 0) ? [{ itemId: value.item.id, dx, dy }] : []);
     const moving = new Set(current.targets.flatMap(value => value.kind === 'card' ? [] : [value.item.id]));
-    const followed = followerFields(current.snapshot, motions, moving);
     ended.current = new Set(current.targets.map(value => value.item.id));
     gesture.current = null;
     setDragging(false);
@@ -117,25 +118,24 @@ export function useCanvasMove(
       return true;
     }
     enqueue(
-      async () => current.command ? { ...current.command, ...followed, placement: { expected: current.spatial, ...(pointer ? { point: pointer } : {}) }, payload: { ...current.command.payload, dx, dy } } : ({
-        commandId: crypto.randomUUID(),
-        projectId: current.projectId,
-        type: "canvas.move",
-        placement: { expected: current.spatial, ...(pointer ? { point: pointer } : {}) },
-        ...followed,
-        expected: Object.fromEntries(
-          current.targets.map((value) => [value.item.id, value.item.versionId]),
-        ),
-        payload: {
-          targets: current.targets.map((value) => ({
-            kind: value.kind,
-            id: value.id,
-            itemId: value.item.id,
-            x: value.item.pose.x + dx,
-            y: value.item.pose.y + dy,
-          })),
-        },
-      }),
+      async () => {
+        const targetIds = new Set(current.targets.map(value => value.item.id));
+        const followers = (current.snapshot.attachments ?? []).flatMap(row =>
+          row.target && targetIds.has(row.target.itemId) ? [row.id] : []);
+        const snapshot = await derived?.project(current.snapshot, new Set([...targetIds, ...followers])) ?? current.snapshot;
+        const targets = current.targets.map(value => ({ ...value,
+          item: canvasItems(snapshot).find(item => item.item.id === value.item.id)!.item }));
+        const expected = Object.fromEntries(targets.map(value => [value.item.id, value.item.versionId]));
+        const followed = followerFields(snapshot, motions, moving);
+        const placement = { expected: { ...current.spatial, poses: derived?.versions(current.projectId, current.spatial.poses) ?? current.spatial.poses },
+          ...(pointer ? { point: pointer } : {}) };
+        if (current.command) return { ...current.command, ...followed, placement,
+          expected: { ...current.command.expected, poses: expected }, payload: { ...current.command.payload, dx, dy } };
+        return { commandId: crypto.randomUUID(), projectId: current.projectId, type: 'canvas.move',
+          placement, ...followed, expected, payload: { targets: targets.map(value => ({
+            kind: value.kind, id: value.id, itemId: value.item.id, x: value.item.pose.x + dx, y: value.item.pose.y + dy,
+          })) } };
+      },
       () => setPositions({}),
       { targets: current.targets.map(value => ({ kind: value.kind, id: value.id, itemId: value.item.id,
         poseVersionId: value.item.versionId, pose: structuredClone(value.item.pose), x: value.item.pose.x + dx, y: value.item.pose.y + dy })) },

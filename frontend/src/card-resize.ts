@@ -10,7 +10,7 @@ type Pose = Card["item"]["pose"];
 interface ResizeInterface {
   start: (card: Card) => boolean;
   preview: (id: string, pose: Pose) => void;
-  finish: () => void;
+  finish: (resize?: (pose: Pose) => Pose) => void;
   cancel: () => void;
   zoom: () => number;
 }
@@ -43,6 +43,7 @@ export function useCardResize(input: ResizeInterface) {
     pointerId: number;
     element: HTMLElement;
     zoom: number;
+    delta?: { dx: number; dy: number };
   } | null>(null);
   function cancel() {
     const current = gesture.current;
@@ -97,7 +98,7 @@ export function useCardResize(input: ResizeInterface) {
       card.item.id,
       resized(card.item.pose, direction, delta[0]!, delta[1]!),
     );
-    callbacks.current.finish();
+    callbacks.current.finish(pose => resized(pose, direction, delta[0]!, delta[1]!));
   }
   useEffect(() => {
     const move = (event: globalThis.PointerEvent) => {
@@ -107,13 +108,15 @@ export function useCardResize(input: ResizeInterface) {
         p = card.item.pose;
       const dx = (event.clientX - current.x) / zoom,
         dy = (event.clientY - current.y) / zoom;
+      current.delta = { dx, dy };
       callbacks.current.preview(card.item.id, resized(p, direction, dx, dy));
     };
     const up = (event: globalThis.PointerEvent) => {
       const current = gesture.current;
       if (!current || current.pointerId !== event.pointerId) return;
       gesture.current = null;
-      callbacks.current.finish();
+      const { direction, delta } = current;
+      callbacks.current.finish(delta && (pose => resized(pose, direction, delta.dx, delta.dy)));
       if (current.element.hasPointerCapture(current.pointerId))
         current.element.releasePointerCapture(current.pointerId);
     };

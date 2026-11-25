@@ -14,8 +14,9 @@ export function useShapeMove(
   publish: (value: ProjectState) => void,
   before: () => Promise<boolean>,
   acknowledged?: (command: Geometry, receipt: Awaited<ReturnType<typeof api.execute>>) => void,
+  derived?: DerivedPoseAcknowledgements,
 ) {
-  const gesture = useRef<Target | null>(null), pending = useRef<{ target: Target; command: Geometry } | null>(null);
+  const gesture = useRef<Target | null>(null), pending = useRef<{ target: Target; command: Geometry; sealed?: boolean } | null>(null);
   const running = useRef<Promise<boolean> | null>(null);
   const lastAck = useRef<{ commandId: string; target: Target } | null>(null);
   const keyQueue = useRef<KeyIntent[]>([]), keyBase = useRef<Target | null>(null), keyDependency = useRef<string | null>(null);
@@ -79,7 +80,8 @@ export function useShapeMove(
     deletedRef.current = null; setDeleted(null);
     setWaiting(true); setError("");
     running.current = (async () => {
-      const { target, command } = pending.current!;
+      const request = pending.current!;
+      const { target, command } = request;
       try {
         if (!(await before())) throw new Error("请先确认输入保存，原形状移动仍保留");
         const state = authority();
@@ -87,6 +89,18 @@ export function useShapeMove(
         // successful receipt may already exist even though the target is gone.
         if (state?.project.id !== target.projectId)
           throw new Error("形状移动目标已变化，原请求仍保留");
+        if (derived && !request.sealed) {
+          const before = target.value.item, item = await derived.item(target.projectId, before);
+          if (item !== before) {
+            const pose = command.type === 'shape.transform' ? command.payload.pose : command.payload;
+            pose.x += item.pose.x - before.pose.x;
+            pose.y += item.pose.y - before.pose.y;
+            command.expected = item.versionId;
+            target.value = { ...target.value, item };
+          }
+          derived.updatePlacement(command);
+          request.sealed = true;
+        }
         const receipt = await api.execute(command);
         const poseVersion = receipt.shapeVersions?.pose ?? (receipt.changedIds.length === 0 ? command.expected : undefined);
         if (receipt.commandId !== command.commandId || receipt.projectId !== command.projectId || !poseVersion)
@@ -225,3 +239,4 @@ export function useShapeMove(
     hasPending: () => !!gesture.current || !!pending.current || !!running.current || !!keyQueue.current.length,
     error, status: error ? label + "保存未完成" : waiting || keyCount ? label + "正在保存…" : dragging ? "形状正在调整…" : "" };
 }
+import type { DerivedPoseAcknowledgements } from './derived-pose-acknowledgements';

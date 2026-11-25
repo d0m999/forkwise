@@ -13,6 +13,7 @@ import { api, type Command, type ProjectState } from "./api";
 import type { TextData } from "./canvas-text";
 import { useTextSave } from "./text-save";
 import { TextPrepareConflict, useTextOperations } from "./text-operations";
+import type { DerivedPoseAcknowledgements } from './derived-pose-acknowledgements';
 export function useCanvasTexts(
   state: ProjectState | null,
   selection: string[],
@@ -20,6 +21,7 @@ export function useCanvasTexts(
   publish: (value: ProjectState) => void,
   before: () => Promise<boolean>,
   acknowledged?: (command: Command, receipt: Awaited<ReturnType<typeof api.execute>>) => void,
+  derived?: DerivedPoseAcknowledgements,
 ) {
   const [placing, setPlacing] = useState(false);
   const stateRef = useRef(state);
@@ -141,18 +143,21 @@ export function useCanvasTexts(
         if (!(await before()) || !(await save.flush(true)))
           throw new Error("请先确认文字或正文保存");
         const textVersion = operations.textVersion(projectId, value.id, value.versionId, value.content);
+        const captured = { ...value.item, versionId: operations.poseVersion(projectId, value.id, textVersion, value.item.versionId) };
+        const item = await derived?.item(projectId, captured) ?? captured;
         return {
           commandId: crypto.randomUUID(),
           projectId,
           type: "text.transform",
           expected: {
             text: textVersion,
-            pose: operations.poseVersion(projectId, value.id, textVersion, value.item.versionId),
+            pose: item.versionId,
           },
           payload: {
             id: value.id,
             content: next.content,
-            pose: next.item.pose,
+            pose: { ...next.item.pose, x: next.item.pose.x + item.pose.x - captured.pose.x,
+              y: next.item.pose.y + item.pose.y - captured.pose.y },
           },
         };
       },
@@ -204,13 +209,15 @@ export function useCanvasTexts(
       async () => {
         if (!(await before()) || !(await save.flush(true)))
           throw new Error("请先确认文字或正文保存");
+        const item = await derived?.item(projectId, value.item) ?? value.item;
         const latest = await api.project(projectId);
         const target = latest.texts?.find(
           (text) => text.id === value.id,
         );
         if (!target ||
-          target.item.pose.x !== value.item.pose.x ||
-          target.item.pose.y !== value.item.pose.y)
+          target.item.pose.x !== item.pose.x ||
+          target.item.pose.y !== item.pose.y ||
+          (item !== value.item && target.item.versionId !== item.versionId))
           throw new TextPrepareConflict(
             {
               commandId: crypto.randomUUID(), projectId, type: "text.move",
@@ -221,14 +228,17 @@ export function useCanvasTexts(
             { ...value, item: { ...value.item, pose: { ...value.item.pose, x: point.x, y: point.y } } },
             latest,
           );
-        return {
+        const command: Command = {
           commandId: crypto.randomUUID(),
           projectId,
           type: "text.move",
           ...(spatial ? { placement: { expected: spatial, ...(pointer ? { point: pointer } : {}) } } : {}),
           expected: target.item.versionId,
-          payload: { id: target.id, x: point.x, y: point.y },
+          payload: { id: target.id, x: point.x + item.pose.x - value.item.pose.x,
+            y: point.y + item.pose.y - value.item.pose.y },
         };
+        derived?.updatePlacement(command);
+        return command;
       },
       clear,
       { projectId, id: value.id, discard: clear },
@@ -256,7 +266,8 @@ export function useCanvasTexts(
       async () => {
         if (!(await before()) || !(await save.flush(true)))
           throw new Error("请先确认文字或正文保存");
-        const local = operations.confirmedText(projectId, captured);
+        const confirmed = operations.confirmedText(projectId, captured);
+        const local = { ...confirmed, item: await derived?.item(projectId, confirmed.item) ?? confirmed.item };
         const command: Command = {
           commandId: crypto.randomUUID(),
           projectId,

@@ -2,13 +2,15 @@ import { useEffect, useRef, useState } from 'react';
 import type { CanvasImage } from '../../backend/src/mapping/image-contracts';
 import type { Command, ProjectState } from './api';
 import { captureMemberDeletion } from './canvas-group-commands';
+import type { DerivedPoseAcknowledgements } from './derived-pose-acknowledgements';
 export type ImagePose = CanvasImage['item']['pose'];
 // Only the execute boundary may classify a write as rejected. A failed read
 // after an acknowledged write still requires confirmation of that request.
 export class ImageWriteRejected extends Error {}
-export function useImageGeometry(authority: () => ProjectState | null, commit: (command: Command, done?: () => void) => Promise<boolean | undefined>, readSaved: (projectId: string) => Promise<unknown>, historyBlocked: () => boolean) {
+export function useImageGeometry(authority: () => ProjectState | null, commit: (command: Command, done?: () => void, prepare?: () => Promise<boolean>) => Promise<boolean | undefined>, readSaved: (projectId: string) => Promise<unknown>, historyBlocked: () => boolean, derived?: DerivedPoseAcknowledgements) {
   const gesture = useRef<{ projectId: string; value: CanvasImage } | null>(null);
   const request = useRef<Command | null>(null), running = useRef(false);
+  const beforeSend = useRef<(() => void | Promise<void>) | null>(null);
   const [poses, setPoses] = useState<Record<string, ImagePose>>({});
   const [dragging, setDragging] = useState(false), [pending, setPending] = useState(false);
   const [cropping, setCropping] = useState<{ projectId: string; value: CanvasImage } | null>(null);
@@ -16,7 +18,7 @@ export function useImageGeometry(authority: () => ProjectState | null, commit: (
   const rejectedRequest = useRef<Command | null>(null), [rejected, setRejected] = useState(false);
   function clear(command: Command) {
     if (request.current !== command) return;
-    request.current = null; rejectedRequest.current = null;
+    request.current = null; rejectedRequest.current = null; beforeSend.current = null;
     setRejected(false); setPoses({}); setCropping(null); setPending(false); setError('');
   }
   async function retry() {
@@ -28,7 +30,11 @@ export function useImageGeometry(authority: () => ProjectState | null, commit: (
       clear(command);
     };
     try {
-      if (await commit(command, confirmed)) confirmed();
+      if (await commit(command, confirmed, async () => {
+        await beforeSend.current?.();
+        beforeSend.current = null;
+        return true;
+      })) confirmed();
       else if (request.current === command) setError('图片调整尚未确认，请先完成其他保存后重试原请求');
     } catch (failure) {
       if (request.current === command) {
@@ -46,7 +52,9 @@ export function useImageGeometry(authority: () => ProjectState | null, commit: (
     catch { setError('无法读取图片已保存状态，本次调整仍保留，请重新读取'); }
     finally { running.current = false; }
   }
-  function send(command: Command) { request.current = command; setPending(true); void retry(); }
+  function send(command: Command, prepare?: () => void | Promise<void>) {
+    request.current = command; beforeSend.current = prepare ?? null; setPending(true); void retry();
+  }
   function cancel() { gesture.current = null; setDragging(false); if (!request.current) { setPoses({}); setCropping(null); } }
   useEffect(() => { cancel(); }, [authority()?.project.id]);
   function start(value: CanvasImage) {
@@ -65,8 +73,14 @@ export function useImageGeometry(authority: () => ProjectState | null, commit: (
     if (JSON.stringify(pose) === JSON.stringify(value.item.pose)) { setPoses({}); return; }
     const { rotation: _rotation, ...layout } = pose;
     setPoses({ [value.item.id]: pose });
-    send({ commandId: crypto.randomUUID(), projectId, type: 'image.transform',
-      expected: { image: value.versionId, pose: value.item.versionId }, payload: { id: value.id, pose: layout } });
+    const command = { commandId: crypto.randomUUID(), projectId, type: 'image.transform' as const,
+      expected: { image: value.versionId, pose: value.item.versionId }, payload: { id: value.id, pose: layout } };
+    send(command, async () => {
+      const item = await derived?.item(projectId, value.item) ?? value.item;
+      command.expected.pose = item.versionId;
+      layout.x += item.pose.x - value.item.pose.x;
+      layout.y += item.pose.y - value.item.pose.y;
+    });
   }
   function beginCrop(value: CanvasImage) { if (start(value)) setCropping(gesture.current); }
   function finishCrop(crop: CanvasImage['content']['crop']) {
@@ -74,8 +88,11 @@ export function useImageGeometry(authority: () => ProjectState | null, commit: (
     if (!captured || !cropping) return;
     gesture.current = null; setDragging(false);
     const { value, projectId } = captured;
-    send({ commandId: crypto.randomUUID(), projectId, type: 'image.crop',
-      expected: { image: value.versionId, pose: value.item.versionId }, payload: { id: value.id, crop } });
+    const command = { commandId: crypto.randomUUID(), projectId, type: 'image.crop' as const,
+      expected: { image: value.versionId, pose: value.item.versionId }, payload: { id: value.id, crop } };
+    send(command, () => {
+      command.expected.pose = derived?.version(projectId, value.item.id, command.expected.pose) ?? command.expected.pose;
+    });
   }
   function adjust(value: CanvasImage, next: ImagePose | null) { if (next && start(value)) finish(next); }
   function operate(value: CanvasImage, direction: 'left' | 'right' | 'delete' | 'restore') {
@@ -86,14 +103,19 @@ export function useImageGeometry(authority: () => ProjectState | null, commit: (
       if (!facts) {
         setError('请先确认原图片和完整连线投影，再明确删除'); return;
       }
-      send({ commandId: crypto.randomUUID(), projectId: current.project.id, type: 'image.delete',
-        expected: { image: value.versionId, pose: value.item.versionId, ...facts }, payload: { id: value.id } });
+      const command = { commandId: crypto.randomUUID(), projectId: current.project.id, type: 'image.delete' as const,
+        expected: { image: value.versionId, pose: value.item.versionId, ...facts }, payload: { id: value.id } };
+      send(command, () => {
+        command.expected.pose = derived?.version(command.projectId, value.item.id, command.expected.pose) ?? command.expected.pose;
+      });
       return;
     }
     const command: Command = { commandId: crypto.randomUUID(), projectId: current.project.id,
       expected: { image: value.versionId, pose: value.item.versionId },
       ...(direction === 'restore' ? { type: 'image.crop', payload: { id: value.id, crop: { x: 0, y: 0, width: 1, height: 1 } } } : { type: 'image.rotate', payload: { id: value.id, direction } }) };
-    send(command);
+    send(command, () => {
+      command.expected.pose = derived?.version(command.projectId, value.item.id, command.expected.pose) ?? command.expected.pose;
+    });
   }
   return { poses, dragging, pending, cropping, beginCrop, finishCrop, start, preview, finish, adjust, cancel, operate, error, retry, rejected, abandon,
     hasPending: (projectId?: string) => projectId === undefined ? !!request.current || !!gesture.current

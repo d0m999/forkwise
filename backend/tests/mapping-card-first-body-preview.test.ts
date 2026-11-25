@@ -123,3 +123,81 @@ it('重新开启预览保留已保存的非零预留高度', async () => {
   expect(f.card().body).toEqual(existing.body);
   expect(f.card().item).toEqual(existing.item);
 });
+
+it('表格文字和已保存图注满足首次预览条件，上传占位不占用预览高度', async () => {
+  const f = await contentFixture();
+  const assetId = 'preview-image';
+  f.apply('asset.save', null, {
+    id: assetId, name: '图.svg', mime: 'image/svg+xml',
+    base64: Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="2" height="2"><rect width="2" height="2"/></svg>').toString('base64'),
+  });
+  for (const [id, block, height] of [
+    ['table', { type: 'table', header: false, rows: [[{ text: '库存' }, { text: '回落' }]] }, 160],
+    ['caption', { type: 'image', assetId, name: '图.svg', mime: 'image/svg+xml', naturalWidth: 2, naturalHeight: 2, caption: '库存走低' }, 160],
+    ['placeholder', { type: 'pendingImage', name: '图片文件名.png', mime: 'image/png', byteLength: 1, base64: 'YQ==', status: 'unsupported' }, 59],
+  ] as const) {
+    f.apply('thought.create', null, { id, title: '短标题', text: '', x: 10, y: 20 });
+    const card = f.card(id);
+    f.apply('card.layout', {
+      thought: card.versionId, body: card.body.versionId, pose: card.item.versionId, appearance: null,
+    }, { id, necessaryHeight: 59 });
+    f.apply('body.edit', card.body.versionId, { id, blocks: [{ ...block, id: 'body-' + id }] });
+    expect(f.card(id).body.blocks).toEqual([{ ...block, id: 'body-' + id }]);
+    expect.soft(f.card(id).item.pose.height, id).toBe(height);
+    f.apply('body.edit', f.card(id).body.versionId, { id, blocks: [{ id: 'empty-' + id, type: 'text', text: '' }] });
+    expect(f.card(id).item.pose.height).toBe(59);
+  }
+});
+
+it('连续正文编辑回到原文时，只有几何和随动也回到起点才去掉历史动作', async () => {
+  const f = await contentFixture();
+  const oldCompactCard = f.card();
+  oldCompactCard.item.heightPolicy = { manualHeight: null, necessaryHeight: 52, previewFloor: 0 };
+  oldCompactCard.item.pose.height = 52;
+  f.mapping.access.db.prepare('UPDATE mapping_cards SET value=? WHERE project_id=? AND id=?').run(JSON.stringify(oldCompactCard), 'p', oldCompactCard.id);
+  f.apply('text.create', null, {
+    id: 'note', content: { runs: [{ text: '批注' }], fontSize: 16, lineHeight: 1.5, align: 'left', widthMode: 'fixed', width: 80 },
+    pose: { x: 40, y: 130, width: 80, height: 24 },
+  });
+  const note = () => f.state().texts![0]!;
+  f.apply('attachment.attach', {
+    attachment: null, target: { itemId: oldCompactCard.item.id, versionId: oldCompactCard.item.versionId }, containment: null,
+  }, { itemId: note().item.id, targetItemId: oldCompactCard.item.id });
+  const originalNote = note().item.pose;
+  const priorActions = f.history().undo.length;
+  const clearAndRestore = (editGroup: string) => {
+    const original = f.card().body.blocks[0]!;
+    for (const text of ['', original.text]) {
+      f.mapping.execute({
+        ...command('body.edit', f.card().body.versionId, { id: oldCompactCard.id, blocks: [{ ...original, text }] }),
+        editGroup,
+      }, f.human);
+    }
+  };
+
+  clearAndRestore('first-preview');
+  expect(f.card().body.blocks).toEqual(oldCompactCard.body.blocks);
+  const expandedBody = f.card().body;
+  const expanded = f.card().item;
+  const movedNote = note().item.pose;
+  expect(expanded.pose.height).toBe(160);
+  expect(movedNote).toEqual({ ...originalNote, y: originalNote.y + 54 });
+  expect(f.history().undo).toHaveLength(priorActions + 1);
+  f.apply('history.undo', f.history().revision, {});
+  expect(f.card().body).toEqual(expandedBody);
+  expect(f.card().item.pose).toEqual(oldCompactCard.item.pose);
+  expect(f.card().item.heightPolicy).toEqual(oldCompactCard.item.heightPolicy);
+  expect(note().item.pose).toEqual(originalNote);
+  f.apply('history.redo', f.history().revision, {});
+  expect(f.card().body).toEqual(expandedBody);
+  expect(f.card().item.pose).toEqual(expanded.pose);
+  expect(f.card().item.heightPolicy).toEqual(expanded.heightPolicy);
+  expect(note().item.pose).toEqual(movedNote);
+
+  clearAndRestore('no-net-change');
+  expect(f.card().body.blocks).toEqual(oldCompactCard.body.blocks);
+  expect(f.card().item.pose).toEqual(expanded.pose);
+  expect(f.card().item.heightPolicy).toEqual(expanded.heightPolicy);
+  expect(note().item.pose).toEqual(movedNote);
+  expect(f.history().undo).toHaveLength(priorActions + 1);
+});

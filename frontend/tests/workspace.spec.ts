@@ -239,7 +239,7 @@ function gate() {
   });
   return { promise, release };
 }
-async function newCard(page: Page) {
+async function newCard(page: Page, initialBody?: string) {
   await page.getByRole("button", { name: "新建研究", exact: true }).click();
   await expect(
     page.getByRole("button", { name: "卡片", exact: true }),
@@ -266,6 +266,11 @@ async function newCard(page: Page) {
     .toBe(true);
   await expect(page.getByRole("status")).toHaveText("已保存到本机");
   await page.getByRole("button", { name: "编辑正文" }).click();
+  if (initialBody) {
+    const editor = page.getByLabel("卡片正文", { exact: true });
+    await editor.fill(initialBody);
+    await expect(page.getByRole("status")).toHaveText("已保存到本机");
+  }
   return projectId;
 }
 
@@ -617,7 +622,7 @@ test("布局回读不替换正文草稿的起始版本，同正文冲突保留�
   page,
 }) => {
   await openWorkspace(page);
-  const projectId = await newCard(page);
+  const projectId = await newCard(page, "已有正文");
   const body = page.getByLabel("卡片正文", { exact: true });
   const before = await page.evaluate(
     async (id) => (await fetch("/api/mapping/projects/" + id)).json(),
@@ -788,7 +793,7 @@ test("R3 正文未知转明确冲突后，可独立重试布局且重复点击�
   page,
 }, testInfo) => {
   await openWorkspace(page);
-  const projectId = await newCard(page);
+  const projectId = await newCard(page, "已有正文");
   const body = page.getByLabel("卡片正文", { exact: true });
   const read = () =>
     page.evaluate(
@@ -829,7 +834,7 @@ test("R3 正文未知转明确冲突后，可独立重试布局且重复点击�
     return route.continue();
   });
   try {
-    await body.pressSequentially("A");
+    await body.fill("A");
     await expect.poll(() => bodyStarted).toBe(true);
     await page
       .getByRole("button", { name: "移动卡片：方向键调整位置" })
@@ -877,7 +882,7 @@ test("R3 正文未知转明确冲突后，可独立重试布局且重复点击�
     expect(commands.filter((c) => c.type === "pose.move")).toHaveLength(1);
     expect(
       (await historyState(page)).undo.map((a: { label: string }) => a.label),
-    ).toEqual(["thought.create", "body.edit", "pose.move"]);
+    ).toEqual(["thought.create", "body.edit", "body.edit", "pose.move"]);
     await testInfo.attach("unknown-to-conflict-recovery", {
       body: JSON.stringify({ commands, persisted: await read() }),
       contentType: "application/json",
@@ -943,11 +948,13 @@ test("布局竞争显式确认再保存；丢失布局 ACK 重试一次生效且
   await expect
     .poll(async () => (await read()).cards[0].body.blocks[0].text)
     .toBe("布局失败时继续写正文");
+  const firstWriting = (await read()).cards[0].item;
+  expect(firstWriting.pose).toEqual({ ...moved.cards[0].item.pose, height: 160 });
   await expect(page.getByRole("status")).not.toHaveText("已保存到本机");
   await page.getByRole("button", { name: "重试保存" }).click();
   await expect(page.getByRole("status")).toHaveText("已保存到本机");
   const after = await read();
-  expect(after.cards[0].item).toEqual(moved.cards[0].item);
+  expect(after.cards[0].item).toEqual(firstWriting);
   expect(after.project.revision).toBe(moved.project.revision + 1);
 });
 
@@ -1784,12 +1791,13 @@ test("R2 已落盘正文ACK延迟时后续输入先于方向键移动入历史",
     await expectTextValue(body, "AB");
     await expect
       .poll(async () => (await read()).cards[0].item.pose)
-      .toEqual(original.item.pose);
+      .toEqual({ ...original.item.pose, height: 160 });
     await expect(
       page.getByRole("button", { name: "撤销", exact: true }),
     ).toBeEnabled();
     await page.getByRole("button", { name: "撤销", exact: true }).click();
     await expectTextValue(body, "");
+    expect((await read()).cards[0].item.pose).toEqual(original.item.pose);
   } finally {
     ack.release();
     await page.unrouteAll({ behavior: "wait" });
@@ -1854,7 +1862,7 @@ for (const lostAck of [false, true]) {
       ack.release();
       if (lostAck) {
         await expect(page.getByRole("alert")).toContainText("确认此移动之前");
-        expect((await read()).cards[0].item.pose).toEqual(original.item.pose);
+        expect((await read()).cards[0].item.pose).toEqual({ ...original.item.pose, height: 160 });
         expect((await read()).cards[0].body.blocks[0].text).toBe("A");
         await expectTextValue(body, "ABC");
         await page.getByRole("button", { name: "重试保存" }).click();
@@ -1904,7 +1912,7 @@ for (const lostAck of [false, true]) {
       await page.getByRole("button", { name: "撤销", exact: true }).click();
       await expect
         .poll(async () => (await read()).cards[0].item.pose)
-        .toEqual(original.item.pose);
+        .toEqual({ ...original.item.pose, height: 160 });
       await expectTextValue(body, "AB");
     } finally {
       ack.release();
@@ -2027,7 +2035,7 @@ for (const lostAck of [false, true]) {
       expect(saved.body.versionId).not.toBe(before.body.versionId);
       expect(saved.body.blocks).toEqual(savedA.body.blocks.map((block: any) => ({ ...block, text: "AB" })));
       expect(saved.body.blocks).toEqual(bodyWrites.at(-1)!.payload.blocks);
-      expect(saved.item.pose).not.toEqual(before.item.pose);
+      expect(saved.item.pose).not.toEqual({ ...before.item.pose, height: 160 });
       await expect(page.locator(".react-flow__node")).toHaveCSS("transform", transform);
       await testInfo.attach("saved-body-before-pose-undo", {
         body: JSON.stringify({ saved, submitted, inputs, timeline: await historyState(page) }),
@@ -2040,7 +2048,7 @@ for (const lostAck of [false, true]) {
       await page.getByRole("button", { name: "撤销", exact: true }).click();
       await expect
         .poll(async () => (await read()).cards[0].item.pose)
-        .toEqual(before.item.pose);
+        .toEqual({ ...before.item.pose, height: 160 });
       await expectTextValue(body, "AB");
       await expect(
         page.getByRole("button", { name: "撤销", exact: true }),
@@ -2051,6 +2059,7 @@ for (const lostAck of [false, true]) {
       expect(undone.id).toBe(before.id);
       expect(undone.body.id).toBe(before.body.id);
       expect(undone.body.blocks).toEqual(before.body.blocks);
+      expect(undone.item.pose).toEqual(before.item.pose);
       expect(undone.body.versionId).not.toBe(before.body.versionId);
     } finally {
       ack.release();

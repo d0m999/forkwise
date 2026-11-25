@@ -101,6 +101,7 @@ import {
 import { usePoseSave } from "./pose-save";
 import { alignMove, type Guide, type Position } from "./canvas-geometry";
 import { useCardResize } from "./card-resize";
+import { createDerivedPoseAcknowledgements } from './derived-pose-acknowledgements';
 import { InlineTitle } from "./inline-title";
 import { CardMenu } from "./card-menu";
 import { OrganizeDialog } from "./organize-dialog";
@@ -117,7 +118,7 @@ const STALE_READ_CODES = new Set(['VERSION_CONFLICT', 'NOT_FOUND', 'ID_CONFLICT'
 // 一次提交的附加回调集中在具名选项里，避免位置参数与 undefined 占位。
 // persist 必须在真正发送前落盘最终命令；重试同一请求时沿用同一份 options，否则成功回执不会清理恢复记录。
 type ActionOptions = {
-  beforeSubmit?: () => boolean;
+  beforeSubmit?: () => boolean | Promise<boolean>;
   onSettled?: () => void;
   persist?: (command: Command) => void;
   onCommitted?: () => void;
@@ -600,6 +601,7 @@ function Workspace() {
   } | null>(null);
   const cardDeletion = useRef<ReturnType<typeof captureCardDeletion>>(null);
   const selectionDeletion = useRef<ReturnType<typeof captureSelectionDeletion>>(null);
+  const previewPoseAcks = useRef(createDerivedPoseAcknowledgements(() => authority.current)).current;
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const maxTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const composition = useRef(false),
@@ -1076,7 +1078,7 @@ function Workspace() {
   }, [state?.project.id]);
   const pose = usePoseSave(refresh,
     (command, receipt) => { cardDeletion.current?.acknowledge(command, receipt); selectionDeletion.current?.acknowledge(command, receipt); },
-    () => authority.current);
+    () => authority.current, previewPoseAcks);
   const cardLayout = useCardLayoutSave(refresh, () => authority.current,
     (command, receipt) => { cardDeletion.current?.acknowledge(command, receipt); selectionDeletion.current?.acknowledge(command, receipt); });
   const appearance = useAppearanceSave(
@@ -1086,15 +1088,16 @@ function Workspace() {
       breakBodyGroup();
       return await connectorLabel.finish() && await shapeText.finish() && await flush();
     },
-    (command, receipt) => { cardDeletion.current?.acknowledge(command, receipt); selectionDeletion.current?.acknowledge(command, receipt); },
+    (command, receipt) => { previewPoseAcks.record(command, receipt); cardDeletion.current?.acknowledge(command, receipt); selectionDeletion.current?.acknowledge(command, receipt); },
   );
-  const imageGeometry = useImageGeometry(() => authority.current, action, refresh,
-    () => historyLock.current || !!historyCommand.current);
+  const imageGeometry = useImageGeometry(() => authority.current,
+    (command, done, prepare) => action(command, done, prepare ? { beforeSubmit: prepare } : {}), refresh,
+    () => historyLock.current || !!historyCommand.current, previewPoseAcks);
   const shapeMove = useShapeMove(() => authority.current, value => {
     if (authority.current?.project.id === value.project.id) updateState(value);
   }, async () => await connectorLabel.finish() && await shapeText.finish() && await texts.finish() && await appearance.flush() &&
     await cardLayout.flush() && await pose.flush() && await flush(),
-    (command, receipt) => selectionDeletion.current?.acknowledge(command, receipt));
+    (command, receipt) => selectionDeletion.current?.acknowledge(command, receipt), previewPoseAcks);
   const strokeDraw = useStrokeDraw({
     projectId: () => authority.current?.project.id,
     blocked: () => busy || historyBlocked || composition.current || !!pendingAction.current ||
@@ -1236,7 +1239,7 @@ function Workspace() {
       !!authority.current &&
       startMove(authority.current.project.id, card, true),
     preview: pose.preview,
-    finish: () => pose.finish(),
+    finish: resize => pose.finish(undefined, undefined, resize),
     cancel: pose.cancel,
     zoom: () => flow.getZoom(),
   });
@@ -1498,6 +1501,7 @@ function Workspace() {
     saving.current = (async () => {
       try {
         const receipt = await api.execute(command);
+        previewPoseAcks.record(command, receipt);
         cardDeletion.current?.acknowledge(command, receipt);
         selectionDeletion.current?.acknowledge(command, receipt);
         await refresh(current.projectId);
@@ -1769,6 +1773,7 @@ function Workspace() {
     const imageCommand = command.type.startsWith('image.');
     const backgroundImage = () => imageCommand && command.projectId !== authority.current?.project.id;
     const finishImage = async () => {
+      if (options.beforeSubmit && !(await options.beforeSubmit())) return false;
       try { await api.execute(command); }
       catch (failure) {
         if (failure instanceof MappingError && ['image.transform', 'image.rotate', 'image.delete', 'image.crop'].includes(command.type) &&
@@ -1806,7 +1811,26 @@ function Workspace() {
       if (command.type === "stroke.create" && command.projectId !== authority.current?.project.id) {
         fail(new Error("笔迹所属项目已变化，请在原项目明确恢复")); return false;
       }
-      if (options.beforeSubmit && !options.beforeSubmit()) return false;
+      if (options.beforeSubmit && !(await options.beforeSubmit())) return false;
+      if (!retrying) {
+        previewPoseAcks.updatePlacement(command);
+        if (command.type === 'frame.move') {
+          command.expected.poses = previewPoseAcks.versions(command.projectId, command.expected.poses);
+          if (command.followers && command.expectedFollowers) {
+            const expected = command.expectedFollowers;
+            const { dx, dy } = command.payload;
+            try {
+              command.followers = await Promise.all(command.followers.map(async follower => {
+                const version = previewPoseAcks.version(command.projectId, follower.itemId, expected[follower.itemId]!);
+                if (version === expected[follower.itemId]) return follower;
+                const { pose } = await previewPoseAcks.read(command.projectId, follower.itemId, version);
+                return { ...follower, x: pose.x + dx, y: pose.y + dy };
+              }));
+            } catch (failure) { fail(failure); return false; }
+            command.expectedFollowers = previewPoseAcks.versions(command.projectId, expected);
+          }
+        }
+      }
     }
     // 落盘发生在发送之前：保存失败就中止，目标不产生任何写入，源内容仍可由源历史恢复。
     if (options?.persist && !pendingAction.current?.receipt) {
@@ -2095,7 +2119,7 @@ function Workspace() {
       if (editorEpoch.current !== epoch || authority.current?.project.id !== projectId ||
         !authority.current.strokes?.some(stroke => stroke.id === captured.id && stroke.item.id === captured.item.id)) return;
       await action({ commandId: crypto.randomUUID(), projectId, type: "stroke.delete",
-        expected: { stroke: captured.versionId, pose: captured.item.versionId, membership: facts.membership }, payload: { id: captured.id } });
+        expected: { stroke: captured.versionId, pose: previewPoseAcks.version(projectId, captured.item.id, captured.item.versionId), membership: facts.membership }, payload: { id: captured.id } });
     } finally { strokeDeleteRunning.current = false; }
   }
   const shapeDeleteRunning = useRef(false);
@@ -2121,7 +2145,8 @@ function Workspace() {
       // Waiting may reveal peer changes. Only this visible snapshot and our
       // own intervening ACKs authorize deletion; a fresh read never does.
       await action({ commandId: crypto.randomUUID(), projectId, type: "shape.delete",
-        expected: { shape: textAck?.value.versionId ?? captured.versionId, pose: poseAck?.value.item.versionId ?? captured.item.versionId, ...facts },
+        expected: { shape: textAck?.value.versionId ?? captured.versionId,
+          pose: previewPoseAcks.version(projectId, captured.item.id, poseAck?.value.item.versionId ?? captured.item.versionId), ...facts },
         payload: { id: captured.id } });
     } finally { shapeDeleteRunning.current = false; }
   }
@@ -2367,7 +2392,7 @@ function Workspace() {
     (command, receipt) => {
       cardDeletion.current?.acknowledge(command, receipt);
       selectionDeletion.current?.acknowledge(command, receipt);
-    });
+    }, previewPoseAcks);
   useEffect(() => {
     const remove = (event: KeyboardEvent) => {
       if (event.key !== 'Delete' || event.defaultPrevented || event.isComposing || event.keyCode === 229 || composition.current ||
@@ -2686,7 +2711,7 @@ function Workspace() {
   const canvasMove = useCanvasMove(state, canvasSelection.value, (prepare, done, intent, discard) => texts.enqueueGeometry(async () => {
     if (!(await shapeMove.flush())) throw new Error("请先确认形状布局保存，整组移动意图仍保留");
     return prepare();
-  }, done, intent, discard));
+  }, done, intent, discard), previewPoseAcks);
   const frameMove = useFrameMove({ state, blocked: busy || historyBlocked || composition.current || !!pendingAction.current,
     point: client => flow.screenToFlowPosition(client, { snapToGrid: false }),
     execute: async (command, done) => {
