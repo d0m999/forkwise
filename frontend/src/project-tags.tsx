@@ -161,7 +161,8 @@ export function ProjectTags({ state, card, blocked, execute, refresh, undo }: Pr
         void run({ type: 'card.tags', expected: card.cardTags?.versionId ?? null, payload: { id: card.id, tagIds: ids } });
       }}>拖动</button><TagChip tag={tag} />
     </div>)}</div>
-    <button ref={manage} type="button" disabled={blocked} aria-expanded={open} onClick={() => { setOpen(!open); setColorId(null); }}>管理标签</button>
+    <button ref={manage} type="button" className="board-tags-trigger" aria-label="管理标签" disabled={blocked} aria-expanded={open}
+      onClick={() => { setOpen(!open); setColorId(null); }}>{selected.length ? '管理标签' : '＋ 标签'}</button>
     {open && <section className="tag-manager" aria-label="项目标签">
       <div className="tag-palette-heading"><strong>项目标签</strong><button type="button" onClick={() => { setOpen(false); setColorId(null); manage.current?.focus(); }}>完成标签管理</button></div>
       <p>项目内共用名称和颜色。创建时添加到当前卡片，也可勾选已有标签。</p>

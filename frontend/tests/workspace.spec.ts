@@ -1234,7 +1234,7 @@ test("H4 跨卡撤销提示实际目标，保留当前正文面板及项目独�
   }, projectId);
   await page.getByRole("button", { name: "撤销", exact: true }).click();
   await expect(page.locator(".history-notice")).toHaveText("已撤销：初始标题");
-  await expect(page.locator(".body-editor h2")).toHaveText("正在编辑：" + ("当前卡B"));
+  await expect(page.locator(".body-editor h2")).toHaveText("当前卡B");
   await expectTextValue(page.getByLabel("卡片正文", { exact: true }), "");
   const originalHistory = await historyState(page);
   await page.getByRole("button", { name: "新建研究", exact: true }).click();
@@ -2091,7 +2091,7 @@ test("R2 撤销创建保留当前写字板删除态并恢复原卡身份", async
   await expect(page.locator(".body-editor")).toHaveCount(1);
   await expect(page.getByText("这张卡片已删除", { exact: true })).toBeVisible();
   await expect(page.getByLabel("卡片正文", { exact: true })).not.toBeEditable();
-  await expect(page.locator(".body-editor h2")).toHaveText("正在编辑：" + ("初始标题"));
+  await expect(page.locator(".body-editor h2")).toHaveText("初始标题");
   await page.screenshot({ path: testInfo.outputPath("deleted-panel.png") });
   await page.getByRole("button", { name: "撤销删除", exact: true }).click();
   await expectTextValue(page.getByLabel("卡片正文", { exact: true }), "");
@@ -2169,7 +2169,7 @@ test("R2 删除恢复预读后发生竞争不会重做无关对象，失效入�
     await expect(
       page.getByText("这次删除的恢复已不可用", { exact: true }),
     ).toBeVisible();
-    await expect(page.locator(".body-editor h2")).toHaveText("正在编辑：" + ("初始标题"));
+    await expect(page.locator(".body-editor h2")).toHaveText("初始标题");
   } finally {
     readAck.release();
     await page.unrouteAll({ behavior: "wait" });
@@ -2211,7 +2211,7 @@ for (const written of [false, true]) {
       expect(keys).toHaveLength(2);
       expect(keys[0]).toBe(keys[1]);
       expect((await historyState(page)).redo).toHaveLength(1);
-      await expect(page.locator(".body-editor h2")).toHaveText("正在编辑：" + ("初始标题"));
+      await expect(page.locator(".body-editor h2")).toHaveText("初始标题");
     } finally {
       await page.unrouteAll({ behavior: "wait" });
     }
@@ -2280,7 +2280,7 @@ test("R2 后续研究编辑使原删除恢复失效，另一redo不能复活原�
   await expect(
     page.getByRole("button", { name: "撤销删除", exact: true }),
   ).toBeDisabled();
-  await expect(page.locator(".body-editor h2")).toHaveText("正在编辑：" + ("初始标题"));
+  await expect(page.locator(".body-editor h2")).toHaveText("初始标题");
   await page.getByRole("button", { name: "撤销", exact: true }).click();
   await expect(page.locator(".react-flow__node")).toHaveCount(0);
   expect((await historyState(page)).redo.at(-1).target.title).toBe("新卡片");

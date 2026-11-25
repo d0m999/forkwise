@@ -17,8 +17,8 @@ test('+N明确打开目标卡完整标签，不被旧选区覆盖，并保留组
   const open = async (title: string, tags: string[]) => {
     await expect.poll(async () => {
       await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
-      return { title: await board.getByRole('heading').textContent(), owner: await board.locator('.board-identity small').textContent(), tags: await board.locator('.board-tags .project-tag').allTextContents() };
-    }).toEqual({ title: `正在编辑：${title}`, owner: `卡片 ${initial.cards[title === '入口甲' ? 0 : 1]!.id}`, tags });
+      return { title: await board.getByRole('heading').textContent(), owner: await board.locator('.board-card-id').textContent(), tags: await board.locator('.board-tags .project-tag').allTextContents() };
+    }).toEqual({ title, owner: `卡片 ID：${initial.cards[title === '入口甲' ? 0 : 1]!.id}`, tags });
   };
   const clearSelection = () => page.locator('.react-flow__pane').click({ position: { x: 30, y: 500 } });
 
@@ -93,7 +93,7 @@ for (const navigation of ['click', 'keyboard', 'empty', 'multi', 'marquee'] as c
     const b = page.locator('.react-flow__node').filter({ has: page.getByRole('button', { name: '迟到乙', exact: true }) });
     const board = page.getByRole('complementary', { name: '写字板', exact: true });
     await b.locator('.title-button').click(); await b.locator('.tag-overflow').click();
-    await expect(board.getByRole('heading')).toHaveText('正在编辑：迟到乙');
+    await expect(board.getByRole('heading')).toHaveText('迟到乙');
     const before = await workspace.state();
     const history = async () => (await (await page.request.get(`${workspace.origin}/api/mapping/projects/${projectId}/history`)).json()).undo
       .filter((action: { label: string }) => action.label === 'body.edit' || action.label === 'card.tags' || action.label.startsWith('tag.'));
@@ -111,14 +111,14 @@ for (const navigation of ['click', 'keyboard', 'empty', 'multi', 'marquee'] as c
       const result = [];
       for (let i = 0; i < count; i++) {
         await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
-        result.push({ title: host.querySelector('h2')?.textContent, owner: host.querySelector('.board-identity small')?.textContent,
+        result.push({ title: host.querySelector('h2')?.textContent, owner: host.querySelector('.board-card-id')?.textContent,
           tags: [...host.querySelectorAll('.board-tags .project-tag')].map(tag => tag.textContent),
           selected: [...document.querySelectorAll('.react-flow__node.selected')].map(node => node.getAttribute('data-id')).sort() });
       }
       return result;
     }, count);
     const selected = navigation === 'empty' ? [] : navigation === 'multi' ? [cardA!.item.id, cardB!.item.id].sort() : [cardB!.item.id];
-    const expected = { title: '正在编辑：迟到乙', owner: `卡片 ${cardB!.id}`, tags: names.slice(0, -1), selected };
+    const expected = { title: '迟到乙', owner: `卡片 ID：${cardB!.id}`, tags: names.slice(0, -1), selected };
     try {
       await page.getByRole('textbox', { name: '卡片正文', exact: true }).fill('较晚导航期间仍只保存乙'); await arrival;
       await a.locator('.tag-overflow').click();
@@ -157,8 +157,11 @@ test('普通正文入口的同次鼠标或键盘选择不取消自身，正文�
     await a.locator('.title-button').click();
     if (input === 'mouse') await b.locator('.body-button').click();
     else await b.locator('.body-button').press('Enter');
-    await expect(board.getByRole('heading')).toHaveText('正在编辑：正文入口乙');
-    await expect(board.locator('.board-identity small')).toHaveText(`卡片 ${cardB!.id}`);
+    await expect(board.getByRole('heading')).toHaveText('正文入口乙');
+    const details = board.getByText('详情', { exact: true });
+    await details.click();
+    await expect(board.getByText(`卡片 ID：${cardB!.id}`, { exact: true })).toBeVisible();
+    await details.press('Escape');
     await expect(b).toHaveClass(/selected/);
     await page.getByRole('textbox', { name: '卡片正文', exact: true }).fill(`${input}入口仅保存乙`);
     await expect(page.getByRole('status')).toHaveText('已保存到本机');

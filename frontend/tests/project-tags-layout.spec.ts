@@ -21,7 +21,7 @@ test('卡面真实单行和长名省略，+N打开本卡完整标签，指针拖
   expect(layout.h).toBeLessThanOrEqual(40); expect(new Set(layout.ys).size).toBe(1); expect(layout.wrap).toBe('nowrap');
   await more.click();
   const board = page.getByRole('complementary', { name: '写字板', exact: true });
-  await expect(board.getByRole('heading')).toHaveText('正在编辑：第一张');
+  await expect(board.getByRole('heading')).toHaveText('第一张');
   await expect(board.locator('.board-tags .project-tag')).toHaveText(names);
   const handles = board.locator('.tag-drag');
   const first = handles.nth(0), second = handles.nth(1);

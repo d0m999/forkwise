@@ -3087,6 +3087,39 @@ function Workspace() {
     deletedBody.card.id === bodyCard
       ? deletedBody.card
       : undefined);
+  const currentBodyDraft = state && currentBody && draftView[draftKey(state.project.id, currentBody.id, "body")];
+  const boardSaveFailure = !!(currentBodyDraft && error && !pose.error && !conflict &&
+    !pendingAction.current && !historyCommand.current);
+  const saveFailure = (error || pose.error) ? (
+    <>
+      <span role="alert">
+        {[error, pose.error].filter(Boolean).join("；")}
+      </span>
+      <button
+        disabled={busy || !!pose.conflict || (!!conflict && !pose.error)}
+        onClick={() => {
+          if (historyCommand.current) {
+            void travel("retry");
+            return;
+          }
+          if (pose.error) {
+            void pose.flush();
+            return;
+          }
+          const pending = pendingAction.current;
+          if (pending) void action(pending.command, pending.onDone, pending.options);
+          else if (Object.keys(drafts.current).length) void flush();
+          else location.reload();
+        }}
+      >
+        {historyCommand.current
+          ? historyCommand.current.type === "history.undo"
+            ? "重试撤销"
+            : "重试重做"
+          : "重试保存"}
+      </button>
+    </>
+  ) : null;
   // 按钮禁用与捕获中止是两套条件。并集会让框选、草稿等额外禁用导出，这里保持分开。
   // 内联编辑会话要在捕获侧单独把关：导出已开始后再双击进入编辑时，会话刚建立还没有未保存内容，
   // 只查 hasPending() 会把编辑框（textarea 与所选样式）连同白底烘进图像。
@@ -3720,7 +3753,11 @@ function Workspace() {
           key={state!.project.id}
           projectId={state!.project.id} cardId={panelCard.id} opened={bodyOpened}
           title={draftView[draftKey(state!.project.id, panelCard.id, "title")]?.value ?? panelCard.title}
-          status={!currentBody ? "已删除 · 内容保留" : saveStatus}
+          status={!currentBody ? "已删除 · 内容保留"
+            : boardSaveFailure ? status
+            : saveStatus === "已保存到本机" && !currentBodyDraft && bodyPreviewText(currentBody.body).trim()
+              ? "正文已保存" : saveStatus}
+          saveFailure={boardSaveFailure ? saveFailure : undefined}
           onClose={() => {
             if (composition.current) return;
             editorEpoch.current++;
@@ -3745,30 +3782,27 @@ function Workspace() {
               {!deletedBody?.canRestore && <p>这次删除的恢复已不可用</p>}
             </section>
           ) : null}
-            <>
-              <label htmlFor="card-body">卡片正文</label>
-              <ParagraphEditor
-                key={state!.project.id + ":" + panelCard.id}
-                projectId={state!.project.id}
-                onMediaRetry={block=>{void mediaQueue.retry(block);}}
-                readingIdentity={state!.project.id + ":" + panelCard.id}
-                searchReading={bodySearchReading?.result.cardId === panelCard.id ? bodySearchReading : null}
-                blocks={(() => {
-                  const draft = draftView[draftKey(state!.project.id, panelCard.id, "body")];
-                  return draft?.blocks ?? (draft ? [{ ...panelCard.body.blocks[0]!, text: draft.value }] : panelCard.body.blocks);
-                })()}
-                readOnly={historyBlocked || !currentBody}
-                onChange={(blocks, inputType, cursor) => { if (currentBody) change("body", currentBody, bodyText({ blocks }), { inputType, ...cursor }, blocks); }}
-                onOriginalCopy={(before,after)=>{ if (currentBody) void copyOriginalBody(currentBody.id,before,after); }}
-                onSelect={(cursor: TextCursor) => {
-                  const group = bodyGroup.current;
-                  if (!composition.current && group && (cursor.start !== group.start || cursor.end !== group.end || cursor.blockId !== group.blockId)) breakBodyGroup();
-                }}
-                onComposition={compose}
-                onHistory={direction => travel(direction)}
-                onFinish={() => { breakBodyGroup(); void flush(); }}
-              />
-            </>
+          <ParagraphEditor
+            key={"body-editor:" + state!.project.id + ":" + panelCard.id}
+            projectId={state!.project.id}
+            onMediaRetry={block=>{void mediaQueue.retry(block);}}
+            readingIdentity={state!.project.id + ":" + panelCard.id}
+            searchReading={bodySearchReading?.result.cardId === panelCard.id ? bodySearchReading : null}
+            blocks={(() => {
+              const draft = draftView[draftKey(state!.project.id, panelCard.id, "body")];
+              return draft?.blocks ?? (draft ? [{ ...panelCard.body.blocks[0]!, text: draft.value }] : panelCard.body.blocks);
+            })()}
+            readOnly={historyBlocked || !currentBody}
+            onChange={(blocks, inputType, cursor) => { if (currentBody) change("body", currentBody, bodyText({ blocks }), { inputType, ...cursor }, blocks); }}
+            onOriginalCopy={(before,after)=>{ if (currentBody) void copyOriginalBody(currentBody.id,before,after); }}
+            onSelect={(cursor: TextCursor) => {
+              const group = bodyGroup.current;
+              if (!composition.current && group && (cursor.start !== group.start || cursor.end !== group.end || cursor.blockId !== group.blockId)) breakBodyGroup();
+            }}
+            onComposition={compose}
+            onHistory={direction => travel(direction)}
+            onFinish={() => { breakBodyGroup(); void flush(); }}
+          />
         </WritingBoard>
       )}
       {pose.conflict && !conflict && (
@@ -3995,39 +4029,10 @@ function Workspace() {
           )
         )}
         {attachTarget && <span>点击要附着的卡片</span>}
-        {(error || pose.error) && (
-          <>
-            <span role="alert">
-              {[error, pose.error].filter(Boolean).join("；")}
-            </span>
-            <button
-              disabled={busy || !!pose.conflict || (!!conflict && !pose.error)}
-              onClick={() => {
-                if (historyCommand.current) {
-                  void travel("retry");
-                  return;
-                }
-                if (pose.error) {
-                  void pose.flush();
-                  return;
-                }
-                const pending = pendingAction.current;
-                if (pending) void action(pending.command, pending.onDone, pending.options);
-                else if (Object.keys(drafts.current).length) void flush();
-                else location.reload();
-              }}
-            >
-              {historyCommand.current
-                ? historyCommand.current.type === "history.undo"
-                  ? "重试撤销"
-                  : "重试重做"
-                : "重试保存"}
-            </button>
-            {pendingAction.current?.rejected && <button disabled={busy} onClick={() => void abandonStructure()}>
-              {['thought.create', 'shape.create', 'stroke.create'].includes(pendingAction.current.command.type) ? '放弃本次创建' : pendingAction.current.command.type === 'text.delete' ? '放弃本次删除' : pendingAction.current.command.type.startsWith('frame.') ? '放弃本次分区操作' : '放弃本次组合操作'}
-            </button>}
-          </>
-        )}
+        {saveFailure && !boardSaveFailure && saveFailure}
+        {saveFailure && pendingAction.current?.rejected && <button disabled={busy} onClick={() => void abandonStructure()}>
+          {['thought.create', 'shape.create', 'stroke.create'].includes(pendingAction.current.command.type) ? '放弃本次创建' : pendingAction.current.command.type === 'text.delete' ? '放弃本次删除' : pendingAction.current.command.type.startsWith('frame.') ? '放弃本次分区操作' : '放弃本次组合操作'}
+        </button>}
       </div>
       {renaming && (
         <div className="dialog-shade">

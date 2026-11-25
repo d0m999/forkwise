@@ -862,10 +862,10 @@ for (const boundary of ["card", "project", "close"] as const) {
       await readStarted.promise;
       if (boundary === "card") {
         await openBody(otherCard!);
-        await expect(page.locator(".body-editor h2")).toHaveText("正在编辑：" + ("另一张卡片"));
+        await expect(page.locator(".body-editor h2")).toHaveText("另一张卡片");
         await openBody(originalCard);
         await expect(page.locator(".body-editor h2")).toHaveText(
-          "正在编辑：" + (originalCard.title),
+          originalCard.title,
         );
       } else if (boundary === "project") {
         await page.locator(`[role=tab][title="${otherProjectId}"]`).click();

@@ -62,7 +62,7 @@ test('长标题在窄且短的窗口仍保留完整身份，正文与返回按�
   const state = await workspace.state(), card = state.cards[0]!;
   const title = '保留完整标题且不挤走正文'.repeat(300);
   await workspace.execute(page, { commandId: crypto.randomUUID(), projectId: state.project.id, type: 'thought.title', expected: card.versionId, payload: { id: card.id, title } });
-  await expect(page.locator('.body-editor h2')).toHaveText('正在编辑：' + title);
+  await expect(page.locator('.body-editor h2')).toHaveText(title);
   await page.setViewportSize({ width: 390, height: 500 });
   await expect(page.getByRole('textbox', { name: '卡片正文', exact: true })).toBeInViewport();
   await expect(page.getByRole('button', { name: '返回画布', exact: true })).toBeInViewport();

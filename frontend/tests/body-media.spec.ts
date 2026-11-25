@@ -116,7 +116,7 @@ test('延迟真实上传后切卡完成原卡，取消替换后晚到保旧图',
   await expect(page.getByRole('progressbar', { name: '图片保存进度' })).toBeVisible();
   await expect(page.locator('.save-state [role=status]')).not.toHaveText('已保存到本机');
   await page.getByRole('button', { name: '另一卡', exact: true }).click();
-  await expect(page.getByRole('heading', { name: '正在编辑：另一卡' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '另一卡' })).toBeVisible();
   release();
   await expect
     .poll(async () =>

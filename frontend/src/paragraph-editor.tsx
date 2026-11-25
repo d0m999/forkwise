@@ -1510,10 +1510,6 @@ export function ParagraphEditor({
           else if (target) restoreFileFocus(target.menu);
         }}
       />
-      <p className="media-limits">
-        图片：JPEG / PNG / WebP / GIF / 静态 SVG；每次合计最多 512 KiB、4000 万像素。SVG
-        仅支持安全静态子集，拒绝脚本、外联和动效。
-      </p>
       {active && imageNode && ['image', 'imageTask', 'pendingImage'].includes(active.type) && !readOnly && createPortal(
         <div ref={imageActions} className="body-image-actions" role="group" aria-label="正文图片操作">
           {active.type === 'image' && <button onClick={() => openImage(active)}>查看大图</button>}

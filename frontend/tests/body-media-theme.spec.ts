@@ -116,9 +116,12 @@ test('正文媒体真实根节点、焦点、图注、进度和拖入提示随�
     await expect.soft(progress).toHaveCSS('border-top-width', '3px', { timeout: 100 });
     await expect.soft(progress).toHaveCSS('width', '320px', { timeout: 100 });
     await expect.soft(progress).toHaveCSS('height', '180px', { timeout: 100 });
+    await page.getByText('详情', { exact: true }).click();
+    await expect(limits).toBeVisible();
     await expect.soft(limits).toHaveCSS('font-size', '17px', { timeout: 100 });
     await expect.soft(limits).toHaveCSS('line-height', '26px', { timeout: 100 });
     await expect.soft(limits).toHaveCSS('color', tokens['--inline-gray'], { timeout: 100 });
+    await page.getByText('详情', { exact: true }).press('Escape');
     await editor.evaluate((el) => {
       const data = new DataTransfer();
       data.items.add(new File([new Uint8Array([0, 1, 2])], '拖入.png', { type: 'image/png' }));

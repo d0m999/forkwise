@@ -1,12 +1,65 @@
 import { test, expect, place } from './writing-board-fixture';
 
-test('空正文占位避开图片说明，点击原空段可输入并在保存重开后保持正文身份', async ({ page, workspace }) => {
+test('项目首次宽度为 440，旧值独立保留，临时限制和恢复默认可重开验证', async ({ page, workspace }) => {
+  const board = page.getByRole('complementary', { name: '写字板', exact: true });
+  const open = () => page.getByRole('button', { name: '编辑正文', exact: true }).click();
+  const expectWidth = (width: number) => expect.poll(async () => (await board.boundingBox())?.width).toBe(width);
+  const firstProject = page.getByRole('tab', { selected: true });
+  const firstId = (await firstProject.getAttribute('title'))!;
+  await place(page, '原项目卡', 80, 120);
+  await open();
+  await expectWidth(440);
+  await page.getByRole('button', { name: '关闭正文' }).click();
+  // 模拟升级前已保存在此浏览器里的项目偏好，随后从正常入口重开。
+  await page.evaluate(id => localStorage.setItem('forkwise:writing-board-width:' + id, '544'), firstId);
+  await open();
+  await expectWidth(544);
+  await page.setViewportSize({ width: 960, height: 900 });
+  await expectWidth(480);
+  await page.getByRole('separator', { name: '调整写字板宽度' }).click();
+  await page.getByRole('button', { name: '关闭正文' }).click();
+  await page.setViewportSize({ width: 1360, height: 900 });
+  await open();
+  await expectWidth(544);
+
+  await page.getByRole('button', { name: '新建研究', exact: true }).click();
+  const secondProject = page.getByRole('tab').and(page.locator(`[title]:not([title="${firstId}"])`));
+  await expect(secondProject).toHaveAttribute('aria-selected', 'true');
+  await place(page, '另一项目卡', 80, 120);
+  await open();
+  await expectWidth(440);
+  await page.getByRole('separator', { name: '调整写字板宽度' }).press('ArrowLeft');
+  await expectWidth(460);
+  await page.locator('.project-tabs').getByTitle(firstId).click();
+  await page.getByRole('button', { name: '原项目卡', exact: true }).click();
+  await open();
+  await expectWidth(544);
+  await board.getByText('详情', { exact: true }).click();
+  await board.getByRole('button', { name: '恢复默认宽度' }).click();
+  await expectWidth(440);
+  await secondProject.click();
+  await page.getByRole('button', { name: '另一项目卡', exact: true }).click();
+  await open();
+  await expectWidth(460);
+  await page.locator('.project-tabs').getByTitle(firstId).click();
+  await page.getByRole('button', { name: '原项目卡', exact: true }).click();
+  await open();
+  await expectWidth(440);
+  await page.reload();
+  await expect(page.getByRole('status')).toHaveText('已保存到本机');
+  await page.getByRole('button', { name: '原项目卡', exact: true }).click();
+  await open();
+  await expectWidth(440);
+});
+
+test('空正文和轻量标签入口可见，图片限制按需查阅，原空段点击输入后保留正文身份', async ({ page, workspace }) => {
   await place(page, '空正文占位', 80, 120);
   const original = (await workspace.state()).cards[0]!;
   await page.getByRole('button', { name: '编辑正文', exact: true }).click();
   const editor = page.getByRole('textbox', { name: '卡片正文', exact: true });
   const placeholder = page.getByText('输入文字，或用 / 插入', { exact: true });
   const help = page.locator('.media-limits');
+  const details = page.getByText('详情', { exact: true });
   await expect(editor).not.toBeFocused();
   const textRects = (locator: typeof placeholder) => locator.evaluate(element => {
     const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
@@ -25,14 +78,13 @@ test('空正文占位避开图片说明，点击原空段可输入并在保存�
   });
   for (const viewport of [{ width: 1360, height: 900 }, { width: 390, height: 660 }]) {
     await page.setViewportSize(viewport);
-    const hintRects = await textRects(placeholder), helpRects = await textRects(help);
-    expect(hintRects.length).toBeGreaterThan(0);
-    expect(helpRects.length).toBeGreaterThan(0);
-    const overlaps = hintRects.flatMap(hint => helpRects.filter(note =>
-      hint.x < note.x + note.width && hint.x + hint.width > note.x &&
-      hint.y < note.y + note.height && hint.y + hint.height > note.y,
-    ).map(note => ({ hint, note })));
-    expect(overlaps, `${viewport.width}px 窗口的占位与图片说明文字不得重叠`).toEqual([]);
+    await expect(placeholder).toBeInViewport();
+    await expect(help).toBeHidden();
+    await details.click();
+    await expect(help).toBeInViewport();
+    await expect(help).toContainText('512 KiB');
+    await details.press('Escape');
+    await expect(help).toBeHidden();
   }
   const hint = (await textRects(placeholder))[0]!;
   await page.mouse.click(hint.x + hint.width / 2, hint.y + hint.height / 2);
@@ -44,7 +96,7 @@ test('空正文占位避开图片说明，点击原空段可输入并在保存�
   })).toBe(original.body.blocks[0]!.id);
   await page.keyboard.insertText('空正文点击后输入');
   await expect(placeholder).toHaveCount(0);
-  await expect(help).toBeVisible();
+  await expect(help).toBeHidden();
   await expect.poll(async () => (await workspace.state()).cards[0]!.body.blocks
     .map(({ id, type, text }) => ({ id, type, text })))
     .toEqual([{ id: original.body.blocks[0]!.id, type: 'text', text: '空正文点击后输入' }]);
@@ -57,6 +109,82 @@ test('空正文占位避开图片说明，点击原空段可输入并在保存�
   await expect(editor).toHaveText('空正文点击后输入');
   await expect(placeholder).toHaveCount(0);
   expect((await workspace.state()).cards[0]!.body).toEqual(saved);
+});
+
+test('标题、标签和正文同线阅读，保存等待、失败重试与确认可在写字板完成', async ({ page, workspace }, info) => {
+  await place(page, '先把问题拆开', 80, 120);
+  const initial = (await workspace.state()).cards[0]!;
+  await page.getByRole('button', { name: '编辑正文', exact: true }).click();
+  const board = page.getByRole('complementary', { name: '写字板', exact: true });
+  const title = board.getByRole('heading', { name: '先把问题拆开', exact: true });
+  const tags = board.getByRole('button', { name: '管理标签', exact: true });
+  const editor = board.getByRole('textbox', { name: '卡片正文', exact: true });
+  const id = board.getByText(`卡片 ID：${initial.id}`, { exact: true });
+  await expect(tags).toHaveText('＋ 标签');
+  await expect(id).toBeHidden();
+  await board.getByText('详情', { exact: true }).click();
+  await expect(id).toBeVisible();
+  await board.getByText('详情', { exact: true }).click();
+  await tags.click();
+  await board.getByRole('textbox', { name: '新标签名称' }).fill('研究问题');
+  await board.getByRole('button', { name: '创建标签', exact: true }).click();
+  await board.getByRole('button', { name: '完成标签管理' }).click();
+  const chip = board.getByText('研究问题', { exact: true });
+
+  let reject!: () => void;
+  const hold = new Promise<void>(resolve => { reject = resolve; });
+  let rejectWrites = true;
+  await page.route('**/api/mapping/execute', async route => {
+    if (route.request().postDataJSON().type !== 'body.edit' || !rejectWrites) return route.continue();
+    await hold;
+    await route.abort();
+  });
+  try {
+    await editor.fill('业务改善、制造进展与估值，是三个不同的问题。');
+    await expect(board.getByText('正在保存…', { exact: true })).toBeVisible();
+    const separator = board.getByRole('separator', { name: '调整写字板宽度' });
+    await separator.press('ArrowLeft');
+    await expect.poll(async () => (await board.boundingBox())?.width).toBe(460);
+    await expect(editor).toHaveText('业务改善、制造进展与估值，是三个不同的问题。');
+    await separator.press('ArrowRight');
+    await board.getByRole('button', { name: '展开写字板' }).click();
+    await page.setViewportSize({ width: 760, height: 900 });
+    await expect(board.getByRole('button', { name: '返回画布' })).toBeVisible();
+    await expect(editor).toHaveText('业务改善、制造进展与估值，是三个不同的问题。');
+    await page.setViewportSize({ width: 1360, height: 900 });
+    await board.getByRole('button', { name: '还原写字板' }).click();
+    await expect(title).toBeInViewport();
+    await expect(editor).toHaveText('业务改善、制造进展与估值，是三个不同的问题。');
+    reject();
+    await expect(board.getByText('保存未完成', { exact: true })).toBeVisible();
+    const retry = board.getByRole('button', { name: '重试保存', exact: true });
+    await expect(retry).toBeVisible();
+    await expect(editor).toContainText('业务改善、制造进展与估值');
+    await page.screenshot({ path: info.outputPath('save-failed.png') });
+    rejectWrites = false;
+    await retry.click();
+    await expect(board.getByText('正文已保存', { exact: true })).toBeVisible();
+  } finally {
+    reject();
+    await page.unrouteAll({ behavior: 'wait' });
+  }
+  await editor.press('End');
+  await editor.press('Enter');
+  await page.keyboard.insertText('把已知、未知，以及需要继续阅读的内容，分别放在画布上。');
+  await expect(board.getByText('正文已保存', { exact: true })).toBeVisible();
+  await board.getByRole('button', { name: '关闭正文' }).click();
+  await page.getByRole('button', { name: '编辑正文', exact: true }).click();
+  await expect(editor).not.toBeFocused();
+  for (const width of [1360, 760]) {
+    await page.setViewportSize({ width, height: 900 });
+    await expect.poll(async () => (await board.boundingBox())?.width).toBe(width === 1360 ? 440 : 760);
+    for (const item of [title, chip, editor]) await expect(item).toBeInViewport();
+    const [head, tag, body] = await Promise.all([title.boundingBox(), chip.boundingBox(), editor.boundingBox()]);
+    expect(head!.y).toBeLessThan(tag!.y);
+    expect(tag!.y).toBeLessThan(body!.y);
+    expect(head!.x).toBeCloseTo(body!.x, 0);
+    await page.screenshot({ path: info.outputPath(`reading-${width}.png`) });
+  }
 });
 
 test('正文双击普通打开不抢光标，单卡跟随从开头，空白和多选保当前卡', async ({ page, workspace }) => {
@@ -79,7 +207,7 @@ test('正文双击普通打开不抢光标，单卡跟随从开头，空白和�
   await a.locator('.title-button').click({ modifiers: ['Shift'] });
   await b.locator('.title-button').click({ modifiers: ['Shift'] });
   await expect(page.locator('.react-flow__node.selected')).toHaveCount(2);
-  await expect(board).toContainText('正在编辑：卡片乙');
+  await expect(board.getByRole('heading', { name: '卡片乙', exact: true })).toBeVisible();
 });
 
 test('菜单真实删卡保留内容、退出编辑，绑定此次删除直接撤销并恢复原卡', async ({ page, workspace }) => {
@@ -169,7 +297,7 @@ test('宽度基线、拖动调宽、展开还原和窄窗使用同一正文视�
   await workspace.execute(page, { commandId: crypto.randomUUID(), projectId: state.project.id, type: 'body.edit', expected: card.body.versionId, payload: { id: card.id, blocks } });
   await page.getByRole('button', { name: '编辑正文', exact: true }).click();
   const board = page.locator('.body-editor');
-  await expect.poll(async () => (await board.boundingBox())!.width).toBe(544);
+  await expect.poll(async () => (await board.boundingBox())!.width).toBe(440);
   const editor = page.getByRole('textbox', { name: '卡片正文', exact: true });
   await editor.locator('[data-block-id="paragraph-15"]').scrollIntoViewIfNeeded();
   const readingPoint = () => editor.locator('[data-block-id="paragraph-15"]').evaluate(p => {
@@ -186,25 +314,30 @@ test('宽度基线、拖动调宽、展开还原和窄窗使用同一正文视�
   const handle = (await separator.boundingBox())!;
   await page.mouse.move(handle.x + handle.width / 2, handle.y + 220);
   await page.mouse.down();
-  await page.mouse.move(handle.x - 80, handle.y + 220, { steps: 8 });
+  await page.mouse.move(handle.x + handle.width / 2 - 80, handle.y + 220, { steps: 8 });
   await page.mouse.up();
-  await expect.poll(async () => (await board.boundingBox())!.width).toBeGreaterThan(620);
+  await expect.poll(async () => (await board.boundingBox())!.width).toBe(520);
   await page.getByRole('button', { name: '展开写字板' }).click();
   await expect.poll(async () => (await board.boundingBox())!.width).toBe(1360);
   await expect(editor.locator('[data-block-id="paragraph-15"]')).toBeVisible();
-  await page.setViewportSize({ width: 700, height: 700 });
+  await page.setViewportSize({ width: 760, height: 900 });
   await expect(page.getByRole('button', { name: '返回画布' })).toBeVisible();
-  await expect.poll(async () => (await board.boundingBox())!.width).toBe(700);
+  await expect.poll(async () => (await board.boundingBox())!.width).toBe(760);
   await page.setViewportSize({ width: 1360, height: 900 });
   await expect.poll(async () => (await board.boundingBox())!.width).toBe(1360);
   await page.getByRole('button', { name: '还原写字板' }).click();
-  await expect.poll(async () => (await board.boundingBox())!.width).toBeGreaterThan(620);
+  await expect.poll(async () => (await board.boundingBox())!.width).toBe(520);
   const restored = await readingPoint();
   expect(Math.abs(restored - mark)).toBeLessThan(35);
   await expect(editor).toHaveCount(1);
   expect(await page.request.get(workspace.origin + `/api/mapping/projects/${state.project.id}/history`).then(r => r.json())).toEqual(historyBefore);
-  await page.getByRole('button', { name: '关闭正文' }).click();
+  await page.setViewportSize({ width: 760, height: 900 });
+  await page.getByRole('button', { name: '返回画布' }).click();
+  await expect(board).toBeHidden();
+  await expect(page.locator('.react-flow__pane')).toBeInViewport();
+  await page.setViewportSize({ width: 1360, height: 900 });
   await page.getByRole('button', { name: '编辑正文', exact: true }).click();
+  await expect.poll(async () => (await board.boundingBox())!.width).toBe(520);
   await expect(editor.locator('[data-block-id="paragraph-0"]')).toBeInViewport();
 });
 

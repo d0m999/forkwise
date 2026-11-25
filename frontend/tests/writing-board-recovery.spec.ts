@@ -31,18 +31,18 @@ test('多选中删除当前卡后剩余单卡属于系统选区清理，不自�
   await page.locator('.react-flow__node').filter({ has: page.getByRole('button', { name: '待删除甲', exact: true }) }).getByRole('button', { name: '编辑正文', exact: true }).click();
   await page.getByRole('button', { name: '保留乙', exact: true }).click({ modifiers: ['Shift'] });
   await expect(page.locator('.react-flow__node.selected')).toHaveCount(2);
-  await expect(page.locator('.body-editor h2')).toHaveText('正在编辑：待删除甲');
+  await expect(page.locator('.body-editor h2')).toHaveText('待删除甲');
   await page.getByRole('toolbar', { name: '卡片操作', exact: true }).first().getByRole('button', { name: '更多', exact: true }).click();
   await expect(page.getByRole('dialog', { name: '更多', exact: true })).toBeVisible();
   await page.getByRole('button', { name: '删除卡片', exact: true }).click();
   await expect(page.getByLabel('已删除卡片')).toBeVisible();
-  await expect(page.locator('.body-editor h2')).toHaveText('正在编辑：待删除甲');
+  await expect(page.locator('.body-editor h2')).toHaveText('待删除甲');
   await expect(page.locator('.react-flow__node.selected')).toHaveCount(1);
   await page.getByRole('button', { name: '撤销删除', exact: true }).click();
   await expect(page.locator('.react-flow__node')).toHaveCount(2);
-  await expect(page.locator('.body-editor h2')).toHaveText('正在编辑：待删除甲');
+  await expect(page.locator('.body-editor h2')).toHaveText('待删除甲');
   await page.getByRole('button', { name: '保留乙', exact: true }).click();
-  await expect(page.locator('.body-editor h2')).toHaveText('正在编辑：保留乙');
+  await expect(page.locator('.body-editor h2')).toHaveText('保留乙');
   expect((await workspace.state()).cards).toHaveLength(2);
 });
 
@@ -86,7 +86,7 @@ test('段落原请求丢ACK、切卡和关闭保持原卡绑定，重开明确�
     await expect.poll(() => written).toBe(true);
     await page.getByRole('button', { name: 'b', exact: true }).click();
     ack.release();
-    await expect(page.locator('.body-editor h2')).toHaveText('正在编辑：b');
+    await expect(page.locator('.body-editor h2')).toHaveText('b');
     await expect(editor).toHaveText('初始b');
     expect((await workspace.state()).cards.find(c => c.id === 'a')!.body.blocks.map(b => b.text)).toEqual(['初始a', '甲第二段']);
     expect((await workspace.state()).cards.find(c => c.id === 'b')!.body.blocks.map(b => b.text)).toEqual(['初始b']);
