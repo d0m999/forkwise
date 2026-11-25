@@ -72,6 +72,47 @@ it('HTTP 回环会话可以创建和重读项目，跨站、无会话及伪造 H
   }
 });
 
+it('画布引导偏好仅工作台所有者可写，保存独立于项目和撤销记录', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'forkwise-guide-http-'));
+  const mapping = openMapping(directory);
+  const origin = 'http://127.0.0.1:8790';
+  const app = createWorkspaceApp(mapping, origin, () => new Response(''));
+  const endpoint = origin + '/api/workspace/guide';
+  try {
+    const ownerToken = mapping.access.issue('human', ['*']);
+    const owner = mapping.access.authenticate(ownerToken);
+    const projectId = 'guide-project';
+    mapping.execute({ commandId: 'create-guide-project', projectId, type: 'project.create', expected: null, payload: { name: '研究' } }, owner);
+    const state = mapping.read({ type: 'project', projectId }, owner);
+    const history = mapping.read({ type: 'history', projectId }, owner);
+    const read = (token: string) => app.request(endpoint, { headers: { Authorization: `Bearer ${token}` } });
+    const write = (token: string | undefined, preference: unknown, requestOrigin = origin) => app.request(endpoint, {
+      method: 'PUT', body: JSON.stringify({ preference }),
+      headers: { Origin: requestOrigin, 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    });
+    expect(await (await read(ownerToken)).json()).toEqual({ preference: null });
+    expect((await write(undefined, 'completed')).status).toBe(401);
+    expect((await write(ownerToken, 'completed', 'https://example.invalid')).status).toBe(403);
+    for (const type of ['human', 'agent'] as const) {
+      const projectToken = mapping.access.issue(type, [projectId]);
+      expect((await read(projectToken)).status).toBe(403);
+      expect((await write(projectToken, 'completed')).status).toBe(403);
+    }
+    expect((await write(ownerToken, 'unknown')).status).toBe(400);
+    expect(await (await read(ownerToken)).json()).toEqual({ preference: null });
+    expect((await write(ownerToken, 'skipped')).status).toBe(204);
+    expect(await (await read(ownerToken)).json()).toEqual({ preference: 'skipped' });
+    expect((await write(ownerToken, 'completed')).status).toBe(204);
+    expect((await write(ownerToken, 'skipped')).status).toBe(204);
+    expect(await (await read(ownerToken)).json()).toEqual({ preference: 'completed' });
+    expect(mapping.read({ type: 'project', projectId }, owner)).toEqual(state);
+    expect(mapping.read({ type: 'history', projectId }, owner)).toEqual(history);
+  } finally {
+    mapping.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 it('HTTP 可信项目编辑委托与 UI 共用 execute；请求自报 human、越权 ID 和重复身份明确拒绝', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'forkwise-mapping-auth-'));
   const mapping = openMapping(directory);

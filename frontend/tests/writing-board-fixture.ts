@@ -26,8 +26,9 @@ export type Workspace = {
   installOriginalTagColor: (id: string, color: string) => Promise<void>;
   installOriginalShapeItem: (id: string, itemId: string) => Promise<void>;
 };
-export const test = base.extend<{ workspace: Workspace }>({
-  workspace: async ({ page }, use, testInfo) => {
+export const test = base.extend<{ workspace: Workspace; workspaceStartsEmpty: boolean }>({
+  workspaceStartsEmpty: [false, { option: true }],
+  workspace: async ({ page, workspaceStartsEmpty }, use, testInfo) => {
     const directory = mkdtempSync(join(tmpdir(), "forkwise-issue10-"));
     const evidence = process.env.FORKWISE_ISSUE10_RESOURCE_LOG;
     const record = (event: Record<string, unknown>) => {
@@ -124,8 +125,10 @@ export const test = base.extend<{ workspace: Workspace }>({
       origin = `http://127.0.0.1:${port}`;
       await start();
       await open(page);
-      await page.getByRole("button", { name: "新建研究", exact: true }).click();
-      await expect(page.getByRole("tab", { selected: true })).toBeVisible();
+      if (!workspaceStartsEmpty) {
+        await page.getByRole("button", { name: "新建研究", exact: true }).click();
+        await expect(page.getByRole("tab", { selected: true })).toBeVisible();
+      }
       await use({
         origin,
         directory,

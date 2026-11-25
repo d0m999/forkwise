@@ -10,6 +10,7 @@ import { SnapshotMenu } from "./snapshot-menu";
 import { ExportMenu } from "./export-menu";
 import { ImportPackage, importDialogOpen } from "./import-package";
 import { WorkspaceProjectDialog } from './workspace-project-dialog';
+import { WorkspaceGuide } from './workspace-guide';
 import { renderCanvasPng, type CanvasExportVisual } from "./canvas-export";
 import { useCanvasImageInput } from "./canvas-image-input";
 import { droppedFilePlan, fileAssetPayload, runDroppedFiles } from "./canvas-drop";
@@ -316,6 +317,9 @@ function draftKey(projectId: string, cardId: string, field: Draft["field"]) {
 function Workspace() {
   const [state, setState] = useState<ProjectState | null>(null);
   const projectTabs = useRef<HTMLDivElement>(null);
+  const [launchReady, setLaunchReady] = useState(false);
+  const [launchEmpty, setLaunchEmpty] = useState(false);
+  const guideDialog = useRef<HTMLDialogElement>(null);
   const navigation = useRef<HTMLButtonElement>(null);
   const [attachTarget, setAttachTarget] = useState<string | null>(null);
   useEffect(() => {
@@ -1114,11 +1118,16 @@ function Workspace() {
           authority.current = null;
           const focused = document.activeElement;
           const dialog = renameDialog.current;
+          const guide = guideDialog.current;
           const focusInRename = dialog?.open && (dialog.contains(focused) || focused === document.body);
+          const focusInGuide = guide?.open && (guide.contains(focused) || focused === document.body);
           dialog?.close();
+          guide?.close();
+          setLaunchReady(false);
+          setLaunchEmpty(false);
           setRenaming(null);
           setName('');
-          if (focusInRename || projectTabs.current?.contains(focused) || projectNavList.current?.contains(focused)) {
+          if (focusInRename || focusInGuide || projectTabs.current?.contains(focused) || projectNavList.current?.contains(focused)) {
             navigation.current?.focus({ preventScroll: true });
           }
           setState(null);
@@ -1248,6 +1257,16 @@ function Workspace() {
     frameDrag.current = null;
     setFramePreview(null);
     return epoch;
+  }
+  function chooseCardPlacement() {
+    if (strokeDraw.hasPending()) return false;
+    beginCreationToolChoice();
+    strokeDraw.setMode(null);
+    setPanTool(false);
+    setShapePreset(null);
+    texts.setPlacing(false);
+    setPlacing(true);
+    return true;
   }
   async function chooseStroke(kind: PenKind) {
     const projectId = authority.current?.project.id;
@@ -2448,7 +2467,10 @@ function Workspace() {
   useEffect(() => {
     let active = true;
     void authorizeLocalSession()
-      .then(() => api.projects())
+      .then(() => {
+        if (active) setLaunchReady(true);
+        return api.projects();
+      })
       .then(async (all) => {
         if (!active) return;
         setProjects(all);
@@ -2459,6 +2481,7 @@ function Workspace() {
           if (active) updateState(value);
         }
         if (active) {
+          setLaunchEmpty(!first);
           setStatus(scanRecovery() ? "有待恢复的未确认草稿" : "已保存到本机");
         }
       })
@@ -3290,6 +3313,17 @@ function Workspace() {
     ? [...organizeCancellations.pending.values()].filter(({ projectId, request }) =>
       projectId === organizing.projectId && (!organizing.source || request.cardId === organizing.source.id)).map(({ request }) => request)
     : [];
+  const showNoProjects = launchEmpty && !state && !projects.length;
+  const showEmptyCanvas = state && !spatialItems(state).length && !state.frames?.length &&
+    !state.groups?.length && !state.connectors?.length && !textNodes.length &&
+    !placing && !texts.placing && !frameTool && !shapePreset && !strokeDraw.mode && !connectorCreate.mode;
+  // Opening a modal shifts focus, which would end these editing rounds.
+  const guideEditInProgress = !!editing || !!connectorLabel.session || frameMove.hasKeyboardResize() ||
+    texts.nodes.some(node => node.data.editing) ||
+    !!(state && currentBody && draftView[draftKey(state.project.id, currentBody.id, 'body')]);
+  function openGuide() {
+    if (!guideEditInProgress && !composition.current) guideDialog.current?.showModal();
+  }
   return (
     <div
       className="workspace"
@@ -3297,6 +3331,7 @@ function Workspace() {
       data-revision={state?.project.revision}
       onClickCapture={event => {
         const target = event.target as Element;
+        if (target.closest('[data-workspace-guide]')) return;
         if (connectorLabel.currentSession() && !connectorLabelHistoryBusy && !target.closest('.connector-label-session') &&
           (!target.closest('.connector-tools') || target.closest('.connector-label-position input')) &&
           (target.closest('.react-flow__controls') || !target.closest('.react-flow__node, .react-flow__pane, .canvas-connector, .connector-label'))) {
@@ -3304,6 +3339,8 @@ function Workspace() {
         }
       }}
     >
+      <WorkspaceGuide ready={launchReady} showInvitation={showNoProjects && !nav} editInProgress={guideEditInProgress}
+        open={openGuide} dialog={guideDialog} navigation={navigation} />
       {syncNotice && (
         <div className="recovery-error" aria-live="polite">
           {syncNotice}
@@ -3329,6 +3366,8 @@ function Workspace() {
           aria-expanded={nav}
           aria-controls={nav ? 'project-navigation' : undefined}
           title="项目导航"
+          data-workspace-guide
+          onMouseDown={event => event.preventDefault()}
           onClick={() => setNav(!nav)}
         >
           <img src={brandMark} width="36" height="36" alt="" />
@@ -3432,6 +3471,9 @@ function Workspace() {
               {pinned ? "取消固定" : "固定"}
             </button>
           </div>
+          {launchReady && <button type="button" aria-haspopup="dialog" data-workspace-guide aria-disabled={guideEditInProgress}
+            title={guideEditInProgress ? '结束当前操作后可查看引导' : undefined}
+            onMouseDown={event => event.preventDefault()} onClick={openGuide}>画布引导</button>}
           {state && <button onClick={() => setOrganizing({ projectId: state.project.id })}
             disabled={busy || historyBlocked} aria-haspopup="dialog">AI 整理记录</button>}
           <div className="project-nav-list" ref={projectNavList}>
@@ -3454,6 +3496,7 @@ function Workspace() {
         aria-label={state ? `${state.project.name}画布` : '画布'}
         className={panelCard ? "canvas with-editor" : "canvas"}
         data-exporting={exportVisual ? 'true' : undefined}
+        data-no-projects={showNoProjects || undefined}
         tabIndex={0}
         onDragOver={event => {
           if (!event.dataTransfer.types.includes('Files')) return;
@@ -3799,11 +3842,24 @@ function Workspace() {
               ))}
             </ViewportPortal>
           </ReactFlow>
-        ) : (
-          <div className="empty">
-            <h1>从一个想法开始</h1>
-            <p>新建研究，在画布上记下第一张卡片。</p>
-          </div>
+        ) : null}
+        {(showNoProjects || showEmptyCanvas) && (
+          <section className="workspace-empty" aria-labelledby="workspace-empty-title">
+            <img src={brandMark} width="55" height="55" alt="" />
+            <h2 id="workspace-empty-title">{showNoProjects ? '尚无研究' : '从一个想法开始'}</h2>
+            <button type="button" aria-disabled={busy || historyBlocked}
+              onClick={event => {
+                if (busy || historyBlocked) return;
+                if (showNoProjects) void createProject();
+                else if (chooseCardPlacement()) event.currentTarget.closest('main')?.focus({ preventScroll: true });
+              }}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
+                <path d="M12 5v14M5 12h14" />
+              </svg>
+              {showNoProjects ? '创建研究' : '新建卡片'}
+            </button>
+            {!showNoProjects && <p>直接粘贴文字可新建正文卡片，粘贴图片可添加独立图片</p>}
+          </section>
         )}
         {state && connectorCreate.mode && <ConnectorCreateControls active={connectorCreate.keyboardActive} focusFree={connectorCreate.draft?.startEndpoint.kind === 'free'}
           blocked={connectorCreate.keyboardBlocked()} composing={() => composition.current} start={connectorCreate.startBlank}
@@ -3880,15 +3936,7 @@ function Workspace() {
             <button
               aria-pressed={placing}
               disabled={busy || historyBlocked}
-              onClick={() => {
-                if (strokeDraw.hasPending()) return;
-                beginCreationToolChoice();
-                strokeDraw.setMode(null);
-                setPanTool(false); setFrameTool(false);
-                setShapePreset(null);
-                texts.setPlacing(false);
-                setPlacing(true);
-              }}
+              onClick={chooseCardPlacement}
             >
               卡片
             </button>

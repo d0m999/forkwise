@@ -557,7 +557,19 @@ test("结束正文查找不隐藏编辑光标，离开编辑后恢复折叠", as
   await board.locator("[data-block-id=inside]").click();
   await board.getByRole("button", { name: "结束正文查找" }).click();
   await expect(board.locator("[data-block-id=inside]")).toBeVisible();
-  await page.locator(".react-flow__pane").click({ position: { x: 10, y: 10 } });
+  const editor = board.getByRole("textbox", { name: "卡片正文", exact: true });
+  await editor.focus();
+  await page.getByRole("button", { name: "项目导航", exact: true }).click();
+  await expect(editor).toBeFocused();
+  await expect(board.locator("[data-block-id=inside]")).toBeVisible();
+  await page.locator('.project-nav').getByRole('button', { name: '画布引导', exact: true }).click();
+  const guide = page.getByRole('dialog', { name: '画布引导', exact: true });
+  await expect(guide).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(guide).toHaveCount(0);
+  await expect(editor).toBeFocused();
+  await expect(board.locator("[data-block-id=inside]")).toBeVisible();
+  await page.locator(".react-flow__pane").click({ position: { x: 360, y: 310 } });
   await expect(board.locator("[data-block-id=inside]")).toBeHidden();
 });
 
