@@ -148,8 +148,10 @@ for (const method of ['GET', 'PUT']) {
     const requestMatches = (request: Request) => request.url() === endpoint && request.method() === method;
     const dialog = page.getByRole('dialog', { name: '画布引导', exact: true });
     const navigation = page.getByRole('button', { name: '项目导航', exact: true });
+    const invite = page.getByRole('button', { name: '查看引导', exact: true });
+    await expect(invite).toBeVisible();
     if (method === 'PUT') {
-      await page.getByRole('button', { name: '查看引导', exact: true }).click();
+      await invite.click();
       await expect(dialog).toBeVisible();
     }
     let release!: () => void;
@@ -187,4 +189,91 @@ test('未携带启动凭证且无有效会话时，隐藏引导和新建研究�
   await expect(page.locator('.project-nav').getByRole('button', { name: '画布引导', exact: true })).toHaveCount(0);
   await expect(research(page)).toHaveCount(0);
   await expect(page.getByRole('button', { name: '新建研究', exact: true })).toBeDisabled();
+});
+
+test('引导撤权后，已完成但延迟送达的研究交接不能重新显示项目', async ({ page, workspace }) => {
+  const guideEndpoint = workspace.origin + '/api/workspace/guide';
+  const projectsEndpoint = workspace.origin + '/api/mapping/projects';
+  const guide = page.getByRole('dialog', { name: '画布引导', exact: true });
+  await page.getByRole('button', { name: '查看引导', exact: true }).click();
+  await expect(guide).toBeVisible();
+  let releaseSave!: () => void;
+  let releaseProjects!: () => void;
+  let receivedProjects!: (status: number) => void;
+  const heldSave = new Promise<void>(resolve => { releaseSave = resolve; });
+  const heldProjects = new Promise<void>(resolve => { releaseProjects = resolve; });
+  const preRevocationProjects = new Promise<number>(resolve => { receivedProjects = resolve; });
+  const guideRequest = (request: Request) => request.url() === guideEndpoint && request.method() === 'PUT';
+  const guideStarted = page.waitForRequest(guideRequest);
+  const guideReturned = page.waitForResponse(response => guideRequest(response.request()));
+  const projectsReturned = page.waitForResponse(response => response.url() === projectsEndpoint);
+  await page.evaluate(endpoint => {
+    const json = Response.prototype.json;
+    Response.prototype.json = async function () {
+      const value = await json.call(this);
+      if (this.ok && this.url === endpoint) requestAnimationFrame(() => requestAnimationFrame(() => {
+        document.documentElement.dataset.lateProjectsRead = 'received';
+      }));
+      return value;
+    };
+  }, projectsEndpoint);
+  const topbarCreate = page.getByRole('button', { name: '新建研究', exact: true });
+  await page.route(guideEndpoint, async route => {
+    if (guideRequest(route.request())) await heldSave;
+    await route.continue();
+  });
+  await page.route(projectsEndpoint, async route => {
+    const result = await route.fetch();
+    receivedProjects(result.status());
+    await heldProjects;
+    await route.fulfill({ response: result });
+  }, { times: 1 });
+  try {
+    await guide.getByRole('button', { name: '跳过引导' }).press('Enter');
+    await guideStarted;
+    await page.keyboard.press('Escape');
+    await expect(guide).toHaveCount(0);
+    await research(page).getByRole('button', { name: '创建研究', exact: true }).click();
+    expect(await preRevocationProjects).toBe(200);
+    await expect(topbarCreate).toHaveJSProperty('disabled', true);
+    workspace.revoke();
+    releaseSave();
+    expect((await guideReturned).status()).toBe(401);
+    await expect(page.getByText('授权已失效，请从本机启动入口重新打开；未确认草稿已保留')).toBeVisible();
+    await expect(research(page)).toHaveCount(0);
+  } finally {
+    releaseSave();
+    releaseProjects();
+  }
+  expect((await projectsReturned).status()).toBe(200);
+  await expect(page.locator('html')).toHaveAttribute('data-late-projects-read', 'received');
+  expect(new URL(page.url()).searchParams.has('project')).toBe(false);
+  await expect(page.getByRole('tab')).toHaveCount(0);
+  // The command has unwound its busy state after processing the held response.
+  await expect(topbarCreate).toHaveJSProperty('disabled', false);
+  await expect(topbarCreate).toHaveAttribute('aria-disabled', 'true');
+  await expect(emptyCanvas(page)).toHaveCount(0);
+});
+
+
+test('失效的启动凭证不会让顶栏新建研究接受键盘或鼠标', async ({ page, workspace }) => {
+  await page.context().clearCookies();
+  const denied = page.waitForResponse(response => response.url() === workspace.origin + '/api/session');
+  const writes: string[] = [];
+  page.on('request', request => {
+    if (request.url().endsWith('/api/mapping/execute')) writes.push(request.postDataJSON().type);
+  });
+  await page.goto('about:blank');
+  await page.goto(workspace.origin + '/#token=invalid-fixture-token');
+  expect((await denied).status()).toBe(401);
+  await expect(page.getByRole('status')).toHaveText('保存未完成');
+  const create = page.getByRole('button', { name: '新建研究', exact: true });
+  await expect(create).toBeDisabled();
+  await create.focus();
+  await page.keyboard.press('Enter');
+  await page.keyboard.press('Space');
+  const box = (await create.boundingBox())!;
+  await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+  expect(writes).toEqual([]);
+  await expect(research(page)).toHaveCount(0);
 });

@@ -318,6 +318,7 @@ function Workspace() {
   const [state, setState] = useState<ProjectState | null>(null);
   const projectTabs = useRef<HTMLDivElement>(null);
   const [workspaceAccess, setWorkspaceAccess] = useState<'loading' | 'ready' | 'revoked'>('loading');
+  const workspaceRevoked = useRef(false);
   const [guideAccess, setGuideAccess] = useState<'pending' | 'allowed' | 'retry' | 'denied'>('pending');
   const guideDialog = useRef<HTMLDialogElement>(null);
   const navigation = useRef<HTMLButtonElement>(null);
@@ -1087,6 +1088,7 @@ function Workspace() {
     setGuideAccess('denied');
   }
   function revokeWorkspaceView() {
+    workspaceRevoked.current = true;
     persistDrafts();
     authority.current = null;
     const focused = document.activeElement;
@@ -1474,11 +1476,13 @@ function Workspace() {
     };
   });
   const handoff = async (id: string) => {
+    if (workspaceRevoked.current) return false;
     const value = await api.project(id);
     const all = await api.projects();
     // Keep the old project's authority while the destination is loading: the
     // visible editors may still accept input during those requests.
     if (!(await shapeMove.flush()) || !(await connectorLabel.finish()) || !(await shapeText.finish()) || !(await texts.finish()) || !(await pose.flush()) || !(await flush())) return false;
+    if (workspaceRevoked.current) return false;
     updateState(value);
     setProjects(all);
     setWorkspaceAccess('ready');
@@ -2059,6 +2063,7 @@ function Workspace() {
     finally { setBusy(false); }
   }
   async function createProject() {
+    if (workspaceRevoked.current || projectCreationBlocked) return;
     const id = crypto.randomUUID();
     await action(
       {
@@ -2480,15 +2485,15 @@ function Workspace() {
     void authorizeLocalSession()
       .then(() => api.projects())
       .then(async (all) => {
-        if (!active) return;
+        if (!active || workspaceRevoked.current) return;
         setProjects(all);
         const id = new URLSearchParams(location.search).get("project");
         const first = all.find((p) => p.id === id) ?? all[0];
         if (first) {
           const value = await api.project(first.id);
-          if (active) updateState(value);
+          if (active && !workspaceRevoked.current) updateState(value);
         }
-        if (active) {
+        if (active && !workspaceRevoked.current) {
           setWorkspaceAccess('ready');
           setStatus(scanRecovery() ? "有待恢复的未确认草稿" : "已保存到本机");
         }
@@ -3324,7 +3329,8 @@ function Workspace() {
       projectId === organizing.projectId && (!organizing.source || request.cardId === organizing.source.id)).map(({ request }) => request)
     : [];
   const canOpenGuide = workspaceAccess === 'ready' && (guideAccess === 'allowed' || guideAccess === 'retry');
-  const projectCreationBlocked = busy || historyBlocked || workspaceAccess === 'revoked' || guideAccess === 'denied';
+  const projectCreationUnavailable = workspaceAccess !== 'ready' || guideAccess === 'denied';
+  const projectCreationBlocked = busy || historyBlocked || projectCreationUnavailable;
   const showNoProjects = workspaceAccess === 'ready' && !state && !projects.length && guideAccess !== 'denied';
   const showEmptyCanvas = state && !spatialItems(state).length && !state.frames?.length &&
     !state.groups?.length && !state.connectors?.length && !textNodes.length;
@@ -3334,10 +3340,10 @@ function Workspace() {
     texts.nodes.some(node => node.data.editing) ||
     !!(state && currentBody && draftView[draftKey(state.project.id, currentBody.id, 'body')]);
   function handleGuideAccess(result: GuideAccessResult) {
-    if (workspaceAccess === 'revoked') return;
+    if (workspaceRevoked.current) return;
     if (result === 401) revokeWorkspaceView();
     else if (result === 403) hideGuide();
-    else setGuideAccess(result);
+    else setGuideAccess(current => current === 'denied' ? current : result);
   }
   function openGuide() {
     if (canOpenGuide && !guideEditInProgress && !composition.current) guideDialog.current?.showModal();
@@ -3432,7 +3438,8 @@ function Workspace() {
           aria-label="新建研究"
           title="新建研究"
           onClick={() => void createProject()}
-          disabled={projectCreationBlocked}
+          aria-disabled={projectCreationUnavailable || undefined}
+          disabled={busy || historyBlocked}
         >
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
             <path d="M12 5v14M5 12h14" />

@@ -37,7 +37,7 @@ test('项目内引导只从导航打开，键盘跳过后可立即在画布创�
   await expect(invitation).toHaveCount(0);
 });
 
-test('偏好读取及保存失败可重试，首次项目加载失败后也可继续研究', async ({ page, workspace }) => {
+test('偏好读取及保存失败可重试，项目列表重开成功后可继续研究', async ({ page, workspace }) => {
   const failed = new Set<string>();
   await page.route('**/api/mapping/projects', route => route.fulfill({ status: 503, json: { message: '项目暂时无法打开' } }), { times: 1 });
   await page.route('**/api/workspace/guide', route => {
@@ -48,7 +48,12 @@ test('偏好读取及保存失败可重试，首次项目加载失败后也可�
     return route.fulfill({ status: 503, json: { message: '偏好服务暂时不可用' } });
   });
   await page.reload();
-  await page.getByRole('button', { name: '新建研究', exact: true }).click();
+  const create = page.getByRole('button', { name: '新建研究', exact: true });
+  await expect(page.getByRole('status')).toHaveText('保存未完成');
+  await expect(create).toBeDisabled();
+  await page.reload();
+  await expect(page.getByRole('status')).toHaveText('已保存到本机');
+  await create.click();
   await expect(page.getByRole('tab', { selected: true })).toBeVisible();
   await place(page, '偏好服务暂时异常时记录', 390, 210);
   await expect(page.getByRole('button', { name: '偏好服务暂时异常时记录', exact: true })).toBeVisible();
@@ -447,4 +452,56 @@ test('左上方对象工具与导航重叠时，真实指针仍可打开引导',
   await navigation.click();
   await tools.getByRole('button', { name: '编辑形状文字' }).click();
   await expect(page.getByRole('textbox', { name: '形状文字' })).toBeFocused();
+});
+
+test('引导 PUT 被真实项目权限拒绝后，晚到的旧偏好不能恢复入口', async ({ page, workspace }) => {
+  const projectId = (await workspace.state()).project.id;
+  const endpoint = workspace.origin + '/api/workspace/guide';
+  await page.addInitScript(() => {
+    const json = Response.prototype.json;
+    Response.prototype.json = async function () {
+      const value = await json.call(this);
+      if (this.ok && this.url.endsWith('/api/workspace/guide')) {
+        requestAnimationFrame(() => requestAnimationFrame(() => {
+          document.documentElement.dataset.lateGuideRead = 'received';
+        }));
+      }
+      return value;
+    };
+  });
+  let release!: () => void;
+  let received!: (status: number) => void;
+  let attempts = 0;
+  const hold = new Promise<void>(resolve => { release = resolve; });
+  const beforeScopeChange = new Promise<number>(resolve => { received = resolve; });
+  await page.route(endpoint, async route => {
+    if (route.request().method() !== 'GET') return route.continue();
+    if (++attempts === 1) return route.fulfill({ status: 503, json: { message: '先触发读取重试' } });
+    const ownerResult = await route.fetch();
+    received(ownerResult.status());
+    await hold;
+    return route.fulfill({ response: ownerResult });
+  });
+  await page.reload();
+  const guide = await openReplay(page);
+  const denied = page.waitForResponse(response => response.url() === endpoint && response.request().method() === 'PUT');
+  try {
+    await guide.getByRole('button', { name: '重试读取', exact: true }).click();
+    expect(await beforeScopeChange).toBe(200);
+    const mapping = openMapping(workspace.directory);
+    let scoped: string;
+    try { scoped = mapping.access.issue('human', [projectId]); }
+    finally { mapping.close(); }
+    const cookie = (await page.context().cookies(workspace.origin)).find(value => value.name.startsWith('forkwise_workspace_'));
+    if (!cookie) throw new Error('Expected the isolated workspace session cookie');
+    await page.context().addCookies([{ ...cookie, value: scoped }]);
+    await guide.getByRole('button', { name: '下一步' }).click();
+    await guide.getByRole('button', { name: '下一步' }).click();
+    await guide.getByRole('button', { name: '完成引导' }).click();
+    expect((await denied).status()).toBe(403);
+    await expect(guide).toHaveCount(0);
+  } finally { release(); }
+  await expect(page.locator('html')).toHaveAttribute('data-late-guide-read', 'received');
+  await expect(page.locator('.project-nav').getByRole('button', { name: '画布引导', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('tab', { selected: true })).toBeVisible();
 });

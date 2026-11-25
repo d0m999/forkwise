@@ -251,6 +251,7 @@ button[aria-current="true"] {
   white-space: nowrap;
   font-size: 13px;
 }
+.project-create[aria-disabled="true"] { opacity: .5; cursor: default; }
 .project-create,
 .workspace-actions .project-search-trigger {
   display: inline-flex;
