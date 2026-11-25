@@ -294,6 +294,10 @@ function deletesCard(action: HistoryAction, cardId: string) {
 }
 type CardSaveOwner = Pick<Draft, "projectId" | "cardId" | "field"> & { commandId: string };
 
+function failureMessage(error: unknown) {
+  return error instanceof Error ? error.message : "本机服务暂时不可用";
+}
+
 function draftKey(projectId: string, cardId: string, field: Draft["field"]) {
   return JSON.stringify([projectId, cardId, field]);
 }
@@ -595,7 +599,6 @@ function Workspace() {
     [busy, setBusy] = useState(true);
   const [savingDraft, setSavingDraft] = useState<CardSaveOwner | null>(null);
   const [savingBodyAction, setSavingBodyAction] = useState<CardSaveOwner | null>(null);
-  const error = failure?.message ?? "";
   function setError(message: string) {
     setFailure(message ? { message, owner: undefined } : null);
   }
@@ -606,6 +609,7 @@ function Workspace() {
     selectionIntent?: SelectionIntent;
     receipt?: Awaited<ReturnType<typeof api.execute>>;
     rejected?: string;
+    bodyFailure?: { message: string; owner: CardSaveOwner };
     options?: ActionOptions;
   } | null>(null);
   const cardDeletion = useRef<ReturnType<typeof captureCardDeletion>>(null);
@@ -1433,7 +1437,7 @@ function Workspace() {
     }
   };
   function fail(e: unknown, owner?: CardSaveOwner) {
-    setFailure({ message: e instanceof Error ? e.message : "本机服务暂时不可用", owner });
+    setFailure({ message: failureMessage(e), owner });
     setStatus("保存未完成");
   }
   async function drainCompletedPrefix(
@@ -1919,7 +1923,10 @@ function Workspace() {
         pendingAction.current = null;
         try { await refresh(command.projectId); } catch { /* Keep the unconfirmed view; authorization polling owns retraction. */ }
       }
-      fail(e, savingOwner ?? undefined);
+      if (savingOwner) {
+        pending.bodyFailure = { message: failureMessage(e), owner: savingOwner };
+        setStatus("保存未完成");
+      } else fail(e);
       return false;
     } finally {
       if (savingOwner) setSavingBodyAction(null);
@@ -3110,11 +3117,15 @@ function Workspace() {
   const ownsCurrentBody = (owner: CardSaveOwner | null | undefined) =>
     owner?.field === "body" && owner.projectId === state?.project.id && owner.cardId === currentBody?.id;
   const currentBodySaving = ownsCurrentBody(savingDraft) || ownsCurrentBody(savingBodyAction);
-  const failureOwner = failure?.owner;
-  const currentBodyFailed = ownsCurrentBody(failureOwner) && !currentBodySaving;
+  const pendingBodyFailure = pendingAction.current?.bodyFailure;
+  const retryFailure = pendingBodyFailure
+    ? pendingBodyFailure.owner.projectId === state?.project.id ? pendingBodyFailure : null
+    : failure;
+  const currentBodyFailed = !currentBodySaving &&
+    (ownsCurrentBody(failure?.owner) || ownsCurrentBody(pendingBodyFailure?.owner));
   const pending = pendingAction.current?.command;
-  const boardSaveFailure = !!(currentBodyFailed && !pose.error && !conflict &&
-    !historyCommand.current && (!pending || pending.type === "body.edit" && pending.commandId === failureOwner?.commandId));
+  const boardSaveFailure = currentBodyFailed && ownsCurrentBody(retryFailure?.owner) &&
+    !pose.error && !conflict && !historyCommand.current && (!pending || retryFailure === pendingBodyFailure);
   const boardStatus = !currentBody ? "已删除 · 内容保留"
     : currentBodyFailed ? "保存未完成"
     : currentBodySaving ? "正在保存…"
@@ -3123,9 +3134,10 @@ function Workspace() {
     : currentBody.body.blocks.some(block => imageTask(block)?.status === "failed") ? "媒体保存失败 · 重试或移除"
     : currentBody.body.blocks.some(block => imageTask(block)) ? "媒体处理中 · 尚未保存"
     : bodyPreviewText(currentBody.body).trim() ? "正文已保存" : "已保存到本机";
-  const retryingFailure = failureOwner &&
-    (savingDraft?.commandId === failureOwner.commandId || savingBodyAction?.commandId === failureOwner.commandId);
-  const visibleError = retryingFailure ? "" : error;
+  const retryOwner = retryFailure?.owner;
+  const retryingFailure = retryOwner &&
+    (savingDraft?.commandId === retryOwner.commandId || savingBodyAction?.commandId === retryOwner.commandId);
+  const visibleError = retryingFailure ? "" : retryFailure?.message;
   const saveFailure = (visibleError || pose.error) ? (
     <>
       <span role="alert">
@@ -3790,7 +3802,7 @@ function Workspace() {
           projectId={state!.project.id} cardId={panelCard.id} opened={bodyOpened}
           title={draftView[draftKey(state!.project.id, panelCard.id, "title")]?.value ?? panelCard.title}
           status={boardStatus}
-          identifyCard={!!currentBody && (singleItemId !== currentBody.item.id || selectedConnectors.length > 0)}
+          identifyCard={!!currentBody && (singleItemId !== currentBody.item.id || selectedConnectors.length > 0 || selectedFrameIds.length > 0)}
           saveFailure={boardSaveFailure ? saveFailure : undefined}
           onClose={() => {
             if (composition.current) return;
@@ -4063,6 +4075,8 @@ function Workspace() {
           )
         )}
         {attachTarget && <span>点击要附着的卡片</span>}
+        {!!visibleError && retryFailure === pendingBodyFailure && failure && !failure.owner && failure.message !== visibleError &&
+          <span role="alert">{failure.message}</span>}
         {saveFailure && !boardSaveFailure && saveFailure}
         {saveFailure && pendingAction.current?.rejected && <button disabled={busy} onClick={() => void abandonStructure()}>
           {['thought.create', 'shape.create', 'stroke.create'].includes(pendingAction.current.command.type) ? '放弃本次创建' : pendingAction.current.command.type === 'text.delete' ? '放弃本次删除' : pendingAction.current.command.type.startsWith('frame.') ? '放弃本次分区操作' : '放弃本次组合操作'}

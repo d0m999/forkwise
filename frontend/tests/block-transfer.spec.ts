@@ -121,8 +121,10 @@ test('未知原件和已有媒体可明确复制副本，保原文资源引用�
   workspace,
 }) => {
   await place(page, '未知块复制');
+  await place(page, '另一张正文', 430, 160);
   const state = await workspace.state(),
     card = state.cards[0]!;
+  const other = state.cards[1]!;
   const originals = [
     { id: 'p', type: 'text', text: '已知段落' },
     {
@@ -136,19 +138,23 @@ test('未知原件和已有媒体可明确复制副本，保原文资源引用�
   ];
   await workspace.installOriginalBody(card.id, originals);
   await workspace.open(page);
-  await page.getByRole('button', { name: '未知块复制', exact: true }).click();
-  await page.getByRole('button', { name: '编辑正文', exact: true }).click();
+  const originalTitle = page.getByRole('button', { name: '未知块复制', exact: true });
+  await originalTitle.click();
+  await page.locator('.react-flow__node').filter({ has: originalTitle }).getByRole('button', { name: '编辑正文', exact: true }).click();
   await page.setViewportSize({ width: 760, height: 900 });
   const board = page.getByRole('complementary', { name: '写字板', exact: true });
-  await page.getByRole('button', { name: '选择块：旧列表原件', exact: true }).click();
-  await page
-    .getByRole('button', { name: '选择块：image', exact: true })
-    .click({ modifiers: ['Shift'] });
+  const copyOriginals = async () => {
+    await board.locator('[data-block-id="raw"]').getByRole('button', { name: '选择块：旧列表原件', exact: true }).click();
+    await board.locator('[data-block-id="image"]').getByRole('button', { name: '选择块：image', exact: true }).click({ modifiers: ['Shift'] });
+    await page.getByRole('menuitem', { name: '创建副本', exact: true }).click();
+  };
   const requests: unknown[] = [];
+  let rejectOtherDraft = true;
   let reject!: () => void;
   const held = new Promise<void>(resolve => { reject = resolve; });
   await page.route('**/api/mapping/execute', async route => {
     const command = route.request().postDataJSON();
+    if (command.type === 'body.edit' && command.payload.id === other.id && rejectOtherDraft) return route.abort();
     if (command.type !== 'body.edit' || !command.payload.copyOriginals) return route.continue();
     requests.push(command);
     if (requests.length === 1) {
@@ -158,14 +164,43 @@ test('未知原件和已有媒体可明确复制副本，保原文资源引用�
     await route.continue();
   });
   try {
-    await page.getByRole('menuitem', { name: '创建副本', exact: true }).click();
+    await copyOriginals();
     await expect.poll(() => requests.length).toBe(1);
     await expect(board.getByText('正在保存…', { exact: true })).toBeInViewport();
     reject();
     await expect(board.getByText('保存未完成', { exact: true })).toBeInViewport();
     const retry = board.getByRole('button', { name: '重试保存', exact: true });
     await expect(retry).toBeInViewport();
+    const originalError = await board.getByRole('alert').textContent();
+    await copyOriginals();
+    await expect(page.getByRole('alert').filter({ hasText: '请先重试未完成的保存' })).toBeVisible();
+    expect(requests).toHaveLength(1);
+    await expect(board.getByText('保存未完成', { exact: true })).toBeInViewport();
+    await expect(board.getByRole('alert')).toHaveText(originalError!);
+    await expect(retry).toBeInViewport();
     expect((await workspace.state()).cards[0]!.body.blocks).toEqual(originals);
+
+    await page.setViewportSize({ width: 1360, height: 900 });
+    await page.getByRole('button', { name: '另一张正文', exact: true }).click();
+    await expect(board.getByRole('heading', { name: '另一张正文', exact: true })).toBeInViewport();
+    const otherEditor = board.getByRole('textbox', { name: '卡片正文', exact: true });
+    await otherEditor.fill('另一张卡最初也保存失败');
+    await expect(board.getByText('保存未完成', { exact: true })).toBeInViewport();
+    await expect(retry).toBeHidden();
+    await expect(page.getByRole('button', { name: '重试保存', exact: true })).toBeVisible();
+    expect(requests).toHaveLength(1);
+    rejectOtherDraft = false;
+    await otherEditor.fill('另一张卡正文已单独保存');
+    await expect(board.getByText('正文已保存', { exact: true })).toBeInViewport();
+    expect((await workspace.state()).cards.find(candidate => candidate.id === other.id)!.body.blocks[0]!.text).toBe('另一张卡正文已单独保存');
+    await expect(retry).toBeHidden();
+    await expect(page.getByRole('button', { name: '重试保存', exact: true })).toBeVisible();
+
+    await originalTitle.click();
+    await expect(board.getByRole('heading', { name: '未知块复制', exact: true })).toBeInViewport();
+    await page.setViewportSize({ width: 760, height: 900 });
+    await expect(board.getByText('保存未完成', { exact: true })).toBeInViewport();
+    await expect(retry).toBeInViewport();
     await retry.click();
     await expect(board.getByText('正文已保存', { exact: true })).toBeInViewport();
     await expect(retry).toBeHidden();
@@ -191,6 +226,28 @@ test('未知原件和已有媒体可明确复制副本，保原文资源引用�
     .toEqual(copied);
   await workspace.restart();
   expect((await workspace.state()).cards[0]!.body.blocks).toEqual(copied);
+
+  await board.getByRole('button', { name: '返回画布', exact: true }).click();
+  await originalTitle.click();
+  await page.locator('.react-flow__node').filter({ has: originalTitle }).getByRole('button', { name: '编辑正文', exact: true }).click();
+  await page.route('**/api/mapping/execute', route => {
+    const command = route.request().postDataJSON();
+    return command.type === 'body.edit' && command.payload.copyOriginals ? route.abort() : route.continue();
+  });
+  try {
+    await copyOriginals();
+    await expect(board.getByRole('button', { name: '重试保存', exact: true })).toBeInViewport();
+    const message = (await board.getByRole('alert').textContent())!;
+    const lostAuthorization = page.waitForResponse(response =>
+      response.url().includes('/api/mapping/') && response.status() === 401);
+    workspace.revoke();
+    await lostAuthorization;
+    await expect(board).toBeHidden();
+    await expect(page.getByRole('button', { name: '重试保存', exact: true })).toBeHidden();
+    await expect(page.getByText(message, { exact: true })).toBeHidden();
+  } finally {
+    await page.unrouteAll({ behavior: 'wait' });
+  }
 });
 
 test('剪贴板拒绝保留原文与历史；显式块选区Delete全删留空段并一次撤销', async ({

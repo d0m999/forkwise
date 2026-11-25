@@ -367,6 +367,25 @@ test('单卡与普通连线混选仍明确标明正在编辑的原卡', async ({
   await expect(board.getByText('正在编辑：原卡', { exact: true })).toBeInViewport();
 });
 
+test('单卡与分区混选仍明确标明正在编辑的原卡', async ({ page, workspace }) => {
+  await place(page, '原卡', 80, 120);
+  const state = await workspace.state();
+  await workspace.execute(page, { commandId: crypto.randomUUID(), projectId: state.project.id, type: 'frame.create',
+    expected: { frame: null, groups: {}, containment: {}, poses: {} },
+    payload: { id: 'mixed-frame', itemIds: [], pose: { x: 410, y: 220, width: 240, height: 180 } } });
+  await page.reload();
+  await expect(page.getByRole('status')).toHaveText('已保存到本机');
+  await page.getByRole('button', { name: '原卡', exact: true }).click();
+  await page.getByRole('button', { name: '编辑正文', exact: true }).click();
+  const board = page.getByRole('complementary', { name: '写字板', exact: true });
+  const identity = board.getByText('正在编辑：原卡', { exact: true });
+  await expect(identity).toBeHidden();
+  await page.getByRole('button', { name: '分区1', exact: true }).click({ modifiers: ['Shift'] });
+  await expect(page.locator('[data-frame-id="mixed-frame"]')).toHaveAttribute('data-selected', 'true');
+  await expect(page.locator('.react-flow__node.selected')).toHaveCount(1);
+  await expect(identity).toBeInViewport();
+});
+
 test('菜单真实删卡保留内容、退出编辑，绑定此次删除直接撤销并恢复原卡', async ({ page, workspace }) => {
   await place(page, '原卡删除', 80, 120);
   await page.getByRole('button', { name: '编辑正文', exact: true }).click();
