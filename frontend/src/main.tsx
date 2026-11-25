@@ -293,14 +293,14 @@ function deletesCard(action: HistoryAction, cardId: string) {
   return action.deletedCardIds?.includes(cardId) || action.label === 'thought.delete' && action.target.id === cardId;
 }
 type CardSaveOwner = Pick<Draft, "projectId" | "cardId" | "field"> & { commandId: string };
-type DraftSaveFailure = { message: string; owner: CardSaveOwner; generation: number };
+type DraftSaveFailure = { message: string; owner: CardSaveOwner; generation: number; commandRejected: boolean };
 
 function matchesFailedDraft(draft: Draft | undefined, failure: DraftSaveFailure) {
   const { owner } = failure;
   return !!draft && draft.projectId === owner.projectId && draft.cardId === owner.cardId &&
     draft.field === owner.field && (draft.command
       ? draft.command.commandId === owner.commandId
-      : !!draft.rejected && draft.generation === failure.generation);
+      : failure.commandRejected && draft.generation === failure.generation);
 }
 
 function failureMessage(error: unknown) {
@@ -1585,12 +1585,9 @@ function Workspace() {
         const latest = drafts.current[key];
         if (!latest || latest.generation <= current.generation)
           drafts.current[key] = current;
-        if (
-          e instanceof MappingError &&
-          ["INVALID_COMMAND", "TOO_LARGE", "MEDIA_NOT_PERSISTED"].includes(
-            e.code,
-          )
-        ) {
+        const commandRejected = e instanceof MappingError &&
+          ["INVALID_COMMAND", "TOO_LARGE", "MEDIA_NOT_PERSISTED"].includes(e.code);
+        if (commandRejected) {
           // These replies explicitly reject before mutation. A corrected draft
           // may use a new request; transport failures must retain the old one.
           current.rejected = true;
@@ -1619,7 +1616,12 @@ function Workspace() {
           }
         }
         if (submitted.field === "body") {
-          setDraftFailure({ message: failureMessage(e), owner: savingOwner, generation: submitted.generation });
+          // After rejection, retry the unsealed input if it is now this owner's queue head.
+          const next = commandRejected ? nextSaveDraft() : undefined;
+          const retryGeneration = next && !next.command && next.projectId === submitted.projectId &&
+            next.cardId === submitted.cardId && next.field === submitted.field
+            ? next.generation : submitted.generation;
+          setDraftFailure({ message: failureMessage(e), owner: savingOwner, generation: retryGeneration, commandRejected });
           setStatus("保存未完成");
         } else fail(e);
         return false;
@@ -3143,12 +3145,12 @@ function Workspace() {
   const currentBodyFailed = !currentBodySaving &&
     (ownsCurrentBody(failedDraft?.owner) || ownsCurrentBody(pendingBodyFailure?.owner));
   const pending = pendingAction.current?.command;
-  const bodyRetryAvailable = currentBodyFailed && !pose.error && !conflict && !historyCommand.current;
-  const boardDraftFailure = bodyRetryAvailable && pendingBodyFailure && failedDraft && ownsCurrentBody(failedDraft.owner)
-    ? failedDraft : null;
-  const boardSaveFailure = bodyRetryAvailable && !boardDraftFailure && ownsCurrentBody(retryFailure?.owner) &&
+  const bodyRetryAvailable = !pose.error && !conflict && !historyCommand.current;
+  const blockingBodyDraft = bodyRetryAvailable && failedDraft?.owner.field === "body" &&
+    pendingBodyFailure?.owner.projectId === failedDraft.owner.projectId ? failedDraft : null;
+  const boardDraftFailure = currentBodyFailed && ownsCurrentBody(blockingBodyDraft?.owner);
+  const boardSaveFailure = currentBodyFailed && bodyRetryAvailable && !boardDraftFailure && ownsCurrentBody(retryFailure?.owner) &&
     (!pending || retryFailure === pendingBodyFailure);
-  const waitingForOtherDraft = boardSaveFailure && pendingBodyFailure && failedDraft?.owner.field === "body";
   const boardStatus = !currentBody ? "已删除 · 内容保留"
     : currentBodyFailed ? "保存未完成"
     : currentBodySaving ? "正在保存…"
@@ -3166,9 +3168,9 @@ function Workspace() {
       <span role="alert">
         {[visibleError, pose.error].filter(Boolean).join("；")}
       </span>
-      {waitingForOtherDraft && <span>请先处理其他卡片的正文保存，再重试本次操作</span>}
+      {blockingBodyDraft && <span>请先处理未完成的正文保存，再重试本次操作</span>}
       <button
-        disabled={busy || !!pose.conflict || (!!conflict && !pose.error) || !!waitingForOtherDraft}
+        disabled={busy || !!pose.conflict || (!!conflict && !pose.error) || !!blockingBodyDraft}
         onClick={() => {
           if (historyCommand.current) {
             void travel("retry");
@@ -3192,15 +3194,16 @@ function Workspace() {
       </button>
     </>
   ) : null;
-  const boardFailure = boardDraftFailure ? (
+  const draftSaveFailure = blockingBodyDraft ? (
     <>
-      <span role="alert">{boardDraftFailure.message}</span>
+      <span role="alert">{blockingBodyDraft.message}</span>
       <button disabled={busy || historyBlocked || !!pose.conflict || !!savingDraft}
         onClick={() => {
-          if (!saving.current && !historyLock.current && matchesFailedDraft(nextSaveDraft(), boardDraftFailure)) void flush();
+          if (!saving.current && !historyLock.current && matchesFailedDraft(nextSaveDraft(), blockingBodyDraft)) void flush();
         }}>重试正文保存</button>
     </>
-  ) : boardSaveFailure ? saveFailure : undefined;
+  ) : null;
+  const boardFailure = boardDraftFailure ? draftSaveFailure : boardSaveFailure ? saveFailure : undefined;
   // 按钮禁用与捕获中止是两套条件。并集会让框选、草稿等额外禁用导出，这里保持分开。
   // 内联编辑会话要在捕获侧单独把关：导出已开始后再双击进入编辑时，会话刚建立还没有未保存内容，
   // 只查 hasPending() 会把编辑框（textarea 与所选样式）连同白底烘进图像。
@@ -4109,6 +4112,7 @@ function Workspace() {
         )}
         {attachTarget && <span>点击要附着的卡片</span>}
         {!!visibleError && retryFailure === pendingBodyFailure && error && error !== visibleError && <span role="alert">{error}</span>}
+        {!boardDraftFailure && draftSaveFailure}
         {saveFailure && !boardSaveFailure && saveFailure}
         {saveFailure && pendingAction.current?.rejected && <button disabled={busy} onClick={() => void abandonStructure()}>
           {['thought.create', 'shape.create', 'stroke.create'].includes(pendingAction.current.command.type) ? '放弃本次创建' : pendingAction.current.command.type === 'text.delete' ? '放弃本次删除' : pendingAction.current.command.type.startsWith('frame.') ? '放弃本次分区操作' : '放弃本次组合操作'}

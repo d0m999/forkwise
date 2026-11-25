@@ -303,6 +303,52 @@ test('重试原正文期间继续输入，仍显示原请求保存中并最后�
   }
 });
 
+test('旧正文明确拒绝后仍可用新请求重试在途期间输入的正文', async ({ page, workspace }) => {
+  await place(page, '保留新版正文', 80, 120);
+  await page.getByRole('button', { name: '编辑正文', exact: true }).click();
+  const board = page.getByRole('complementary', { name: '写字板', exact: true });
+  const editor = board.getByRole('textbox', { name: '卡片正文', exact: true });
+  const requests: string[] = [];
+  let reject!: () => void;
+  const held = new Promise<void>(resolve => { reject = resolve; });
+  await page.route('**/api/mapping/execute', async route => {
+    const command = route.request().postDataJSON();
+    if (command.type !== 'body.edit') return route.continue();
+    requests.push(command.commandId);
+    if (requests.length === 1) {
+      await held;
+      return route.fulfill({ status: 413, json: { code: 'TOO_LARGE', message: '旧请求超出大小限制' } });
+    }
+    await route.continue();
+  });
+  const clockStart = Date.now();
+  await page.clock.install({ time: clockStart });
+  await page.clock.pauseAt(clockStart + 1000);
+  try {
+    await editor.fill('被拒绝的旧版本');
+    await page.clock.runFor(400);
+    await expect.poll(() => requests.length).toBe(1);
+    await editor.fill('保留并重试最新输入');
+    // 让新版的防抖落盘先进入 flush，等待尚未完成的旧请求。
+    await page.clock.runFor(400);
+    expect(requests).toHaveLength(1);
+    reject();
+    await expect(page.getByRole('status')).toHaveText('保存未完成');
+    await expect(board.getByText('保存未完成', { exact: true })).toBeVisible({ timeout: 3000 });
+    await expect(board.getByRole('alert')).toHaveText('旧请求超出大小限制');
+    await expect(editor).toHaveText('保留并重试最新输入');
+    await page.clock.resume();
+    await board.getByRole('button', { name: '重试保存', exact: true }).click();
+    await expect(board.getByText('正文已保存', { exact: true })).toBeVisible();
+    expect(requests).toHaveLength(2);
+    expect(requests[1]).not.toBe(requests[0]);
+    expect((await workspace.state()).cards[0]!.body.blocks.map(block => block.text)).toEqual(['保留并重试最新输入']);
+  } finally {
+    reject();
+    await page.unrouteAll({ behavior: 'wait' });
+  }
+});
+
 test('正文双击普通打开不抢光标，单卡跟随从开头，空白和多选保当前卡', async ({ page, workspace }) => {
   const initial = await workspace.state();
   for (const [id, title, x] of [['a', '卡片甲', 60], ['b', '卡片乙', 380]] as const) {

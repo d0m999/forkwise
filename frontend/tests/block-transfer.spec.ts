@@ -197,6 +197,9 @@ test('未知原件和已有媒体可明确复制副本，保原文资源引用�
     await expect(retry).toBeHidden();
     const otherRetry = board.getByRole('button', { name: '重试正文保存', exact: true });
     await expect(otherRetry).toBeInViewport();
+    const saveState = page.locator('.save-state');
+    const workspaceRetry = saveState.getByRole('button', { name: '重试保存', exact: true });
+    await expect(workspaceRetry).toBeDisabled({ timeout: 3000 });
     const failed = otherRequests.length;
     await otherRetry.click();
     await expect.poll(() => otherRequests.length).toBe(failed + 1);
@@ -207,22 +210,28 @@ test('未知原件和已有媒体可明确复制副本，保原文资源引用�
     await originalTitle.click();
     await expect(board.getByRole('heading', { name: '未知块复制', exact: true })).toBeInViewport();
     await expect(board.getByRole('alert')).toHaveText(originalError!);
-    await expect(board.getByText('请先处理其他卡片的正文保存，再重试本次操作', { exact: true })).toBeInViewport();
+    await expect(board.getByText('请先处理未完成的正文保存，再重试本次操作', { exact: true })).toBeInViewport();
     await expect(retry).toBeDisabled();
     expect(requests).toHaveLength(1);
 
     await otherTitle.click();
     await expect(board.getByRole('heading', { name: '另一张正文', exact: true })).toBeInViewport();
+    await board.getByRole('button', { name: '关闭正文', exact: true }).click();
+    await expect(board).toBeHidden();
+    await expect(workspaceRetry).toBeDisabled();
+    const workspaceDraftRetry = saveState.getByRole('button', { name: '重试正文保存', exact: true });
+    await expect(workspaceDraftRetry).toBeEnabled();
+    await expect(saveState.getByRole('alert').filter({ hasText: '乙卡正文暂时无法保存' })).toBeVisible();
     rejectOtherDraft = false;
-    await otherRetry.click();
-    await expect(board.getByText('正文已保存', { exact: true })).toBeInViewport();
+    await workspaceDraftRetry.click();
+    await expect(workspaceDraftRetry).toBeHidden();
+    await expect(workspaceRetry).toBeEnabled();
     expect(otherRequests.every(command => JSON.stringify(command) === JSON.stringify(otherRequests[0]))).toBe(true);
     expect(requests).toHaveLength(1);
     expect((await workspace.state()).cards.find(candidate => candidate.id === other.id)!.body.blocks[0]!.text).toBe('另一张卡正文已单独保存');
-    await expect(retry).toBeHidden();
-    await expect(page.getByRole('button', { name: '重试保存', exact: true })).toBeVisible();
 
     await originalTitle.click();
+    await page.locator('.react-flow__node').filter({ has: originalTitle }).getByRole('button', { name: '编辑正文', exact: true }).click();
     await expect(board.getByRole('heading', { name: '未知块复制', exact: true })).toBeInViewport();
     await page.setViewportSize({ width: 760, height: 900 });
     await expect(board.getByText('保存未完成', { exact: true })).toBeInViewport();
