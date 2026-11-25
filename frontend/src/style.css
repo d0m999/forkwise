@@ -1,5 +1,6 @@
 :root {
-  --canvas-grid-color: #dce0e7;
+  --canvas-grid-color: #d6d7cf;
+  --canvas-grid-surface: #f6f5f1;
   --connector-ink: #626e81;
   --connector-stroke: 4;
   --connector-endpoint-size: 14px;
@@ -151,40 +152,156 @@ button[aria-current="true"] {
   color: #264aad;
 }
 .workspace {
+  --workspace-topbar-height: 72px;
+  --workspace-gutter: 28px;
+  --workspace-line: #e2e3dc;
+  --workspace-ink: #292b29;
+  --workspace-muted: #676961;
+  --workspace-focus: #bb7738;
   position: relative;
   height: 100dvh;
   overflow: hidden;
 }
 .topbar {
-  height: 44px;
-  background: #fff;
-  border-bottom: 1px solid #dce0e7;
+  height: var(--workspace-topbar-height);
+  background: var(--card-color-ffffff);
+  border-bottom: 1px solid var(--workspace-line);
+  color: var(--workspace-ink);
   display: flex;
   align-items: center;
-  padding: 0 8px;
-  gap: 6px;
+  padding: 0 var(--workspace-gutter);
+  gap: 12px;
   position: relative;
   z-index: 5;
 }
+.workspace-brand {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+  white-space: nowrap;
+}
+.workspace-brand strong { font-size: 19px; }
+.workspace-brand span { color: var(--workspace-muted); font-size: 12px; }
+.workspace-brand::after {
+  content: '';
+  width: 1px;
+  height: 24px;
+  margin: 0 10px 0 14px;
+  background: var(--workspace-line);
+}
 .project-tabs {
   display: flex;
-  min-width: 0;
-  overflow: auto;
-  flex: 1;
-  height: 100%;
   align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: 40vw;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
 }
-.project-tabs button {
+.project-tabs > button,
+.project-nav-list > button {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--workspace-muted);
+  font-size: 13px;
+  text-align: left;
+}
+.project-tabs > button {
+  flex: none;
+  max-width: 210px;
+  min-height: 38px;
+  padding: 8px 14px;
+  border-radius: 7px;
+}
+.project-name {
+  min-width: 0;
   white-space: nowrap;
-  border-radius: 6px 6px 0 0;
-  height: 38px;
-  margin-top: 6px;
-  max-width: 240px;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.topbar > button {
+.project-tabs > button[aria-selected="true"],
+.project-nav-list > button[aria-current="true"],
+.project-nav .nav-heading button[aria-pressed="true"],
+.workspace-brand[aria-expanded="true"] {
+  background: var(--canvas-grid-surface);
+  color: var(--workspace-ink);
+  font-weight: 600;
+}
+.project-tabs > button[aria-disabled="true"],
+.project-nav-list > button[aria-disabled="true"] { cursor: wait; opacity: .5; }
+.workspace-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  flex: none;
+  gap: 4px;
+}
+.workspace-actions > button,
+.workspace-actions .import-package > button,
+.workspace-actions .export-menu > button {
+  padding: 8px;
   white-space: nowrap;
+  font-size: 13px;
+}
+.project-create,
+.workspace-actions .project-search-trigger {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 36px;
+  padding: 7px 9px;
+}
+.workspace-actions .project-search-trigger {
+  margin: 0 4px;
+  border-color: var(--workspace-line);
+  color: var(--workspace-muted);
+  font-size: 12px;
+}
+.project-search-trigger kbd {
+  margin-left: 8px;
+  padding: 2px 5px;
+  border-radius: 4px;
+  background: var(--canvas-grid-surface);
+  font-size: 10px;
+}
+.topbar .search-record-error {
+  position: absolute;
+  right: var(--workspace-gutter);
+  top: 100%;
+  max-width: calc(100% - var(--workspace-gutter) * 2);
+  padding: 4px 8px;
+  border: 1px solid var(--workspace-line);
+  border-radius: 6px;
+  background: var(--card-color-ffffff);
+}
+.workspace-brand:hover,
+.project-tabs > button:hover,
+.project-create:hover,
+.workspace-actions > button:hover,
+.workspace-actions .import-package > button:hover,
+.workspace-actions .export-menu > button:hover,
+.project-nav > button:hover,
+.project-nav-list > button:hover,
+.nav-heading > button:hover {
+  background: var(--canvas-grid-surface);
+  color: var(--workspace-ink);
+}
+.topbar > button:focus-visible,
+.project-tabs > button:focus-visible,
+.workspace-actions > button:focus-visible,
+.workspace-actions .import-package > button:focus-visible,
+.workspace-actions .export-menu > button:focus-visible,
+.project-nav > button:focus-visible,
+.project-nav-list > button:focus-visible,
+.nav-heading > button:focus-visible {
+  outline-color: var(--workspace-focus);
+  outline-offset: -2px;
 }
 .export-menu {
   position: relative;
@@ -216,12 +333,13 @@ button[aria-current="true"] {
 .project-tabs small,
 .project-nav small {
   font-size: 10px;
-  color: #697386;
-  margin-left: 10px;
+  color: var(--workspace-muted);
+  flex: none;
 }
 .canvas {
   position: absolute;
-  inset: 44px 0 0;
+  inset: var(--workspace-topbar-height) 0 0;
+  background: var(--canvas-grid-surface);
 }
 .canvas.with-editor {
   right: var(--board-width, 440px);
@@ -376,7 +494,7 @@ body:has(.workspace[data-board-full="true"]) .card-tooltip { display: none; }
 .body-editor {
   position: absolute;
   right: 0;
-  top: 44px;
+  top: var(--workspace-topbar-height);
   bottom: 0;
   width: 440px;
   background: var(--search-surface);
@@ -568,30 +686,46 @@ body:has(.workspace[data-board-full="true"]) .card-tooltip { display: none; }
 }
 .project-nav {
   position: absolute;
-  left: 8px;
-  top: 50px;
-  bottom: 50px;
-  width: 248px;
-  background: white;
-  border: 1px solid #dce0e7;
+  left: var(--workspace-gutter);
+  top: calc(var(--workspace-topbar-height) + 8px);
+  max-height: calc(100% - var(--workspace-topbar-height) - 58px);
+  width: min(280px, calc(100% - var(--workspace-gutter) * 2));
+  display: flex;
+  flex-direction: column;
+  background: var(--card-color-ffffff);
+  border: 1px solid var(--workspace-line);
   border-radius: 10px;
+  color: var(--workspace-ink);
   z-index: 10;
-  padding: 10px;
+  padding: 8px;
   box-shadow: 0 8px 30px #23314912;
 }
 .nav-heading {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 4px 6px 12px;
+  padding: 4px 0 6px 8px;
+  flex: none;
+  font-weight: 600;
 }
 .project-nav > button {
-  display: block;
-  width: 100%;
+  flex: none;
   text-align: left;
+}
+.project-nav-list {
+  overflow-y: auto;
+  min-height: 0;
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--workspace-line);
+  scrollbar-width: thin;
+}
+.project-nav-list > button {
+  justify-content: space-between;
+  width: 100%;
+  min-height: 36px;
+  padding: 6px 8px;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 .empty {
   height: 100%;
@@ -758,6 +892,23 @@ body:has(.workspace[data-board-full="true"]) .card-tooltip { display: none; }
 .canvas[data-exporting="true"] .react-flow__viewport {
   transform: var(--export-viewport-transform) !important;
 }
+@media (max-width: 1200px) {
+  .workspace { --workspace-gutter: 18px; }
+  .topbar { gap: 8px; }
+  .workspace-brand span { display: none; }
+}
+@media (max-width: 850px) {
+  .workspace { --workspace-topbar-height: 60px; --workspace-gutter: 12px; }
+  .topbar { gap: 6px; }
+  .workspace-brand::after,
+  .workspace-brand strong,
+  .project-search-trigger span,
+  .project-search-trigger kbd { display: none; }
+  .project-tabs { max-width: 48vw; }
+  .project-tabs > button { max-width: 160px; padding-inline: 10px; }
+  .workspace-actions { gap: 0; }
+  .workspace-actions .project-search-trigger { margin: 0; border-color: transparent; }
+}
 @media (max-width: 760px) {
   .creation-tools {
     bottom: 55px;
@@ -766,12 +917,6 @@ body:has(.workspace[data-board-full="true"]) .card-tooltip { display: none; }
     flex-wrap: wrap;
   }
   .connector-tools { bottom: var(--connector-tools-compact-bottom); }
-  .topbar {
-    gap: 0;
-  }
-  .topbar button {
-    padding: 7px 8px;
-  }
   .save-state {
     bottom: 10px;
     right: 8px;
@@ -779,9 +924,6 @@ body:has(.workspace[data-board-full="true"]) .card-tooltip { display: none; }
   }
   .creation-tools span {
     display: none;
-  }
-  .project-tabs button {
-    max-width: 160px;
   }
   .empty h1 {
     font-size: 24px;

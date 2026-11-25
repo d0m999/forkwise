@@ -112,6 +112,8 @@ import { useAppearanceSave, type AppearanceInput } from "./appearance-save";
 import { ProjectTags, CardTagSummary } from "./project-tags";
 import type { Tag } from "../../backend/src/mapping/contracts";
 
+const brandMark = new URL('../../assets/brand/forkwise-basic-kit/01-logos/logo-mark.svg', import.meta.url).href;
+
 // 结构类命令的读已过期失败靠一次刷新收敛：命令集与错误码集中在这里，新增错误码不必改条件里的长行。
 const STALE_READ_COMMANDS = new Set(['connector.reconnect', 'connector.path', 'connector.move', 'connector.delete', 'connector.style', 'connector.reverse', 'connector.label', 'canvas.layer', 'canvas.duplicate', 'canvas.paste', 'canvas.cut', 'canvas.paste-cut']);
 const STALE_READ_CODES = new Set(['VERSION_CONFLICT', 'NOT_FOUND', 'ID_CONFLICT', 'CUT_STATE_CONFLICT', 'CUT_NOT_FOUND', 'CUT_RESTORE_MISSING', 'CUT_OUTER_CHANGED', 'CUT_OUTER_UNKNOWN']);
@@ -312,6 +314,8 @@ function draftKey(projectId: string, cardId: string, field: Draft["field"]) {
 }
 function Workspace() {
   const [state, setState] = useState<ProjectState | null>(null);
+  const projectTabs = useRef<HTMLDivElement>(null);
+  const navigation = useRef<HTMLButtonElement>(null);
   const [attachTarget, setAttachTarget] = useState<string | null>(null);
   useEffect(() => {
     if (!attachTarget) return;
@@ -355,6 +359,11 @@ function Workspace() {
     Record<string, { width: number; height: number }>
   >({});
   const [projects, setProjects] = useState<Project[]>([]);
+  const activeProjectId = state?.project.id;
+  const activeProjectListed = projects.some(project => project.id === activeProjectId);
+  useEffect(() => {
+    projectTabs.current?.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  }, [activeProjectId, activeProjectListed]);
   const [organizing, setOrganizing] = useState<{ projectId: string; source?: Card } | null>(null);
   const [organizeCancellationJournal] = useState(createOrganizeCancellationJournal);
   const [organizeCancellations, setOrganizeCancellations] = useState(() => organizeCancellationJournal.snapshot);
@@ -391,6 +400,10 @@ function Workspace() {
   }
   const [nav, setNav] = useState(false),
     [pinned, setPinned] = useState(false);
+  const projectNavList = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (nav) projectNavList.current?.querySelector('[aria-current="true"]')?.scrollIntoView({ block: 'nearest' });
+  }, [nav, activeProjectId, activeProjectListed]);
   const [renaming, setRenaming] = useState<string | null>(null),
     [name, setName] = useState("");
   const [placing, setPlacing] = useState(false),
@@ -1407,7 +1420,7 @@ function Workspace() {
     setProjects(all);
     return true;
   };
-  const select = async (id: string) => {
+  const select = async (id: string, navigationRow?: HTMLButtonElement) => {
     if (historyLock.current || historyCommand.current || strokeDraw.hasPending()) return;
     if (pendingAction.current) {
       fail(new Error("请先重试未完成的保存"));
@@ -1433,7 +1446,10 @@ function Workspace() {
       setBodyCard(null);
       setPlacing(false);
       setShapePreset(null);
-      if (!pinned) setNav(false);
+      if (!pinned) {
+        if (navigationRow && document.activeElement === navigationRow) navigation.current?.focus();
+        setNav(false);
+      }
       history.replaceState(null, "", "?project=" + encodeURIComponent(id));
       setStatus("已保存到本机");
       setError("");
@@ -1993,7 +2009,7 @@ function Workspace() {
         setDeletedBody(null);
         setBodyCard(null);
         setEditing(null);
-        setNav(false);
+        if (!pinned) setNav(false);
         history.replaceState(null, "", "?project=" + id);
       },
     );
@@ -3272,76 +3288,105 @@ function Workspace() {
           close={() => setOrganizing(null)}
           onAdded={async () => { await refresh(organizing.projectId); }} />}
       <header className="topbar">
-        {state && <ProjectSearch key={state.project.id} projectId={state.project.id} revision={state.project.revision} tags={state.tags ?? []} cards={state.cards} onOpen={openSearch} disabled={busy || historyBlocked} />}
         <button
-          disabled={!state || busy || historyBlocked || imageGeometry.hasPending(state.project.id) || imageInput.hasPending(state.project.id)}
-          onMouseDown={(e) => e.preventDefault()}
-          onClick={() => void travel("undo")}
-        >
-          撤销
-        </button>
-        <button
-          disabled={!state || busy || historyBlocked || imageGeometry.hasPending(state.project.id) || imageInput.hasPending(state.project.id)}
-          onMouseDown={(e) => e.preventDefault()}
-          onClick={() => void travel("redo")}
-        >
-          重做
-        </button>
-        <button
+          ref={navigation}
+          className="workspace-brand"
           aria-label="项目导航"
           aria-expanded={nav}
+          aria-controls={nav ? 'project-navigation' : undefined}
+          title="项目导航"
           onClick={() => setNav(!nav)}
         >
-          见岔
+          <img src={brandMark} width="36" height="36" alt="" />
+          <strong>见岔</strong><span>Forkwise</span>
         </button>
-        <div className="project-tabs" role="tablist" aria-label="研究项目">
-          {projects.map((project) => (
-            <button
-              role="tab"
-              key={project.id}
-              aria-selected={project.id === state?.project.id}
-              disabled={busy || historyBlocked}
-              onClick={() => void select(project.id)}
-              title={project.id}
-            >
-              {project.name}
-              <small>{project.id.slice(0, 6)}</small>
-            </button>
-          ))}
+        <div className="project-tabs" ref={projectTabs} role="tablist" aria-label="研究项目" onKeyDown={event => {
+          const key = event.key;
+          if (key !== 'Home' && key !== 'End' && key !== 'ArrowLeft' && key !== 'ArrowRight') return;
+          if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || event.nativeEvent.isComposing || event.defaultPrevented || busy || historyBlocked) return;
+          const tabs = [...event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="tab"]')];
+          const current = tabs.indexOf(event.target as HTMLButtonElement);
+          if (current === -1) return;
+          const next = { Home: 0, End: tabs.length - 1, ArrowLeft: (current + tabs.length - 1) % tabs.length, ArrowRight: (current + 1) % tabs.length }[key];
+          event.preventDefault();
+          tabs[next]?.focus({ preventScroll: true });
+          tabs[next]?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+        }}>
+          {projects.map((project, index) => {
+            const selected = project.id === activeProjectId;
+            const duplicate = projects.some(other => other.id !== project.id && other.name === project.name);
+            return (
+              <button
+                role="tab"
+                key={project.id}
+                aria-selected={selected}
+                aria-controls="project-canvas"
+                aria-disabled={busy || historyBlocked || undefined}
+                tabIndex={selected || (!activeProjectListed && index === 0) ? 0 : -1}
+                onClick={() => { if (!busy && !historyBlocked) void select(project.id); }}
+                title={project.id}
+              >
+                <span className="project-name" title={project.name}>{project.name}</span>
+                {(duplicate || project.name.length > 10) && <small aria-hidden={!duplicate}>{project.id.slice(0, 6)}</small>}
+              </button>
+            );
+          })}
         </div>
         <button
+          className="project-create"
+          aria-label="新建研究"
+          title="新建研究"
           onClick={() => void createProject()}
           disabled={busy || historyBlocked}
         >
-          新建研究
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
+            <path d="M12 5v14M5 12h14" />
+          </svg>
         </button>
-        <ImportPackage
-          disabled={busy || historyBlocked}
-          onImported={(id) => {
-            void select(id).finally(() => { void api.projects().then(setProjects).catch(() => { /* 保留当前可见项目 */ }); });
-          }}
-        />
-        {state && (
+        <div className="workspace-actions">
           <button
-            aria-label="重命名当前项目"
-            disabled={busy || historyBlocked}
-            onClick={() => {
-              setRenaming(state.project.id);
-              setName(state.project.name);
-            }}
+            disabled={!state || busy || historyBlocked || imageGeometry.hasPending(state.project.id) || imageInput.hasPending(state.project.id)}
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => void travel("undo")}
           >
-            重命名
+            撤销
           </button>
-        )}
-        {state && <ExportMenu project={state.project} disabled={exportBlocked} report={setExportStatus} image={async () => {
-          const snapshot = state;
-          const root = document.querySelector<HTMLElement>('.canvas .react-flow');
-          if (!root) throw new Error('画布尚未完成绘制，无法导出');
-          return renderCanvasPng(root, setExportVisual, () => exportCaptureIntact(snapshot.snapshot));
-        }} />}
+          <button
+            disabled={!state || busy || historyBlocked || imageGeometry.hasPending(state.project.id) || imageInput.hasPending(state.project.id)}
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => void travel("redo")}
+          >
+            重做
+          </button>
+          {state && <ProjectSearch key={state.project.id} projectId={state.project.id} revision={state.project.revision} tags={state.tags ?? []} cards={state.cards} onOpen={openSearch} disabled={busy || historyBlocked} />}
+          <ImportPackage
+            disabled={busy || historyBlocked}
+            onImported={(id) => {
+              void select(id).finally(() => { void api.projects().then(setProjects).catch(() => { /* 保留当前可见项目 */ }); });
+            }}
+          />
+          {state && (
+            <button
+              aria-label="重命名当前项目"
+              disabled={busy || historyBlocked}
+              onClick={() => {
+                setRenaming(state.project.id);
+                setName(state.project.name);
+              }}
+            >
+              重命名
+            </button>
+          )}
+          {state && <ExportMenu project={state.project} disabled={exportBlocked} report={setExportStatus} image={async () => {
+            const snapshot = state;
+            const root = document.querySelector<HTMLElement>('.canvas .react-flow');
+            if (!root) throw new Error('画布尚未完成绘制，无法导出');
+            return renderCanvasPng(root, setExportVisual, () => exportCaptureIntact(snapshot.snapshot));
+          }} />}
+        </div>
       </header>
       {nav && (
-        <aside className="project-nav">
+        <aside className="project-nav" id="project-navigation" aria-label="项目导航">
           <div className="nav-heading">
             研究项目{" "}
             <button aria-pressed={pinned} onClick={() => setPinned(!pinned)}>
@@ -3350,20 +3395,24 @@ function Workspace() {
           </div>
           {state && <button onClick={() => setOrganizing({ projectId: state.project.id })}
             disabled={busy || historyBlocked} aria-haspopup="dialog">AI 整理记录</button>}
-          {projects.map((project) => (
-            <button
-              key={project.id}
-              disabled={busy || historyBlocked}
-              aria-current={project.id === state?.project.id}
-              onClick={() => void select(project.id)}
-            >
-              {project.name}
-              <small>{project.id.slice(0, 6)}</small>
-            </button>
-          ))}
+          <div className="project-nav-list" ref={projectNavList}>
+            {projects.map((project) => (
+              <button
+                key={project.id}
+                aria-disabled={busy || historyBlocked || undefined}
+                aria-current={project.id === activeProjectId}
+                onClick={event => { if (!busy && !historyBlocked) void select(project.id, event.currentTarget); }}
+              >
+                <span className="project-name" title={project.name}>{project.name}</span>
+                <small>{project.id.slice(0, 6)}</small>
+              </button>
+            ))}
+          </div>
         </aside>
       )}
       <main
+        id="project-canvas"
+        aria-label={state ? `${state.project.name}画布` : '画布'}
         className={panelCard ? "canvas with-editor" : "canvas"}
         data-exporting={exportVisual ? 'true' : undefined}
         tabIndex={0}
@@ -3643,7 +3692,7 @@ function Workspace() {
               marqueeSelection.retire();
             }}
           >
-            <Background gap={24} color="var(--canvas-grid-color)" />
+            <Background gap={24} size={1.5} color="var(--canvas-grid-color)" bgColor="var(--canvas-grid-surface)" />
             <Controls showInteractive={false} />
             <ViewportPortal>
               <CanvasFrames drawMemberIds={frameDrawMemberIds} dropCandidateId={frameDropCandidate} key={`${state.project.id}:${frameEditorEpoch}`} state={state} preview={framePreview} selectedId={exportVisual ? null : selectedFrameId} selectedIds={exportVisual ? [] : selectedFrameIds} choose={chooseFrame}
