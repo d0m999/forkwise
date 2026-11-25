@@ -1,6 +1,14 @@
 import { expect, type Page } from '@playwright/test';
 import type { Workspace } from './writing-board-fixture';
 
+export async function expectWritingBoardCard(page: Page, cardId: string) {
+  const board = page.getByRole('complementary', { name: '写字板', exact: true });
+  const details = board.getByText('详情', { exact: true });
+  await details.click();
+  await expect(board.getByText(`卡片 ID：${cardId}`, { exact: true })).toBeInViewport();
+  await details.click();
+}
+
 export async function fiveMembers(page: Page, workspace: Workspace) {
   const projectId = (await workspace.state()).project.id;
   const execute = (type: string, payload: unknown, expected: unknown = null) => workspace.execute(page,

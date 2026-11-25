@@ -14,9 +14,18 @@ test('项目首次宽度为 440，旧值独立保留，临时限制和恢复默�
   await page.evaluate(id => localStorage.setItem('forkwise:writing-board-width:' + id, '544'), firstId);
   await open();
   await expectWidth(544);
+  const separator = page.getByRole('separator', { name: '调整写字板宽度' });
+  const handle = (await separator.boundingBox())!;
+  await page.mouse.move(handle.x + handle.width / 2, handle.y + 200);
+  await page.mouse.down();
   await page.setViewportSize({ width: 960, height: 900 });
   await expectWidth(480);
-  await page.getByRole('separator', { name: '调整写字板宽度' }).click();
+  await page.mouse.up();
+  await page.setViewportSize({ width: 1360, height: 900 });
+  await expectWidth(544);
+  await page.setViewportSize({ width: 960, height: 900 });
+  await expectWidth(480);
+  await separator.click();
   await page.getByRole('button', { name: '关闭正文' }).click();
   await page.setViewportSize({ width: 1360, height: 900 });
   await open();
@@ -83,6 +92,7 @@ test('空正文和轻量标签入口可见，图片限制按需查阅，原空�
     await details.click();
     await expect(help).toBeInViewport();
     await expect(help).toContainText('512 KiB');
+    await expect(help).toContainText('单张图片最多 4000 万像素');
     await details.press('Escape');
     await expect(help).toBeHidden();
   }
@@ -192,6 +202,67 @@ test('标题、标签和正文同线阅读，保存等待、失败重试与确�
   }
 });
 
+test('原卡保存失败后的切卡和后续输入只显示当前卡的保存状态', async ({ page, workspace }) => {
+  await place(page, '正文甲', 80, 120);
+  await place(page, '正文乙', 420, 150);
+  const [cardA, cardB] = (await workspace.state()).cards;
+  const titleA = page.getByRole('button', { name: '正文甲', exact: true });
+  await titleA.click();
+  await page.locator('.react-flow__node').filter({ has: titleA }).getByRole('button', { name: '编辑正文', exact: true }).click();
+  const board = page.getByRole('complementary', { name: '写字板', exact: true });
+  const editor = board.getByRole('textbox', { name: '卡片正文', exact: true });
+  const boardRetry = board.getByRole('button', { name: '重试保存', exact: true });
+  const workspaceRetry = page.getByRole('button', { name: '重试保存', exact: true });
+  const aRequests: string[] = [];
+  let rejectA = true;
+  let releaseB!: () => void;
+  const holdB = new Promise<void>(resolve => { releaseB = resolve; });
+  await page.route('**/api/mapping/execute', async route => {
+    const command = route.request().postDataJSON();
+    if (command.type !== 'body.edit') return route.continue();
+    if (command.payload.id === cardA!.id) {
+      aRequests.push(command.commandId);
+      if (rejectA) return route.abort();
+    }
+    if (command.payload.id === cardB!.id) await holdB;
+    await route.continue();
+  });
+  try {
+    await editor.fill('属于甲的未确认正文');
+    await expect(board.getByText('保存未完成', { exact: true })).toBeVisible();
+    await expect(boardRetry).toBeVisible();
+    await page.getByRole('button', { name: '正文乙', exact: true }).click();
+    await expect(board.getByRole('heading', { name: '正文乙', exact: true })).toBeVisible();
+    await expect(board.getByText('已保存到本机', { exact: true })).toBeVisible();
+    await expect(boardRetry).toBeHidden();
+    await expect(workspaceRetry).toBeVisible();
+    const before = aRequests.length;
+
+    await editor.fill('属于乙的等待正文');
+    await expect.poll(() => aRequests.length).toBeGreaterThan(before);
+    await expect(page.getByRole('status')).toHaveText('保存未完成');
+    await expect(board.getByText('等待保存…', { exact: true })).toBeVisible();
+    await expect(boardRetry).toBeHidden();
+    await expect(workspaceRetry).toBeVisible();
+    await expect(editor).toHaveText('属于乙的等待正文');
+
+    rejectA = false;
+    await workspaceRetry.click();
+    await expect(board.getByText('正在保存…', { exact: true })).toBeVisible();
+    releaseB();
+    await expect(board.getByText('正文已保存', { exact: true })).toBeVisible();
+    await expect(workspaceRetry).toBeHidden();
+    expect(new Set(aRequests).size).toBe(1);
+    const saved = (await workspace.state()).cards;
+    expect(saved.map(card => card.body.blocks.map(block => block.text))).toEqual([
+      ['属于甲的未确认正文'], ['属于乙的等待正文'],
+    ]);
+  } finally {
+    releaseB();
+    await page.unrouteAll({ behavior: 'wait' });
+  }
+});
+
 test('正文双击普通打开不抢光标，单卡跟随从开头，空白和多选保当前卡', async ({ page, workspace }) => {
   const initial = await workspace.state();
   for (const [id, title, x] of [['a', '卡片甲', 60], ['b', '卡片乙', 380]] as const) {
@@ -205,14 +276,25 @@ test('正文双击普通打开不抢光标，单卡跟随从开头，空白和�
   await expect(board).toContainText('卡片甲');
   await expect(page.getByLabel('卡片正文', { exact: true })).not.toBeFocused();
   await b.locator('.title-button').click();
-  await expect(board).toContainText('卡片乙');
+  const heading = board.getByRole('heading', { name: '卡片乙', exact: true });
+  await expect(heading).toBeInViewport();
+  const scroller = board.locator('.board-scroll');
+  const viewport = (await scroller.boundingBox())!;
+  await page.mouse.move(viewport.x + 100, viewport.y + 200);
+  await page.mouse.wheel(0, 900);
+  await expect(heading).not.toBeInViewport();
+  const scrollTop = await scroller.evaluate(el => el.scrollTop);
+  const currentTitle = board.getByText('正在编辑：卡片乙', { exact: true });
   await page.locator('.react-flow__pane').click({ position: { x: 30, y: 400 } });
-  await expect(board).toContainText('卡片乙');
+  await expect(currentTitle).toBeInViewport();
+  expect(await scroller.evaluate(el => el.scrollTop)).toBe(scrollTop);
   await b.locator('.title-button').click();
   await a.locator('.title-button').click({ modifiers: ['Shift'] });
   await b.locator('.title-button').click({ modifiers: ['Shift'] });
   await expect(page.locator('.react-flow__node.selected')).toHaveCount(2);
-  await expect(board.getByRole('heading', { name: '卡片乙', exact: true })).toBeVisible();
+  await expect(heading).not.toBeInViewport();
+  await expect(currentTitle).toBeInViewport();
+  expect(await scroller.evaluate(el => el.scrollTop)).toBe(scrollTop);
 });
 
 test('菜单真实删卡保留内容、退出编辑，绑定此次删除直接撤销并恢复原卡', async ({ page, workspace }) => {

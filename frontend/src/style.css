@@ -492,7 +492,17 @@ body:has(.workspace[data-board-full="true"]) .card-tooltip { display: none; }
 }
 .board-card-id { margin: 0; font-size: 12px; overflow-wrap: anywhere; }
 .board-details-content button { border: 1px solid var(--search-divider); }
-.board-status { margin: 0; color: var(--search-muted); font-size: 12px; }
+.board-indicators { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; }
+.board-current-card {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  font-weight: 600;
+}
+.board-status { flex: none; max-width: 100%; margin: 0; color: var(--search-muted); font-size: 12px; }
 .board-status[data-saved=true] { color: #41644f; }
 .board-status[data-failed=true], .board-save-failure [role="alert"] { color: #a52e39; }
 .board-save-failure, .board-notice {

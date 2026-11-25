@@ -1,5 +1,6 @@
 import { expect, test } from './writing-board-fixture';
 import { createFrameCommand } from '../src/canvas-frame-commands';
+import { expectWritingBoardCard } from './group-selection-fixture';
 
 test('整组从菜单复制为独立新组，只选新组且保留写字板绑定，一次撤销重做并重开', async ({ page, workspace }) => {
   const projectId = (await workspace.state()).project.id;
@@ -11,12 +12,12 @@ test('整组从菜单复制为独立新组，只选新组且保留写字板绑�
   await page.getByRole('button', { name: '研究正文', exact: true }).click();
   await page.getByRole('button', { name: '编辑正文', exact: true }).click();
   await expect(page.getByRole('complementary', { name: '写字板', exact: true })).toBeVisible();
-  await expect(page.locator('.body-editor small[title]')).toHaveAttribute('title', 'card');
+  await expectWritingBoardCard(page, 'card');
   const sourceCard = page.getByRole('button', { name: '研究正文', exact: true });
   await sourceCard.focus(); await expect(sourceCard).toBeFocused();
   await page.keyboard.press('Escape');
   await expect(page.locator('.react-flow__node.selected')).toHaveCount(0);
-  await expect(page.locator('.body-editor small[title]')).toHaveAttribute('title', 'card');
+  await expectWritingBoardCard(page, 'card');
   await sourceCard.click();
   await expect(page.locator('[data-group-id="bundle"]')).toHaveAttribute('data-selected', 'true');
   await expect(page.getByRole('button', { name: '进入组合', exact: true })).toBeVisible();
@@ -34,7 +35,7 @@ test('整组从菜单复制为独立新组，只选新组且保留写字板绑�
   await expect.poll(async () => page.locator('.react-flow__node.selected').evaluateAll(nodes => nodes.map(n => n.getAttribute('data-id')).sort())).toEqual([...copy.memberItemIds].sort());
   await expect(page.locator(`[data-group-id="${copy.id}"]`)).toHaveAttribute('data-selected', 'true');
   await expect(page.locator('[data-group-id="bundle"]')).toHaveAttribute('data-selected', 'false');
-  await expect(page.locator('.body-editor small[title]')).toHaveAttribute('title', 'card');
+  await expectWritingBoardCard(page, 'card');
   await page.getByRole('button', { name: '撤销', exact: true }).click();
   await expect.poll(async () => (await workspace.state()).groups!.length).toBe(1);
   await page.getByRole('button', { name: '重做', exact: true }).click();

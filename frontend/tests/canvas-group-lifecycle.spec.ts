@@ -1,5 +1,5 @@
 import { test, expect } from './writing-board-fixture';
-import { fiveMembers } from './group-selection-fixture';
+import { expectWritingBoardCard, fiveMembers } from './group-selection-fixture';
 
 test('普通线与五类对象混选后建组只选择新组合，连线与成员内容保持', async ({ page, workspace }) => {
   const f = await fiveMembers(page, workspace), projectId = f.before.project.id;
@@ -270,11 +270,11 @@ test('组合等待正文flush时真实改选loose Card，旧组合请求零提�
     response.request().postDataJSON()?.type === 'card.layout' && response.request().postDataJSON()?.payload.id === 'regroup-wait-card');
   await page.reload(); expect((await layout).status()).toBe(200); await expect(page.getByRole('status')).toHaveText('已保存到本机');
   await page.locator('.react-flow__node[data-id="' + f.items.card.item.id + '"]').getByRole('button', { name: '编辑正文', exact: true }).click();
-  await expect(page.locator('.body-editor small[title]')).toHaveAttribute('title', f.items.card.id);
+  await expectWritingBoardCard(page, f.items.card.id);
   await f.visuals.card.focus(); await expect(f.visuals.card).toBeFocused(); await page.keyboard.press('Escape');
   await expect(page.locator('.react-flow__node.selected')).toHaveCount(0);
   await expect(page.getByRole('complementary', { name: '写字板', exact: true })).toBeVisible();
-  await expect(page.locator('.body-editor small[title]')).toHaveAttribute('title', f.items.card.id);
+  await expectWritingBoardCard(page, f.items.card.id);
   await f.visuals.shape.click();
   await expect(page.locator('.react-flow__node.selected')).toHaveCount(5);
   await expect(page.locator('.canvas-group-outline')).toHaveAttribute('data-selected', 'true');

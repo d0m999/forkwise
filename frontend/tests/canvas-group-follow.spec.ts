@@ -1,7 +1,7 @@
 import { test, expect, type Workspace } from './writing-board-fixture';
 import type { Page } from '@playwright/test';
 import type { ProjectState } from '../src/api';
-import { fiveMembers } from './group-selection-fixture';
+import { expectWritingBoardCard, fiveMembers } from './group-selection-fixture';
 
 async function read(page: Page, workspace: Workspace, projectId: string): Promise<ProjectState> {
   return (await page.request.get(workspace.origin + '/api/mapping/projects/' + projectId)).json();
@@ -10,7 +10,7 @@ async function frames(page: Page) {
   await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
 }
 async function bound(page: Page, id: string, text: string) {
-  await expect(page.locator('.body-editor small[title]')).toHaveAttribute('title', id);
+  await expectWritingBoardCard(page, id);
   await expect(page.getByRole('textbox', { name: '卡片正文', exact: true })).toHaveText(text);
 }
 async function seed(page: Page, workspace: Workspace, single = false, anotherProject = false) {

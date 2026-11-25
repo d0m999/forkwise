@@ -3,8 +3,10 @@ test("小数渲染宽的原地点击与取消手势不写期望宽、不增加�
   page,
   workspace,
 }, info) => {
-  await page.setViewportSize({ width: 1361, height: 900 });
   await place(page, "无变化手势");
+  // A fractional preference saved by the earlier proportional-width layout.
+  const projectId = (await workspace.state()).project.id;
+  await page.evaluate(id => localStorage.setItem("forkwise:writing-board-width:" + id, "544.4"), projectId);
   await page.getByRole("button", { name: "编辑正文", exact: true }).click();
   await page.getByRole("textbox", { name: "卡片正文", exact: true }).click();
   await page.getByRole("button", { name: "插入块", exact: true }).click();

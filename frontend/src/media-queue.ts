@@ -187,11 +187,13 @@ export function useMediaQueue(
     };
     await commit(command);
   };
+  const unconfirmedCardIds = new Set([...jobs.current.values()]
+    .filter(job => job.projectId === projectId && job.uncertain && job.stage !== 'done')
+    .map(job => job.cardId));
   return {
     retry,
-    hasUnconfirmed: [...jobs.current.values()].some(
-      (job) => job.projectId === projectId && job.uncertain && job.stage !== 'done',
-    ),
+    hasUnconfirmed: unconfirmedCardIds.size > 0,
+    unconfirmedCardIds,
     retryUnconfirmed: () => {
       for (const job of jobs.current.values())
         if (job.projectId === projectId) {
