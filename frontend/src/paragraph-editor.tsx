@@ -70,6 +70,7 @@ type FormatTarget = {
   left: number;
   top: number;
   link?: boolean;
+  dismissed?: boolean;
 };
 function blank(): Block {
   return {
@@ -585,12 +586,13 @@ export function ParagraphEditor({
         first = current.findIndex((b) => b.id === selection.start.blockId),
         last = current.findIndex((b) => b.id === selection.end.blockId);
       const rect = window.getSelection()!.getRangeAt(0).getBoundingClientRect();
-      setFormatTarget({
+      setFormatTarget((previous) => ({
         selection,
         originals: current.slice(first, last + 1),
         left: Math.max(8, Math.min(rect.left, window.innerWidth - 330)),
         top: Math.max(8, Math.min(rect.top - 44, window.innerHeight - 260)),
-      });
+        dismissed: !!previous?.dismissed && JSON.stringify(previous.selection) === JSON.stringify(selection),
+      }));
     } else setFormatTarget(null);
   }
   function tableChange(table: Block, cell: string) {
@@ -1910,7 +1912,7 @@ export function ParagraphEditor({
         }}
         onPointerMove={(event) => {
           const block = (event.target as Element).closest<HTMLElement>('[data-block-id]');
-          if (menu || !block || document.activeElement?.closest('.block-tools')) return;
+          if (menu || !block || document.activeElement?.closest('.block-handle-row')) return;
           const cell = (event.target as Element).closest<HTMLElement>('[data-cell]');
           activateBlock(block.dataset.blockId!, cell?.dataset.cell);
         }}
@@ -1988,6 +1990,7 @@ export function ParagraphEditor({
           interaction.current++;
           typed.current = null;
           setLinkTarget(null);
+          if (formatTarget?.dismissed) setFormatTarget(null);
         }}
         onPointerUp={selected}
         onCompositionStart={() => {
@@ -2250,7 +2253,7 @@ export function ParagraphEditor({
         }}
       />
       </div>
-      {formatTarget && !readOnly && !menu && !linkTarget && (
+      {formatTarget && !formatTarget.dismissed && !readOnly && !menu && !linkTarget && (
         <InlineToolbar
           onFormat={format}
           onLink={() => openLink()}
@@ -2264,7 +2267,7 @@ export function ParagraphEditor({
               formatTarget.selection.start,
               formatTarget.selection.end,
             );
-            setFormatTarget(null);
+            setFormatTarget({ ...formatTarget, dismissed: true });
           }}
         />
       )}

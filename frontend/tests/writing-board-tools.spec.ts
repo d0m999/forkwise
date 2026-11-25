@@ -72,9 +72,10 @@ test('Tab 聚焦第二段时可键盘打开块菜单和插入，取消保留触�
   await page.keyboard.press('Escape');
   await expect(handle).toBeFocused();
   const insert = board.getByRole('button', { name: '插入块', exact: true });
+  await editor.locator('p').nth(2).hover();
   await page.keyboard.press('Tab');
   await expect(insert).toBeFocused({ timeout: 1000 });
-  await editor.locator('p').nth(2).hover();
+  await editor.locator('p').first().hover();
   await expect(insert).toBeFocused({ timeout: 1000 });
   await page.keyboard.press('Enter');
   const filter = board.getByRole('textbox', { name: '筛选块类型' });
@@ -107,6 +108,16 @@ test('Tab 进入键盘选区的格式工具并应用，恢复原文字选区', a
   expect(await selection()).toBe('第一段');
   await expect(page.getByRole('status')).toHaveText('已保存到本机');
   expect((await workspace.state()).cards[0]!.body.blocks[0]!.marks).toEqual([{ type: 'bold', start: 0, end: 3 }]);
+  await page.keyboard.press('Tab');
+  await expect(bold).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(editor).toBeFocused();
+  expect(await selection()).toBe('第一段');
+  await expect(board.getByRole('toolbar', { name: '文字格式' })).toHaveCount(0, { timeout: 1500 });
+  await page.keyboard.press('Meta+i');
+  await expect.poll(async () => (await workspace.state()).cards[0]!.body.blocks[0]!.marks).toContainEqual({
+    type: 'italic', start: 0, end: 3,
+  });
 });
 
 test('从大表切到小表的块柄时，Tab 保留块焦点与正文版本', async ({ page, workspace }) => {
@@ -152,7 +163,7 @@ test('取消替换正文图片时，返回本次图片操作并保留原正文',
   await page.keyboard.press('Enter');
   await page.keyboard.press('Escape');
   await expect(firstHandle).toBeFocused();
-  await image.hover();
+  await image.click();
 
   const input = board.getByLabel('选择正文图片文件');
   await input.evaluate(node => {
@@ -199,5 +210,7 @@ test.describe('760 px Chromium 触控', () => {
     await page.keyboard.press('Escape');
     await expect.poll(() => page.evaluate(() => getSelection()?.toString())).toBe('');
     await expect(board.getByRole('toolbar', { name: '文字格式' })).toHaveCount(0);
+    // 先释放 Chromium 的原生触控选择状态，再关闭测试窗口。
+    await page.goto('about:blank');
   });
 });
