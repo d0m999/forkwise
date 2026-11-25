@@ -127,8 +127,9 @@ for (const navigation of ['click', 'keyboard', 'empty', 'multi', 'marquee'] as c
       else if (navigation === 'multi') await a.locator('.title-button').click({ modifiers: ['Shift'] });
       else if (navigation === 'marquee') {
         const rect = (await b.boundingBox())!;
-        await page.mouse.move(rect.x - 12, rect.y - 12); await page.mouse.down();
-        await page.mouse.move(rect.x + rect.width + 12, rect.y + rect.height + 12, { steps: 8 }); await page.mouse.up();
+        // Give the card's pending preview height room while keeping the rectangle clear of A.
+        await page.mouse.move(rect.x - 12, rect.y + rect.height + 80); await page.mouse.down();
+        await page.mouse.move(rect.x + rect.width + 12, rect.y - 12, { steps: 8 }); await page.mouse.up();
       } else await b.locator('.title-button').click();
       const held = await frames(4); expect(held).toEqual(Array.from({ length: 4 }, () => expected));
       release(); await expect(page.getByRole('status')).toHaveText('已保存到本机');

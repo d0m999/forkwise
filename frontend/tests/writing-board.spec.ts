@@ -130,6 +130,8 @@ test('标题、标签和正文同线阅读，保存等待、失败重试与确�
   await board.getByRole('button', { name: '创建标签', exact: true }).click();
   await board.getByRole('button', { name: '完成标签管理' }).click();
   const chip = board.getByText('研究问题', { exact: true });
+  await expect(chip).toBeVisible();
+  await expect(page.getByRole('status')).toHaveText('已保存到本机');
 
   let reject!: () => void;
   const hold = new Promise<void>(resolve => { reject = resolve; });
@@ -155,10 +157,12 @@ test('标题、标签和正文同线阅读，保存等待、失败重试与确�
     await board.getByRole('button', { name: '还原写字板' }).click();
     await expect(title).toBeInViewport();
     await expect(editor).toHaveText('业务改善、制造进展与估值，是三个不同的问题。');
+    await page.setViewportSize({ width: 760, height: 900 });
+    await expect(board.getByRole('button', { name: '返回画布' })).toBeVisible();
     reject();
     await expect(board.getByText('保存未完成', { exact: true })).toBeVisible();
-    const retry = board.getByRole('button', { name: '重试保存', exact: true });
-    await expect(retry).toBeVisible();
+    const retry = page.getByRole('button', { name: '重试保存', exact: true });
+    await expect(retry).toBeInViewport();
     await expect(editor).toContainText('业务改善、制造进展与估值');
     await page.screenshot({ path: info.outputPath('save-failed.png') });
     rejectWrites = false;
@@ -168,6 +172,7 @@ test('标题、标签和正文同线阅读，保存等待、失败重试与确�
     reject();
     await page.unrouteAll({ behavior: 'wait' });
   }
+  await page.setViewportSize({ width: 1360, height: 900 });
   await editor.press('End');
   await editor.press('Enter');
   await page.keyboard.insertText('把已知、未知，以及需要继续阅读的内容，分别放在画布上。');
