@@ -112,7 +112,9 @@ test('文字操作取消旧块区，Shift柄从新锚点开始；多块不偷偷
     { id: 'c', type: 'text', text: '丙' },
   ]);
   await clickBlockHandle(page.getByRole('button', { name: '选择块：甲', exact: true }));
-  await editor.locator('[data-block-id="b"]').click();
+  const nextParagraph = editor.locator('[data-block-id="b"]');
+  const bounds = (await nextParagraph.boundingBox())!;
+  await nextParagraph.click({ position: { x: bounds.width - 8, y: bounds.height / 2 } });
   await clickBlockHandle(page.getByRole('button', { name: '选择块：丙', exact: true }), true);
   await expect(page.getByText('已选择 1 个块', { exact: true })).toBeVisible();
   await clickBlockHandle(page.getByRole('button', { name: '选择块：乙', exact: true }), true);
