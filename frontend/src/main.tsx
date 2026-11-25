@@ -9,6 +9,7 @@ import { nextPaste, pasteTranslation, type PasteSequence } from "./canvas-snapsh
 import { SnapshotMenu } from "./snapshot-menu";
 import { ExportMenu } from "./export-menu";
 import { ImportPackage, importDialogOpen } from "./import-package";
+import { WorkspaceProjectDialog } from './workspace-project-dialog';
 import { renderCanvasPng, type CanvasExportVisual } from "./canvas-export";
 import { useCanvasImageInput } from "./canvas-image-input";
 import { droppedFilePlan, fileAssetPayload, runDroppedFiles } from "./canvas-drop";
@@ -422,11 +423,10 @@ function Workspace() {
   const [renaming, setRenaming] = useState<string | null>(null),
     [name, setName] = useState("");
   const renameTrigger = useRef<HTMLButtonElement>(null);
-  const renameForm = useRef<HTMLFormElement>(null);
+  const renameDialog = useRef<HTMLDialogElement>(null);
   function closeRename() {
-    const form = renameForm.current;
-    const focused = document.activeElement;
-    if (form && (form.contains(focused) || focused === document.body)) {
+    if (renameDialog.current?.open) {
+      renameDialog.current.close();
       renameTrigger.current?.focus({ preventScroll: true });
     }
     setRenaming(null);
@@ -817,7 +817,7 @@ function Workspace() {
       if (target.closest("dialog.project-search, dialog.shape-appearance-dialog, dialog.organize-dialog, dialog.attachment-copy-dialog")) return;
       // 导入和改名是模态表单：打开期间画布动作历史一律不动。
       // 这里直接返回、不 preventDefault，名称输入框的原生撤销照常生效。
-      if (importDialogOpen() || renameForm.current) return;
+      if (importDialogOpen() || renameDialog.current?.open) return;
       // Text inputs and title rounds own native text undo; non-text controls
       // such as the appearance checkbox use the project's action history.
       const input = target.closest("input");
@@ -1372,7 +1372,7 @@ function Workspace() {
         event.keyCode === 229 ||
         composition.current ||
         (event.target as HTMLElement).closest(
-          "input, textarea, [contenteditable=true], dialog.organize-dialog",
+          "input, textarea, [contenteditable=true], dialog.organize-dialog, dialog.workspace-project-dialog",
         )
       )
         return;
@@ -4203,20 +4203,11 @@ function Workspace() {
         </button>}
       </div>
       {renaming && (
-        <div className="dialog-shade">
+        <WorkspaceProjectDialog dialog={renameDialog} label="重命名项目" dismiss={() => { if (!busy) closeRename(); }}>
           <form
-            ref={renameForm}
-            role="dialog"
-            aria-modal="true"
-            aria-label="重命名项目"
             onKeyDown={event => {
               if (event.nativeEvent.isComposing) {
                 if (event.key === 'Enter') event.preventDefault();
-                return;
-              }
-              if (event.key === 'Escape') {
-                event.preventDefault();
-                closeRename();
                 return;
               }
               if (event.key !== 'Tab' || event.ctrlKey || event.altKey || event.metaKey) return;
@@ -4229,7 +4220,7 @@ function Workspace() {
             }}
             onSubmit={(e) => {
               e.preventDefault();
-              if (state && name.trim())
+              if (state && name.trim() && !busy && !historyBlocked)
                 void action(
                   {
                     commandId: crypto.randomUUID(),
@@ -4246,24 +4237,23 @@ function Workspace() {
             <label htmlFor="project-name">项目名称</label>
             <input
               id="project-name"
-              autoFocus
               maxLength={240}
               value={name}
               onChange={(e) => setName(e.target.value)}
             />
             <div>
-              <button type="button" onClick={closeRename}>
+              <button type="button" aria-disabled={busy || undefined} onClick={() => { if (!busy) closeRename(); }}>
                 取消
               </button>
               <button
                 type="submit"
-                disabled={busy || historyBlocked || !name.trim()}
+                aria-disabled={busy || historyBlocked || !name.trim() || undefined}
               >
                 保存名称
               </button>
             </div>
           </form>
-        </div>
+        </WorkspaceProjectDialog>
       )}
     </div>
   );

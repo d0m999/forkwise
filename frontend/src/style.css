@@ -177,10 +177,6 @@ button[aria-current="true"] {
 .topbar:has(.export-popover, .workspace-actions > .search-record-error) {
   z-index: 11;
 }
-.topbar:has(.import-dialog) {
-  /* 导入遮罩也要覆盖挂在 document.body 上的卡片工具。 */
-  z-index: 42;
-}
 .workspace-brand {
   flex: none;
   display: flex;
@@ -752,52 +748,48 @@ body:has(.workspace[data-board-full="true"]) .card-tooltip { display: none; }
 .empty p {
   font-size: 15px;
 }
-.dialog-shade {
-  position: fixed;
-  inset: 0;
-  background: #1d27384a;
-  z-index: 20;
-  display: grid;
-  place-items: center;
-}
-.dialog-shade form {
+.workspace-project-dialog {
   width: min(420px, 90vw);
+  max-height: 88vh;
+  overflow: auto;
+  border: 0;
   border-radius: 12px;
   background: white;
+  color: inherit;
   padding: 28px;
   box-shadow: 0 20px 80px #16203b30;
 }
-.dialog-shade h2 {
+.workspace-project-dialog::backdrop { background: #1d27384a; }
+.workspace-project-dialog h2 {
   font-size: 20px;
   margin: 0 0 24px;
 }
-.dialog-shade label {
+.workspace-project-dialog label {
   display: block;
   margin-bottom: 8px;
 }
-.dialog-shade input {
+.workspace-project-dialog input {
   width: 100%;
   border: 1px solid #aeb8c8;
   border-radius: 6px;
   padding: 10px;
 }
-.dialog-shade form > div {
+.workspace-project-dialog form > div {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
   margin-top: 24px;
 }
-.dialog-shade button[type="submit"] {
+.workspace-project-dialog button[type="submit"] {
   background: #365ec9;
   color: white;
 }
+.workspace-project-dialog button[aria-disabled="true"] { cursor: wait; opacity: .5; }
 .import-package {
   display: inline-flex;
 }
-.dialog-shade form.import-dialog {
+.workspace-project-dialog:has(> .import-dialog) {
   width: min(560px, 92vw);
-  max-height: 88vh;
-  overflow: auto;
 }
 .import-dialog h2 {
   margin-bottom: 12px;

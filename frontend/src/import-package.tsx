@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { api, MappingError } from './api';
+import { WorkspaceProjectDialog } from './workspace-project-dialog';
 import { UNKNOWN_RESULT_CODES } from '../../backend/src/mapping/recovery-contract';
 import type { ImportPreview } from '../../backend/src/mapping/package-import';
 import type { PackageFailure } from '../../backend/src/mapping/package-verify';
@@ -31,7 +32,7 @@ async function fingerprint(base64: string): Promise<string> {
 
 // 画布快捷键据此判断导入对话框是否打开；类名由本模块独占。
 export function importDialogOpen() {
-  return !!document.querySelector('.import-dialog');
+  return !!document.querySelector('dialog[open] > .import-dialog');
 }
 
 // 只校验的预览是只读的，随时可以退出；已提交的请求不能再被 Esc 打断。
@@ -58,7 +59,8 @@ export function ImportPackage({ disabled, onImported }: {
   const trigger = useRef<HTMLButtonElement>(null);
   const nameInput = useRef<HTMLInputElement>(null);
   const closeButton = useRef<HTMLButtonElement>(null);
-  const dialogRef = useRef<HTMLFormElement>(null);
+  const dialog = useRef<HTMLDialogElement>(null);
+  const form = useRef<HTMLFormElement>(null);
   const failureRef = useRef<HTMLElement>(null);
   // 迟到的预览结果属于已经关闭或已被替换的那一次选择，直接丢弃。
   const selection = useRef(0);
@@ -82,13 +84,14 @@ export function ImportPackage({ disabled, onImported }: {
   useEffect(() => {
     if (!open) return;
     if (source) nameInput.current?.focus({ preventScroll: true });
-    else if (verifying) dialogRef.current?.focus({ preventScroll: true });
+    else if (verifying) form.current?.focus({ preventScroll: true });
     else closeButton.current?.focus({ preventScroll: true });
   }, [open, source, verifying]);
 
   function close() {
     if (submitting) return;
     selection.current += 1;
+    dialog.current?.close();
     setOpen(false);
     setSource(null);
     setName('');
@@ -98,25 +101,13 @@ export function ImportPackage({ disabled, onImported }: {
     requestAnimationFrame(() => trigger.current?.focus({ preventScroll: true }));
   }
 
-  useEffect(() => {
-    if (!open) return;
-    const escape = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape' || event.isComposing) return;
-      event.preventDefault();
-      event.stopImmediatePropagation();
-      close();
-    };
-    window.addEventListener('keydown', escape, true);
-    return () => window.removeEventListener('keydown', escape, true);
-  }, [open, submitting]);
-
   function trapTab(event: ReactKeyboardEvent<HTMLFormElement>) {
     if (event.key !== 'Tab') return;
     const nodes = [...event.currentTarget.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), [href], select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])')]
       .filter((node) => node.offsetParent !== null);
     if (!nodes.length) {
       event.preventDefault();
-      dialogRef.current?.focus({ preventScroll: true });
+      form.current?.focus({ preventScroll: true });
       return;
     }
     const first = nodes[0]!;
@@ -214,6 +205,7 @@ export function ImportPackage({ disabled, onImported }: {
     try {
       sessionStorage.removeItem(key);
       if (!refusal) {
+        dialog.current?.close();
         setOpen(false);
         requestAnimationFrame(() => trigger.current?.focus({ preventScroll: true }));
       }
@@ -257,8 +249,8 @@ export function ImportPackage({ disabled, onImported }: {
         导入项目包
       </button>
       {open && (
-        <div className="dialog-shade">
-          <form ref={dialogRef} className="import-dialog" role="dialog" aria-modal="true" aria-label="导入项目包" tabIndex={-1} onSubmit={(event) => void submit(event)} onKeyDown={trapTab}>
+        <WorkspaceProjectDialog dialog={dialog} label="导入项目包" dismiss={close}>
+          <form ref={form} className="import-dialog" tabIndex={-1} onSubmit={(event) => void submit(event)} onKeyDown={trapTab}>
             <h2>导入项目包</h2>
             {!source && (
               <>
@@ -364,7 +356,7 @@ export function ImportPackage({ disabled, onImported }: {
               </>
             )}
           </form>
-        </div>
+        </WorkspaceProjectDialog>
       )}
     </span>
   );

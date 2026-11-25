@@ -1,4 +1,5 @@
 import { test, expect, place } from './writing-board-fixture';
+import { croppedCanvasImage } from './canvas-image-reading-fixture';
 
 test('从顶栏创建、改名和切换研究，项目导航和搜索跟随活动项目', async ({ page, workspace }) => {
   const selected = page.getByRole('tab', { selected: true });
@@ -168,13 +169,59 @@ test('固定导航时导入遮罩覆盖背景项目行', async ({ page, workspac
   await expect(dialog).toBeVisible();
   for (const target of [bounds, tool]) {
     const point = { x: target.x + target.width / 2, y: target.y + target.height / 2 };
-    expect(await page.evaluate(({ x, y }) => document.elementFromPoint(x, y)?.className, point)).toBe('dialog-shade');
+    expect(await page.evaluate(({ x, y }) => document.elementFromPoint(x, y)?.matches('dialog:modal'), point)).toBe(true);
     await page.mouse.click(point.x, point.y);
   }
   await expect(dialog).toBeVisible();
   await dialog.getByRole('button', { name: '关闭', exact: true }).click();
   await expect(row).toHaveAttribute('aria-current', 'true');
   expect((await workspace.state()).project.name).toBe('未命名研究');
+});
+
+for (const label of ['导入项目包', '重命名项目']) {
+  test(`${label}打开期间挡住单选形状的真实悬浮工具`, async ({ page, workspace }) => {
+    await page.getByRole('button', { name: '形状', exact: true }).click();
+    await page.getByRole('menuitem', { name: '矩形', exact: true }).click();
+    await page.locator('.react-flow__pane').click({ position: { x: 375, y: 235 } });
+    await expect(page.getByRole('status')).toHaveText('已保存到本机');
+    await page.getByRole('img', { name: '矩形', exact: true }).click();
+    const tool = page.getByRole('button', { name: '编辑形状文字', exact: true });
+    await expect(tool).toBeVisible();
+    const bounds = (await tool.boundingBox())!;
+    const point = { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 };
+    const before = await workspace.state();
+    if (label === '导入项目包') {
+      await Promise.all([page.waitForEvent('filechooser'), page.getByRole('button', { name: label, exact: true }).click()]);
+    } else {
+      await page.getByRole('button', { name: '重命名当前项目', exact: true }).click();
+    }
+    const dialog = page.getByRole('dialog', { name: label, exact: true });
+    await expect(dialog).toBeVisible();
+    const hit = await page.evaluate(({ x, y }) => Boolean(document.elementFromPoint(x, y)?.closest('.shape-text-actions--floating')), point);
+    await page.mouse.click(point.x, point.y);
+    expect(hit).toBe(false);
+    await expect(page.locator('.shape-text-input')).toHaveCount(0);
+    await expect(dialog).toBeVisible();
+    expect(await workspace.state()).toEqual(before);
+  });
+}
+
+test('先打开图片大图时，真实指针无法命中顶栏的导入与改名', async ({ page, workspace }) => {
+  await croppedCanvasImage(page, workspace);
+  const triggers = await Promise.all([
+    page.getByRole('button', { name: '导入项目包', exact: true }).boundingBox(),
+    page.getByRole('button', { name: '重命名当前项目', exact: true }).boundingBox(),
+  ]);
+  await page.getByRole('img', { name: '已裁剪拉伸.svg', exact: true }).dblclick();
+  const viewer = page.getByRole('dialog', { name: '图片大图', exact: true });
+  await expect(viewer).toBeVisible();
+  for (const bounds of triggers) {
+    const point = { x: bounds!.x + bounds!.width / 2, y: bounds!.y + bounds!.height / 2 };
+    expect(await page.evaluate(({ x, y }) => Boolean(document.elementFromPoint(x, y)?.closest('.body-image-viewer')), point)).toBe(true);
+    await page.mouse.click(point.x, point.y);
+  }
+  await expect(page.locator('dialog.workspace-project-dialog[open]')).toHaveCount(0);
+  await viewer.getByRole('button', { name: '关闭大图', exact: true }).click();
 });
 
 test('1360px 缩至 760px 后继续显示活动或键盘探索中的页签', async ({ page, workspace }) => {
@@ -339,6 +386,40 @@ test('改名对话框内非文本按钮的快捷键不会撤销画布，名称�
   expect(historyCommands).toEqual([]);
 });
 
+test('聚焦保存按钮提交后等待改名回执，Tab 与 Esc 保持在活跃模态直到完成', async ({ page, workspace }) => {
+  const rename = page.getByRole('button', { name: '重命名当前项目', exact: true });
+  await rename.click();
+  const dialog = page.getByRole('dialog', { name: '重命名项目', exact: true });
+  const name = dialog.getByRole('textbox', { name: '项目名称', exact: true });
+  const save = dialog.getByRole('button', { name: '保存名称', exact: true });
+  await name.fill('等待确认后命名');
+  let release!: () => void;
+  const held = new Promise<void>(resolve => { release = resolve; });
+  let acknowledged!: (status: number) => void;
+  const acknowledgment = new Promise<number>(resolve => { acknowledged = resolve; });
+  await page.route('**/api/mapping/execute', async route => {
+    if (route.request().postDataJSON().type !== 'project.rename') return route.continue();
+    const response = await route.fetch();
+    acknowledged(response.status());
+    await held;
+    await route.fulfill({ response });
+  });
+  try {
+    await save.focus();
+    await page.keyboard.press('Enter');
+    expect(await acknowledgment).toBe(200);
+    await expect(save).toBeDisabled();
+    await page.keyboard.press('Tab');
+    await expect(dialog.locator(':focus')).toHaveCount(1, { timeout: 2000 });
+    await page.keyboard.press('Escape');
+    await expect(dialog).toBeVisible();
+    await expect(dialog.locator(':focus')).toHaveCount(1);
+  } finally { release(); }
+  await expect(dialog).toHaveCount(0);
+  await expect(rename).toBeFocused();
+  expect((await workspace.state()).project.name).toBe('等待确认后命名');
+});
+
 for (const outcome of ['延迟', '失败']) {
   test(`改名已保存但项目列表${outcome}时，活动页签、导航与画布立即同步`, async ({ page, workspace }) => {
     const title = '完成改名后的长名称用于核对活动研究仍完整可见';
@@ -349,11 +430,11 @@ for (const outcome of ['延迟', '失败']) {
     await page.setViewportSize({ width: 760, height: 900 });
     await page.reload();
     const tabs = page.getByRole('tablist', { name: '研究项目' });
-    const selected = tabs.getByRole('tab', { selected: true });
+    const selected = page.locator('.project-tabs [aria-selected="true"]');
     await expect(tabs.getByRole('tab')).toHaveCount(6);
     const selectedId = await selected.getAttribute('title');
     await page.getByRole('button', { name: '项目导航', exact: true }).click();
-    const navigation = page.getByRole('complementary', { name: '项目导航' });
+    const navigation = page.locator('#project-navigation');
     const rename = page.getByRole('button', { name: '重命名当前项目', exact: true });
     await rename.click();
     const name = page.getByRole('textbox', { name: '项目名称', exact: true });
@@ -376,11 +457,19 @@ for (const outcome of ['延迟', '失败']) {
       await page.getByRole('button', { name: '保存名称', exact: true }).click();
       expect((await ack).status()).toBe(200);
       await expect.poll(() => listRequests).toBeGreaterThan(0);
-      await expect(page.getByRole('main')).toHaveAccessibleName(title + '画布');
-      await expect(selected).toHaveAccessibleName(title, { timeout: 2000 });
+      await expect(page.locator('#project-canvas')).toHaveAttribute('aria-label', title + '画布');
+      await expect(selected.locator('.project-name')).toHaveText(title, { timeout: 2000 });
       await expect(selected).toHaveAttribute('title', selectedId);
       await expect(selected).toBeInViewport({ ratio: 1 });
-      await expect(navigation.getByRole('button', { name: new RegExp(title) })).toHaveAttribute('aria-current', 'true');
+      await expect(navigation.locator('[aria-current="true"] .project-name')).toHaveText(title);
     } finally { release(); }
+    const dialog = page.getByRole('dialog', { name: '重命名项目', exact: true });
+    if (outcome === '失败') {
+      await expect(dialog.getByRole('button', { name: '取消', exact: true })).toBeEnabled();
+      await page.keyboard.press('Escape');
+    }
+    await expect(dialog).toHaveCount(0);
+    await expect(tabs.getByRole('tab', { selected: true })).toHaveAccessibleName(title);
+    await expect(page.getByRole('main')).toHaveAccessibleName(title + '画布');
   });
 }
