@@ -117,6 +117,43 @@ test('复制单个附件到同项目已有同名卡，保留独立笔记和原�
   expect(await content.body()).toEqual(Buffer.from(pdf));
 });
 
+for (const action of ['粘贴', '搜索快捷键'] as const) test(`附件复制对话框内的${action}不会触发背景画布操作`, async ({ page, workspace }) => {
+  await place(page, '目标卡');
+  await dropFiles(page, [{ name: '来源.pdf', type: 'application/pdf', text: pdf }]);
+  const copy = page.getByRole('button', { name: '复制 来源.pdf 到其他卡片' });
+  await copy.press('Enter');
+  const dialog = page.getByRole('dialog', { name: '复制附件到卡片' });
+  const picker = dialog.getByRole('combobox', { name: '目标卡片' });
+  await expect(picker).toBeFocused();
+  const search = page.getByRole('dialog', { name: '搜索当前项目卡片' });
+  if (action === '搜索快捷键') {
+    for (const key of ['Control+k', 'Meta+k']) {
+      await picker.press(key);
+      await expect(picker).toBeFocused();
+      await expect(search).toBeHidden();
+    }
+    await picker.press('Escape');
+    await expect(dialog).toHaveCount(0);
+    await page.keyboard.press('Control+k');
+    await expect(search).toBeVisible();
+    return;
+  }
+
+  const paste = (target: typeof picker, text: string) => target.evaluate((element, text) => {
+    const clipboardData = new DataTransfer();
+    clipboardData.setData('text/plain', text);
+    element.dispatchEvent(new ClipboardEvent('paste', { clipboardData, bubbles: true, cancelable: true }));
+  }, text);
+  await paste(picker, '对话框中的文本');
+  await picker.press('Escape');
+  await expect(dialog).toHaveCount(0);
+  await expect(page.getByRole('status')).toHaveText('已保存到本机');
+  await paste(page.locator('.react-flow__pane'), '画布中的文本');
+  await expect.poll(async () => (await workspace.state()).cards.flatMap(card => card.body.blocks.map(block => block.text)))
+    .toContain('画布中的文本');
+  expect((await workspace.state()).cards).toHaveLength(3);
+});
+
 test('拖入 PDF、三个普通文件和图片分别建卡或图片，中文名可打开，其余附件可用键盘展开', async ({ page, workspace }) => {
   await dropFiles(page, [{ name: '财报.pdf', type: 'application/pdf', text: pdf }]);
   await expect(page.getByRole('button', { name: '打开 财报.pdf', exact: true })).toBeVisible();

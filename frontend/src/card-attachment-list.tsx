@@ -41,7 +41,8 @@ function CopyAttachmentDialog({ item, targets, onCopy, close }: {
   return createPortal(
     <dialog ref={dialog} className="attachment-copy-dialog" aria-label="复制附件到卡片"
       onCancel={event => { event.preventDefault(); close(); }}
-      onKeyDown={event => event.stopPropagation()} onClick={event => event.stopPropagation()}>
+      onKeyDown={event => event.stopPropagation()} onClick={event => event.stopPropagation()}
+      onPaste={event => event.stopPropagation()}>
       <form onSubmit={event => {
         event.preventDefault();
         if (targets.some(target => target.id === targetId)) { onCopy(targetId); close(); }

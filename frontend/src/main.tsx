@@ -106,7 +106,7 @@ import { useCardResize } from "./card-resize";
 import { InlineTitle } from "./inline-title";
 import { CardMenu } from "./card-menu";
 import { OrganizeDialog } from "./organize-dialog";
-import { organizeCancellationJournal } from "./organize-cancellation-recovery";
+import { createOrganizeCancellationJournal } from "./organize-cancellation-recovery";
 import { bodyPreviewText, useCardPresentation } from "./card-presentation";
 import { useCardLayoutSave } from "./card-layout-save";
 import { useAppearanceSave, type AppearanceInput } from "./appearance-save";
@@ -346,10 +346,8 @@ function Workspace() {
   >({});
   const [projects, setProjects] = useState<Project[]>([]);
   const [organizing, setOrganizing] = useState<{ projectId: string; source?: Card } | null>(null);
-  const [organizeCancellations, setOrganizeCancellations] = useState(() => {
-    const saved = organizeCancellationJournal.read();
-    return { pending: saved, saved };
-  });
+  const [organizeCancellationJournal] = useState(createOrganizeCancellationJournal);
+  const [organizeCancellations, setOrganizeCancellations] = useState(() => organizeCancellationJournal.snapshot);
   const authority = useRef<ProjectState | null>(null);
   const [selectedConnectors, setSelectedConnectors] = useState<string[]>([]);
   const selectedFrameIds = frameSelection?.projectId === state?.project.id && frameSelection?.generation === canvasSelection.generation()
@@ -3116,13 +3114,10 @@ function Workspace() {
         <OrganizeDialog projectId={organizing.projectId} {...(organizing.source ? { source: organizing.source } : {})}
           cards={state.cards}
           pendingCancellations={pendingOrganizeCancellations}
-          isCancellationSaved={id => organizeCancellations.saved.has(id)}
+          isCancellationSaved={id => organizeCancellations.saved?.has(id) ?? false}
           onPendingCancellationChange={(request, status) => {
-            const next = new Map(organizeCancellations.pending);
-            if (status === 'pending') next.set(request.requestId, { projectId: organizing.projectId, request });
-            else next.delete(request.requestId);
-            const written = organizeCancellationJournal.write(next);
-            setOrganizeCancellations(previous => ({ pending: next, saved: written ? next : previous.saved }));
+            const written = organizeCancellationJournal.update(organizing.projectId, request, status);
+            setOrganizeCancellations(organizeCancellationJournal.snapshot);
             return written;
           }}
           close={() => setOrganizing(null)}
