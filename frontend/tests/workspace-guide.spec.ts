@@ -1,5 +1,6 @@
 import { expect, place, test } from './writing-board-fixture';
 import type { Page } from '@playwright/test';
+import { openMapping } from '../../backend/src/mapping/storage';
 
 async function openReplay(page: Page) {
   const navigation = page.getByRole('button', { name: '项目导航', exact: true });
@@ -84,14 +85,16 @@ test('偏好晚到时不渲染会消失的跳过按钮，引导打开时失焦�
   try {
     await page.reload();
     await expect(page.getByRole('status')).toHaveText('已保存到本机');
-    await openReplay(page);
-    await expect(dialog.getByRole('button', { name: '跳过引导' })).toHaveCount(0);
-    await page.keyboard.press('Tab');
-    await expect(dialog.getByRole('button', { name: '下一步' })).toBeFocused();
+    await page.getByRole('button', { name: '项目导航', exact: true }).click();
+    await expect(page.locator('.project-nav').getByRole('button', { name: '画布引导', exact: true })).toHaveCount(0);
+    await expect(dialog).toHaveCount(0);
   } finally {
     release();
   }
   expect(await (await read).json()).toEqual({ preference: 'completed' });
+  await openReplay(page);
+  await expect(dialog.getByRole('button', { name: '跳过引导' })).toHaveCount(0);
+  await page.keyboard.press('Tab');
   await expect(dialog.getByRole('button', { name: '下一步' })).toBeFocused();
   const writes: unknown[] = [];
   page.on('request', request => {
@@ -375,11 +378,73 @@ for (const preference of ['跳过引导', '完成引导']) {
   });
 }
 
-test('撤权时关闭引导并把焦点还给项目导航', async ({ page, workspace }) => {
-  const dialog = await openReplay(page);
-  await expect(dialog.getByRole('button', { name: '关闭引导' })).toBeFocused();
-  workspace.revoke();
-  await expect(dialog).toHaveCount(0);
-  await expect(page.getByRole('button', { name: '项目导航', exact: true })).toBeFocused();
-  await expect(page.getByText('授权已失效，请从本机启动入口重新打开；未确认草稿已保留')).toBeVisible();
+for (const scene of ['引导打开', 'Esc 后焦点停在重看按钮']) {
+  test(`撤权时，${scene}均把焦点还给项目导航`, async ({ page, workspace }) => {
+    const navigation = page.getByRole('button', { name: '项目导航', exact: true });
+    await navigation.press('Enter');
+    const replay = page.locator('.project-nav').getByRole('button', { name: '画布引导', exact: true });
+    await replay.press('Enter');
+    const dialog = page.getByRole('dialog', { name: '画布引导', exact: true });
+    await expect(dialog.getByRole('button', { name: '关闭引导' })).toBeFocused();
+    if (scene.startsWith('Esc')) {
+      await page.keyboard.press('Escape');
+      await expect(replay).toBeFocused();
+    }
+    workspace.revoke();
+    await expect(dialog).toHaveCount(0);
+    await expect(navigation).toBeFocused();
+    await expect(page.getByText('授权已失效，请从本机启动入口重新打开；未确认草稿已保留')).toBeVisible();
+  });
+}
+
+test('项目范围的真实 403 撤下引导，允许原项目继续建卡', async ({ page, workspace }) => {
+  const projectId = (await workspace.state()).project.id;
+  const mapping = openMapping(workspace.directory);
+  let token: string;
+  try { token = mapping.access.issue('human', [projectId]); }
+  finally { mapping.close(); }
+  const endpoint = workspace.origin + '/api/workspace/guide';
+  const response = page.waitForResponse(result => result.url() === endpoint);
+  await page.goto(workspace.origin + '/#' + new URLSearchParams({ token }));
+  expect((await response).status()).toBe(403);
+  await page.getByRole('button', { name: '项目导航', exact: true }).click();
+  await expect(page.locator('.project-nav').getByRole('button', { name: '画布引导', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('tab', { selected: true })).toBeVisible();
+  await place(page, '授权项目内继续记录', 360, 210);
+  expect((await workspace.state()).cards[0]?.title).toBe('授权项目内继续记录');
+});
+
+test('左上方对象工具与导航重叠时，真实指针仍可打开引导', async ({ page, workspace }) => {
+  await page.getByRole('button', { name: '形状', exact: true }).click();
+  await page.getByRole('menuitem', { name: '矩形', exact: true }).click();
+  await page.locator('.react-flow__pane').click({ position: { x: 40, y: 94 } });
+  await expect(page.getByRole('status')).toHaveText('已保存到本机');
+  await page.getByRole('img', { name: '矩形', exact: true }).click();
+  const tools = page.getByRole('toolbar', { name: '形状操作' });
+  await expect(tools).toBeVisible();
+  const before = await workspace.state();
+  const navigation = page.getByRole('button', { name: '项目导航', exact: true });
+  await navigation.click();
+  const replay = page.locator('.project-nav').getByRole('button', { name: '画布引导', exact: true });
+  const bounds = (await replay.boundingBox())!;
+  const floating = (await tools.boundingBox())!;
+  const point = { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 };
+  expect(point.x).toBeGreaterThan(floating.x);
+  expect(point.x).toBeLessThan(floating.x + floating.width);
+  expect(point.y).toBeGreaterThan(floating.y);
+  expect(point.y).toBeLessThan(floating.y + floating.height);
+  const hit = await page.evaluate(({ x, y }) => {
+    const element = document.elementFromPoint(x, y);
+    return { replay: !!element?.closest('.project-nav [data-workspace-guide]'),
+      coveredByShape: !!element?.closest('.shape-text-actions--floating') };
+  }, point);
+  expect(hit).toEqual({ replay: true, coveredByShape: false });
+  await page.mouse.click(point.x, point.y);
+  const dialog = page.getByRole('dialog', { name: '画布引导', exact: true });
+  await expect(dialog).toBeVisible();
+  await page.keyboard.press('Escape');
+  expect(await workspace.state()).toEqual(before);
+  await navigation.click();
+  await tools.getByRole('button', { name: '编辑形状文字' }).click();
+  await expect(page.getByRole('textbox', { name: '形状文字' })).toBeFocused();
 });

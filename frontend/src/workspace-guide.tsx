@@ -1,8 +1,9 @@
-import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from 'react';
+import { useEffect, useEffectEvent, useLayoutEffect, useRef, useState, type RefObject } from 'react';
 import type { WorkspaceGuidePreference } from '../../backend/src/mapping/mapping';
 import './workspace-guide.css';
 
 const preferenceUrl = '/api/workspace/guide';
+export type GuideAccessResult = 'allowed' | 'retry' | 401 | 403;
 type PreferenceSave = { value: WorkspaceGuidePreference; status: 'saving' | 'failed' };
 
 const steps = [
@@ -20,13 +21,14 @@ const steps = [
   },
 ];
 
-export function WorkspaceGuide({ ready, showInvitation, editInProgress, open, dialog, navigation }: {
+export function WorkspaceGuide({ ready, showInvitation, editInProgress, open, dialog, navigation, onAccess }: {
   ready: boolean;
   showInvitation: boolean;
   editInProgress: boolean;
   open: () => void;
   dialog: RefObject<HTMLDialogElement | null>;
   navigation: RefObject<HTMLButtonElement | null>;
+  onAccess: (result: GuideAccessResult) => void;
 }) {
   const [preference, setPreference] = useState<WorkspaceGuidePreference | null>();
   const [readFailed, setReadFailed] = useState(false);
@@ -44,20 +46,30 @@ export function WorkspaceGuide({ ready, showInvitation, editInProgress, open, di
   const skipFailed = save?.status === 'failed' && save.value === 'skipped';
   const completeFailed = save?.status === 'failed' && save.value === 'completed';
 
+  const publishAccess = useEffectEvent(onAccess);
   useEffect(() => {
     if (!ready) return;
     const controller = new AbortController();
     void fetch(preferenceUrl, { signal: controller.signal }).then(async response => {
-      if (response.status === 401 || response.status === 403) return;
+      if (response.status === 401 || response.status === 403) {
+        if (!controller.signal.aborted) publishAccess(response.status);
+        return;
+      }
       if (!response.ok) throw new Error('Guide preference unavailable');
       const saved: { preference: WorkspaceGuidePreference | null } = await response.json();
+      if (controller.signal.aborted) return;
       setPreference(current => current === undefined ? saved.preference : current);
+      publishAccess('allowed');
       const active = document.activeElement;
       if (active?.hasAttribute('data-guide-read-retry')) {
         (dialog.current?.contains(active) ? next.current : navigation.current)?.focus({ preventScroll: true });
       }
       setReadFailed(false);
-    }).catch(() => { if (!controller.signal.aborted) setReadFailed(true); });
+    }).catch(() => {
+      if (controller.signal.aborted) return;
+      setReadFailed(true);
+      publishAccess('retry');
+    });
     return () => controller.abort();
   }, [ready, readAttempt, dialog, navigation]);
 
@@ -96,6 +108,11 @@ export function WorkspaceGuide({ ready, showInvitation, editInProgress, open, di
         body: JSON.stringify({ preference: value }),
         keepalive: true,
       });
+      if (response.status === 401 || response.status === 403) {
+        setSave(null);
+        onAccess(response.status);
+        return;
+      }
       if (!response.ok) throw new Error('Guide preference not saved');
       setPreference(value);
       setSave(null);

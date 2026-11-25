@@ -1044,7 +1044,7 @@ body:has(.workspace[data-board-full="true"]) .card-tooltip { display: none; }
   position: fixed;
   z-index: 30;
 }
-body:has(.project-nav) .card-floating { z-index: 9; }
+body:has(.workspace > .project-nav) :is(.card-floating, .text-actions, .shape-text-actions--floating, .layer-menu-popup) { z-index: 9; }
 .card-actions button {
   min-height: 32px;
 }

@@ -10,7 +10,7 @@ import { SnapshotMenu } from "./snapshot-menu";
 import { ExportMenu } from "./export-menu";
 import { ImportPackage, importDialogOpen } from "./import-package";
 import { WorkspaceProjectDialog } from './workspace-project-dialog';
-import { WorkspaceGuide } from './workspace-guide';
+import { WorkspaceGuide, type GuideAccessResult } from './workspace-guide';
 import { renderCanvasPng, type CanvasExportVisual } from "./canvas-export";
 import { useCanvasImageInput } from "./canvas-image-input";
 import { droppedFilePlan, fileAssetPayload, runDroppedFiles } from "./canvas-drop";
@@ -317,8 +317,8 @@ function draftKey(projectId: string, cardId: string, field: Draft["field"]) {
 function Workspace() {
   const [state, setState] = useState<ProjectState | null>(null);
   const projectTabs = useRef<HTMLDivElement>(null);
-  const [launchReady, setLaunchReady] = useState(false);
-  const [launchEmpty, setLaunchEmpty] = useState(false);
+  const [workspaceAccess, setWorkspaceAccess] = useState<'loading' | 'ready' | 'revoked'>('loading');
+  const [guideAccess, setGuideAccess] = useState<'pending' | 'allowed' | 'retry' | 'denied'>('pending');
   const guideDialog = useRef<HTMLDialogElement>(null);
   const navigation = useRef<HTMLButtonElement>(null);
   const [attachTarget, setAttachTarget] = useState<string | null>(null);
@@ -1075,6 +1075,36 @@ function Workspace() {
     }
     return value;
   };
+  function hideGuide() {
+    const dialog = guideDialog.current;
+    const wasOpen = dialog?.open;
+    dialog?.close();
+    const focus = document.activeElement;
+    if (focus?.closest('.workspace-guide-invitation, .project-nav [data-workspace-guide]') ||
+      (wasOpen && focus === document.body)) {
+      navigation.current?.focus({ preventScroll: true });
+    }
+    setGuideAccess('denied');
+  }
+  function revokeWorkspaceView() {
+    persistDrafts();
+    authority.current = null;
+    const focused = document.activeElement;
+    const rename = renameDialog.current;
+    const guide = guideDialog.current;
+    const focusInRename = rename?.open && (rename.contains(focused) || focused === document.body);
+    const focusInGuide = guide?.open && (guide.contains(focused) || focused === document.body);
+    rename?.close();
+    hideGuide();
+    setWorkspaceAccess('revoked');
+    setRenaming(null);
+    setName('');
+    if (focusInRename || focusInGuide || projectTabs.current?.contains(focused) || projectNavList.current?.contains(focused) ||
+      focused?.closest('.workspace-empty')) navigation.current?.focus({ preventScroll: true });
+    setState(null);
+    setProjects([]);
+    setSyncNotice("授权已失效，请从本机启动入口重新打开；未确认草稿已保留");
+  }
   useEffect(() => {
     const id = state?.project.id;
     if (!id) return;
@@ -1114,27 +1144,7 @@ function Workspace() {
             error.code,
           )
         ) {
-          persistDrafts();
-          authority.current = null;
-          const focused = document.activeElement;
-          const dialog = renameDialog.current;
-          const guide = guideDialog.current;
-          const focusInRename = dialog?.open && (dialog.contains(focused) || focused === document.body);
-          const focusInGuide = guide?.open && (guide.contains(focused) || focused === document.body);
-          dialog?.close();
-          guide?.close();
-          setLaunchReady(false);
-          setLaunchEmpty(false);
-          setRenaming(null);
-          setName('');
-          if (focusInRename || focusInGuide || projectTabs.current?.contains(focused) || projectNavList.current?.contains(focused)) {
-            navigation.current?.focus({ preventScroll: true });
-          }
-          setState(null);
-          setProjects([]);
-          setSyncNotice(
-            "授权已失效，请从本机启动入口重新打开；未确认草稿已保留",
-          );
+          revokeWorkspaceView();
         } else setSyncNotice("地图同步暂时中断，正在重试；未确认草稿已保留");
       } finally {
         running = false;
@@ -1471,6 +1481,7 @@ function Workspace() {
     if (!(await shapeMove.flush()) || !(await connectorLabel.finish()) || !(await shapeText.finish()) || !(await texts.finish()) || !(await pose.flush()) || !(await flush())) return false;
     updateState(value);
     setProjects(all);
+    setWorkspaceAccess('ready');
     return true;
   };
   const select = async (id: string, navigationRow?: HTMLButtonElement) => {
@@ -2467,10 +2478,7 @@ function Workspace() {
   useEffect(() => {
     let active = true;
     void authorizeLocalSession()
-      .then(() => {
-        if (active) setLaunchReady(true);
-        return api.projects();
-      })
+      .then(() => api.projects())
       .then(async (all) => {
         if (!active) return;
         setProjects(all);
@@ -2481,12 +2489,14 @@ function Workspace() {
           if (active) updateState(value);
         }
         if (active) {
-          setLaunchEmpty(!first);
+          setWorkspaceAccess('ready');
           setStatus(scanRecovery() ? "有待恢复的未确认草稿" : "已保存到本机");
         }
       })
       .catch((e) => {
-        if (active) fail(e);
+        if (!active) return;
+        if (e instanceof MappingError && e.status === 401) revokeWorkspaceView();
+        fail(e);
       })
       .finally(() => {
         if (active) setBusy(false);
@@ -3313,16 +3323,24 @@ function Workspace() {
     ? [...organizeCancellations.pending.values()].filter(({ projectId, request }) =>
       projectId === organizing.projectId && (!organizing.source || request.cardId === organizing.source.id)).map(({ request }) => request)
     : [];
-  const showNoProjects = launchEmpty && !state && !projects.length;
+  const canOpenGuide = workspaceAccess === 'ready' && (guideAccess === 'allowed' || guideAccess === 'retry');
+  const projectCreationBlocked = busy || historyBlocked || workspaceAccess === 'revoked' || guideAccess === 'denied';
+  const showNoProjects = workspaceAccess === 'ready' && !state && !projects.length && guideAccess !== 'denied';
   const showEmptyCanvas = state && !spatialItems(state).length && !state.frames?.length &&
-    !state.groups?.length && !state.connectors?.length && !textNodes.length &&
-    !placing && !texts.placing && !frameTool && !shapePreset && !strokeDraw.mode && !connectorCreate.mode;
+    !state.groups?.length && !state.connectors?.length && !textNodes.length;
+  const showingPlacement = placing || texts.placing || frameTool || shapePreset || strokeDraw.mode || connectorCreate.mode;
   // Opening a modal shifts focus, which would end these editing rounds.
   const guideEditInProgress = !!editing || !!connectorLabel.session || frameMove.hasKeyboardResize() ||
     texts.nodes.some(node => node.data.editing) ||
     !!(state && currentBody && draftView[draftKey(state.project.id, currentBody.id, 'body')]);
+  function handleGuideAccess(result: GuideAccessResult) {
+    if (workspaceAccess === 'revoked') return;
+    if (result === 401) revokeWorkspaceView();
+    else if (result === 403) hideGuide();
+    else setGuideAccess(result);
+  }
   function openGuide() {
-    if (!guideEditInProgress && !composition.current) guideDialog.current?.showModal();
+    if (canOpenGuide && !guideEditInProgress && !composition.current) guideDialog.current?.showModal();
   }
   return (
     <div
@@ -3339,8 +3357,9 @@ function Workspace() {
         }
       }}
     >
-      <WorkspaceGuide ready={launchReady} showInvitation={showNoProjects && !nav} editInProgress={guideEditInProgress}
-        open={openGuide} dialog={guideDialog} navigation={navigation} />
+      <WorkspaceGuide ready={workspaceAccess === 'ready'} showInvitation={canOpenGuide && showNoProjects && !nav}
+        editInProgress={guideEditInProgress} open={openGuide} dialog={guideDialog} navigation={navigation}
+        onAccess={handleGuideAccess} />
       {syncNotice && (
         <div className="recovery-error" aria-live="polite">
           {syncNotice}
@@ -3413,7 +3432,7 @@ function Workspace() {
           aria-label="新建研究"
           title="新建研究"
           onClick={() => void createProject()}
-          disabled={busy || historyBlocked}
+          disabled={projectCreationBlocked}
         >
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
             <path d="M12 5v14M5 12h14" />
@@ -3471,7 +3490,7 @@ function Workspace() {
               {pinned ? "取消固定" : "固定"}
             </button>
           </div>
-          {launchReady && <button type="button" aria-haspopup="dialog" data-workspace-guide aria-disabled={guideEditInProgress}
+          {canOpenGuide && <button type="button" aria-haspopup="dialog" data-workspace-guide aria-disabled={guideEditInProgress}
             title={guideEditInProgress ? '结束当前操作后可查看引导' : undefined}
             onMouseDown={event => event.preventDefault()} onClick={openGuide}>画布引导</button>}
           {state && <button onClick={() => setOrganizing({ projectId: state.project.id })}
@@ -3847,9 +3866,9 @@ function Workspace() {
           <section className="workspace-empty" aria-labelledby="workspace-empty-title">
             <img src={brandMark} width="55" height="55" alt="" />
             <h2 id="workspace-empty-title">{showNoProjects ? '尚无研究' : '从一个想法开始'}</h2>
-            <button type="button" aria-disabled={busy || historyBlocked}
+            {(showNoProjects || !showingPlacement) && <button type="button" aria-disabled={showNoProjects ? projectCreationBlocked : busy || historyBlocked}
               onClick={event => {
-                if (busy || historyBlocked) return;
+                if (showNoProjects ? projectCreationBlocked : busy || historyBlocked) return;
                 if (showNoProjects) void createProject();
                 else if (chooseCardPlacement()) event.currentTarget.closest('main')?.focus({ preventScroll: true });
               }}>
@@ -3857,8 +3876,8 @@ function Workspace() {
                 <path d="M12 5v14M5 12h14" />
               </svg>
               {showNoProjects ? '创建研究' : '新建卡片'}
-            </button>
-            {!showNoProjects && <p>直接粘贴文字可新建正文卡片，粘贴图片可添加独立图片</p>}
+            </button>}
+            {!showNoProjects && <p>粘贴纯文字可新建带正文的卡片，粘贴单张图片可添加独立图片</p>}
           </section>
         )}
         {state && connectorCreate.mode && <ConnectorCreateControls active={connectorCreate.keyboardActive} focusFree={connectorCreate.draft?.startEndpoint.kind === 'free'}

@@ -1,5 +1,5 @@
 import { expect, test, type Workspace } from './writing-board-fixture';
-import type { Page } from '@playwright/test';
+import type { Page, Request } from '@playwright/test';
 
 test.use({ workspaceStartsEmpty: true });
 
@@ -50,6 +50,8 @@ test('新建空研究后可跳过引导，从中央入口落点建卡，保留�
   await expect(page.locator('#project-canvas')).toBeFocused();
   await expect(page.getByRole('button', { name: '卡片', exact: true })).toHaveAttribute('aria-pressed', 'true');
   await expect(page.getByText('点击画布放置卡片', { exact: true })).toBeVisible();
+  await expect(empty).toBeVisible();
+  await expect(create).toHaveCount(0);
   expect(await workspace.state()).toEqual(before);
   await page.locator('.react-flow__pane').click({ position: { x: 360, y: 210 } });
   const title = page.getByRole('textbox', { name: '卡片标题', exact: true });
@@ -72,6 +74,7 @@ test('加载或读取失败不显示无项目空态', async ({ page, workspace }
   const delay = new Promise<void>(resolve => { reply = resolve; });
   const endpoint = workspace.origin + '/api/mapping/projects';
   const reached = page.waitForRequest(request => request.url() === endpoint);
+  const failed = page.waitForResponse(response => response.url() === endpoint);
   await page.route(endpoint, async route => {
     await delay;
     await route.fulfill({ status: 503, json: { message: '项目暂时无法打开' } });
@@ -84,7 +87,8 @@ test('加载或读取失败不显示无项目空态', async ({ page, workspace }
   } finally {
     reply();
   }
-  await expect(page.getByRole('status')).not.toHaveText('已保存到本机');
+  expect((await failed).status()).toBe(503);
+  await expect(page.getByRole('status')).toHaveText('保存未完成');
   await expect(research(page)).toHaveCount(0);
   await expect(emptyCanvas(page)).toHaveCount(0);
 });
@@ -137,3 +141,50 @@ for (const object of ['空分区', '自由端连线']) {
     await expect(emptyCanvas(page)).toHaveCount(0);
   });
 }
+
+for (const method of ['GET', 'PUT']) {
+  test(`空工作台的真实引导 ${method} 返回 401 时撤下入口并提示重开`, async ({ page, workspace }) => {
+    const endpoint = workspace.origin + '/api/workspace/guide';
+    const requestMatches = (request: Request) => request.url() === endpoint && request.method() === method;
+    const dialog = page.getByRole('dialog', { name: '画布引导', exact: true });
+    const navigation = page.getByRole('button', { name: '项目导航', exact: true });
+    if (method === 'PUT') {
+      await page.getByRole('button', { name: '查看引导', exact: true }).click();
+      await expect(dialog).toBeVisible();
+    }
+    let release!: () => void;
+    const held = new Promise<void>(resolve => { release = resolve; });
+    const requested = page.waitForRequest(requestMatches);
+    const returned = page.waitForResponse(response => requestMatches(response.request()));
+    await page.route(endpoint, async route => {
+      if (route.request().method() === method) await held;
+      await route.continue();
+    });
+    try {
+      if (method === 'GET') await page.reload({ waitUntil: 'domcontentloaded' });
+      else await dialog.getByRole('button', { name: '跳过引导' }).press('Enter');
+      await requested;
+      workspace.revoke();
+    } finally { release(); }
+    expect((await returned).status()).toBe(401);
+    await expect(dialog).toHaveCount(0);
+    await expect(research(page)).toHaveCount(0);
+    await expect(page.getByRole('region', { name: '画布引导', exact: true })).toHaveCount(0);
+    await expect(page.getByText('授权已失效，请从本机启动入口重新打开；未确认草稿已保留')).toBeVisible();
+    await expect(page.getByRole('button', { name: '新建研究', exact: true })).toBeDisabled();
+    if (method === 'PUT') await expect(navigation).toBeFocused();
+  });
+}
+
+
+test('未携带启动凭证且无有效会话时，隐藏引导和新建研究空态', async ({ page, workspace }) => {
+  await page.context().clearCookies();
+  const endpoint = workspace.origin + '/api/mapping/projects';
+  const denied = page.waitForResponse(response => response.url() === endpoint);
+  await page.goto(workspace.origin);
+  expect((await denied).status()).toBe(401);
+  await page.getByRole('button', { name: '项目导航', exact: true }).click();
+  await expect(page.locator('.project-nav').getByRole('button', { name: '画布引导', exact: true })).toHaveCount(0);
+  await expect(research(page)).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '新建研究', exact: true })).toBeDisabled();
+});
