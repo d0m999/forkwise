@@ -408,10 +408,10 @@ export function ProjectSearch({
         disabled={disabled}
         onClick={() => setOpen(true)}
       >
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
           <circle cx="11" cy="11" r="8" /><path d="m21 21-4.3-4.3" />
         </svg>
-        <span>搜索卡片</span>
+        <span>搜索当前项目卡片</span>
         <kbd aria-hidden="true">{navigator.userAgent.includes('Mac') ? '⌘ K' : 'Ctrl K'}</kbd>
       </button>
       {!open && records.error && (

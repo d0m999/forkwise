@@ -360,10 +360,14 @@ function Workspace() {
   >({});
   const [projects, setProjects] = useState<Project[]>([]);
   const activeProjectId = state?.project.id;
+  const activeProjectName = state?.project.name;
   const activeProjectListed = projects.some(project => project.id === activeProjectId);
+  const navigationProjects = projects.map(project => project.id === state?.project.id ? state.project : project);
+  const [focusedTabId, setFocusedTabId] = useState<string | null>(null);
+  const tabStopId = focusedTabId ?? (activeProjectListed ? activeProjectId : projects[0]?.id);
   useEffect(() => {
     projectTabs.current?.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
-  }, [activeProjectId, activeProjectListed]);
+  }, [activeProjectId, activeProjectName, activeProjectListed]);
   const [organizing, setOrganizing] = useState<{ projectId: string; source?: Card } | null>(null);
   const [organizeCancellationJournal] = useState(createOrganizeCancellationJournal);
   const [organizeCancellations, setOrganizeCancellations] = useState(() => organizeCancellationJournal.snapshot);
@@ -403,9 +407,15 @@ function Workspace() {
   const projectNavList = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (nav) projectNavList.current?.querySelector('[aria-current="true"]')?.scrollIntoView({ block: 'nearest' });
-  }, [nav, activeProjectId, activeProjectListed]);
+  }, [nav, activeProjectId, activeProjectName, activeProjectListed]);
   const [renaming, setRenaming] = useState<string | null>(null),
     [name, setName] = useState("");
+  const renameTrigger = useRef<HTMLButtonElement>(null);
+  const renameForm = useRef<HTMLFormElement>(null);
+  function closeRename() {
+    if (renameForm.current?.contains(document.activeElement)) renameTrigger.current?.focus({ preventScroll: true });
+    setRenaming(null);
+  }
   const [placing, setPlacing] = useState(false),
     [editing, setEditing] = useState<string | null>(null),
     [bodyCard, setBodyCard] = useState<string | null>(null);
@@ -1087,6 +1097,10 @@ function Workspace() {
         ) {
           persistDrafts();
           authority.current = null;
+          const focused = document.activeElement;
+          if (projectTabs.current?.contains(focused) || projectNavList.current?.contains(focused)) {
+            navigation.current?.focus({ preventScroll: true });
+          }
           setState(null);
           setProjects([]);
           setSyncNotice(
@@ -3300,7 +3314,9 @@ function Workspace() {
           <img src={brandMark} width="36" height="36" alt="" />
           <strong>见岔</strong><span>Forkwise</span>
         </button>
-        <div className="project-tabs" ref={projectTabs} role="tablist" aria-label="研究项目" onKeyDown={event => {
+        <div className="project-tabs" ref={projectTabs} role="tablist" aria-label="研究项目" onBlur={event => {
+          if (!event.currentTarget.contains(event.relatedTarget)) setFocusedTabId(null);
+        }} onKeyDown={event => {
           const key = event.key;
           if (key !== 'Home' && key !== 'End' && key !== 'ArrowLeft' && key !== 'ArrowRight') return;
           if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || event.nativeEvent.isComposing || event.defaultPrevented || busy || historyBlocked) return;
@@ -3312,9 +3328,9 @@ function Workspace() {
           tabs[next]?.focus({ preventScroll: true });
           tabs[next]?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
         }}>
-          {projects.map((project, index) => {
+          {navigationProjects.map(project => {
             const selected = project.id === activeProjectId;
-            const duplicate = projects.some(other => other.id !== project.id && other.name === project.name);
+            const duplicate = navigationProjects.some(other => other.id !== project.id && other.name === project.name);
             return (
               <button
                 role="tab"
@@ -3322,7 +3338,8 @@ function Workspace() {
                 aria-selected={selected}
                 aria-controls="project-canvas"
                 aria-disabled={busy || historyBlocked || undefined}
-                tabIndex={selected || (!activeProjectListed && index === 0) ? 0 : -1}
+                tabIndex={project.id === tabStopId ? 0 : -1}
+                onFocus={() => setFocusedTabId(project.id)}
                 onClick={() => { if (!busy && !historyBlocked) void select(project.id); }}
                 title={project.id}
               >
@@ -3367,9 +3384,11 @@ function Workspace() {
           />
           {state && (
             <button
+              ref={renameTrigger}
               aria-label="重命名当前项目"
-              disabled={busy || historyBlocked}
+              aria-disabled={busy || historyBlocked || undefined}
               onClick={() => {
+                if (busy || historyBlocked) return;
                 setRenaming(state.project.id);
                 setName(state.project.name);
               }}
@@ -3396,7 +3415,7 @@ function Workspace() {
           {state && <button onClick={() => setOrganizing({ projectId: state.project.id })}
             disabled={busy || historyBlocked} aria-haspopup="dialog">AI 整理记录</button>}
           <div className="project-nav-list" ref={projectNavList}>
-            {projects.map((project) => (
+            {navigationProjects.map((project) => (
               <button
                 key={project.id}
                 aria-disabled={busy || historyBlocked || undefined}
@@ -4171,9 +4190,28 @@ function Workspace() {
       {renaming && (
         <div className="dialog-shade">
           <form
+            ref={renameForm}
             role="dialog"
             aria-modal="true"
             aria-label="重命名项目"
+            onKeyDown={event => {
+              if (event.nativeEvent.isComposing) {
+                if (event.key === 'Enter') event.preventDefault();
+                return;
+              }
+              if (event.key === 'Escape') {
+                event.preventDefault();
+                closeRename();
+                return;
+              }
+              if (event.key !== 'Tab' || event.ctrlKey || event.altKey || event.metaKey) return;
+              const controls = event.currentTarget.querySelectorAll<HTMLElement>('input:not(:disabled), button:not(:disabled)');
+              const first = controls[0], last = controls[controls.length - 1];
+              if (event.shiftKey ? event.target === first : event.target === last) {
+                event.preventDefault();
+                (event.shiftKey ? last : first)?.focus();
+              }
+            }}
             onSubmit={(e) => {
               e.preventDefault();
               if (state && name.trim())
@@ -4185,7 +4223,7 @@ function Workspace() {
                     expected: state.project.versionId,
                     payload: { name },
                   },
-                  () => setRenaming(null),
+                  closeRename,
                 );
             }}
           >
@@ -4197,15 +4235,9 @@ function Workspace() {
               maxLength={240}
               value={name}
               onChange={(e) => setName(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.nativeEvent.isComposing && e.key === "Enter")
-                  e.preventDefault();
-                if (e.key === "Escape" && !e.nativeEvent.isComposing)
-                  setRenaming(null);
-              }}
             />
             <div>
-              <button type="button" onClick={() => setRenaming(null)}>
+              <button type="button" onClick={closeRename}>
                 取消
               </button>
               <button

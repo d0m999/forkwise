@@ -85,11 +85,42 @@ test('760px 下长名称保持完整可访问文本，溢出页签和项目操�
     const name = tab.querySelector<HTMLElement>('.project-name')!;
     return name.scrollWidth > name.clientWidth && getComputedStyle(name).textOverflow === 'ellipsis';
   })).toBe(true);
+  const initialName = await selected.getAttribute('title');
+  const create = page.getByRole('button', { name: '新建研究', exact: true });
+  const toggle = page.getByRole('button', { name: '项目导航', exact: true });
+  await page.keyboard.press('Shift+Tab');
+  await expect(toggle).toBeFocused({ timeout: 2000 });
+  await expect(selected).toHaveAttribute('title', initialName);
+  await page.keyboard.press('Tab');
+  await expect(selected).toBeFocused();
+  await page.keyboard.press('End');
+  await page.keyboard.press('Tab');
+  await expect(create).toBeFocused({ timeout: 2000 });
+  await expect(selected).toHaveAttribute('title', initialName);
+  await page.keyboard.press('Shift+Tab');
+  await expect(selected).toBeFocused();
+  await page.keyboard.press('Home');
+  await expect(tabs.getByRole('tab').first()).toBeFocused();
+  await page.keyboard.press('ArrowLeft');
+  await expect(last).toBeFocused();
+  await page.keyboard.press('ArrowRight');
+  await expect(tabs.getByRole('tab').first()).toBeFocused();
+  await page.keyboard.press('End');
   await page.keyboard.press('Enter');
   await expect(selected).toHaveAccessibleName(fullName);
   await expect(last).toBeFocused();
+  const previous = tabs.getByRole('tab').nth(longNames.length - 1);
+  await page.keyboard.press('ArrowLeft');
+  await expect(previous).toBeFocused();
+  await expect(selected).toHaveAccessibleName(fullName);
+  await page.keyboard.press('Space');
+  await expect(previous).toHaveAttribute('aria-selected', 'true');
+  await expect(previous).toBeFocused();
+  await page.keyboard.press('End');
+  await page.keyboard.press('Enter');
+  await expect(selected).toHaveAccessibleName(fullName);
   await page.keyboard.press('Tab');
-  await expect(page.getByRole('button', { name: '新建研究', exact: true })).toBeFocused();
+  await expect(create).toBeFocused();
 
   await page.getByRole('button', { name: '项目导航', exact: true }).click();
   const navigation = page.getByRole('complementary', { name: '项目导航' });
@@ -117,3 +148,174 @@ test('760px 下长名称保持完整可访问文本，溢出页签和项目操�
   await page.getByRole('button', { name: '搜索当前项目卡片', exact: true }).click();
   await expect(page.getByRole('dialog', { name: '搜索当前项目卡片' })).toBeVisible();
 });
+
+test('固定导航时导入遮罩覆盖背景项目行', async ({ page, workspace }) => {
+  const toggle = page.getByRole('button', { name: '项目导航', exact: true });
+  await toggle.click();
+  const navigation = page.getByRole('complementary', { name: '项目导航' });
+  await navigation.getByRole('button', { name: '固定', exact: true }).click();
+  const row = navigation.getByRole('button', { name: /未命名研究/ });
+  const bounds = (await row.boundingBox())!;
+  await Promise.all([
+    page.waitForEvent('filechooser'),
+    page.getByRole('button', { name: '导入项目包', exact: true }).click(),
+  ]);
+  const dialog = page.getByRole('dialog', { name: '导入项目包' });
+  await expect(dialog).toBeVisible();
+  const hit = await page.evaluate(({ x, y }) => document.elementFromPoint(x, y)?.className,
+    { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 });
+  expect(hit).toBe('dialog-shade');
+  await page.mouse.click(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole('button', { name: '关闭', exact: true }).click();
+  await expect(row).toHaveAttribute('aria-current', 'true');
+  expect((await workspace.state()).project.name).toBe('未命名研究');
+});
+
+test('写字板打开时顶栏导出菜单可真实命中和下载', async ({ page, workspace }) => {
+  await place(page, '写字板打开时导出的卡片');
+  await page.getByRole('button', { name: '编辑正文', exact: true }).click();
+  await expect(page.getByRole('complementary', { name: '写字板' })).toBeVisible();
+  await page.getByRole('button', { name: '导出', exact: true }).click();
+  const [download] = await Promise.all([
+    page.waitForEvent('download', { timeout: 5000 }),
+    page.getByRole('menuitem', { name: '下载可读摘要（Markdown）', exact: true }).click({ timeout: 2000 }),
+  ]);
+  expect(download.suggestedFilename()).toMatch(/\.md$/);
+  expect((await workspace.state()).cards.map(card => card.title)).toEqual(['写字板打开时导出的卡片']);
+});
+
+test('写字板打开时关闭搜索，顶栏的搜索记录失败入口可点击重试', async ({ page, workspace }) => {
+  await place(page, '搜索记录与写字板');
+  expect((await workspace.state()).cards).toHaveLength(1);
+  await page.getByRole('button', { name: '编辑正文', exact: true }).click();
+  await expect(page.getByRole('complementary', { name: '写字板' })).toBeVisible();
+  let fails = true;
+  const recordIds: string[] = [];
+  await page.route('**/api/mapping/execute', route => {
+    const command = route.request().postDataJSON();
+    if (command.type !== 'search.record') return route.continue();
+    recordIds.push(command.commandId);
+    return fails ? route.abort('failed') : route.continue();
+  });
+  await page.getByRole('button', { name: '搜索当前项目卡片', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: '搜索当前项目卡片' });
+  await dialog.getByRole('searchbox', { name: '关键词' }).fill('搜索记录');
+  await dialog.getByRole('button', { name: '关闭搜索', exact: true }).click();
+  const retry = page.getByRole('button', { name: '重试保存搜索记录', exact: true });
+  await expect(dialog).toBeHidden();
+  await expect(retry).toBeVisible();
+  fails = false;
+  await retry.click({ timeout: 2000 });
+  await expect(retry).toBeHidden();
+  expect(recordIds).toHaveLength(2);
+  expect(recordIds[1]).toBe(recordIds[0]);
+});
+
+test('1360px 和 760px 的撤销和重做提示均处于工作台顶栏下方', async ({ page, workspace }) => {
+  await place(page, '需要撤销并恢复的研究卡片');
+  const topbar = page.locator('.topbar');
+  const notice = page.locator('.history-notice');
+  for (const width of [1360, 760]) {
+    await page.setViewportSize({ width, height: 900 });
+    for (const action of ['撤销', '重做']) {
+      await topbar.getByRole('button', { name: action, exact: true }).click();
+      await expect(notice).toContainText(action);
+      const bar = (await topbar.boundingBox())!;
+      const tip = (await notice.boundingBox())!;
+      expect(tip.y).toBeGreaterThan(bar.y + bar.height);
+    }
+  }
+  expect((await workspace.state()).cards).toHaveLength(1);
+});
+
+for (const focus of ['页签', '项目行', '其它仍存活的控件']) {
+  test(`真实撤权撤下项目；焦点原在${focus}`, async ({ page, workspace }) => {
+    const toggle = page.getByRole('button', { name: '项目导航', exact: true });
+    const create = page.getByRole('button', { name: '新建研究', exact: true });
+    const tab = page.getByRole('tab', { selected: true });
+    await toggle.click();
+    const row = page.getByRole('complementary', { name: '项目导航' }).getByRole('button', { name: /未命名研究/ });
+    const previouslyFocused = focus === '页签' ? tab : row;
+    await previouslyFocused.focus();
+    await expect(previouslyFocused).toBeFocused();
+    if (focus === '其它仍存活的控件') await create.focus();
+    workspace.revoke();
+    await expect(page.getByText('授权已失效，请从本机启动入口重新打开；未确认草稿已保留', { exact: true })).toBeVisible();
+    await expect(tab).toHaveCount(0);
+    await expect(row).toHaveCount(0);
+    await expect(focus === '其它仍存活的控件' ? create : toggle).toBeFocused({ timeout: 2000 });
+  });
+}
+
+test('改名对话框的 Tab 与 Shift+Tab 留在对话框，Esc 和保存恢复触发器焦点', async ({ page, workspace }) => {
+  const rename = page.getByRole('button', { name: '重命名当前项目', exact: true });
+  const dialog = page.getByRole('dialog', { name: '重命名项目' });
+  const name = dialog.getByRole('textbox', { name: '项目名称', exact: true });
+  const save = dialog.getByRole('button', { name: '保存名称', exact: true });
+  const cancel = dialog.getByRole('button', { name: '取消', exact: true });
+  await rename.focus();
+  await page.keyboard.press('Enter');
+  await expect(name).toBeFocused();
+  await page.keyboard.press('Shift+Tab');
+  await expect(save).toBeFocused({ timeout: 2000 });
+  await page.keyboard.press('Tab');
+  await expect(name).toBeFocused();
+  await page.keyboard.press('Tab');
+  await expect(cancel).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(dialog).toHaveCount(0);
+  await expect(rename).toBeFocused();
+  await page.keyboard.press('Enter');
+  await name.fill('焦点恢复后的项目名称');
+  await name.press('Enter');
+  await expect(dialog).toHaveCount(0);
+  await expect(rename).toBeFocused();
+  expect((await workspace.state()).project.name).toBe('焦点恢复后的项目名称');
+});
+
+for (const outcome of ['延迟', '失败']) {
+  test(`改名已保存但项目列表${outcome}时，活动页签、导航与画布立即同步`, async ({ page, workspace }) => {
+    const title = '完成改名后的长名称用于核对活动研究仍完整可见';
+    for (let i = 0; i < 5; i++) {
+      await workspace.execute(page, { commandId: crypto.randomUUID(), projectId: crypto.randomUUID(),
+        type: 'project.create', expected: null, payload: { name: '用于形成横向溢出的独立研究名称' + i } });
+    }
+    await page.setViewportSize({ width: 760, height: 900 });
+    await page.reload();
+    const tabs = page.getByRole('tablist', { name: '研究项目' });
+    const selected = tabs.getByRole('tab', { selected: true });
+    await expect(tabs.getByRole('tab')).toHaveCount(6);
+    const selectedId = await selected.getAttribute('title');
+    await page.getByRole('button', { name: '项目导航', exact: true }).click();
+    const navigation = page.getByRole('complementary', { name: '项目导航' });
+    const rename = page.getByRole('button', { name: '重命名当前项目', exact: true });
+    await rename.click();
+    const name = page.getByRole('textbox', { name: '项目名称', exact: true });
+    await name.fill(title);
+    await tabs.evaluate(tablist => { tablist.scrollLeft = tablist.scrollWidth; });
+    await expect(selected).not.toBeInViewport();
+
+    let release!: () => void;
+    const delayed = new Promise<void>(resolve => { release = resolve; });
+    let listRequests = 0;
+    await page.route('**/api/mapping/projects', async route => {
+      listRequests++;
+      if (outcome === '失败') return route.abort('failed');
+      await delayed;
+      await route.continue();
+    });
+    try {
+      const ack = page.waitForResponse(response => response.url().endsWith('/api/mapping/execute') &&
+        response.request().postDataJSON().type === 'project.rename');
+      await page.getByRole('button', { name: '保存名称', exact: true }).click();
+      expect((await ack).status()).toBe(200);
+      await expect.poll(() => listRequests).toBeGreaterThan(0);
+      await expect(page.getByRole('main')).toHaveAccessibleName(title + '画布');
+      await expect(selected).toHaveAccessibleName(title, { timeout: 2000 });
+      await expect(selected).toHaveAttribute('title', selectedId);
+      await expect(selected).toBeInViewport({ ratio: 1 });
+      await expect(navigation.getByRole('button', { name: new RegExp(title) })).toHaveAttribute('aria-current', 'true');
+    } finally { release(); }
+  });
+}
