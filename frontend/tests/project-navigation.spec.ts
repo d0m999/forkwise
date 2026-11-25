@@ -328,6 +328,23 @@ for (const focus of ['页签', '项目行', '其它仍存活的控件']) {
   });
 }
 
+test('真实撤权同时撤下改名对话框和原项目名称，焦点返回项目导航', async ({ page, workspace }) => {
+  const rename = page.getByRole('button', { name: '重命名当前项目', exact: true });
+  await rename.click();
+  const dialog = page.getByRole('dialog', { name: '重命名项目', exact: true });
+  const name = dialog.getByRole('textbox', { name: '项目名称', exact: true });
+  await expect(name).toHaveValue('未命名研究');
+  await expect(name).toBeFocused();
+  const refusal = page.waitForResponse(response => response.url().includes('/api/mapping/') && response.status() === 401);
+  workspace.revoke();
+  expect(await (await refusal).json()).toMatchObject({ code: 'UNAUTHORIZED' });
+  await expect(dialog).toHaveCount(0, { timeout: 2000 });
+  await expect(rename).toHaveCount(0);
+  await expect(page.getByRole('tab')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '项目导航', exact: true })).toBeFocused();
+  await expect(page.getByText('授权已失效，请从本机启动入口重新打开；未确认草稿已保留', { exact: true })).toBeVisible();
+});
+
 test('改名对话框的 Tab 与 Shift+Tab 留在对话框，Esc 和保存恢复触发器焦点', async ({ page, workspace }) => {
   const rename = page.getByRole('button', { name: '重命名当前项目', exact: true });
   const dialog = page.getByRole('dialog', { name: '重命名项目' });

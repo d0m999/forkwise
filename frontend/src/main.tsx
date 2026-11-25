@@ -1113,7 +1113,12 @@ function Workspace() {
           persistDrafts();
           authority.current = null;
           const focused = document.activeElement;
-          if (projectTabs.current?.contains(focused) || projectNavList.current?.contains(focused)) {
+          const dialog = renameDialog.current;
+          const focusInRename = dialog?.open && (dialog.contains(focused) || focused === document.body);
+          dialog?.close();
+          setRenaming(null);
+          setName('');
+          if (focusInRename || projectTabs.current?.contains(focused) || projectNavList.current?.contains(focused)) {
             navigation.current?.focus({ preventScroll: true });
           }
           setState(null);
