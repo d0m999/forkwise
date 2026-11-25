@@ -293,6 +293,15 @@ function deletesCard(action: HistoryAction, cardId: string) {
   return action.deletedCardIds?.includes(cardId) || action.label === 'thought.delete' && action.target.id === cardId;
 }
 type CardSaveOwner = Pick<Draft, "projectId" | "cardId" | "field"> & { commandId: string };
+type DraftSaveFailure = { message: string; owner: CardSaveOwner; generation: number };
+
+function matchesFailedDraft(draft: Draft | undefined, failure: DraftSaveFailure) {
+  const { owner } = failure;
+  return !!draft && draft.projectId === owner.projectId && draft.cardId === owner.cardId &&
+    draft.field === owner.field && (draft.command
+      ? draft.command.commandId === owner.commandId
+      : !!draft.rejected && draft.generation === failure.generation);
+}
 
 function failureMessage(error: unknown) {
   return error instanceof Error ? error.message : "本机服务暂时不可用";
@@ -595,13 +604,11 @@ function Workspace() {
     remote: Card;
   } | null>(null);
   const [status, setStatus] = useState("正在打开本机资料…"),
-    [failure, setFailure] = useState<{ message: string; owner: CardSaveOwner | undefined } | null>(null),
+    [error, setError] = useState(""),
     [busy, setBusy] = useState(true);
+  const [draftFailure, setDraftFailure] = useState<DraftSaveFailure | null>(null);
   const [savingDraft, setSavingDraft] = useState<CardSaveOwner | null>(null);
   const [savingBodyAction, setSavingBodyAction] = useState<CardSaveOwner | null>(null);
-  function setError(message: string) {
-    setFailure(message ? { message, owner: undefined } : null);
-  }
   const pendingAction = useRef<{
     command: Command;
     onDone?: () => void;
@@ -1436,8 +1443,8 @@ function Workspace() {
       setBusy(false);
     }
   };
-  function fail(e: unknown, owner?: CardSaveOwner) {
-    setFailure({ message: failureMessage(e), owner });
+  function fail(e: unknown) {
+    setError(failureMessage(e));
     setStatus("保存未完成");
   }
   async function drainCompletedPrefix(
@@ -1447,6 +1454,10 @@ function Workspace() {
     // A confirmed conflict preserves both bodies for an explicit later choice.
     // An unknown response still needs recovery with the original command ID.
     return conflictRef.current ? "explicitConflict" : "unknown";
+  }
+  function nextSaveDraft(excludedCard?: string) {
+    return [unconfirmed.current, ...closedDrafts.current, ...Object.values(drafts.current)]
+      .find(draft => draft && draft.cardId !== excludedCard) ?? undefined;
   }
   async function flush(
     limit = Infinity,
@@ -1464,7 +1475,7 @@ function Workspace() {
       if (!(await saving.current) && target !== excludedCard) return false;
       return flush(limit, completedPrefix, excludedCard);
     }
-    const current = [unconfirmed.current, ...closedDrafts.current, ...Object.values(drafts.current)].find(d => d && d.cardId !== excludedCard);
+    const current = nextSaveDraft(excludedCard);
     if (!current || current.generation > limit) return true;
     const key = draftKey(current.projectId, current.cardId, current.field);
     const card = authority.current?.cards.find((c) => c.id === current.cardId);
@@ -1560,6 +1571,9 @@ function Workspace() {
           delete drafts.current[key];
         persistDrafts();
         setDraftView({ ...drafts.current });
+        setDraftFailure(previous => previous && previous.owner.projectId === submitted.projectId &&
+          previous.owner.cardId === submitted.cardId && previous.owner.field === submitted.field &&
+          previous.generation <= submitted.generation ? null : previous);
         setStatus(
           Object.keys(drafts.current).length ? "等待保存…" : "已保存到本机",
         );
@@ -1604,7 +1618,10 @@ function Workspace() {
             /* Keep the original draft/command available for retry. */
           }
         }
-        fail(e, savingOwner);
+        if (submitted.field === "body") {
+          setDraftFailure({ message: failureMessage(e), owner: savingOwner, generation: submitted.generation });
+          setStatus("保存未完成");
+        } else fail(e);
         return false;
       }
     })();
@@ -3117,15 +3134,21 @@ function Workspace() {
   const ownsCurrentBody = (owner: CardSaveOwner | null | undefined) =>
     owner?.field === "body" && owner.projectId === state?.project.id && owner.cardId === currentBody?.id;
   const currentBodySaving = ownsCurrentBody(savingDraft) || ownsCurrentBody(savingBodyAction);
+  const failedDraft = draftFailure && draftFailure.owner.projectId === state?.project.id &&
+    matchesFailedDraft(nextSaveDraft(), draftFailure) ? draftFailure : null;
   const pendingBodyFailure = pendingAction.current?.bodyFailure;
   const retryFailure = pendingBodyFailure
     ? pendingBodyFailure.owner.projectId === state?.project.id ? pendingBodyFailure : null
-    : failure;
+    : failedDraft;
   const currentBodyFailed = !currentBodySaving &&
-    (ownsCurrentBody(failure?.owner) || ownsCurrentBody(pendingBodyFailure?.owner));
+    (ownsCurrentBody(failedDraft?.owner) || ownsCurrentBody(pendingBodyFailure?.owner));
   const pending = pendingAction.current?.command;
-  const boardSaveFailure = currentBodyFailed && ownsCurrentBody(retryFailure?.owner) &&
-    !pose.error && !conflict && !historyCommand.current && (!pending || retryFailure === pendingBodyFailure);
+  const bodyRetryAvailable = currentBodyFailed && !pose.error && !conflict && !historyCommand.current;
+  const boardDraftFailure = bodyRetryAvailable && pendingBodyFailure && failedDraft && ownsCurrentBody(failedDraft.owner)
+    ? failedDraft : null;
+  const boardSaveFailure = bodyRetryAvailable && !boardDraftFailure && ownsCurrentBody(retryFailure?.owner) &&
+    (!pending || retryFailure === pendingBodyFailure);
+  const waitingForOtherDraft = boardSaveFailure && pendingBodyFailure && failedDraft?.owner.field === "body";
   const boardStatus = !currentBody ? "已删除 · 内容保留"
     : currentBodyFailed ? "保存未完成"
     : currentBodySaving ? "正在保存…"
@@ -3137,14 +3160,15 @@ function Workspace() {
   const retryOwner = retryFailure?.owner;
   const retryingFailure = retryOwner &&
     (savingDraft?.commandId === retryOwner.commandId || savingBodyAction?.commandId === retryOwner.commandId);
-  const visibleError = retryingFailure ? "" : retryFailure?.message;
+  const visibleError = retryingFailure ? "" : retryFailure?.message ?? (pendingBodyFailure ? "" : error);
   const saveFailure = (visibleError || pose.error) ? (
     <>
       <span role="alert">
         {[visibleError, pose.error].filter(Boolean).join("；")}
       </span>
+      {waitingForOtherDraft && <span>请先处理其他卡片的正文保存，再重试本次操作</span>}
       <button
-        disabled={busy || !!pose.conflict || (!!conflict && !pose.error)}
+        disabled={busy || !!pose.conflict || (!!conflict && !pose.error) || !!waitingForOtherDraft}
         onClick={() => {
           if (historyCommand.current) {
             void travel("retry");
@@ -3168,6 +3192,15 @@ function Workspace() {
       </button>
     </>
   ) : null;
+  const boardFailure = boardDraftFailure ? (
+    <>
+      <span role="alert">{boardDraftFailure.message}</span>
+      <button disabled={busy || historyBlocked || !!pose.conflict || !!savingDraft}
+        onClick={() => {
+          if (!saving.current && !historyLock.current && matchesFailedDraft(nextSaveDraft(), boardDraftFailure)) void flush();
+        }}>重试正文保存</button>
+    </>
+  ) : boardSaveFailure ? saveFailure : undefined;
   // 按钮禁用与捕获中止是两套条件。并集会让框选、草稿等额外禁用导出，这里保持分开。
   // 内联编辑会话要在捕获侧单独把关：导出已开始后再双击进入编辑时，会话刚建立还没有未保存内容，
   // 只查 hasPending() 会把编辑框（textarea 与所选样式）连同白底烘进图像。
@@ -3803,7 +3836,7 @@ function Workspace() {
           title={draftView[draftKey(state!.project.id, panelCard.id, "title")]?.value ?? panelCard.title}
           status={boardStatus}
           identifyCard={!!currentBody && (singleItemId !== currentBody.item.id || selectedConnectors.length > 0 || selectedFrameIds.length > 0)}
-          saveFailure={boardSaveFailure ? saveFailure : undefined}
+          saveFailure={boardFailure}
           onClose={() => {
             if (composition.current) return;
             editorEpoch.current++;
@@ -4075,8 +4108,7 @@ function Workspace() {
           )
         )}
         {attachTarget && <span>点击要附着的卡片</span>}
-        {!!visibleError && retryFailure === pendingBodyFailure && failure && !failure.owner && failure.message !== visibleError &&
-          <span role="alert">{failure.message}</span>}
+        {!!visibleError && retryFailure === pendingBodyFailure && error && error !== visibleError && <span role="alert">{error}</span>}
         {saveFailure && !boardSaveFailure && saveFailure}
         {saveFailure && pendingAction.current?.rejected && <button disabled={busy} onClick={() => void abandonStructure()}>
           {['thought.create', 'shape.create', 'stroke.create'].includes(pendingAction.current.command.type) ? '放弃本次创建' : pendingAction.current.command.type === 'text.delete' ? '放弃本次删除' : pendingAction.current.command.type.startsWith('frame.') ? '放弃本次分区操作' : '放弃本次组合操作'}

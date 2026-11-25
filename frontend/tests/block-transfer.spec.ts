@@ -149,12 +149,18 @@ test('未知原件和已有媒体可明确复制副本，保原文资源引用�
     await page.getByRole('menuitem', { name: '创建副本', exact: true }).click();
   };
   const requests: unknown[] = [];
+  const otherRequests: unknown[] = [];
   let rejectOtherDraft = true;
   let reject!: () => void;
   const held = new Promise<void>(resolve => { reject = resolve; });
   await page.route('**/api/mapping/execute', async route => {
     const command = route.request().postDataJSON();
-    if (command.type === 'body.edit' && command.payload.id === other.id && rejectOtherDraft) return route.abort();
+    if (command.type === 'body.edit' && command.payload.id === other.id) {
+      otherRequests.push(command);
+      if (rejectOtherDraft) return route.fulfill({
+        status: 503, json: { code: 'SERVICE_UNAVAILABLE', message: '乙卡正文暂时无法保存' },
+      });
+    }
     if (command.type !== 'body.edit' || !command.payload.copyOriginals) return route.continue();
     requests.push(command);
     if (requests.length === 1) {
@@ -181,17 +187,37 @@ test('未知原件和已有媒体可明确复制副本，保原文资源引用�
     expect((await workspace.state()).cards[0]!.body.blocks).toEqual(originals);
 
     await page.setViewportSize({ width: 1360, height: 900 });
-    await page.getByRole('button', { name: '另一张正文', exact: true }).click();
+    const otherTitle = page.getByRole('button', { name: '另一张正文', exact: true });
+    await otherTitle.click();
     await expect(board.getByRole('heading', { name: '另一张正文', exact: true })).toBeInViewport();
     const otherEditor = board.getByRole('textbox', { name: '卡片正文', exact: true });
-    await otherEditor.fill('另一张卡最初也保存失败');
-    await expect(board.getByText('保存未完成', { exact: true })).toBeInViewport();
-    await expect(retry).toBeHidden();
-    await expect(page.getByRole('button', { name: '重试保存', exact: true })).toBeVisible();
-    expect(requests).toHaveLength(1);
-    rejectOtherDraft = false;
     await otherEditor.fill('另一张卡正文已单独保存');
+    await expect(board.getByText('保存未完成', { exact: true })).toBeInViewport();
+    await expect(board.getByRole('alert')).toHaveText('乙卡正文暂时无法保存');
+    await expect(retry).toBeHidden();
+    const otherRetry = board.getByRole('button', { name: '重试正文保存', exact: true });
+    await expect(otherRetry).toBeInViewport();
+    const failed = otherRequests.length;
+    await otherRetry.click();
+    await expect.poll(() => otherRequests.length).toBe(failed + 1);
+    expect(otherRequests.at(-1)).toEqual(otherRequests[0]);
+    await expect(board.getByRole('alert')).toHaveText('乙卡正文暂时无法保存');
+    expect(requests).toHaveLength(1);
+
+    await originalTitle.click();
+    await expect(board.getByRole('heading', { name: '未知块复制', exact: true })).toBeInViewport();
+    await expect(board.getByRole('alert')).toHaveText(originalError!);
+    await expect(board.getByText('请先处理其他卡片的正文保存，再重试本次操作', { exact: true })).toBeInViewport();
+    await expect(retry).toBeDisabled();
+    expect(requests).toHaveLength(1);
+
+    await otherTitle.click();
+    await expect(board.getByRole('heading', { name: '另一张正文', exact: true })).toBeInViewport();
+    rejectOtherDraft = false;
+    await otherRetry.click();
     await expect(board.getByText('正文已保存', { exact: true })).toBeInViewport();
+    expect(otherRequests.every(command => JSON.stringify(command) === JSON.stringify(otherRequests[0]))).toBe(true);
+    expect(requests).toHaveLength(1);
     expect((await workspace.state()).cards.find(candidate => candidate.id === other.id)!.body.blocks[0]!.text).toBe('另一张卡正文已单独保存');
     await expect(retry).toBeHidden();
     await expect(page.getByRole('button', { name: '重试保存', exact: true })).toBeVisible();
@@ -227,7 +253,8 @@ test('未知原件和已有媒体可明确复制副本，保原文资源引用�
   await workspace.restart();
   expect((await workspace.state()).cards[0]!.body.blocks).toEqual(copied);
 
-  await board.getByRole('button', { name: '返回画布', exact: true }).click();
+  await page.goto('about:blank');
+  await workspace.open(page);
   await originalTitle.click();
   await page.locator('.react-flow__node').filter({ has: originalTitle }).getByRole('button', { name: '编辑正文', exact: true }).click();
   await page.route('**/api/mapping/execute', route => {
