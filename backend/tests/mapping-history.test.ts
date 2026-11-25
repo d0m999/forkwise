@@ -102,7 +102,7 @@ it('创建撤销持久删除并保留身份，重做恢复同卡/正文/块/位�
 });
 it('human/Agent 的 Body 与 Pose 按项目时间倒序，撤销只写变化域且旧版本永不再次有效', () => {
   const f = fixture();
-  f.create();
+  f.run({ type: 'thought.create', expected: null, payload: { id: 'c', title: '', text: '原正文', x: 10, y: 20 } });
   f.project('other');
   f.create('other-card', 'other');
   const other = f.state('other');
@@ -146,7 +146,8 @@ it('human/Agent 的 Body 与 Pose 按项目时间倒序，撤销只写变化域�
     }),
   ).toThrow('正文已更新');
   f.travel('history.undo');
-  expect(f.state().cards[0]!.body.blocks[0]!.text).toBe('');
+  expect(f.state().cards[0]!.body.blocks[0]!.text).toBe('原正文');
+  expect(f.state().cards[0]!.item).toEqual(afterMove.item);
   for (let i = 0; i < 3; i++) f.travel('history.redo');
   expect(f.state().cards[0]).toMatchObject({
     body: { blocks: [{ text: 'Agent 正文' }] },

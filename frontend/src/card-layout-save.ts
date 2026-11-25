@@ -8,6 +8,7 @@ import {
   type ProjectState,
 } from "./api";
 import { followerFields } from "./attachment-follow";
+import { hasPreviewText } from "../../backend/src/mapping/body-text";
 
 type LayoutCommand = Extract<Command, { type: "card.layout" }>;
 export function useCardLayoutSave(
@@ -85,7 +86,7 @@ export function useCardLayoutSave(
     const policy = card.item.heightPolicy;
     const floor = policy
       ? (policy.manualHeight ??
-        (card.body.blocks.some((b) => typeof b.text === 'string' && b.text.length > 0)
+        (hasPreviewText(card.body)
           ? (policy.previewFloor ?? 0)
           : 0))
       : card.item.pose.height;

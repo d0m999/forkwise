@@ -1,24 +1,24 @@
 # 卡片外观、必要高度与有限正文预览
 
-状态：工程采纳；Issue #9 当前普通卡片纵切片。依据 D158–167、D196、D285、D307–308，保留 D151/D256/D262–263/D283 与 D301/D302 边界。实现、固定 SHA 检查及本人体验分别记录；不表示后续写字板/标签票或完整首版已交付。
+状态：工程采纳；Issue #9 普通卡片纵切片，Issue #51 修订默认卡首写的预览高度。依据 D158–167、D196、D285、D307–308，保留 D151/D256/D262–263/D283 与 D301/D302 边界。实现、固定 SHA 检查及本人体验分别记录；不表示后续写字板/标签票或完整首版已交付。
 
 ## 权威与写域
 
-保留 React Flow、Node/SQLite 与同一 Mapping.read/execute/observe Interface。新增 `card.appearance`，只写独立 `appearance`：稳定逻辑 ID `appearance:{cardId}`、不可变 versionId、titleColor、showPreview。命令 expected 是当前 appearance versionId，只有尚未建立该域的记录使用 null；严格 payload 只有 id/titleColor/showPreview。UI、HTTP 与已授权 Agent 走同一授权、幂等、事务、版本、40步历史、receipt 和 observe 路径。预览开关与颜色不改 Thought/Body/Pose。
+保留 React Flow、Node/SQLite 与同一 Mapping.read/execute/observe Interface。新增 `card.appearance`，以独立 `appearance` 保存外观：稳定逻辑 ID `appearance:{cardId}`、不可变 versionId、titleColor、showPreview。命令 expected 是当前 appearance versionId，只有尚未建立该域的记录使用 null；严格 payload 只有 id/titleColor/showPreview。UI、HTTP 与已授权 Agent 走同一授权、幂等、事务、版本、40步历史、receipt 和 observe 路径。颜色与关闭预览只改变外观。重新开启时可为明确采用自动高度且有可预览正文的卡片首次建立预览预留，在同一次写入更新实际 Pose；外观修改不写 Thought 或 Body。
 
 外观进入固定 snapshot 索引；完整 Body 仍按同 token 的无损 detail 展开，UI 与 Agent 可读同 revision 的原文、实际几何、外观和版本。appearance 的不可变版本可经版本读取路径获取；预算继续计算整个 Mapping JSON，不只计算文字。
 
-默认外观为默认蓝、预览开启。六种标题色与创建时已带正文卡的初始预览高度160是共享的工程参数（presentation-values），视觉令牌在前端唯一 CSS 入口；不是本人锁定的最终色板，也不是标签票的十种色板。沿用 R2 已有 Lucide 轮廓与许可，不新增 UI 库或依赖安装。
+默认外观为默认蓝、预览开启。六种标题色与有限预览高度 160 CSS px 是共享的工程参数（presentation-values），视觉令牌在前端唯一 CSS 入口；不是本人锁定的最终色板，也不是标签票的十种色板。沿用 R2 已有 Lucide 轮廓与许可，不新增 UI 库或依赖安装。
 
 外观撤销也推进版本时钟。撤销首次外观修改时写一份新的、显式默认 appearance，不能退回 null expected 的初始状态；曾建立该域的卡片在创建删除/重做后同样写新默认版本，避免 ABA。生命周期回执和 observe 包含实际影响的 appearance ID。原始旧记录不因此被批量补写。
 
 ## 手动参照与测量
 
-`item.heightPolicy = { manualHeight: number | null, necessaryHeight: number, previewFloor?: number }` 与实际 `item.pose.height` 明确分离，共用 Pose 的不可变版本、SQLite JSON、历史与完整序列化。新卡显式 manualHeight=null、necessaryHeight=0；0 表示尚未测量。previewFloor 是创建时的初始预览留白，有正文为160、空正文为0，缺省为0；它不是手调参照，也不是完整正文或另一份预览内容。正文以后新增或变长不增加这个值；清空正文后清除系统预留，以满足默认无正文收紧。手动高度实际变化时，记录受当前必要高度约束后的实际手动高度；只调宽度/位置及取消/no-op 不伪造新的手动高度。宽度、位置、邻卡不由自动测量更改。
+`item.heightPolicy = { manualHeight: number | null, necessaryHeight: number, previewFloor?: number }` 与实际 `item.pose.height` 明确分离，共用 Pose 的不可变版本、SQLite JSON、历史与完整序列化。新卡显式 manualHeight=null、necessaryHeight=0；0 表示尚未测量。previewFloor 保存系统为有限预览预留的高度，缺省为 0，与手调参照和正文分开。创建时带正文或开启预览的默认空卡首次保存可预览正文时，沿用固定的 160 CSS px。清空时撤回预留，再写时按同一规则恢复。关闭预览的紧凑空卡可保存全文并保持紧凑；重新开启时，有可预览正文且尚无预留的自动高度卡片建立同一预留。关闭已有预览保留当前高度，正文继续变长时沿用已建立的预留。手动高度实际变化时，记录受当前必要高度约束后的实际手动高度；只调宽度/位置及取消/no-op 不伪造新的手动高度。宽度、位置、邻卡不由自动测量更改。
 
 旧数据从未有这些字段，不能猜测其高度来自手调还是默认创建。缺省策略保守解释现有实际高度为兼容下限；测量仍放得下时完全不补写该旧记录，只有实际必要增高或手调时才进入新的 Pose 版本；不执行旧库迁移、清理或批量补字段，不假称旧数据已有 manualHeight。新的测量写入保留原内容、身份、版本和历史，属于正常版本化操作；旧研究库及其领域能力继续独立保留。
 
-`card.layout` 提交实际 DOM 测得的必要高度，expected 同时校验 Thought/Body/Pose/appearance（未建外观域为null）。完整标题及当前可见标签行的真实盒高与边框构成 necessaryHeight，正文全文不参与。实际高度为必要值与手动下限的较大值；新卡无手调时，只有创建时带正文的卡保留初始预览空间；空卡后续保存正文只使用现有空间，不自动增高或单因正文非空改写 Pose。无正文时只保留标题/可见标签必要空间。没有变化不写新版本/历史。
+`card.layout` 提交实际 DOM 测得的必要高度，expected 同时校验 Thought/Body/Pose/appearance（未建外观域为null）。完整标题及当前可见标签行的真实盒高与边框构成 necessaryHeight，正文全文不参与。实际高度取必要高度与下限中较大者。下限优先使用手动高度或旧卡兼容高度，默认自动高度使用当前预览预留。默认空卡收至必要高度；尚未测量必要高度时沿用当前边框，等待真实测量。没有变化不写新版本或历史。写字板与已授权 Mapping 正文补丁共享同一规则，服务端在提交正文时原子保存由此改变的 Pose，并按目标卡片中心的实际位移同步附着批注；普通邻卡留在原位。一次撤销或重做恢复该动作的正文、实际几何和随动批注。属于同一轮正文输入的连续保存沿既有规则合并。
 
 测量是派生几何维护，不新增研究撤销步骤、不清 redo、不拆创建+首次标题或一轮标题组；它的实体、不可变 Pose、receipt、delta 仍在同一事务。派生测量同时更新它所属创建/几何动作的 after Pose，让删除重做恢复已经测量的实际投影，不退回未测占位高度再多推进一次 revision。历史撤销/重做读取当前完整内容，随后按该版本重新测量；手动动作恢复手动参照，并按当前必要高度保护标题。UI 不把旧 title/body/width 测量用于新版本，拒绝后重读再测量。已确认测量在发布读回前释放队列位置，使读回期间出现的新标题可继续测量；未知结果重试原请求。冲突重读若再次失败，错误必须可见、队列必须释放，保留请求供重试，不能把 rejected Promise 留作永久阻塞。
 
@@ -34,13 +34,13 @@
 
 ## 预览和后续适配
 
-当前 Body 是既有普通文本块；预览 Adapter 取同一权威完整 Body，保留块边界，不截断保存正文、不另存摘要，不把字串解析为 HTML。实际可用卡面几何扣除标题、可见标签行及留白后，只放完整22px行盒；手调放大能放更多，长正文不自动撑高。预览开关与侧栏阅读状态分开。当前没有章节/列表折叠功能，不能用演示折叠证明它已交付；后续富文须在该 Body Adapter 明确添加文本投影，不能改为读取折叠 DOM。
+预览从同一份权威 Body 投影可显示的纯文本，保留块边界；仅含空白的正文不会占用正文预览区。完整正文独立保存，卡面按纯文本显示。实际可用卡面几何扣除标题、可见标签行及留白后，只放完整22px行盒；手调放大能放更多，长正文不自动撑高。预览开关与侧栏阅读状态分开。当前没有章节/列表折叠功能，不能用演示折叠证明它已交付；后续富文须在该 Body Adapter 明确添加文本投影，不能改为读取折叠 DOM。
 
 标签 owner 后续把自己的真实单行可见摘要接入 `.card-visible-tags` 测量槽，扩展对应版本读依赖与原子契约，再接 +N/ellipsis/写字板完整标签。此票不创建标签数据、生命周期、搜索或虚假的标签展示；没有可见标签时槽为空。R2 localStorage 的 autoSize/manualHeight、旧 QA 和契约提案都不是本生产字段的采用证据。
 
 ## 验证边界
 
-主要验证通过 Mapping +真实临时SQLite，补回环 HTTP、MCP SDK及正式 workspace-server 的真实本机 Chromium 指针/键盘、菜单、原请求、冲突、必要高度、完整行、历史、重启与授权。旧 #8 几何/原生标题断言继续保留；其依赖160高度与三卡重叠的两项场景，准备阶段显式通过真实 Mapping 设定手调160，再执行原断言，不能把默认卡收紧误写为原几何能力失效。workspace 创建 fixture 等真实测量已落盘后再开始旧场景；changefeed 的严格时间线以实际测量后的 revision3 开始，预览双击/原生undo场景通过真实 Mapping 创建时带正文的卡片准备初始预览空间，仍保留原双击和两步历史断言；空卡零行预算不强行显示预览。原创建 receipt 仍为2，同snapshot、迟到轮次、草稿generation和撤销序列断言保留。
+主要验证通过 Mapping +真实临时SQLite，补回环 HTTP、MCP SDK及正式 workspace-server 的真实本机 Chromium 指针/键盘、菜单、原请求、冲突、必要高度、完整行、历史、重启与授权。旧 #8 几何/原生标题断言继续保留；其依赖160高度与三卡重叠的两项场景，准备阶段显式通过真实 Mapping 设定手调160，再执行原断言，不能把默认卡收紧误写为原几何能力失效。workspace 创建 fixture 等真实测量已落盘后再开始旧场景；changefeed 的严格时间线以实际测量后的 revision3 开始，预览双击/原生undo场景通过真实 Mapping 创建时带正文的卡片准备初始预览空间，仍保留原双击和两步历史断言；空卡零行预算不强行显示预览。Issue #51 另从默认空卡的写字板和已授权 Mapping 补测首写、清空后再写、开关、实际卡高、附着随动、撤销重做和重开读回。原创建 receipt 仍为2，同snapshot、迟到轮次、草稿generation和撤销序列断言保留。
 
 固定候选七组、工具 SHA256/mode、资源归属、私有证据权限和两轴审查的实际状态见本票私有记录。真实 OS IME、系统 clipboard、物理设备、本人 UX、第二 OS、生产用户数据/备份、未来富文与完整标签未由这些检查证明。
 

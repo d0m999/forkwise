@@ -145,11 +145,7 @@ export function followCardMotions(
     const delta = moving.get(row.id)!;
     requireThat(delta.dx === motion.dx && delta.dy === motion.dy, 'INVALID_COMMAND', '已选批注的位移须等于目标卡片中心位移', 400);
   }
-  const textChanges: { before: CanvasText; after: CanvasText }[] = [];
-  const shapeChanges: { before: CanvasShape; after: CanvasShape }[] = [];
-  const imageChanges: { before: CanvasImage; after: CanvasImage }[] = [];
-  const strokeChanges: { before: CanvasStroke; after: CanvasStroke }[] = [];
-  for (const follower of list) {
+  const moves = list.map(follower => {
     const row = required.find(value => value.id === follower.itemId)!;
     const annotation = readAnnotation(db, projectId, follower.itemId);
     requireThat(annotation && annotation.kind === follower.kind && annotation.value.id === follower.id, 'INVALID_COMMAND', '随动批注与当前对象不一致', 400);
@@ -157,20 +153,45 @@ export function followCardMotions(
     const motion = changed.get(row.target!.itemId)!;
     const pose = annotation.value.item.pose;
     requireThat(follower.x === pose.x + motion.dx && follower.y === pose.y + motion.dy, 'INVALID_COMMAND', '随动批注位移须等于目标卡片中心位移', 400);
+    return { annotation, x: follower.x, y: follower.y };
+  });
+  return moveFollowers(db, projectId, commandId, moves);
+}
+
+// A body save carries no caller-supplied geometry. Resolve its deterministic
+// center shift against the current attached annotations in the same transaction.
+export function followCardPreviewResize(db: Database.Database, projectId: string, commandId: string, motion: CardMotion) {
+  const moves = readAttachments(db, projectId)
+    .filter(attachment => attachment.target?.itemId === motion.itemId)
+    .map(attachment => {
+      const annotation = readAnnotation(db, projectId, attachment.id);
+      requireThat(annotation, 'INVALID_COMMAND', '随动批注与当前对象不一致', 400);
+      const { x, y } = annotation.value.item.pose;
+      return { annotation, x: x + motion.dx, y: y + motion.dy };
+    });
+  return moveFollowers(db, projectId, commandId, moves);
+}
+
+function moveFollowers(db: Database.Database, projectId: string, commandId: string, moves: { annotation: Annotation; x: number; y: number }[]) {
+  const textChanges: { before: CanvasText; after: CanvasText }[] = [];
+  const shapeChanges: { before: CanvasShape; after: CanvasShape }[] = [];
+  const imageChanges: { before: CanvasImage; after: CanvasImage }[] = [];
+  const strokeChanges: { before: CanvasStroke; after: CanvasStroke }[] = [];
+  for (const { annotation, x, y } of moves) {
     if (annotation.kind === 'text') {
-      const change = writeText(db, { commandId, projectId, type: 'text.move', expected: annotation.value.item.versionId, payload: { id: annotation.value.id, x: follower.x, y: follower.y } });
+      const change = writeText(db, { commandId, projectId, type: 'text.move', expected: annotation.value.item.versionId, payload: { id: annotation.value.id, x, y } });
       if (change?.before && change.after) textChanges.push({ before: change.before, after: change.after });
     } else if (annotation.kind === 'shape') {
-      const change = moveShape(db, { commandId, projectId, type: 'shape.move', expected: annotation.value.item.versionId, payload: { id: annotation.value.id, x: follower.x, y: follower.y } });
+      const change = moveShape(db, { commandId, projectId, type: 'shape.move', expected: annotation.value.item.versionId, payload: { id: annotation.value.id, x, y } });
       if (change?.before && change.after) shapeChanges.push({ before: change.before, after: change.after });
     } else if (annotation.kind === 'image') {
       const image = annotation.value as CanvasImage;
-      const change = writeImagePose(db, projectId, image, { ...image.item.pose, x: follower.x, y: follower.y });
+      const change = writeImagePose(db, projectId, image, { ...image.item.pose, x, y });
       if (change?.before && change.after) imageChanges.push({ before: change.before, after: change.after });
     } else {
       const stroke = annotation.value as CanvasStroke;
-      if (stroke.item.pose.x !== follower.x || stroke.item.pose.y !== follower.y) {
-        const change = moveStroke(db, projectId, stroke, { x: follower.x, y: follower.y });
+      if (stroke.item.pose.x !== x || stroke.item.pose.y !== y) {
+        const change = moveStroke(db, projectId, stroke, { x, y });
         if (change.before && change.after) strokeChanges.push({ before: change.before, after: change.after });
       }
     }

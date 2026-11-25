@@ -70,6 +70,11 @@ export function captureCardDeletion(state: ProjectState, cardId: string) {
       const version = receipt.versions?.[domain];
       if (!version || ((command.type === 'card.layout' || command.type === 'pose.move') &&
         (receipt.changedIds.length !== 1 || receipt.changedIds[0] !== itemId))) { valid = false; return; }
+      if ((command.type === 'body.edit' || command.type === 'card.appearance') && receipt.changedIds.includes(itemId)) {
+        const pose = receipt.derivedPoseVersions?.[itemId];
+        if (!pose || pose.before !== expected.pose || pose.after !== receipt.versions?.pose) { valid = false; return; }
+        expected.pose = pose.after;
+      }
       expected[domain] = version;
     },
     command,

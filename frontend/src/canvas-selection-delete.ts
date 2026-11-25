@@ -60,6 +60,17 @@ export function captureSelectionDeletion(state: ProjectState, selection: CanvasS
       if (sealed) return;
       for (const card of cards) card.intent.acknowledge(acknowledged, receipt);
       if (acknowledged.projectId !== state.project.id || acknowledgedCommands.has(acknowledged.commandId)) return;
+      if ((acknowledged.type === 'body.edit' || acknowledged.type === 'card.appearance') && receipt.derivedPoseVersions) {
+        acknowledgedCommands.add(acknowledged.commandId);
+        for (const [id, pose] of Object.entries(receipt.derivedPoseVersions)) {
+          const expected = command.expected.items[id];
+          if (!expected || expected.kind === 'card') continue;
+          if (receipt.commandId !== acknowledged.commandId || receipt.projectId !== acknowledged.projectId ||
+            !receipt.changedIds.includes(id) || pose.before !== expected.pose) { valid = false; continue; }
+          expected.pose = pose.after;
+        }
+        return;
+      }
       if (acknowledged.type === 'shape.move' || acknowledged.type === 'shape.transform') {
         const value = state.shapes?.find(shape => shape.id === acknowledged.payload.id), expected = value && command.expected.items[value.item.id];
         if (!value || expected?.kind !== 'shape') return;

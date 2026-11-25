@@ -295,6 +295,13 @@ export function recordAction(
     previous.after = after;
     previous.lastRevision = change.revision;
     previous.target.title = 'body' in after ? after.title : after.name;
+    if (command.type === 'body.edit') {
+      previous.changedIds = [...new Set([...previous.changedIds, ...change.changedIds])];
+      previous.textChanges = foldPoseChange(previous.textChanges, change.textChanges);
+      previous.shapeChanges = foldPoseChange(previous.shapeChanges, change.shapeChanges);
+      previous.imageChanges = foldPoseChange(previous.imageChanges, change.imageChanges);
+      previous.strokeChanges = foldPoseChange(previous.strokeChanges, change.strokeChanges);
+    }
     const before = previous.before;
     if (
       before &&

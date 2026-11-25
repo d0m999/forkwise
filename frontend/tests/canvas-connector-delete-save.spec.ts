@@ -2,7 +2,7 @@ import { test, expect } from './writing-board-fixture';
 import type { Command, Receipt, ProjectHistory } from '../../backend/src/mapping/contracts';
 import { connectorCardPair } from './connector-ui-fixture';
 
-test('待保存正文派生布局确认后首次删卡保留原关联线闭包', async ({ page, workspace }) => {
+test('正文内联缩高和后续标题测量均确认后，首次删卡保留原关联线闭包', async ({ page, workspace }) => {
   const pair = await connectorCardPair(page, workspace), projectId = (await workspace.state()).project.id;
   await workspace.execute(page, { commandId: crypto.randomUUID(), projectId, type: 'connector.create', expected: null,
     payload: { id: 'body-layout-incident', path: 'straight', start: pair.expected.start, end: pair.expected.end } });
@@ -16,6 +16,8 @@ test('待保存正文派生布局确认后首次删卡保留原关联线闭包',
   expect(card.item.pose.height).toBeGreaterThan(card.item.heightPolicy!.necessaryHeight);
   const historyUrl = workspace.origin + '/api/mapping/projects/' + encodeURIComponent(projectId) + '/history';
   const history = await (await page.request.get(historyUrl)).json() as ProjectHistory;
+  // 该修订发布后才改变实际标题盒，单独覆盖随后发生的 DOM 测量请求。
+  await page.addStyleTag({ content: `.workspace:not([data-revision="${before.project.revision}"]) [data-id="${card.item.id}"] .title-button { min-height: 100px }` });
   let releaseBodyExecute = () => {}, releaseBodyAck = () => {}, releaseLayoutAck = () => {};
   let bodyAckReleased = false, layoutAckReleased = false;
   const bodyExecuteGate = new Promise<void>(resolve => { releaseBodyExecute = resolve; });
@@ -60,7 +62,9 @@ test('待保存正文派生布局确认后首次删卡保留原关联线闭包',
     const bodySaved = await workspace.state(), bodyCard = bodySaved.cards.find(value => value.id === card.id)!;
     expect(bodyCard.body.versionId).toBe(body.receipt.versions!.body);
     expect(bodyCard.body.blocks.every(block => typeof block.text !== 'string' || block.text.length === 0)).toBe(true);
-    expect(bodyCard.item).toEqual(card.item); expect(bodySaved.connectors).toEqual(before.connectors);
+    expect(bodyCard.item.pose).toEqual({ ...card.item.pose, height: card.item.heightPolicy!.necessaryHeight });
+    expect(body.receipt.derivedPoseVersions?.[card.item.id]).toEqual({ before: card.item.versionId, after: bodyCard.item.versionId });
+    expect(bodySaved.connectors).toEqual(before.connectors);
     expect(layoutCommands).toHaveLength(0); expect(deletes).toHaveLength(0); expect(bodyAckReleased).toBe(false);
     releaseBodyAck();
     const first = await Promise.race([layoutReached, deleteReached]);
@@ -68,10 +72,10 @@ test('待保存正文派生布局确认后首次删卡保留原关联线闭包',
     expect(first, '正文确认后的真实派生布局必须先完成，再发送删除').toBe('layout');
     await expect.poll(() => layoutReplies.length).toBe(1);
     const layout = layoutReplies[0]!; expect(layout.status).toBe(200);
-    expect(layout.receipt.versions!.pose).not.toBe(card.item.versionId);
+    expect(layout.receipt.versions!.pose).not.toBe(bodyCard.item.versionId);
     const layoutSaved = await workspace.state(), layoutCard = layoutSaved.cards.find(value => value.id === card.id)!;
     expect(layoutCard.item.versionId).toBe(layout.receipt.versions!.pose);
-    expect(layoutCard.item.pose.height).toBeLessThan(card.item.pose.height);
+    expect(layoutCard.item.pose.height).toBeGreaterThan(bodyCard.item.pose.height);
     expect(layoutCard.body).toEqual(bodyCard.body); expect(layoutCard.versionId).toBe(card.versionId);
     expect(layoutSaved.cards.find(value => value.id === pair.b.id)).toEqual(before.cards.find(value => value.id === pair.b.id));
     expect(layoutSaved.connectors).toEqual(before.connectors); expect(deletes).toHaveLength(0); expect(layoutAckReleased).toBe(false);
@@ -81,7 +85,7 @@ test('待保存正文派生布局确认后首次删卡保留原关联线闭包',
     releaseLayoutAck(); const response = await responsePromise, receipt = await response.json();
     const after = await workspace.state(), afterHistory = await (await page.request.get(historyUrl)).json() as ProjectHistory;
     console.log('issue26-body-layout-delete', JSON.stringify({ before, history, events, bodyCommands, bodyReplies, bodySaved, layoutCommands, layoutReplies, layoutSaved, savedHistory, deletes, deleteStatus: response.status(), receipt, after, afterHistory,
-      boundary: 'actual nonempty-to-empty body200 then independent derived layout shrink200; intent precedes both ACKs; original closure, no internal state or successful response mock' }));
+      boundary: 'actual clearing body200 atomically shrinks the card, then the changed title box triggers a separate layout200; intent precedes both ACKs' }));
     expect(response.status(), '正文与派生布局自身确认后首次删卡应使用两域自身版本').toBe(200);
     expect(bodyCommands).toHaveLength(1); expect(layoutCommands).toHaveLength(1); expect(deletes).toHaveLength(1);
     expect(deletes[0]!.command).toMatchObject({ projectId, type: 'thought.delete', payload: { id: card.id }, expected: {

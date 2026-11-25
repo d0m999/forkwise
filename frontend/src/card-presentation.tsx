@@ -6,7 +6,8 @@ import { bodyText } from "../../backend/src/mapping/body-text";
 // blocks must supply their own explicit projection here, never a second summary
 // or the editor's folded/visible DOM. No HTML is interpreted as markup.
 export function bodyPreviewText(body: Card["body"]) {
-  return bodyText(body);
+  const text = bodyText(body);
+  return text.trim() ? text : "";
 }
 
 export function measureCardPresentation(element: HTMLElement) {

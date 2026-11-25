@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import type { Card, Command } from './contracts.js';
 import { requireThat } from '../domain/errors.js';
 import type { GeometryMemberExpected } from './group-geometry-contracts.js';
+import { hasPreviewText } from './body-text.js';
 
 // Mapping owns the surrounding SQLite transaction, receipt and history.
 export function writeGeometry(
@@ -110,7 +111,7 @@ export function restoreGeometry(
       ? {
           ...policy,
           necessaryHeight,
-          previewFloor: before.body.blocks.some((b) => typeof b.text === 'string' && b.text.length > 0)
+          previewFloor: hasPreviewText(before.body)
             ? (policy.previewFloor ?? 0)
             : 0,
         }
@@ -124,12 +125,9 @@ export function restoreGeometry(
           ...desired.item.pose,
           height: Math.max(
             necessaryHeight,
-            heightPolicy?.manualHeight ??
-              (heightPolicy
-                ? before.body.blocks.some((b) => typeof b.text === 'string' && b.text.length > 0)
-                  ? (heightPolicy.previewFloor ?? 0)
-                  : 0
-                : desired.item.pose.height),
+            heightPolicy?.manualHeight ?? (heightPolicy
+              ? (heightPolicy.previewFloor ?? 0)
+              : desired.item.pose.height),
           ),
         },
         versionId: randomUUID(),

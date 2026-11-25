@@ -24,13 +24,14 @@ import { createShape, deleteShape, editShape, moveShape, readShapes, transformSh
 import type { ShapeVersion } from './shape-contracts.js';
 import type { StrokeVersion } from './stroke-contracts.js';
 import { readTexts, writeText } from './text.js';
-import { attachAnnotation, detachAnnotation, followCardMotions, readAttachments, rejectAttachedPoseMove, releaseAttachments } from './attachment.js';
+import { attachAnnotation, detachAnnotation, followCardMotions, followCardPreviewResize, readAttachments, rejectAttachedPoseMove, releaseAttachments } from './attachment.js';
 import { reconcileMediaTasks, completeMediaTask, shouldReconcileCardMediaTasks } from './media-tasks.js';
 import { completeMediaHistory } from './history.js';
 import { readAsset, saveAsset, validateImageAssets } from './media.js';
 import { buildFullPackage } from './full-package.js';
 import { decodeArchive, importPackage, previewImport as previewPackageSource, type ImportPreview } from './package-import.js';
 import { DEFAULT_APPEARANCE, DEFAULT_PREVIEW_HEIGHT } from './presentation-values.js';
+import { hasPreviewText } from './body-text.js';
 import type Database from 'better-sqlite3';
 import { CompactMaps, type CompactOptions } from './compact.js';
 import { observeChanges, type ObserveOptions } from './observe.js';
@@ -409,6 +410,7 @@ export class Mapping {
         let attachmentChanges: Change['attachmentChanges'];
         let cut: CutStateView | undefined;
         let cutOuterEnds: Change['cutOuterEnds'];
+        let derivedPoseVersions: Receipt['derivedPoseVersions'];
         let travel: ReturnType<typeof travelHistory> | undefined;
         let revision: number;
         let changedIds: string[];
@@ -783,7 +785,7 @@ export class Mapping {
               heightPolicy: {
                 manualHeight: null,
                 necessaryHeight: 0,
-                previewFloor: p.text.length ? DEFAULT_PREVIEW_HEIGHT : 0,
+                previewFloor: p.text.trim() ? DEFAULT_PREVIEW_HEIGHT : 0,
               },
             },
             ...(attachment
@@ -831,7 +833,8 @@ export class Mapping {
             if (command.type === 'body.patch')
               requireThat(row.project_id === project.id, 'CONTENT_OBJECT_FORBIDDEN', '该卡片不属于当前项目', 403);
             const card = JSON.parse(row.value) as Card;
-            before = JSON.parse(row.value) as Card;
+            const previous = JSON.parse(row.value) as Card;
+            before = previous;
             if (command.type === 'body.patch') {
               const blocks = patchedBlocks(card, command);
               if (blocks === card.body.blocks) return unchanged(project.revision);
@@ -852,7 +855,7 @@ export class Mapping {
                 manualHeight: card.item.pose.height,
                 necessaryHeight: 0,
               };
-              const previewFloor = card.body.blocks.some((b) => typeof b.text === 'string' && b.text.length > 0)
+              const previewFloor = hasPreviewText(card.body)
                 ? (policy.previewFloor ?? 0)
                 : 0;
               const height = Math.max(
@@ -963,6 +966,44 @@ export class Mapping {
               }
               if (!changedIds.length) return unchanged(project.revision);
             }
+            const bodyEdited = card.body.versionId !== previous.body.versionId;
+            const previewEnabled = command.type === 'card.appearance' &&
+              previous.appearance?.showPreview === false && card.appearance?.showPreview === true;
+            if (card.item.heightPolicy?.manualHeight === null && (bodyEdited || previewEnabled)) {
+              const policy = card.item.heightPolicy;
+              const oldFloor = policy.previewFloor ?? 0;
+              const visibleBody = hasPreviewText(card.body);
+              const showPreview = card.appearance?.showPreview ?? DEFAULT_APPEARANCE.showPreview;
+              const previewFloor = !visibleBody ? 0 : oldFloor === 0 && showPreview && (previewEnabled || !hasPreviewText(previous.body))
+                ? DEFAULT_PREVIEW_HEIGHT : oldFloor;
+              if (previewFloor !== oldFloor) {
+                // A zero necessary height means the title has yet to be
+                // measured. Keep the current box until that measurement.
+                const height = Math.max(previewFloor, policy.necessaryHeight || previous.item.pose.height);
+                const dx = card.item.pose.x - previous.item.pose.x;
+                const dy = card.item.pose.y - previous.item.pose.y + (height - previous.item.pose.height) / 2;
+                card.item.heightPolicy = { ...policy, previewFloor };
+                card.item.pose.height = height;
+                if (card.item.versionId === previous.item.versionId) {
+                  card.item.versionId = randomUUID();
+                  changedIds.push(card.item.id);
+                }
+                derivedPoseVersions = {
+                  [card.item.id]: { before: previous.item.versionId, after: card.item.versionId },
+                };
+                if (dx !== 0 || dy !== 0) {
+                  const followed = followCardPreviewResize(this.db, project.id, command.commandId, { itemId: card.item.id, dx, dy });
+                  if (followed.textChanges.length) textChanges = followed.textChanges;
+                  if (followed.shapeChanges.length) shapeChanges = followed.shapeChanges;
+                  if (followed.imageChanges.length) imageChanges = followed.imageChanges;
+                  if (followed.strokeChanges.length) strokeChanges = followed.strokeChanges;
+                  changedIds.push(...followed.changedIds);
+                  for (const { before, after } of [...followed.textChanges, ...followed.shapeChanges, ...followed.imageChanges, ...followed.strokeChanges]) {
+                    derivedPoseVersions[after.item.id] = { before: before.item.versionId, after: after.item.versionId };
+                  }
+                }
+              }
+            }
             after = card;
             this.db
               .prepare('UPDATE mapping_cards SET value=? WHERE id=? AND project_id=?')
@@ -1056,6 +1097,7 @@ export class Mapping {
           projectId: command.projectId,
           revision,
           changedIds,
+          ...(derivedPoseVersions ? { derivedPoseVersions } : {}),
           ...(movedPoses.length ? { itemPoseVersions: Object.fromEntries(movedPoses) } : {}),
           ...(command.type === 'pose.batch' && cardChanges ? { cardPoseVersions: Object.fromEntries(cardChanges.map(({ after }) => [after.item.id, after.item.versionId])) } : {}),
           ...(frameChanges?.some(change => !change.after) ? { deletedIds: frameChanges.filter(change => !change.after).map(change => change.before!.id) } : {}),

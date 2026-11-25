@@ -311,6 +311,7 @@ export interface Receipt {
   // 剪切资格随回执返回，前端据此确认首次搬动是否被服务端接受。
   cut?: import('./cut-contracts.js').CutStateView;
   itemPoseVersions?: Record<string, string>;
+  derivedPoseVersions?: Record<string, { before: string; after: string }>;
   cardPoseVersions?: Record<string, string>;
   connectorVersions?: Record<string, string>;
   imageVersions?: { image: string; pose: string };

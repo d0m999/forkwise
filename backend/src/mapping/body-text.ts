@@ -24,6 +24,10 @@ export function bodyText(body: Pick<Card['body'], 'blocks'>): string {
   return body.blocks.map(blockPlainText).join('\n');
 }
 
+export function hasPreviewText(body: Pick<Card['body'], 'blocks'>): boolean {
+  return body.blocks.some(block => typeof block.text === 'string' && block.text.trim().length > 0);
+}
+
 export function blockPlainText(block: Block): string {
   if (typeof block.text === 'string') return block.text;
   if (block.type === 'image') return typeof block.caption==='string'?block.caption:'';
