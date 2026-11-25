@@ -300,7 +300,7 @@ function matchesFailedDraft(draft: Draft | undefined, failure: DraftSaveFailure)
   return !!draft && draft.projectId === owner.projectId && draft.cardId === owner.cardId &&
     draft.field === owner.field && (draft.command
       ? draft.command.commandId === owner.commandId
-      : failure.commandRejected && draft.generation === failure.generation);
+      : failure.commandRejected && draft.generation >= failure.generation);
 }
 
 function failureMessage(error: unknown) {
@@ -3162,7 +3162,8 @@ function Workspace() {
   const retryOwner = retryFailure?.owner;
   const retryingFailure = retryOwner &&
     (savingDraft?.commandId === retryOwner.commandId || savingBodyAction?.commandId === retryOwner.commandId);
-  const visibleError = retryingFailure ? "" : retryFailure?.message ?? (pendingBodyFailure ? "" : error);
+  const visibleError = conflict && error ? error
+    : retryingFailure ? "" : retryFailure?.message ?? (pendingBodyFailure ? "" : error);
   const saveFailure = (visibleError || pose.error) ? (
     <>
       <span role="alert">
