@@ -162,6 +162,7 @@ export function ParagraphEditor({
   }, []);
   const [activeId, setActiveId] = useState(''),
     [menu, setMenu] = useState<Menu | null>(null);
+  const keyboardMenuTrigger = useRef<HTMLButtonElement | null>(null);
   const [notice, setNotice] = useState('');
   const gifs = useRef(new Map<HTMLCanvasElement, ReturnType<typeof animateBodyImage>>());
   const gifPreferences = useRef(new Map<string, boolean>());
@@ -809,12 +810,15 @@ export function ParagraphEditor({
     setLinkTarget(null);
     setFormatTarget(null);
   }
-  function openMenu(mode: Menu['mode'], id = activeId, extend = false) {
+  function openMenu(mode: Menu['mode'], id: string, extend = false, trigger?: HTMLButtonElement) {
     if (readOnly || composing.current) return;
     const current = read(),
       index = current.findIndex((b) => b.id === id),
       block = current[index];
     if (!block) return;
+    const selection = element.current ? selectionPoints(element.current) : null;
+    keyboardMenuTrigger.current = trigger ?? null;
+    setActiveId(id);
     onFinish();
     setNotice('');
     setFormatTarget(null);
@@ -841,7 +845,7 @@ export function ParagraphEditor({
       mode,
       query: '',
       index: 0,
-      selection: element.current ? selectionPoints(element.current) : null,
+      selection: selection?.start.blockId === id ? selection : null,
       ...(mode === 'convert' ? { scope, hiddenIds } : {}),
     });
   }
@@ -1104,7 +1108,7 @@ export function ParagraphEditor({
     const cancel = () => {
       const target = fileTarget.current;
       fileTarget.current = null;
-      if (target) restoreFileFocus(target.menu);
+      if (target) restoreMenuFocus(target.menu);
     };
     input?.addEventListener('cancel', cancel);
     return () => input?.removeEventListener('cancel', cancel);
@@ -1114,10 +1118,19 @@ export function ParagraphEditor({
     fileInput.current!.value = '';
     fileInput.current!.click();
   }
-  function restoreFileFocus(target: Menu) {
-    element.current?.focus();
-    if (target.selection && element.current)
-      restoreSelection(element.current, target.selection.start, target.selection.end);
+  function restoreMenuFocus(target: Menu) {
+    const editor = element.current;
+    if (!editor) return;
+    if (!target.selection && target.mode !== 'slash' && keyboardMenuTrigger.current?.isConnected) {
+      keyboardMenuTrigger.current.focus({ preventScroll: true });
+      return;
+    }
+    editor.focus();
+    restoreSelection(
+      editor,
+      target.selection?.start ?? { blockId: target.id, offset: 0 },
+      target.selection?.end,
+    );
   }
   async function insertFiles(files: File[], target: Menu, replace = false) {
     try {
@@ -1160,7 +1173,7 @@ export function ParagraphEditor({
       );
     } catch (error) {
       setNotice(error instanceof Error ? error.message : '图片读取失败，原文保留');
-      restoreFileFocus(target);
+      restoreMenuFocus(target);
     }
   }
   function choose(index: number) {
@@ -1212,9 +1225,7 @@ export function ParagraphEditor({
         wrap: false,
       };
     if (menu.mode === 'convert' && sameBlock(block, target)) {
-      element.current!.focus();
-      if (menu.selection)
-        restoreSelection(element.current!, menu.selection.start, menu.selection.end);
+      restoreMenuFocus(menu);
       return;
     }
     if (reuse && block.type === 'listItem' && target.type !== 'listItem')
@@ -1248,9 +1259,7 @@ export function ParagraphEditor({
     }
     if (event.key === 'Escape') {
       setMenu(null);
-      element.current!.focus();
-      if (menu.selection)
-        restoreSelection(element.current!, menu.selection.start, menu.selection.end);
+      restoreMenuFocus(menu);
     } else if (event.key === 'Enter') choose(menu.index);
     else if (event.key === 'ArrowDown' || event.key === 'ArrowUp')
       setMenu({
@@ -1483,8 +1492,8 @@ export function ParagraphEditor({
     );
   const active = blocks.find((b) => b.id === activeId);
   const imageNode = Array.from(element.current?.children ?? []).find(p => (p as HTMLElement).dataset.blockId === activeId) as HTMLElement | undefined;
-  const anchor = Array.from(element.current?.children ?? [])
-    .find((p) => (p as HTMLElement).dataset.blockId === activeId)
+  const menuAnchor = menu && Array.from(element.current?.children ?? [])
+    .find((p) => (p as HTMLElement).dataset.blockId === menu.id)
     ?.getBoundingClientRect();
   return (
     <div
@@ -1507,7 +1516,7 @@ export function ParagraphEditor({
           fileTarget.current = null;
           const files = Array.from(event.currentTarget.files ?? []);
           if (target && files.length) void insertFiles(files, target.menu, target.replace);
-          else if (target) restoreFileFocus(target.menu);
+          else if (target) restoreMenuFocus(target.menu);
         }}
       />
       {active && imageNode && ['image', 'imageTask', 'pendingImage'].includes(active.type) && !readOnly && createPortal(
@@ -1587,58 +1596,6 @@ export function ParagraphEditor({
           onCancel={closeLink}
         />
       )}
-      {formatTarget && !readOnly && !menu && !linkTarget && (
-        <InlineToolbar
-          onFormat={format}
-          onLink={() => openLink()}
-          left={formatTarget.left}
-          top={formatTarget.top}
-          linkInitially={formatTarget.link ?? false}
-          onCancel={() => {
-            element.current!.focus();
-            restoreSelection(
-              element.current!,
-              formatTarget.selection.start,
-              formatTarget.selection.end,
-            );
-            setFormatTarget(null);
-          }}
-        />
-      )}
-      {!readOnly && activeId && (
-        <div
-          className="block-tools"
-          style={{
-            top: (anchor?.top ?? 0) - (wrapper.current?.getBoundingClientRect().top ?? 0),
-          }}
-          onMouseDown={(e) => e.preventDefault()}
-        >
-          <button type="button" aria-label="插入块" onClick={() => openMenu('insert')}>
-            ＋
-          </button>
-          {active && (editableTextBlock(active) || active.type === 'code') && (
-            <button type="button" aria-label="块菜单" onClick={() => openMenu('convert')}>
-              <CardIcon name="更多" />
-            </button>
-          )}
-          {active?.listType === 'todo' && (
-            <button
-              type="button"
-              aria-label={active.checked ? '标为未完成' : '标为完成'}
-              onClick={() => {
-                const next = read();
-                apply(
-                  next.map((b) => (b.id === activeId ? { ...b, checked: !b.checked } : b)),
-                  { blockId: activeId, offset: 0 },
-                  'formatTodo',
-                );
-              }}
-            >
-              {active.checked ? '已完成' : '未完成'}
-            </button>
-          )}
-        </div>
-      )}
       {menu && !readOnly && (
         <BlockMenu
           explanation={
@@ -1666,8 +1623,8 @@ export function ParagraphEditor({
           onQuery={(query) => setMenu({ ...menu, query, index: 0 })}
           onChoose={choose}
           onKeyDown={menuKey}
-          left={Math.max(8, Math.min(anchor?.left ?? 8, window.innerWidth - 250))}
-          top={Math.max(8, Math.min(anchor?.bottom ?? 100, window.innerHeight - 360))}
+          left={Math.max(8, Math.min(menuAnchor?.left ?? 8, window.innerWidth - 250))}
+          top={Math.max(8, Math.min(menuAnchor?.bottom ?? 100, window.innerHeight - 360))}
         >
           {menu.scope && (
             <div
@@ -1788,51 +1745,98 @@ export function ParagraphEditor({
       {!readOnly && (
         <div className="block-handles">
           {blockControls.map((control) => (
-            <button
+            <div
+              className="block-handle-row"
               key={control.id}
-              type="button"
-              className="block-handle"
-              data-block-selector
               style={{ top: control.top }}
-              aria-label={`选择块：${control.name}`}
-              title="选择内容块；Shift 连续选择；拖动调整顺序"
-              onMouseDown={(event) => event.preventDefault()}
-              onPointerDown={(event) => drag.begin(event, control.id)}
-              onKeyDown={(event) => {
-                if (event.nativeEvent.isComposing || event.keyCode === 229 || composing.current)
-                  return;
-                const action = event.altKey
-                  ? (
-                      {
-                        ArrowUp: 'up',
-                        ArrowDown: 'down',
-                        ArrowRight: 'indent',
-                        ArrowLeft: 'outdent',
-                      } as const
-                    )[event.key as 'ArrowUp']
-                  : event.key === 'Delete' || event.key === 'Backspace'
-                    ? 'delete'
-                    : undefined;
-                if (action) {
-                  event.preventDefault();
-                  event.stopPropagation();
-                  const current = read(),
-                    index = current.findIndex((b) => b.id === control.id);
-                  organize(
-                    action,
-                    menu?.scope?.some((b) => b.id === control.id)
-                      ? menu.scope
-                      : current.slice(index, listEnd(current, index)),
-                  );
-                }
-              }}
-              aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown Alt+ArrowLeft Alt+ArrowRight Delete"
-              onClick={(event) => {
-                if (!drag.consumeClick()) openMenu('convert', control.id, event.shiftKey);
-              }}
+              data-reveal={activeId === control.id || !!menu?.scope?.some((block) => block.id === control.id) || !!drag.preview?.ids.includes(control.id)}
             >
-              <CardIcon name="更多" />
-            </button>
+              <button
+                type="button"
+                className="block-handle"
+                data-block-selector
+                aria-label={`选择块：${control.name}`}
+                title="选择内容块；Shift 连续选择；拖动调整顺序"
+                onFocus={() => setActiveId(control.id)}
+                onMouseDown={(event) => event.preventDefault()}
+                onPointerDown={(event) => drag.begin(event, control.id)}
+                onKeyDown={(event) => {
+                  if (event.nativeEvent.isComposing || event.keyCode === 229 || composing.current)
+                    return;
+                  const action = event.altKey
+                    ? (
+                        {
+                          ArrowUp: 'up',
+                          ArrowDown: 'down',
+                          ArrowRight: 'indent',
+                          ArrowLeft: 'outdent',
+                        } as const
+                      )[event.key as 'ArrowUp']
+                    : event.key === 'Delete' || event.key === 'Backspace'
+                      ? 'delete'
+                      : undefined;
+                  if (action) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    const current = read(),
+                      index = current.findIndex((b) => b.id === control.id);
+                    organize(
+                      action,
+                      menu?.scope?.some((b) => b.id === control.id)
+                        ? menu.scope
+                        : current.slice(index, listEnd(current, index)),
+                    );
+                  }
+                }}
+                aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown Alt+ArrowLeft Alt+ArrowRight Delete"
+                onClick={(event) => {
+                  if (!drag.consumeClick()) {
+                    openMenu('convert', control.id, event.shiftKey, event.detail === 0 ? event.currentTarget : undefined);
+                  }
+                }}
+              >
+                <CardIcon name="更多" />
+              </button>
+              {activeId === control.id && (
+                <div
+                  className="block-tools"
+                  onMouseDown={(e) => e.preventDefault()}
+                >
+                  <button
+                    type="button"
+                    aria-label="插入块"
+                    onClick={(event) => openMenu('insert', control.id, false, event.detail === 0 ? event.currentTarget : undefined)}
+                  >
+                    ＋
+                  </button>
+                  {active && (editableTextBlock(active) || active.type === 'code') && (
+                    <button
+                      type="button"
+                      aria-label="块菜单"
+                      onClick={(event) => openMenu('convert', control.id, false, event.detail === 0 ? event.currentTarget : undefined)}
+                    >
+                      <CardIcon name="更多" />
+                    </button>
+                  )}
+                  {active?.listType === 'todo' && (
+                    <button
+                      type="button"
+                      aria-label={active.checked ? '标为未完成' : '标为完成'}
+                      onClick={() => {
+                        const next = read();
+                        apply(
+                          next.map((b) => (b.id === activeId ? { ...b, checked: !b.checked } : b)),
+                          { blockId: activeId, offset: 0 },
+                          'formatTodo',
+                        );
+                      }}
+                    >
+                      {active.checked ? '已完成' : '未完成'}
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
           ))}
         </div>
       )}
@@ -2240,6 +2244,24 @@ export function ParagraphEditor({
         }}
       />
       </div>
+      {formatTarget && !readOnly && !menu && !linkTarget && (
+        <InlineToolbar
+          onFormat={format}
+          onLink={() => openLink()}
+          left={formatTarget.left}
+          top={formatTarget.top}
+          linkInitially={formatTarget.link ?? false}
+          onCancel={() => {
+            element.current!.focus();
+            restoreSelection(
+              element.current!,
+              formatTarget.selection.start,
+              formatTarget.selection.end,
+            );
+            setFormatTarget(null);
+          }}
+        />
+      )}
     </div>
   );
 }
