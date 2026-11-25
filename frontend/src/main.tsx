@@ -368,6 +368,17 @@ function Workspace() {
   useEffect(() => {
     projectTabs.current?.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
   }, [activeProjectId, activeProjectName, activeProjectListed]);
+  useEffect(() => {
+    const tabs = projectTabs.current;
+    if (!tabs) return;
+    const observer = new ResizeObserver(() => {
+      const focused = document.activeElement;
+      const visible = tabs.contains(focused) ? focused : tabs.querySelector('[aria-selected="true"]');
+      visible?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    });
+    observer.observe(tabs);
+    return () => observer.disconnect();
+  }, []);
   const [organizing, setOrganizing] = useState<{ projectId: string; source?: Card } | null>(null);
   const [organizeCancellationJournal] = useState(createOrganizeCancellationJournal);
   const [organizeCancellations, setOrganizeCancellations] = useState(() => organizeCancellationJournal.snapshot);
@@ -413,7 +424,11 @@ function Workspace() {
   const renameTrigger = useRef<HTMLButtonElement>(null);
   const renameForm = useRef<HTMLFormElement>(null);
   function closeRename() {
-    if (renameForm.current?.contains(document.activeElement)) renameTrigger.current?.focus({ preventScroll: true });
+    const form = renameForm.current;
+    const focused = document.activeElement;
+    if (form && (form.contains(focused) || focused === document.body)) {
+      renameTrigger.current?.focus({ preventScroll: true });
+    }
     setRenaming(null);
   }
   const [placing, setPlacing] = useState(false),
@@ -800,9 +815,9 @@ function Workspace() {
         return;
       const target = event.target as HTMLElement;
       if (target.closest("dialog.project-search, dialog.shape-appearance-dialog, dialog.organize-dialog, dialog.attachment-copy-dialog")) return;
-      // 导入对话框是模态表单，不是原生 <dialog>：打开期间画布动作历史一律不动。
+      // 导入和改名是模态表单：打开期间画布动作历史一律不动。
       // 这里直接返回、不 preventDefault，名称输入框的原生撤销照常生效。
-      if (importDialogOpen()) return;
+      if (importDialogOpen() || renameForm.current) return;
       // Text inputs and title rounds own native text undo; non-text controls
       // such as the appearance checkbox use the project's action history.
       const input = target.closest("input");

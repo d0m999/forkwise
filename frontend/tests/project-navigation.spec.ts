@@ -150,6 +150,10 @@ test('760px 下长名称保持完整可访问文本，溢出页签和项目操�
 });
 
 test('固定导航时导入遮罩覆盖背景项目行', async ({ page, workspace }) => {
+  await place(page, '有悬浮工具条的单选卡片', 380, 300);
+  const floating = page.locator('.card-floating.card-actions button').first();
+  await expect(floating).toBeVisible();
+  const tool = (await floating.boundingBox())!;
   const toggle = page.getByRole('button', { name: '项目导航', exact: true });
   await toggle.click();
   const navigation = page.getByRole('complementary', { name: '项目导航' });
@@ -162,14 +166,43 @@ test('固定导航时导入遮罩覆盖背景项目行', async ({ page, workspac
   ]);
   const dialog = page.getByRole('dialog', { name: '导入项目包' });
   await expect(dialog).toBeVisible();
-  const hit = await page.evaluate(({ x, y }) => document.elementFromPoint(x, y)?.className,
-    { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 });
-  expect(hit).toBe('dialog-shade');
-  await page.mouse.click(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
+  for (const target of [bounds, tool]) {
+    const point = { x: target.x + target.width / 2, y: target.y + target.height / 2 };
+    expect(await page.evaluate(({ x, y }) => document.elementFromPoint(x, y)?.className, point)).toBe('dialog-shade');
+    await page.mouse.click(point.x, point.y);
+  }
   await expect(dialog).toBeVisible();
   await dialog.getByRole('button', { name: '关闭', exact: true }).click();
   await expect(row).toHaveAttribute('aria-current', 'true');
   expect((await workspace.state()).project.name).toBe('未命名研究');
+});
+
+test('1360px 缩至 760px 后继续显示活动或键盘探索中的页签', async ({ page, workspace }) => {
+  for (let i = 0; i < 9; i++) {
+    await workspace.execute(page, { commandId: crypto.randomUUID(), projectId: crypto.randomUUID(),
+      type: 'project.create', expected: null, payload: { name: '横向滚动时检查可见的长项目名称' + i } });
+  }
+  await page.reload();
+  const tabs = page.getByRole('tablist', { name: '研究项目' });
+  await expect(tabs.getByRole('tab')).toHaveCount(10);
+  const middle = tabs.getByRole('tab').nth(2);
+  const last = tabs.getByRole('tab').last();
+  await middle.click();
+  await expect(middle).toHaveAttribute('aria-selected', 'true');
+  await expect(middle).toBeInViewport({ ratio: 1 });
+  await page.locator('.react-flow__pane').click({ position: { x: 400, y: 245 } });
+  await expect(middle).not.toBeFocused();
+  await page.setViewportSize({ width: 760, height: 900 });
+  await expect(middle).toBeInViewport({ ratio: 1, timeout: 2000 });
+
+  await page.setViewportSize({ width: 1360, height: 900 });
+  await middle.focus();
+  await page.keyboard.press('End');
+  await expect(last).toBeFocused();
+  await page.setViewportSize({ width: 760, height: 900 });
+  await expect(last).toBeInViewport({ ratio: 1, timeout: 2000 });
+  await expect(last).toBeFocused();
+  await expect(middle).toHaveAttribute('aria-selected', 'true');
 });
 
 test('写字板打开时顶栏导出菜单可真实命中和下载', async ({ page, workspace }) => {
@@ -268,10 +301,42 @@ test('改名对话框的 Tab 与 Shift+Tab 留在对话框，Esc 和保存恢复
   await expect(rename).toBeFocused();
   await page.keyboard.press('Enter');
   await name.fill('焦点恢复后的项目名称');
-  await name.press('Enter');
+  await page.keyboard.press('Tab');
+  await expect(cancel).toBeFocused();
+  await page.keyboard.press('Tab');
+  await expect(save).toBeFocused();
+  await page.keyboard.press('Enter');
   await expect(dialog).toHaveCount(0);
   await expect(rename).toBeFocused();
   expect((await workspace.state()).project.name).toBe('焦点恢复后的项目名称');
+});
+
+test('改名对话框内非文本按钮的快捷键不会撤销画布，名称仍可原生撤销', async ({ page, workspace }) => {
+  await place(page, '改名对话框后仍存在的卡片');
+  const before = await workspace.state();
+  const historyCommands: string[] = [];
+  page.on('request', request => {
+    if (!request.url().endsWith('/api/mapping/execute')) return;
+    const type = request.postDataJSON().type;
+    if (type === 'history.undo' || type === 'history.redo') historyCommands.push(type);
+  });
+  await page.getByRole('button', { name: '重命名当前项目', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: '重命名项目' });
+  const name = dialog.getByRole('textbox', { name: '项目名称', exact: true });
+  await name.press('Meta+a');
+  await name.pressSequentially('新名称');
+  await name.press('Meta+z');
+  await expect(name).toHaveValue('新名');
+  const historyRequest = page.waitForRequest(request => request.url().endsWith('/api/mapping/execute') &&
+    ['history.undo', 'history.redo'].includes(request.postDataJSON().type), { timeout: 1000 }).catch(() => null);
+  for (const label of ['取消', '保存名称']) {
+    await dialog.getByRole('button', { name: label, exact: true }).press('Meta+z');
+  }
+  expect(await historyRequest).toBeNull();
+  await page.keyboard.press('Escape');
+  await expect(dialog).toHaveCount(0);
+  expect(await workspace.state()).toEqual(before);
+  expect(historyCommands).toEqual([]);
 });
 
 for (const outcome of ['延迟', '失败']) {

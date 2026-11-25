@@ -174,8 +174,12 @@ button[aria-current="true"] {
   position: relative;
   z-index: 5;
 }
-.topbar:has(.import-dialog, .export-popover, .workspace-actions > .search-record-error) {
+.topbar:has(.export-popover, .workspace-actions > .search-record-error) {
   z-index: 11;
+}
+.topbar:has(.import-dialog) {
+  /* 导入遮罩也要覆盖挂在 document.body 上的卡片工具。 */
+  z-index: 42;
 }
 .workspace-brand {
   flex: none;
