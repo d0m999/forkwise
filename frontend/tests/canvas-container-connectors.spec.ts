@@ -152,6 +152,8 @@ test('混选连线不复活旧分区选择，多线Delete不回落删除Card，S
   await expect(second).toHaveAttribute('aria-pressed', 'true'); await page.keyboard.press('Delete');
   await expect.poll(async () => (await workspace.state()).connectors!.map(value => value.id)).toEqual(['first']);
   const deleted = await workspace.state(); expect(deleted.cards).toEqual(before.cards); expect(deleted.frames).toEqual(before.frames);
+  await expect(second).toHaveCount(0);
+  await expect(page.getByRole('status')).toHaveText('已保存到本机');
   await first.click(); await page.getByRole('button', { name: '移动连线', exact: true }).click(); await page.keyboard.press('ArrowRight');
   await expect(page.getByRole('img', { name: '连线预览', exact: true })).toBeVisible();
   await card.click({ modifiers: ['Shift'] }); await expect(first).toHaveAttribute('aria-pressed', 'true');

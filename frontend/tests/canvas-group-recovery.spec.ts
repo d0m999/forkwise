@@ -1,12 +1,12 @@
 import { test, expect } from './writing-board-fixture';
-import { fiveMembers } from './group-selection-fixture';
+import { expectWritingBoardCard, fiveMembers } from './group-selection-fixture';
 
 for (const mode of ['group', 'selection'] as const) {
   test(`D261外部${mode}删除当前写字板Card，经同步保留删除态且只绑定确切undo栈顶`, async ({ page, workspace }) => {
     const f = await fiveMembers(page, workspace), projectId = f.before.project.id;
     await page.getByRole('button', { name: '编辑正文', exact: true }).click();
     const board = page.getByRole('complementary', { name: '写字板', exact: true });
-    await expect(board.locator('small[title]')).toHaveAttribute('title', f.items.card.id);
+    await expectWritingBoardCard(page, f.items.card.id);
     const before = await workspace.state(), card = before.cards[0]!, group = before.groups![0]!;
     const text = before.texts![0]!, shape = before.shapes![0]!, image = before.images![0]!, stroke = before.strokes![0]!;
     const items = { [card.item.id]: { kind: 'card', thought: card.versionId, body: card.body.versionId, pose: card.item.versionId,
@@ -24,7 +24,7 @@ for (const mode of ['group', 'selection'] as const) {
     expect(deleted.cards).toEqual([]); expect(timeline.revision).toBe(deleted.project.revision);
     expect(timeline.undo.at(-1).deletedCardIds).toEqual([card.id]);
     await expect(page.locator('.workspace')).toHaveAttribute('data-revision', String(deleted.project.revision));
-    await expect(board).toBeVisible(); await expect(board.locator('small[title]')).toHaveAttribute('title', card.id);
+    await expect(board).toBeVisible(); await expectWritingBoardCard(page, card.id);
     await expect(board.getByText('这张卡片已删除', { exact: true })).toBeVisible();
     await expect(page.getByLabel('卡片正文', { exact: true })).toContainText('组合正文保持');
     const restore = board.getByRole('button', { name: '撤销删除', exact: true });
@@ -41,7 +41,7 @@ for (const mode of ['group', 'selection'] as const) {
     await workspace.execute(page, { commandId: crypto.randomUUID(), projectId, type: 'tag.create', expected: null, payload: { id: 'later-tag', name: '后续动作' } });
     const later = await workspace.state();
     await expect(page.locator('.workspace')).toHaveAttribute('data-revision', String(later.project.revision));
-    await expect(restore).toBeDisabled(); await expect(board.locator('small[title]')).toHaveAttribute('title', card.id);
+    await expect(restore).toBeDisabled(); await expectWritingBoardCard(page, card.id);
     expect((await workspace.state()).cards).toEqual([]);
   });
 }

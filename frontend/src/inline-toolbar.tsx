@@ -49,7 +49,7 @@ export function InlineToolbar({
       className="inline-toolbar"
       role="toolbar"
       aria-label="文字格式"
-      style={{ left, top }}
+      style={{ left, top, maxWidth: `calc(100vw - ${left}px - 8px)` }}
       onMouseDown={(e) => {
         if (!(e.target instanceof HTMLInputElement)) e.preventDefault();
       }}

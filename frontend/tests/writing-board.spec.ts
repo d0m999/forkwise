@@ -93,6 +93,7 @@ test('空正文和轻量标签入口可见，图片限制按需查阅，原空�
     await expect(help).toBeInViewport();
     await expect(help).toContainText('512 KiB');
     await expect(help).toContainText('单张图片最多 4000 万像素');
+    await expect(help).toContainText('GIF 的所有帧累计也最多 4000 万像素');
     await details.press('Escape');
     await expect(help).toBeHidden();
   }
@@ -263,6 +264,45 @@ test('原卡保存失败后的切卡和后续输入只显示当前卡的保存�
   }
 });
 
+test('重试原正文期间继续输入，仍显示原请求保存中并最后确认新输入', async ({ page, workspace }) => {
+  await place(page, '重试原卡', 80, 120);
+  await page.getByRole('button', { name: '编辑正文', exact: true }).click();
+  const board = page.getByRole('complementary', { name: '写字板', exact: true });
+  const editor = board.getByRole('textbox', { name: '卡片正文', exact: true });
+  const retry = page.getByRole('button', { name: '重试保存', exact: true });
+  const requests: string[] = [];
+  let release!: () => void;
+  const held = new Promise<void>(resolve => { release = resolve; });
+  await page.route('**/api/mapping/execute', async route => {
+    const command = route.request().postDataJSON();
+    if (command.type !== 'body.edit') return route.continue();
+    requests.push(command.commandId);
+    if (requests.length === 1) return route.abort();
+    if (requests.length === 2) await held;
+    await route.continue();
+  });
+  try {
+    await editor.fill('原草稿');
+    await expect(board.getByText('保存未完成', { exact: true })).toBeInViewport();
+    await retry.click();
+    await expect.poll(() => requests.length).toBe(2);
+    expect(requests[1]).toBe(requests[0]);
+    await editor.fill('重试期间继续写的新草稿');
+    await expect(page.getByRole('status')).toHaveText('等待保存…');
+    await expect(board.getByText('正在保存…', { exact: true })).toBeInViewport();
+    await expect(board.getByText('保存未完成', { exact: true })).toBeHidden();
+    await expect(retry).toBeHidden();
+    release();
+    await expect(board.getByText('正文已保存', { exact: true })).toBeInViewport();
+    expect(requests).toHaveLength(3);
+    expect(requests[2]).not.toBe(requests[0]);
+    expect((await workspace.state()).cards[0]!.body.blocks.map(block => block.text)).toEqual(['重试期间继续写的新草稿']);
+  } finally {
+    release();
+    await page.unrouteAll({ behavior: 'wait' });
+  }
+});
+
 test('正文双击普通打开不抢光标，单卡跟随从开头，空白和多选保当前卡', async ({ page, workspace }) => {
   const initial = await workspace.state();
   for (const [id, title, x] of [['a', '卡片甲', 60], ['b', '卡片乙', 380]] as const) {
@@ -295,6 +335,36 @@ test('正文双击普通打开不抢光标，单卡跟随从开头，空白和�
   await expect(heading).not.toBeInViewport();
   await expect(currentTitle).toBeInViewport();
   expect(await scroller.evaluate(el => el.scrollTop)).toBe(scrollTop);
+  for (const width of [320, 760]) {
+    await page.setViewportSize({ width, height: 900 });
+    await expect(currentTitle).toBeInViewport();
+    await expect.poll(() => currentTitle.evaluate(el => {
+      const text = el.firstChild!;
+      const range = document.createRange();
+      range.setStart(text, text.textContent!.length - 1);
+      range.setEnd(text, text.textContent!.length);
+      const lastCharacter = range.getBoundingClientRect(), label = el.getBoundingClientRect();
+      return lastCharacter.left >= label.left && lastCharacter.right <= label.right + 1;
+    })).toBe(true);
+    await expect(board.getByRole('button', { name: '返回画布' })).toBeInViewport();
+  }
+});
+
+test('单卡与普通连线混选仍明确标明正在编辑的原卡', async ({ page, workspace }) => {
+  await place(page, '原卡', 80, 120);
+  const state = await workspace.state();
+  await workspace.execute(page, { commandId: crypto.randomUUID(), projectId: state.project.id, type: 'connector.create',
+    expected: null, payload: { id: 'mixed-line', start: { kind: 'free', point: { x: 140, y: 390 } }, end: { kind: 'free', point: { x: 500, y: 390 } } } });
+  await page.reload();
+  await expect(page.getByRole('status')).toHaveText('已保存到本机');
+  await page.getByRole('button', { name: '原卡', exact: true }).click();
+  await page.getByRole('button', { name: '编辑正文', exact: true }).click();
+  const line = page.getByRole('button', { name: '普通连线', exact: true });
+  await line.click({ modifiers: ['Shift'] });
+  await expect(line).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.locator('.react-flow__node.selected')).toHaveCount(1);
+  const board = page.getByRole('complementary', { name: '写字板', exact: true });
+  await expect(board.getByText('正在编辑：原卡', { exact: true })).toBeInViewport();
 });
 
 test('菜单真实删卡保留内容、退出编辑，绑定此次删除直接撤销并恢复原卡', async ({ page, workspace }) => {
@@ -391,7 +461,12 @@ test('宽度基线、拖动调宽、展开还原和窄窗使用同一正文视�
     const range = document.createRange(); range.setStart(p.firstChild!, 280); range.setEnd(p.firstChild!, 281);
     return range.getBoundingClientRect().y;
   });
-  const bounds = (await page.locator('.board-scroll').boundingBox())!;
+  const scroller = board.locator('.board-scroll');
+  const expectReadingPointInView = () => expect.poll(async () => {
+    const y = await readingPoint(), viewport = (await scroller.boundingBox())!;
+    return y >= viewport.y && y < viewport.y + viewport.height;
+  }).toBe(true);
+  const bounds = (await scroller.boundingBox())!;
   await page.mouse.move(bounds.x + 100, bounds.y + 100);
   await page.mouse.wheel(0, await readingPoint() - bounds.y - 56);
   await expect.poll(readingPoint).toBeLessThan(bounds.y + 90);
@@ -404,16 +479,26 @@ test('宽度基线、拖动调宽、展开还原和窄窗使用同一正文视�
   await page.mouse.move(handle.x + handle.width / 2 - 80, handle.y + 220, { steps: 8 });
   await page.mouse.up();
   await expect.poll(async () => (await board.boundingBox())!.width).toBe(520);
+  await expectReadingPointInView();
   await page.getByRole('button', { name: '展开写字板' }).click();
   await expect.poll(async () => (await board.boundingBox())!.width).toBe(1360);
-  await expect(editor.locator('[data-block-id="paragraph-15"]')).toBeVisible();
+  await expectReadingPointInView();
   await page.setViewportSize({ width: 760, height: 900 });
   await expect(page.getByRole('button', { name: '返回画布' })).toBeVisible();
   await expect.poll(async () => (await board.boundingBox())!.width).toBe(760);
+  await expectReadingPointInView();
   await page.setViewportSize({ width: 1360, height: 900 });
   await expect.poll(async () => (await board.boundingBox())!.width).toBe(1360);
+  await expectReadingPointInView();
   await page.getByRole('button', { name: '还原写字板' }).click();
   await expect.poll(async () => (await board.boundingBox())!.width).toBe(520);
+  await expectReadingPointInView();
+  await page.setViewportSize({ width: 760, height: 900 });
+  await expect.poll(async () => (await board.boundingBox())!.width).toBe(760);
+  await expectReadingPointInView();
+  await page.setViewportSize({ width: 1360, height: 900 });
+  await expect.poll(async () => (await board.boundingBox())!.width).toBe(520);
+  await expectReadingPointInView();
   const restored = await readingPoint();
   expect(Math.abs(restored - mark)).toBeLessThan(35);
   await expect(editor).toHaveCount(1);

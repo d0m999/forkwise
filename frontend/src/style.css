@@ -413,9 +413,9 @@ body:has(.workspace[data-board-full="true"]) .card-tooltip { display: none; }
 .general-editor { position: relative; padding-left: var(--editor-control-gutter); }
 .body-input-surface { position: relative; }
 .body-placeholder { position: absolute; left: 0; top: 0; color: var(--inline-gray); line-height: 28px; pointer-events: none; }
-.inline-toolbar { position: fixed; z-index: 41; display: flex; flex-wrap: wrap; width: max-content; max-width: calc(100vw - 16px); padding: 4px; border: 1px solid var(--card-color-edf1fa); border-radius: 8px; background: var(--card-color-ffffff); }
+.inline-toolbar { position: fixed; z-index: 41; display: flex; flex-wrap: wrap; width: max-content; padding: 4px; border: 1px solid var(--card-color-edf1fa); border-radius: 8px; background: var(--card-color-ffffff); }
 .inline-toolbar button { padding: 6px 8px; font-size: 13px; }
-.format-panel { flex-basis: 100%; display: flex; flex-wrap: wrap; max-width: 320px; padding: 8px; gap: 4px; }
+.format-panel { flex-basis: 100%; min-width: 0; display: flex; flex-wrap: wrap; max-width: 320px; padding: 8px; gap: 4px; }
 .format-panel label, .format-panel input { width: 100%; }
 :root { --inline-gray: #697386; --inline-red: #ad343e; --inline-orange: #9c4f16; --inline-green: #26734d; --inline-blue: #2457ad; --inline-purple: #6e409a; --inline-highlight-yellow: #fff0b5; --inline-highlight-green: #dceee2; --inline-highlight-blue: #deebff; --inline-highlight-pink: #f8dde8; }
 .textColor-default { color: inherit; }
@@ -492,17 +492,20 @@ body:has(.workspace[data-board-full="true"]) .card-tooltip { display: none; }
 }
 .board-card-id { margin: 0; font-size: 12px; overflow-wrap: anywhere; }
 .board-details-content button { border: 1px solid var(--search-divider); }
-.board-indicators { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; }
 .board-current-card {
+  flex: 0 0 100%;
   min-width: 0;
   margin: 0;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
   font-size: 12px;
+  line-height: 18px;
   font-weight: 600;
 }
-.board-status { flex: none; max-width: 100%; margin: 0; color: var(--search-muted); font-size: 12px; }
+.board-status { flex: 1; min-width: 0; margin: 0; overflow-wrap: anywhere; color: var(--search-muted); font-size: 12px; }
 .board-status[data-saved=true] { color: #41644f; }
 .board-status[data-failed=true], .board-save-failure [role="alert"] { color: #a52e39; }
 .board-save-failure, .board-notice {

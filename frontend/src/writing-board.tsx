@@ -124,12 +124,9 @@ export function WritingBoard({ projectId, cardId, opened, title, status, identif
     />}
     <header className="board-toolbar">
       {narrow && <button onClick={onClose}>返回画布</button>}
-      <div className="board-indicators">
-        {identifyCard && <p className="board-current-card" title={documentTitle}>正在编辑：{documentTitle}</p>}
-        <p className="board-status" aria-live="polite"
-          data-saved={status === "已保存到本机" || status === "正文已保存"}
-          data-failed={status === "保存未完成"}>{status}</p>
-      </div>
+      <p className="board-status" aria-live="polite"
+        data-saved={status === "已保存到本机" || status === "正文已保存"}
+        data-failed={status === "保存未完成"}>{status}</p>
       <div className="board-actions">
         <details className="board-details" key={cardId}
           onBlur={e => { if (!e.currentTarget.contains(e.relatedTarget)) e.currentTarget.open = false; }}
@@ -142,7 +139,7 @@ export function WritingBoard({ projectId, cardId, opened, title, status, identif
           <summary>详情</summary>
           <div className="board-details-content">
             <p className="board-card-id">卡片 ID：{cardId}</p>
-            <p className="media-limits">图片格式为 JPEG、PNG、WebP、GIF 和静态 SVG。每次添加合计最多 512 KiB，单张图片最多 4000 万像素。SVG 仅支持安全静态子集，拒绝脚本、外联和动效。</p>
+            <p className="media-limits">图片格式为 JPEG、PNG、WebP、GIF 和静态 SVG。每次添加合计最多 512 KiB，单张图片最多 4000 万像素。GIF 的所有帧累计也最多 4000 万像素。SVG 仅支持安全静态子集，拒绝脚本、外联和动效。</p>
             <button type="button" onClick={e => {
               anchor.current ??= readingPosition();
               remember(null);
@@ -158,6 +155,7 @@ export function WritingBoard({ projectId, cardId, opened, title, status, identif
         }}>{expanded ? "还原" : "展开"}</button>}
         <button aria-label="关闭正文" onClick={onClose}>关闭</button>
       </div>
+      {identifyCard && <p className="board-current-card" title={documentTitle}>正在编辑：{documentTitle}</p>}
     </header>
     {saveFailure && <div className="board-save-failure">{saveFailure}</div>}
     {notice && <p className="board-notice" aria-live="polite">{notice}</p>}

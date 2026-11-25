@@ -292,7 +292,7 @@ type SelectionIntent = { projectId: string; generation: number };
 function deletesCard(action: HistoryAction, cardId: string) {
   return action.deletedCardIds?.includes(cardId) || action.label === 'thought.delete' && action.target.id === cardId;
 }
-type DraftFailureOwner = Pick<Draft, "projectId" | "cardId" | "field">;
+type CardSaveOwner = Pick<Draft, "projectId" | "cardId" | "field"> & { commandId: string };
 
 function draftKey(projectId: string, cardId: string, field: Draft["field"]) {
   return JSON.stringify([projectId, cardId, field]);
@@ -591,8 +591,10 @@ function Workspace() {
     remote: Card;
   } | null>(null);
   const [status, setStatus] = useState("正在打开本机资料…"),
-    [failure, setFailure] = useState<{ message: string; owner: DraftFailureOwner | undefined } | null>(null),
+    [failure, setFailure] = useState<{ message: string; owner: CardSaveOwner | undefined } | null>(null),
     [busy, setBusy] = useState(true);
+  const [savingDraft, setSavingDraft] = useState<CardSaveOwner | null>(null);
+  const [savingBodyAction, setSavingBodyAction] = useState<CardSaveOwner | null>(null);
   const error = failure?.message ?? "";
   function setError(message: string) {
     setFailure(message ? { message, owner: undefined } : null);
@@ -1430,7 +1432,7 @@ function Workspace() {
       setBusy(false);
     }
   };
-  function fail(e: unknown, owner?: DraftFailureOwner) {
+  function fail(e: unknown, owner?: CardSaveOwner) {
     setFailure({ message: e instanceof Error ? e.message : "本机服务暂时不可用", owner });
     setStatus("保存未完成");
   }
@@ -1504,6 +1506,10 @@ function Workspace() {
         projection.command = command;
     unconfirmed.current = current;
     persistDrafts();
+    const savingOwner = {
+      projectId: submitted.projectId, cardId: submitted.cardId, field: submitted.field, commandId: command.commandId,
+    };
+    setSavingDraft(savingOwner);
     setStatus("正在保存…");
     saving.current = (async () => {
       try {
@@ -1594,12 +1600,13 @@ function Workspace() {
             /* Keep the original draft/command available for retry. */
           }
         }
-        fail(e, { projectId: submitted.projectId, cardId: submitted.cardId, field: submitted.field });
+        fail(e, savingOwner);
         return false;
       }
     })();
     const result = await saving.current;
     saving.current = null;
+    setSavingDraft(null);
     // A completed command only confirms its own generation. Drain newer input
     // before allowing a project switch or any other editor handoff.
     return result ? flush(limit, completedPrefix, excludedCard) : false;
@@ -1856,6 +1863,11 @@ function Workspace() {
       ...(structural
         ? { selectionIntent: { projectId: command.projectId, generation: canvasSelection.generation() } } : {}) };
     pendingAction.current = pending;
+    const pendingCommand = pending.command;
+    const savingOwner: CardSaveOwner | null = pendingCommand.type === "body.edit"
+      ? { projectId: pendingCommand.projectId, cardId: pendingCommand.payload.id, field: "body", commandId: pendingCommand.commandId }
+      : null;
+    if (savingOwner) setSavingBodyAction(savingOwner);
     setBusy(true);
     setStatus("正在保存…");
     let executed = !!pending.receipt;
@@ -1907,9 +1919,10 @@ function Workspace() {
         pendingAction.current = null;
         try { await refresh(command.projectId); } catch { /* Keep the unconfirmed view; authorization polling owns retraction. */ }
       }
-      fail(e);
+      fail(e, savingOwner ?? undefined);
       return false;
     } finally {
+      if (savingOwner) setSavingBodyAction(null);
       setBusy(false);
     }
   }
@@ -3094,14 +3107,14 @@ function Workspace() {
       ? deletedBody.card
       : undefined);
   const currentBodyDraft = state && currentBody && draftView[draftKey(state.project.id, currentBody.id, "body")];
-  const writing = unconfirmed.current;
-  const currentBodySaving = !!saving.current && status === "正在保存…" && writing?.field === "body" &&
-    writing.projectId === state?.project.id && writing.cardId === currentBody?.id;
+  const ownsCurrentBody = (owner: CardSaveOwner | null | undefined) =>
+    owner?.field === "body" && owner.projectId === state?.project.id && owner.cardId === currentBody?.id;
+  const currentBodySaving = ownsCurrentBody(savingDraft) || ownsCurrentBody(savingBodyAction);
   const failureOwner = failure?.owner;
-  const currentBodyFailed = failureOwner?.field === "body" && failureOwner.projectId === state?.project.id &&
-    failureOwner.cardId === currentBody?.id && !currentBodySaving;
+  const currentBodyFailed = ownsCurrentBody(failureOwner) && !currentBodySaving;
+  const pending = pendingAction.current?.command;
   const boardSaveFailure = !!(currentBodyFailed && !pose.error && !conflict &&
-    !pendingAction.current && !historyCommand.current);
+    !historyCommand.current && (!pending || pending.type === "body.edit" && pending.commandId === failureOwner?.commandId));
   const boardStatus = !currentBody ? "已删除 · 内容保留"
     : currentBodyFailed ? "保存未完成"
     : currentBodySaving ? "正在保存…"
@@ -3110,10 +3123,13 @@ function Workspace() {
     : currentBody.body.blocks.some(block => imageTask(block)?.status === "failed") ? "媒体保存失败 · 重试或移除"
     : currentBody.body.blocks.some(block => imageTask(block)) ? "媒体处理中 · 尚未保存"
     : bodyPreviewText(currentBody.body).trim() ? "正文已保存" : "已保存到本机";
-  const saveFailure = (error || pose.error) ? (
+  const retryingFailure = failureOwner &&
+    (savingDraft?.commandId === failureOwner.commandId || savingBodyAction?.commandId === failureOwner.commandId);
+  const visibleError = retryingFailure ? "" : error;
+  const saveFailure = (visibleError || pose.error) ? (
     <>
       <span role="alert">
-        {[error, pose.error].filter(Boolean).join("；")}
+        {[visibleError, pose.error].filter(Boolean).join("；")}
       </span>
       <button
         disabled={busy || !!pose.conflict || (!!conflict && !pose.error)}
@@ -3774,7 +3790,7 @@ function Workspace() {
           projectId={state!.project.id} cardId={panelCard.id} opened={bodyOpened}
           title={draftView[draftKey(state!.project.id, panelCard.id, "title")]?.value ?? panelCard.title}
           status={boardStatus}
-          identifyCard={!!currentBody && singleItemId !== currentBody.item.id}
+          identifyCard={!!currentBody && (singleItemId !== currentBody.item.id || selectedConnectors.length > 0)}
           saveFailure={boardSaveFailure ? saveFailure : undefined}
           onClose={() => {
             if (composition.current) return;

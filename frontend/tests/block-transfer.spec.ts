@@ -138,11 +138,43 @@ test('未知原件和已有媒体可明确复制副本，保原文资源引用�
   await workspace.open(page);
   await page.getByRole('button', { name: '未知块复制', exact: true }).click();
   await page.getByRole('button', { name: '编辑正文', exact: true }).click();
+  await page.setViewportSize({ width: 760, height: 900 });
+  const board = page.getByRole('complementary', { name: '写字板', exact: true });
   await page.getByRole('button', { name: '选择块：旧列表原件', exact: true }).click();
   await page
     .getByRole('button', { name: '选择块：image', exact: true })
     .click({ modifiers: ['Shift'] });
-  await page.getByRole('menuitem', { name: '创建副本', exact: true }).click();
+  const requests: unknown[] = [];
+  let reject!: () => void;
+  const held = new Promise<void>(resolve => { reject = resolve; });
+  await page.route('**/api/mapping/execute', async route => {
+    const command = route.request().postDataJSON();
+    if (command.type !== 'body.edit' || !command.payload.copyOriginals) return route.continue();
+    requests.push(command);
+    if (requests.length === 1) {
+      await held;
+      return route.abort();
+    }
+    await route.continue();
+  });
+  try {
+    await page.getByRole('menuitem', { name: '创建副本', exact: true }).click();
+    await expect.poll(() => requests.length).toBe(1);
+    await expect(board.getByText('正在保存…', { exact: true })).toBeInViewport();
+    reject();
+    await expect(board.getByText('保存未完成', { exact: true })).toBeInViewport();
+    const retry = board.getByRole('button', { name: '重试保存', exact: true });
+    await expect(retry).toBeInViewport();
+    expect((await workspace.state()).cards[0]!.body.blocks).toEqual(originals);
+    await retry.click();
+    await expect(board.getByText('正文已保存', { exact: true })).toBeInViewport();
+    await expect(retry).toBeHidden();
+    expect(requests).toHaveLength(2);
+    expect(requests[1]).toEqual(requests[0]);
+  } finally {
+    reject();
+    await page.unrouteAll({ behavior: 'wait' });
+  }
   await expect.poll(async () => (await workspace.state()).cards[0]!.body.blocks.length).toBe(5);
   const copied = (await workspace.state()).cards[0]!.body.blocks;
   expect(copied.slice(0, 3)).toEqual(originals);
