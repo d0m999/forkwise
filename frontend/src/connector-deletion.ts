@@ -72,8 +72,13 @@ export function captureCardDeletion(state: ProjectState, cardId: string, derived
       const fromPreview = command.type === 'body.edit' || command.type === 'card.appearance';
       const version = receipt.versions?.[domain];
       const alreadyPublished = fromPreview && version === expected[domain] && receipt.revision <= state.project.revision;
+      // A failed map read can leave the snapshot behind a local receipt
+      // already applied when this deletion intent captured its versions.
+      const alreadyConfirmed = fromPreview && version === expected[domain] && receipt.versions?.pose === expected.pose &&
+        derived?.matchesRecordedCardPreview(command, receipt, itemId,
+          command.type === 'body.edit' ? card.body.id : (card.appearance?.id ?? 'appearance:' + cardId));
       if (receipt.projectId !== projectId || receipt.commandId !== command.commandId ||
-        (prior !== expected[domain] && !alreadyPublished)) {
+        (prior !== expected[domain] && !alreadyPublished && !alreadyConfirmed)) {
         valid = false; return;
       }
       acknowledged.add(command.commandId);

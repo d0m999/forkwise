@@ -346,3 +346,65 @@ test('拖缩分区时清空正文改变成员计划，保留原分区并要求�
     await expect(page.getByRole('alert')).toContainText('请重新预览分区范围');
   } finally { gate.release(); await page.unrouteAll({ behavior: 'wait' }); }
 });
+
+test('首写已确认但地图读回失败，重复回执后首次删卡沿用精确正文和布局版本', async ({ page, workspace }) => {
+  await place(page, '短标题', 100, 120);
+  const created = await workspace.state(), card = created.cards[0]!, projectId = created.project.id;
+  await workspace.execute(page, { commandId: crypto.randomUUID(), projectId, type: 'connector.create', expected: null,
+    payload: { id: 'incident', path: 'straight', start: { kind: 'bound', itemId: card.item.id, side: 'right' },
+      end: { kind: 'free', point: { x: 550, y: 330 } } } });
+  await page.reload();
+  await page.locator('.title-button').click();
+  await page.getByRole('button', { name: '写字板', exact: true }).click();
+  const before = await workspace.state(), originalPose = before.cards[0]!.item;
+  const writes: { request: Command; result: Receipt; status: number }[] = [];
+  let failedRead = false;
+  let resumeObserve!: () => void;
+  let resumeReplay!: () => void;
+  const holdObserve = new Promise<void>(resolve => { resumeObserve = resolve; });
+  const holdReplay = new Promise<void>(resolve => { resumeReplay = resolve; });
+  await page.route('**/api/mapping/projects/*/changes?*', async route => { await holdObserve; await route.continue(); });
+  await page.route('**/api/mapping/projects/*/map?*', async route => {
+    if (!failedRead && writes.length === 1 && !new URL(route.request().url()).searchParams.has('snapshot')) {
+      failedRead = true;
+      return route.fulfill({ status: 503, json: { code: 'UNAVAILABLE', message: '首次正文地图读回暂不可用' } });
+    }
+    await route.continue();
+  });
+  await page.route('**/api/mapping/execute', async route => {
+    const request = route.request().postDataJSON() as Command;
+    if (request.type !== 'body.edit' || request.payload.id !== card.id) return route.continue();
+    const response = await route.fetch();
+    writes.push({ request, result: await response.json(), status: response.status() });
+    if (writes.length > 1) await holdReplay;
+    await route.fulfill({ response });
+  });
+  try {
+    await page.getByRole('textbox', { name: '卡片正文', exact: true }).fill('已落盘的首写正文');
+    await expect(page.getByRole('alert')).toContainText('首次正文地图读回暂不可用');
+    await expect(page.locator('.workspace')).toHaveAttribute('data-revision', String(before.project.revision));
+    expect(writes).toHaveLength(1);
+    expect(writes[0]!.status).toBe(200);
+    const committed = await workspace.state();
+    expect(committed.cards[0]!.item.pose.height).toBe(160);
+    await page.getByRole('button', { name: '更多', exact: true }).click();
+    const deletion = page.waitForResponse(r => r.url().endsWith('/api/mapping/execute') &&
+      r.request().postDataJSON()?.type === 'thought.delete', { timeout: 7000 });
+    await page.getByRole('button', { name: '删除卡片', exact: true }).click();
+    resumeReplay();
+    const removed = await deletion;
+    expect(removed.status()).toBe(200);
+    expect(writes).toEqual([writes[0], writes[0]]);
+    expect(writes[0]!.result.derivedPoseVersions?.[originalPose.id]).toEqual({
+      before: originalPose.versionId, after: committed.cards[0]!.item.versionId,
+    });
+    expect(removed.request().postDataJSON().expected).toMatchObject({
+      body: committed.cards[0]!.body.versionId, pose: committed.cards[0]!.item.versionId,
+      connectors: { incident: before.connectors![0]!.versionId },
+    });
+    const after = await workspace.state();
+    expect(after.cards).toEqual([]);
+    expect(after.connectors).toEqual([]);
+    expect(after.project.revision).toBe(before.project.revision + 2);
+  } finally { resumeReplay(); resumeObserve(); await page.unrouteAll({ behavior: 'wait' }); }
+});

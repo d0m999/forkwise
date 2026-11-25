@@ -3,12 +3,13 @@ import type { Receipt } from '../../backend/src/mapping/contracts';
 import { api, type Command, type ProjectState } from './api';
 
 export type DerivedPoseAcknowledgements = ReturnType<typeof createDerivedPoseAcknowledgements>;
+type PreviewCommand = Extract<Command, { type: 'body.edit' | 'card.appearance' }>;
 
 export function createDerivedPoseAcknowledgements(current: () => ProjectState | null) {
   // Key by the prior immutable version so a peer write cannot be skipped, even
   // when a later read or a second local receipt has already appeared.
   const byProject = new Map<string, Map<string, Map<string, string>>>();
-  const cardDomains = new Map<string, Map<string | null, string>>();
+  const cardDomains = new Map<string, Map<string | null, { commandId: string; after: string }>>();
   function domainKey(projectId: string, cardId: string, domain: 'body' | 'appearance') {
     return JSON.stringify([projectId, cardId, domain]);
   }
@@ -30,10 +31,20 @@ export function createDerivedPoseAcknowledgements(current: () => ProjectState | 
     const after = receipt.versions?.[domain];
     if (recordedPose && after && after !== command.expected) {
       const key = domainKey(command.projectId, command.payload.id, domain);
-      const versions = cardDomains.get(key) ?? new Map<string | null, string>();
-      versions.set(command.expected, after);
+      const versions = cardDomains.get(key) ?? new Map<string | null, { commandId: string; after: string }>();
+      versions.set(command.expected, { commandId: command.commandId, after });
       cardDomains.set(key, versions);
     }
+  }
+  function matchesRecordedCardPreview(command: PreviewCommand, receipt: Receipt, itemId: string, contentId: string) {
+    if (command.projectId !== receipt.projectId || command.commandId !== receipt.commandId ||
+      !receipt.changedIds.includes(itemId) || !receipt.changedIds.includes(contentId)) return false;
+    const domain = command.type === 'body.edit' ? 'body' : 'appearance';
+    const content = cardDomains.get(domainKey(command.projectId, command.payload.id, domain))?.get(command.expected);
+    const pose = receipt.derivedPoseVersions?.[itemId];
+    return content?.commandId === command.commandId && content.after === receipt.versions?.[domain] &&
+      !!pose && pose.after === receipt.versions?.pose &&
+      byProject.get(command.projectId)?.get(itemId)?.get(pose.before) === pose.after;
   }
   function version(projectId: string, itemId: string, before: string): string {
     const changes = byProject.get(projectId)?.get(itemId);
@@ -45,9 +56,9 @@ export function createDerivedPoseAcknowledgements(current: () => ProjectState | 
   }
   function updateCardDomains(projectId: string, cardId: string, expected: { body: string; appearance: string | null }) {
     const bodies = cardDomains.get(domainKey(projectId, cardId, 'body'));
-    while (bodies?.has(expected.body)) expected.body = bodies.get(expected.body)!;
+    while (bodies?.has(expected.body)) expected.body = bodies.get(expected.body)!.after;
     const appearances = cardDomains.get(domainKey(projectId, cardId, 'appearance'));
-    while (appearances?.has(expected.appearance)) expected.appearance = appearances.get(expected.appearance)!;
+    while (appearances?.has(expected.appearance)) expected.appearance = appearances.get(expected.appearance)!.after;
   }
   function updatePlacement(command: Command) {
     if ('placement' in command && command.placement)
@@ -82,5 +93,5 @@ export function createDerivedPoseAcknowledgements(current: () => ProjectState | 
     }
     return next;
   }
-  return { record, version, versions, updateCardDomains, updatePlacement, read, item, project };
+  return { record, matchesRecordedCardPreview, version, versions, updateCardDomains, updatePlacement, read, item, project };
 }
