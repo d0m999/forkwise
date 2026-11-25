@@ -8,8 +8,9 @@ async function seed(page: Page, workspace: Workspace, owner: 'shape' | 'label', 
     await workspace.execute(page, { commandId: crypto.randomUUID(), projectId, type: 'shape.create', expected: null,
       payload: { id: 'handoff-shape', content: { shapeType: 'rectangle', shortText: '组外形状' }, pose: { x: 1020, y: 140, width: 160, height: 100 } } });
   } else {
+    // 把标签放在组节点之间的空白带，让适应画布后的双击从可见位置开始。
     const created = await workspace.execute(page, { commandId: crypto.randomUUID(), projectId, type: 'connector.create', expected: null,
-      payload: { id: 'handoff-line', path: 'curve', start: { kind: 'free', point: { x: 120, y: 650 } }, end: { kind: 'free', point: { x: 900, y: 730 } } } });
+      payload: { id: 'handoff-line', path: 'curve', start: { kind: 'free', point: { x: 120, y: 315 } }, end: { kind: 'free', point: { x: 900, y: 365 } } } });
     await workspace.execute(page, { commandId: crypto.randomUUID(), projectId, type: 'connector.label', expected: created.connectorVersions['handoff-line'],
       payload: { id: 'handoff-line', label: { text: '交接连线', position: 0.5, fontSize: 16, color: '#252933', bold: false } } });
   }
