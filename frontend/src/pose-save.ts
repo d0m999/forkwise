@@ -40,7 +40,7 @@ export function usePoseSave(
   const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
   const [conflict, setConflict] = useState<(Card["item"] & { placements: { id: string; label: string }[] }) | null>(null);
-  const remote = useRef<{ cards: Card[]; placement?: GeometryCommand['placement'] } | null>(null);
+  const remote = useRef<{ state: ProjectState; cards: Card[]; placement?: GeometryCommand['placement'] } | null>(null);
   const command = useRef<Pending | null>(null);
   const gesture = useRef<Pending | null>(null);
   const saving = useRef<Promise<boolean> | null>(null);
@@ -125,7 +125,7 @@ export function usePoseSave(
                 const label = grouped ? '本次归属：保留所在组合' : `本次位置的分区：${parent?.name ?? '画布顶层'}`;
                 return { id: card.id, label: cards.length > 1 ? `${card.title || '未命名卡片'}：${label}` : label };
               }) : [];
-              remote.current = { cards, ...(placement ? { placement } : {}) };
+              remote.current = { state: latest, cards, ...(placement ? { placement } : {}) };
               setConflict({ ...cards[0]!.item, placements });
             }
           } catch {
@@ -252,16 +252,22 @@ export function usePoseSave(
     const current = command.current,
       compared = remote.current;
     if (!current || !compared || saving.current) return;
-    const { cards, placement } = compared;
-    current.command = {
-      ...current.command,
-      commandId: crypto.randomUUID(),
-      ...(placement ? { placement } : {}),
-      expected:
-        current.command.type === "pose.move"
-          ? cards[0]!.item.versionId
-          : Object.fromEntries(cards.map((c) => [c.id, c.item.versionId])),
-    } as GeometryCommand;
+    const { cards, placement, state } = compared;
+    const { command: prior } = current;
+    const common = { commandId: crypto.randomUUID(), projectId: prior.projectId, ...(placement ? { placement } : {}) };
+    if (prior.type === 'pose.move') {
+      current.command = { ...common, type: 'pose.move', expected: cards[0]!.item.versionId, payload: prior.payload };
+    } else {
+      const poses = cards.map((card, index) => {
+        const requested = prior.payload.poses[index]!;
+        return current.resize ? current.resize(card.item.pose) : { ...card.item.pose, x: requested.x, y: requested.y };
+      });
+      current.command = { ...common, type: 'pose.batch',
+        expected: Object.fromEntries(cards.map(card => [card.id, card.item.versionId])),
+        ...followerFields(state, batchMotions(cards, poses), new Set()),
+        payload: { poses: cards.map((card, index) => ({ id: card.id, ...poses[index]! })) } };
+    }
+    current.sealed = true;
     setConflict(null);
     setError("");
     void flush();

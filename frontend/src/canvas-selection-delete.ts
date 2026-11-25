@@ -3,12 +3,13 @@ import type { Command, ProjectState } from './api';
 import { selectedItemIds, type CanvasSelection } from './canvas-selection';
 import { captureCardDeletion } from './connector-deletion';
 import type { Receipt } from '../../backend/src/mapping/contracts';
+import type { DerivedPoseAcknowledgements } from './derived-pose-acknowledgements';
 
 type DeleteSelection = Extract<Command, { type: 'canvas.delete-selection' }>;
 
 // Capture the complete deletion facts once. Later reads may update the view,
 // but cannot authorize a different group, member set, or incident line set.
-export function captureSelectionDeletion(state: ProjectState, selection: CanvasSelection) {
+export function captureSelectionDeletion(state: ProjectState, selection: CanvasSelection, derived?: DerivedPoseAcknowledgements) {
   if (!state.groups || !state.containment || !state.connectors) return null;
   const groupIds = selection.targets.flatMap(target => target.kind === 'group' ? [target.id] : []);
   const directItemIds = selection.targets.flatMap(target => target.kind === 'item' ? [target.itemId] : []);
@@ -51,7 +52,7 @@ export function captureSelectionDeletion(state: ProjectState, selection: CanvasS
         line.start.kind === 'bound' && (line.start.targetKind ?? 'item') === 'item' && ids.has(line.start.itemId) || line.end.kind === 'bound' && (line.end.targetKind ?? 'item') === 'item' && ids.has(line.end.itemId),
       ).map(line => [line.id, line.versionId])),
     } };
-  const cards = state.cards.filter(value => ids.has(value.item.id)).map(value => ({ value, intent: captureCardDeletion(state, value.id)! }));
+  const cards = state.cards.filter(value => ids.has(value.item.id)).map(value => ({ value, intent: captureCardDeletion(state, value.id, derived)! }));
   const acknowledgedCommands = new Set<string>();
   let valid = true;
   let sealed = false;
@@ -66,7 +67,8 @@ export function captureSelectionDeletion(state: ProjectState, selection: CanvasS
           const expected = command.expected.items[id];
           if (!expected || expected.kind === 'card') continue;
           if (receipt.commandId !== acknowledged.commandId || receipt.projectId !== acknowledged.projectId ||
-            !receipt.changedIds.includes(id) || pose.before !== expected.pose) { valid = false; continue; }
+            !receipt.changedIds.includes(id) ||
+            (pose.before !== expected.pose && pose.after !== expected.pose)) { valid = false; continue; }
           expected.pose = pose.after;
         }
         return;
@@ -121,6 +123,10 @@ export function captureSelectionDeletion(state: ProjectState, selection: CanvasS
     },
     seal() {
       if (!valid) return false;
+      if (sealed) return true;
+      if (derived) for (const [id, expected] of Object.entries(command.expected.items)) {
+        if (expected.kind !== 'card') expected.pose = derived.version(command.projectId, id, expected.pose);
+      }
       for (const card of cards) {
         if (!card.intent.seal()) return false;
         const { connectors: _connectors, membership: _membership, ...domains } = card.intent.command().expected;

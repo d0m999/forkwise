@@ -6,6 +6,7 @@ test("笔迹创建丢 ACK 后原请求重试与同库重开明确恢复不重复
     commandId: crypto.randomUUID(), projectId, type, expected: null, payload,
   });
   await seed("thought.create", { id: "protected-card", title: "恢复保护卡", text: "完整保护正文", x: 820, y: 110 });
+  await seed("thought.create", { id: "preview-card", title: "恢复期间首写", text: "", x: 325, y: 380 });
   await seed("text.create", { id: "protected-text", content: {
     runs: [{ text: "恢复保护文字" }], fontSize: 18, lineHeight: 1.5, align: "left", widthMode: "fixed", width: 190,
   }, pose: { x: 820, y: 430, width: 190, height: 27 } });
@@ -15,6 +16,7 @@ test("笔迹创建丢 ACK 后原请求重试与同库重开明确恢复不重复
   const layout = page.waitForResponse(response => response.url().endsWith("/api/mapping/execute") &&
     response.request().postDataJSON()?.type === "card.layout");
   await page.reload(); expect((await layout).status()).toBe(200);
+  await expect.poll(async () => (await workspace.state()).cards.every(card => (card.item.heightPolicy?.necessaryHeight ?? 0) > 0)).toBe(true);
   await expect(page.getByRole("status")).toHaveText("已保存到本机");
   const baseline = await workspace.state() as any;
   await expect(page.locator(".workspace")).toHaveAttribute("data-revision", String(baseline.project.revision));
@@ -71,13 +73,24 @@ test("笔迹创建丢 ACK 后原请求重试与同库重开明确恢复不重复
     expect(attempts).toHaveLength(2); expect(await workspace.state()).toEqual(committed); expect(await history()).toEqual(committedHistory);
     const recover = page.getByRole("button", { name: "恢复未确认笔迹", exact: true });
     expect(await recover.count(), "同库重开后必须明确恢复当前项目的未确认笔迹，不能自动发请求").toBe(1);
+    const previewCard = committed.cards.find((card: any) => card.id === 'preview-card');
+    expect(attempts[0].command.placement.expected.poses[previewCard.item.id]).toBe(previewCard.item.versionId);
+    await page.getByRole('button', { name: '恢复期间首写', exact: true }).click();
+    await page.getByRole('button', { name: '写字板', exact: true }).click();
+    await page.getByRole('textbox', { name: '卡片正文', exact: true }).fill('恢复前先保存正文');
+    await expect(page.getByRole('status')).toHaveText('已保存到本机');
+    const withBody = await workspace.state(), withBodyHistory = await history();
+    expect(withBody.cards.find(card => card.id === 'preview-card')!.item.pose.height).toBe(160);
+    expect(withBody.cards.find(card => card.id === 'preview-card')!.item.versionId).not.toBe(previewCard.item.versionId);
     await expect(preview).toHaveCount(0); await recover.click();
     await expect.poll(() => attempts.length).toBe(3);
     await expect(recover).toHaveCount(0); await expect(preview).toHaveCount(0);
     await expect(page.getByRole("status")).toHaveText("已保存到本机"); await expect(retry).toHaveCount(0);
     expect(attempts.map(value => value.status)).toEqual([200, 200, 200]);
     expect(attempts[2]).toEqual(attempts[0]);
-    expect(await workspace.state()).toEqual(committed); expect(await history()).toEqual(committedHistory);
+    expect(await workspace.state()).toEqual(withBody); expect(await history()).toEqual(withBodyHistory);
+    await page.getByRole("button", { name: "撤销", exact: true }).click();
+    await expect.poll(async () => (await workspace.state()).cards.find(card => card.id === 'preview-card')!.item.pose.height).toBe(previewCard.item.pose.height);
     await page.getByRole("button", { name: "撤销", exact: true }).click();
     await expect.poll(async () => (await workspace.state() as any).strokes).toEqual([]);
     await expect(page.getByRole("img", { name: "普通笔笔迹", exact: true })).toHaveCount(0);
@@ -87,7 +100,9 @@ test("笔迹创建丢 ACK 后原请求重试与同库重开明确恢复不重复
     expect(saved.strokes).toHaveLength(1);
     expect(restored).toMatchObject({ id: stroke.id, content: stroke.content, item: { id: stroke.item.id, createdOrder: stroke.item.createdOrder, pose: stroke.item.pose } });
     expect(restored.versionId).not.toBe(stroke.versionId); expect(restored.item.versionId).not.toBe(stroke.item.versionId);
-    for (const key of ["cards", "texts", "shapes", "tags"]) expect(saved[key]).toEqual(baseline[key]);
+    for (const key of ["texts", "shapes", "tags"]) expect(saved[key]).toEqual(baseline[key]);
+    expect(saved.cards.map((card: any) => ({ id: card.id, blocks: card.body.blocks, pose: card.item.pose })))
+      .toEqual(baseline.cards.map((card: any) => ({ id: card.id, blocks: card.body.blocks, pose: card.item.pose })));
     expect((await history()).undo.filter((action: any) => action.label === "stroke.create")).toHaveLength(1);
     await page.reload();
     await expect(page.getByRole("img", { name: "普通笔笔迹", exact: true })).toBeVisible();

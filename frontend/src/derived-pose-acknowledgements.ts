@@ -8,17 +8,31 @@ export function createDerivedPoseAcknowledgements(current: () => ProjectState | 
   // Key by the prior immutable version so a peer write cannot be skipped, even
   // when a later read or a second local receipt has already appeared.
   const byProject = new Map<string, Map<string, Map<string, string>>>();
+  const cardDomains = new Map<string, Map<string | null, string>>();
+  function domainKey(projectId: string, cardId: string, domain: 'body' | 'appearance') {
+    return JSON.stringify([projectId, cardId, domain]);
+  }
   function record(command: Command, receipt: Receipt) {
     if ((command.type !== 'body.edit' && command.type !== 'card.appearance') ||
       command.projectId !== receipt.projectId || command.commandId !== receipt.commandId ||
       !receipt.derivedPoseVersions) return;
     const project = byProject.get(command.projectId) ?? new Map<string, Map<string, string>>();
     byProject.set(command.projectId, project);
+    let recordedPose = false;
     for (const [id, change] of Object.entries(receipt.derivedPoseVersions)) {
       if (!receipt.changedIds.includes(id) || change.before === change.after) continue;
       const versions = project.get(id) ?? new Map<string, string>();
       versions.set(change.before, change.after);
       project.set(id, versions);
+      recordedPose = true;
+    }
+    const domain = command.type === 'body.edit' ? 'body' : 'appearance';
+    const after = receipt.versions?.[domain];
+    if (recordedPose && after && after !== command.expected) {
+      const key = domainKey(command.projectId, command.payload.id, domain);
+      const versions = cardDomains.get(key) ?? new Map<string | null, string>();
+      versions.set(command.expected, after);
+      cardDomains.set(key, versions);
     }
   }
   function version(projectId: string, itemId: string, before: string): string {
@@ -28,6 +42,12 @@ export function createDerivedPoseAcknowledgements(current: () => ProjectState | 
   }
   function versions(projectId: string, before: Record<string, string>): Record<string, string> {
     return Object.fromEntries(Object.entries(before).map(([id, value]) => [id, version(projectId, id, value)]));
+  }
+  function updateCardDomains(projectId: string, cardId: string, expected: { body: string; appearance: string | null }) {
+    const bodies = cardDomains.get(domainKey(projectId, cardId, 'body'));
+    while (bodies?.has(expected.body)) expected.body = bodies.get(expected.body)!;
+    const appearances = cardDomains.get(domainKey(projectId, cardId, 'appearance'));
+    while (appearances?.has(expected.appearance)) expected.appearance = appearances.get(expected.appearance)!;
   }
   function updatePlacement(command: Command) {
     if ('placement' in command && command.placement)
@@ -62,5 +82,5 @@ export function createDerivedPoseAcknowledgements(current: () => ProjectState | 
     }
     return next;
   }
-  return { record, version, versions, updatePlacement, read, item, project };
+  return { record, version, versions, updateCardDomains, updatePlacement, read, item, project };
 }

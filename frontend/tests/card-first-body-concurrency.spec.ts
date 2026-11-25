@@ -2,7 +2,7 @@ import { test, expect, place } from './writing-board-fixture';
 import type { Page } from '@playwright/test';
 import type { Command, Receipt } from '../../backend/src/mapping/contracts';
 
-function holdFirstBody(page: Page, cardId: string) {
+function holdFirstBody(page: Page, cardId: string, afterCommit = false) {
   let release!: () => void;
   const pending = new Promise<void>(resolve => { release = resolve; });
   let started = false;
@@ -11,9 +11,10 @@ function holdFirstBody(page: Page, cardId: string) {
     const command = route.request().postDataJSON() as Command;
     if (command.type !== 'body.edit' || command.payload.id !== cardId || started) return route.continue();
     started = true;
-    await pending;
+    if (!afterCommit) await pending;
     const response = await route.fetch();
     receipt = await response.json();
+    if (afterCommit) await pending;
     await route.fulfill({ response });
   });
   return { installed, release, started: () => started, receipt: () => receipt };
@@ -132,5 +133,146 @@ for (const peer of [false, true]) {
         ? { ...target.item.pose, ...overwrite, height: 160 }
         : { ...target.item.pose, x: target.item.pose.x + 10 });
     } finally { gate.release(); await page.unrouteAll({ behavior: 'wait' }); }
+  });
+}
+
+test('首写和第三方移动导致调宽冲突，明确确认时保留新正文高度', async ({ page, workspace }) => {
+  await place(page, '短标题');
+  const state = await workspace.state(), projectId = state.project.id, card = state.cards[0]!;
+  await page.getByRole('button', { name: '写字板', exact: true }).click();
+  const gate = holdFirstBody(page, card.id);
+  await gate.installed;
+  try {
+    await page.getByRole('textbox', { name: '卡片正文', exact: true }).fill('新正文');
+    await expect.poll(gate.started).toBe(true);
+    await page.getByRole('button', { name: '调整卡片尺寸：右', exact: true }).press('ArrowRight');
+    const peer = { x: card.item.pose.x + 40, y: card.item.pose.y + 20 };
+    await workspace.execute(page, { commandId: crypto.randomUUID(), projectId, type: 'pose.move',
+      expected: card.item.versionId, payload: { id: card.id, ...peer } });
+    gate.release();
+    await expect(page.getByRole('alert')).toContainText('布局已更新');
+    await page.getByRole('button', { name: '确认保留本次位置', exact: true }).click();
+    await expect(page.getByRole('status')).toHaveText('已保存到本机');
+    expect((await workspace.state()).cards[0]!.item.pose).toEqual({
+      ...card.item.pose, ...peer, width: card.item.pose.width + 10, height: 160,
+    });
+  } finally { gate.release(); await page.unrouteAll({ behavior: 'wait' }); }
+});
+
+for (const handDrawn of [false, true]) {
+  test(`${handDrawn ? '手绘' : '从所选'}创建分区只接续自身首写的布局版本`, async ({ page, workspace }) => {
+    await place(page, '短标题', 100, 170);
+    await page.locator('.react-flow__pane').click({ position: { x: 30, y: 420 } });
+    await place(page, '另一卡', 455, 135);
+    const before = await workspace.state(), card = before.cards.find(card => card.title === '短标题')!;
+    const title = page.getByRole('button', { name: '短标题', exact: true });
+    await title.click();
+    await page.getByRole('button', { name: '写字板', exact: true }).click();
+    if (handDrawn) await page.getByRole('button', { name: '分区', exact: true }).click();
+    else {
+      await page.getByRole('button', { name: '另一卡', exact: true }).click({ modifiers: ['Shift'] });
+      await expect(page.locator('.react-flow__node.selected')).toHaveCount(2);
+    }
+    const gate = holdFirstBody(page, card.id);
+    await gate.installed;
+    try {
+      await page.getByRole('textbox', { name: '卡片正文', exact: true }).fill('先完成首写');
+      await expect.poll(gate.started).toBe(true);
+      if (handDrawn) {
+        const box = (await page.locator('.react-flow__pane').boundingBox())!;
+        await page.mouse.move(box.x + 75, box.y + 105);
+        await page.mouse.down();
+        await page.mouse.move(box.x + 760, box.y + 358, { steps: 6 });
+        await page.mouse.up();
+      } else await page.getByRole('button', { name: '创建分区', exact: true }).click();
+      gate.release();
+      await expect.poll(async () => (await workspace.state()).frames?.length).toBe(1);
+      const after = await workspace.state(), frame = after.frames![0]!;
+      expect(frame.memberItemIds.toSorted()).toEqual(before.cards.map(value => value.item.id).toSorted());
+      expect(after.cards.find(value => value.id === card.id)?.item.pose.height).toBe(160);
+      if (handDrawn) expect(frame.pose).toEqual({ x: 75, y: 105, width: 685, height: 253 });
+      else expect(frame.pose.y + frame.pose.height).toBe(card.item.pose.y + 160 + 24);
+    } finally { gate.release(); await page.unrouteAll({ behavior: 'wait' }); }
+  });
+}
+
+for (const detach of [false, true]) {
+  test(`${detach ? '解除附着' : '附着'}等待目标卡首写后自有几何确认`, async ({ page, workspace }) => {
+    await place(page, '短标题', 70, 115);
+    const state = await workspace.state(), projectId = state.project.id, card = state.cards[0]!;
+    await workspace.execute(page, { commandId: crypto.randomUUID(), projectId, type: 'shape.create', expected: null,
+      payload: { id: 'annotation', content: { shapeType: 'rectangle', shortText: '批注' }, pose: { x: 400, y: 260, width: 155, height: 85 } } });
+    const item = (await workspace.state()).shapes![0]!.item;
+    if (detach) await workspace.execute(page, { commandId: crypto.randomUUID(), projectId, type: 'attachment.attach',
+      payload: { itemId: item.id, targetItemId: card.item.id },
+      expected: { attachment: null, target: { itemId: card.item.id, versionId: card.item.versionId }, containment: null } });
+    await page.reload();
+    await page.locator('.thought-card').getByRole('button', { name: '编辑正文', exact: true }).click();
+    await page.getByRole('img', { name: '批注', exact: true }).click();
+    if (!detach) await page.getByRole('button', { name: '附着到卡片', exact: true }).click();
+    const gate = holdFirstBody(page, card.id);
+    await gate.installed;
+    try {
+      await page.getByRole('textbox', { name: '卡片正文', exact: true }).fill('首写正文');
+      await expect.poll(gate.started).toBe(true);
+      const response = page.waitForResponse(r => r.url().endsWith('/api/mapping/execute') &&
+        r.request().postDataJSON()?.type === (detach ? 'attachment.detach' : 'attachment.attach'));
+      if (detach) await page.getByRole('button', { name: '解除附着', exact: true }).click();
+      else await page.getByRole('button', { name: '短标题', exact: true }).click();
+      gate.release();
+      expect((await response).status()).toBe(200);
+      const after = await workspace.state();
+      expect(after.attachments).toHaveLength(detach ? 0 : 1);
+      expect(after.shapes![0]!.item.pose.y).toBe(item.pose.y + (detach ? (160 - card.item.pose.height) / 2 : 0));
+    } finally { gate.release(); await page.unrouteAll({ behavior: 'wait' }); }
+  });
+}
+
+for (const observeFirst of [true, false]) {
+  test(`删除附着文字在${observeFirst ? '观察读回早于正文回执' : '正文回执早于读回'}时使用同一已确认派生版本`, async ({ page, workspace }) => {
+    await place(page, '短标题', 40, 95);
+    const state = await workspace.state(), projectId = state.project.id, card = state.cards[0]!;
+    await workspace.execute(page, { commandId: crypto.randomUUID(), projectId, type: 'text.create', expected: null,
+      payload: { id: 'note', content: { runs: [{ text: '附着文字' }], fontSize: 16, lineHeight: 1.5, align: 'left', widthMode: 'fixed', width: 150 },
+        pose: { x: 380, y: 270, width: 150, height: 24 } } });
+    const note = (await workspace.state()).texts![0]!;
+    await workspace.execute(page, { commandId: crypto.randomUUID(), projectId, type: 'attachment.attach',
+      payload: { itemId: note.item.id, targetItemId: card.item.id },
+      expected: { attachment: null, target: { itemId: card.item.id, versionId: card.item.versionId }, containment: null } });
+    await page.reload();
+    await page.locator('.thought-card').getByRole('button', { name: '编辑正文', exact: true }).click();
+    await page.locator('.canvas-text-content').click();
+    const before = await workspace.state(), gate = holdFirstBody(page, card.id, true);
+    await gate.installed;
+    let releaseRead!: () => void;
+    const holdRead = new Promise<void>(resolve => { releaseRead = resolve; });
+    let reading = false;
+    if (!observeFirst) {
+      await page.route('**/api/mapping/projects/*/changes?*', async route => { await holdRead; await route.continue(); });
+      await page.route('**/api/mapping/projects/*/map?*', async route => {
+        if (gate.receipt() && !new URL(route.request().url()).searchParams.has('snapshot')) { reading = true; await holdRead; }
+        await route.continue();
+      });
+    }
+    try {
+      await page.getByRole('textbox', { name: '卡片正文', exact: true }).fill('首写并随动');
+      await expect.poll(() => gate.receipt()?.versions?.body).toBeTruthy();
+      if (observeFirst) {
+        await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+        await expect(page.locator('.workspace')).toHaveAttribute('data-revision', String(before.project.revision + 1));
+      } else {
+        gate.release();
+        await expect.poll(() => reading).toBe(true);
+        await expect(page.locator('.workspace')).toHaveAttribute('data-revision', String(before.project.revision));
+      }
+      const deletion = page.waitForResponse(r => r.url().endsWith('/api/mapping/execute') && r.request().postDataJSON()?.type === 'text.delete', { timeout: 7000 });
+      await page.getByRole('button', { name: '删除文字', exact: true }).click();
+      gate.release();
+      releaseRead();
+      const saved = await deletion;
+      expect(saved.status()).toBe(200);
+      expect(saved.request().postDataJSON().expected.pose).toBe(gate.receipt()!.derivedPoseVersions![note.item.id]!.after);
+      expect((await workspace.state()).texts).toEqual([]);
+    } finally { gate.release(); releaseRead(); await page.unrouteAll({ behavior: 'wait' }); }
   });
 }

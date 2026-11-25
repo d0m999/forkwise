@@ -1,6 +1,7 @@
 import type { ProjectState } from './api';
 import type { Command, Receipt } from '../../backend/src/mapping/contracts';
 import { captureMemberDeletion } from './canvas-group-commands';
+import type { DerivedPoseAcknowledgements } from './derived-pose-acknowledgements';
 
 export function incidentConnectorVersions(state: ProjectState, itemId: string): Record<string, string> | null {
   if (!Array.isArray(state.connectors)) return null;
@@ -11,7 +12,7 @@ export function incidentConnectorVersions(state: ProjectState, itemId: string): 
 }
 
 type CardDeleteCommand = Extract<Command, { type: 'thought.delete' }>;
-export function captureCardDeletion(state: ProjectState, cardId: string) {
+export function captureCardDeletion(state: ProjectState, cardId: string, derived?: DerivedPoseAcknowledgements) {
   const card = state.cards.find(value => value.id === cardId);
   if (!card) return null;
   const facts = captureMemberDeletion(state, card);
@@ -62,17 +63,21 @@ export function captureCardDeletion(state: ProjectState, cardId: string) {
         command.payload.id !== cardId) return;
       const domain = command.type === 'thought.title' ? 'thought' : command.type === 'body.edit' ? 'body' : command.type === 'card.appearance' ? 'appearance' : 'pose';
       const prior = command.type === 'card.layout' ? command.expected.pose : command.expected;
-      if (receipt.projectId !== projectId || receipt.commandId !== command.commandId || prior !== expected[domain]) {
+      const fromPreview = command.type === 'body.edit' || command.type === 'card.appearance';
+      const version = receipt.versions?.[domain];
+      const alreadyPublished = fromPreview && version === expected[domain] && receipt.revision <= state.project.revision;
+      if (receipt.projectId !== projectId || receipt.commandId !== command.commandId ||
+        (prior !== expected[domain] && !alreadyPublished)) {
         valid = false; return;
       }
       acknowledged.add(command.commandId);
       if (!receipt.changedIds.length) return;
-      const version = receipt.versions?.[domain];
       if (!version || ((command.type === 'card.layout' || command.type === 'pose.move') &&
         (receipt.changedIds.length !== 1 || receipt.changedIds[0] !== itemId))) { valid = false; return; }
-      if ((command.type === 'body.edit' || command.type === 'card.appearance') && receipt.changedIds.includes(itemId)) {
+      if (fromPreview && receipt.changedIds.includes(itemId)) {
         const pose = receipt.derivedPoseVersions?.[itemId];
-        if (!pose || pose.before !== expected.pose || pose.after !== receipt.versions?.pose) { valid = false; return; }
+        if (!pose || pose.after !== receipt.versions?.pose ||
+          (pose.before !== expected.pose && pose.after !== expected.pose)) { valid = false; return; }
         expected.pose = pose.after;
       }
       expected[domain] = version;
@@ -80,7 +85,13 @@ export function captureCardDeletion(state: ProjectState, cardId: string) {
     command,
     seal() {
       if (!valid) return false;
-      if (!sealed) { command().expected = structuredClone(expected); sealed = true; }
+      if (!sealed) {
+        if (derived) {
+          expected.pose = derived.version(projectId, itemId, expected.pose);
+          derived.updateCardDomains(projectId, cardId, expected);
+        }
+        command().expected = structuredClone(expected); sealed = true;
+      }
       return true;
     },
   };

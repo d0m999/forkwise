@@ -35,7 +35,7 @@ import { useCanvasMarquee } from './canvas-selection-boundary';
 import { captureMemberDeletion, ungroupSelectionCommand, createGroupCommand, removeMemberCommand, ungroupCommand } from './canvas-group-commands';
 import { CanvasGroups } from './canvas-groups';
 import { CanvasFrames, useFrameMove } from './canvas-frames';
-import { createFrameCommand, createFrameSelectionCommand, deleteFrameCommand, frameItemsInRect, type FrameRect } from './canvas-frame-commands';
+import { createFrameCommand, createFrameSelectionCommand, deleteFrameCommand, frameItemsInRect, frameSelectionRect, type FrameRect } from './canvas-frame-commands';
 import { attachmentPreviewPositions } from './attachment-follow';
 import { useGroupGeometry } from './group-geometry';
 import { CanvasTextNode } from './canvas-text';
@@ -119,6 +119,7 @@ const STALE_READ_CODES = new Set(['VERSION_CONFLICT', 'NOT_FOUND', 'ID_CONFLICT'
 // persist 必须在真正发送前落盘最终命令；重试同一请求时沿用同一份 options，否则成功回执不会清理恢复记录。
 type ActionOptions = {
   beforeSubmit?: () => boolean | Promise<boolean>;
+  sealed?: boolean;
   onSettled?: () => void;
   persist?: (command: Command) => void;
   onCommitted?: () => void;
@@ -1766,9 +1767,9 @@ function Workspace() {
   }
   async function action(command: Command, onDone?: () => void, options: ActionOptions = {}) {
     // 同一 commandId 的页面内重试不是首次发送：权限类拒绝仍须按结果未知保留恢复记录（D467）。
-    const retrying = !!pendingAction.current;
+    const retrying = !!pendingAction.current || !!options.sealed;
     if (connectorCreate.hasPending()) return false;
-    if (['thought.create', 'shape.create', 'stroke.create', 'canvas.duplicate', 'canvas.paste'].includes(command.type) && !('placement' in command && command.placement) && authority.current?.project.id === command.projectId)
+    if (!retrying && ['thought.create', 'shape.create', 'stroke.create', 'canvas.duplicate', 'canvas.paste'].includes(command.type) && !('placement' in command && command.placement) && authority.current?.project.id === command.projectId)
       Object.assign(command, { placement: { expected: captureSpatial(authority.current) } });
     const imageCommand = command.type.startsWith('image.');
     const backgroundImage = () => imageCommand && command.projectId !== authority.current?.project.id;
@@ -1814,8 +1815,13 @@ function Workspace() {
       if (options.beforeSubmit && !(await options.beforeSubmit())) return false;
       if (!retrying) {
         previewPoseAcks.updatePlacement(command);
-        if (command.type === 'frame.move') {
+        if (command.type === 'frame.create' || command.type === 'frame.move')
           command.expected.poses = previewPoseAcks.versions(command.projectId, command.expected.poses);
+        if (command.type === 'attachment.attach' || command.type === 'attachment.detach') {
+          const target = command.expected.target;
+          target.versionId = previewPoseAcks.version(command.projectId, target.itemId, target.versionId);
+        }
+        if (command.type === 'frame.move') {
           if (command.followers && command.expectedFollowers) {
             const expected = command.expectedFollowers;
             const { dx, dy } = command.payload;
@@ -2037,7 +2043,7 @@ function Workspace() {
     if (composition.current || busy || historyBlocked || strokeSelected || cardDeletion.current || pendingAction.current) return;
     const snapshot = authority.current, visible = snapshot?.cards.find(card => card.id === id);
     if (!snapshot || !visible) return;
-    const intent = captureCardDeletion(snapshot, id);
+    const intent = captureCardDeletion(snapshot, id, previewPoseAcks);
     if (!intent) { fail(new Error('请等待完整连线投影后重试删除')); return; }
     cardDeletion.current = intent;
     try {
@@ -2086,7 +2092,7 @@ function Workspace() {
       const command = strokeJournal.adopt(key);
       scanStrokeRecoveries();
       if (authority.current?.project.id !== projectId) return;
-      await action(command);
+      await action(command, undefined, { sealed: true });
     } catch { setStrokeRecoveryError("无法接管未确认笔迹，原始记录仍保留，请重试"); }
     finally { strokeRecoveryRunning.current = false; }
   }
@@ -2676,7 +2682,7 @@ function Workspace() {
     if (!pending || pending.projectId !== id || cutRecovery.current === pending.cutId || pendingAction.current) return;
     cutRecovery.current = pending.cutId;
     void (async () => {
-      const done = await action(pending.command);
+      const done = await action(pending.command, undefined, { sealed: true });
       if (done || pendingAction.current?.command.commandId !== pending.command.commandId) cutJournal.clear();
     })();
   }, [state?.project.id]);
@@ -2765,14 +2771,24 @@ function Workspace() {
     if (!command) return;
     const generation = canvasSelection.generation();
     await action(command, () => { chooseFrame(command.payload.id); setFrameTool(false); },
-      { beforeSubmit: () => authority.current?.project.id === command.projectId && canvasSelection.generation() === generation });
+      { beforeSubmit: async () => {
+        const itemIds = new Set(Object.keys(command.expected.poses));
+        try {
+          const projected = await previewPoseAcks.project(snapshot, itemIds);
+          if (authority.current?.project.id !== command.projectId || canvasSelection.generation() !== generation) return false;
+          const pose = frameSelectionRect(projected, itemIds);
+          if (!pose) return false;
+          command.payload.pose = pose;
+          return true;
+        } catch (failure) { fail(failure); return false; }
+      } });
   }
   async function deleteSelectedCanvas(groupId?: string) {
     const snapshot = authority.current;
     if (!snapshot || busy || historyBlocked || composition.current || pendingAction.current || selectionDeletion.current) return;
     const selected = canvasSelection.current(), target = selected.targets[0];
     if (groupId && (selected.targets.length !== 1 || target?.kind !== 'group' || target.id !== groupId)) return;
-    const intent = captureSelectionDeletion(snapshot, selected), generation = canvasSelection.generation();
+    const intent = captureSelectionDeletion(snapshot, selected, previewPoseAcks), generation = canvasSelection.generation();
     if (!intent) { fail(new Error('请等待完整对象与归属投影，再明确删除选区')); return; }
     selectionDeletion.current = intent;
     const command: Command = groupId ? { commandId: intent.command.commandId, projectId: intent.command.projectId, type: 'group.delete', payload: { id: groupId },
@@ -2830,7 +2846,7 @@ function Workspace() {
   async function removeText(id: string) {
     const snapshot = authority.current, text = snapshot?.texts?.find(value => value.id === id);
     if (!snapshot || !text || !isDirectItem(text.item.id) || busy || historyBlocked || composition.current || pendingAction.current || selectionDeletion.current) return;
-    const facts = captureMemberDeletion(snapshot, text), intent = captureSelectionDeletion(snapshot, { targets: [{ kind: 'item', itemId: text.item.id }], enteredGroupId: null });
+    const facts = captureMemberDeletion(snapshot, text), intent = captureSelectionDeletion(snapshot, { targets: [{ kind: 'item', itemId: text.item.id }], enteredGroupId: null }, previewPoseAcks);
     if (!facts || !intent) return;
     const generation = canvasSelection.generation();
     const command: Extract<Command, { type: 'text.delete' }> = { commandId: intent.command.commandId, projectId: snapshot.project.id, type: 'text.delete',

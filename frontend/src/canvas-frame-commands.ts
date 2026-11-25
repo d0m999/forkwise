@@ -34,16 +34,21 @@ export function createFrameSelectionCommand(state: ProjectState, selection: Canv
   if (itemIds.some(id => !id || state.containment?.find(value => value.id === id)?.parent?.kind === 'group')) return null;
   const parents = itemIds.map(id => state.containment?.find(v => v.id === id)?.parent?.id ?? null);
   if (!parents.every(id => id === parents[0])) return null;
-  const selected = new Set(selectedItemIds(state, selection));
-  const poses = canvasItems(state).filter(value => selected.has(value.item.id)).map(value => value.item.pose);
-  if (poses.length !== selected.size) return null;
-  const x = Math.min(...poses.map(pose => pose.x)) - 24, y = Math.min(...poses.map(pose => pose.y)) - 24;
-  const right = Math.max(...poses.map(pose => pose.x + pose.width)) + 24;
-  const bottom = Math.max(...poses.map(pose => pose.y + pose.height)) + 24;
-  const command = createFrameCommand(state, itemIds, { x, y, width: right - x, height: bottom - y });
+  const pose = frameSelectionRect(state, new Set(selectedItemIds(state, selection)));
+  if (!pose) return null;
+  const command = createFrameCommand(state, itemIds, pose);
   command.payload.parentId = parents[0] ?? null;
   command.placement = { expected: captureSpatial(state, { itemIds }) };
   return command;
+}
+
+export function frameSelectionRect(state: ProjectState, selected: ReadonlySet<string>): FrameRect | null {
+  const poses = canvasItems(state).filter(value => selected.has(value.item.id)).map(value => value.item.pose);
+  if (!poses.length || poses.length !== selected.size) return null;
+  const x = Math.min(...poses.map(pose => pose.x)) - 24, y = Math.min(...poses.map(pose => pose.y)) - 24;
+  const right = Math.max(...poses.map(pose => pose.x + pose.width)) + 24;
+  const bottom = Math.max(...poses.map(pose => pose.y + pose.height)) + 24;
+  return { x, y, width: right - x, height: bottom - y };
 }
 
 export function frameMovingItemIds(state: ProjectState, frame: CanvasFrame) {
