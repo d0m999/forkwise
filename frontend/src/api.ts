@@ -138,5 +138,5 @@ export async function authorizeLocalSession() {
     headers: { Authorization: `Bearer ${token}` },
   });
   if (!response.ok)
-    throw new Error("本机启动凭证无效，请从 local-access.json 重新打开");
+    throw new MappingError(TRANSPORT_FALLBACK_CODE, "本机启动凭证无效，请从 local-access.json 重新打开", undefined, response.status);
 }

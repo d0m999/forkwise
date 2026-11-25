@@ -513,3 +513,45 @@ test('校验未完成时可以关闭预览，迟到的校验结果不会重新�
   expect((await projectsOf(page, workspace.origin)).length).toBe(tabsBefore);
   await page.unroute('**/api/mapping/import.preview');
 });
+
+test('撤权后忽略导入完成后的旧项目列表，项目页签保持撤下', async ({ page, workspace }) => {
+  await place(page, '隔离导入源卡', 380, 200);
+  const packagePath = await exportPackage(page);
+  const { dialog } = await openPackage(page, packagePath);
+  await dialog.getByLabel('新研究名称').fill('已导入的隔离副本');
+  const endpoint = workspace.origin + '/api/mapping/projects';
+  let release!: () => void;
+  let readAtServer!: (status: number) => void;
+  const hold = new Promise<void>(resolve => { release = resolve; });
+  const secondList = new Promise<number>(resolve => { readAtServer = resolve; });
+  let listCount = 0;
+  await page.route(endpoint, async route => {
+    if (++listCount !== 2) return route.continue();
+    const result = await route.fetch();
+    readAtServer(result.status());
+    await hold;
+    return route.fulfill({ response: result });
+  });
+  try {
+    await dialog.getByRole('button', { name: '导入为新研究', exact: true }).click();
+    await expect(page.getByRole('tab', { selected: true })).toContainText('已导入的隔离副本');
+    expect(await secondList).toBe(200);
+    await page.evaluate(endpoint => {
+      const json = Response.prototype.json;
+      Response.prototype.json = async function () {
+        const value = await json.call(this);
+        if (this.ok && this.url === endpoint) requestAnimationFrame(() => requestAnimationFrame(() => {
+          document.documentElement.dataset.lateImportListRead = 'received';
+        }));
+        return value;
+      };
+    }, endpoint);
+    workspace.revoke();
+    await expect(page.getByText('授权已失效，请从本机启动入口重新打开；未确认草稿已保留')).toBeVisible();
+    await expect(page.getByRole('tab')).toHaveCount(0);
+  } finally { release(); }
+  await expect(page.locator('html')).toHaveAttribute('data-late-import-list-read', 'received');
+  await expect(page.getByRole('tab')).toHaveCount(0);
+  await page.getByRole('button', { name: '项目导航', exact: true }).click();
+  await expect(page.locator('.project-nav-list button')).toHaveCount(0);
+});

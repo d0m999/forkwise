@@ -37,7 +37,7 @@ test('项目内引导只从导航打开，键盘跳过后可立即在画布创�
   await expect(invitation).toHaveCount(0);
 });
 
-test('偏好读取及保存失败可重试，项目列表重开成功后可继续研究', async ({ page, workspace }) => {
+test('偏好读取及保存失败可重试，首次项目加载失败后也可继续研究', async ({ page, workspace }) => {
   const failed = new Set<string>();
   await page.route('**/api/mapping/projects', route => route.fulfill({ status: 503, json: { message: '项目暂时无法打开' } }), { times: 1 });
   await page.route('**/api/workspace/guide', route => {
@@ -50,9 +50,7 @@ test('偏好读取及保存失败可重试，项目列表重开成功后可继�
   await page.reload();
   const create = page.getByRole('button', { name: '新建研究', exact: true });
   await expect(page.getByRole('status')).toHaveText('保存未完成');
-  await expect(create).toBeDisabled();
-  await page.reload();
-  await expect(page.getByRole('status')).toHaveText('已保存到本机');
+  await expect(create).toBeEnabled({ timeout: 2000 });
   await create.click();
   await expect(page.getByRole('tab', { selected: true })).toBeVisible();
   await place(page, '偏好服务暂时异常时记录', 390, 210);

@@ -365,6 +365,9 @@ function Workspace() {
     Record<string, { width: number; height: number }>
   >({});
   const [projects, setProjects] = useState<Project[]>([]);
+  function publishProjects(all: Project[]) {
+    if (!workspaceRevoked.current) setProjects(all);
+  }
   const activeProjectId = state?.project.id;
   const activeProjectName = state?.project.name;
   const activeProjectListed = projects.some(project => project.id === activeProjectId);
@@ -858,6 +861,7 @@ function Workspace() {
     value: ProjectState,
     timeline?: Awaited<ReturnType<typeof api.history>>,
   ) => {
+    if (workspaceRevoked.current) return;
     const current = authority.current;
     // Concurrent action/save readbacks may arrive out of order. Never replace
     // an acknowledged project revision with an older snapshot.
@@ -1072,7 +1076,7 @@ function Workspace() {
       updateState(value, timeline);
       if (ownsSelection) selectionIntent.generation = canvasSelection.generation();
       const all = await api.projects();
-      if (authority.current?.project.id === id) setProjects(all);
+      if (authority.current?.project.id === id) publishProjects(all);
     }
     return value;
   };
@@ -1135,7 +1139,7 @@ function Workspace() {
           const all = await api.projects();
           if (!stillCurrent()) return;
           updateState(latest, timeline);
-          setProjects(all);
+          publishProjects(all);
         }
         if (active) setSyncNotice("");
       } catch (error) {
@@ -1484,7 +1488,7 @@ function Workspace() {
     if (!(await shapeMove.flush()) || !(await connectorLabel.finish()) || !(await shapeText.finish()) || !(await texts.finish()) || !(await pose.flush()) || !(await flush())) return false;
     if (workspaceRevoked.current) return false;
     updateState(value);
-    setProjects(all);
+    publishProjects(all);
     setWorkspaceAccess('ready');
     return true;
   };
@@ -2486,7 +2490,7 @@ function Workspace() {
       .then(() => api.projects())
       .then(async (all) => {
         if (!active || workspaceRevoked.current) return;
-        setProjects(all);
+        publishProjects(all);
         const id = new URLSearchParams(location.search).get("project");
         const first = all.find((p) => p.id === id) ?? all[0];
         if (first) {
@@ -2500,7 +2504,7 @@ function Workspace() {
       })
       .catch((e) => {
         if (!active) return;
-        if (e instanceof MappingError && e.status === 401) revokeWorkspaceView();
+        if (e instanceof MappingError && (e.status === 401 || e.status === 403)) revokeWorkspaceView();
         fail(e);
       })
       .finally(() => {
@@ -3329,7 +3333,7 @@ function Workspace() {
       projectId === organizing.projectId && (!organizing.source || request.cardId === organizing.source.id)).map(({ request }) => request)
     : [];
   const canOpenGuide = workspaceAccess === 'ready' && (guideAccess === 'allowed' || guideAccess === 'retry');
-  const projectCreationUnavailable = workspaceAccess !== 'ready' || guideAccess === 'denied';
+  const projectCreationUnavailable = workspaceAccess === 'revoked' || guideAccess === 'denied';
   const projectCreationBlocked = busy || historyBlocked || projectCreationUnavailable;
   const showNoProjects = workspaceAccess === 'ready' && !state && !projects.length && guideAccess !== 'denied';
   const showEmptyCanvas = state && !spatialItems(state).length && !state.frames?.length &&
@@ -3464,7 +3468,9 @@ function Workspace() {
           <ImportPackage
             disabled={busy || historyBlocked}
             onImported={(id) => {
-              void select(id).finally(() => { void api.projects().then(setProjects).catch(() => { /* 保留当前可见项目 */ }); });
+              void select(id).finally(() => {
+                if (!workspaceRevoked.current) void api.projects().then(publishProjects).catch(() => { /* 保留当前可见项目 */ });
+              });
             }}
           />
           {state && (
