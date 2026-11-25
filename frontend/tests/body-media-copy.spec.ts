@@ -1,3 +1,4 @@
+import { clickBlockHandle } from './block-handle-fixture';
 import { test, expect, place } from './writing-board-fixture';
 import { preserveClipboard } from './clipboard-fixture';
 const png =
@@ -65,7 +66,7 @@ for (const kind of ['queued', 'failed', 'replacement', 'saved'] as const)
             : '媒体处理中 · 尚未保存',
       );
       await page.getByRole('button', { name: '编辑正文', exact: true }).click();
-      await page.getByRole('button', { name: `选择块：${block.type}`, exact: true }).click();
+      await clickBlockHandle(page.getByRole('button', { name: `选择块：${block.type}`, exact: true }));
       await page.getByRole('menuitem', { name: '创建副本', exact: true }).click();
       await expect.poll(async () => (await workspace.state()).cards[0]!.body.blocks.length).toBe(2);
       const blocks = (await workspace.state()).cards[0]!.body.blocks;
@@ -126,7 +127,7 @@ test('已保存正文图的真实浏览器复制保完整JSON，纯文仅取图�
   await page.getByRole('button', { name: '编辑正文', exact: true }).click();
   const guard = await preserveClipboard(page, info, caption);
   try {
-    await page.getByRole('button', { name: '选择块：image', exact: true }).click();
+    await clickBlockHandle(page.getByRole('button', { name: '选择块：image', exact: true }));
     await page.getByRole('menuitem', { name: '复制所选块', exact: true }).click();
     await guard.wrote(caption);
     const copied = await page.evaluate(async () => {

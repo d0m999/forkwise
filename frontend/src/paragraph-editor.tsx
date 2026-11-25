@@ -59,6 +59,7 @@ type Menu = {
   query: string;
   index: number;
   selection: Selection | null;
+  returnFocus?: HTMLButtonElement;
   scope?: Block[];
   hiddenIds?: string[];
   section?: boolean;
@@ -162,7 +163,6 @@ export function ParagraphEditor({
   }, []);
   const [activeId, setActiveId] = useState(''),
     [menu, setMenu] = useState<Menu | null>(null);
-  const keyboardMenuTrigger = useRef<HTMLButtonElement | null>(null);
   const [notice, setNotice] = useState('');
   const gifs = useRef(new Map<HTMLCanvasElement, ReturnType<typeof animateBodyImage>>());
   const gifPreferences = useRef(new Map<string, boolean>());
@@ -810,20 +810,24 @@ export function ParagraphEditor({
     setLinkTarget(null);
     setFormatTarget(null);
   }
-  function openMenu(mode: Menu['mode'], id: string, extend = false, trigger?: HTMLButtonElement) {
+  function activateBlock(id: string, cell = '0,0') {
+    if (id === activeId) return;
+    setActiveCell(cell);
+    setActiveId(id);
+  }
+  function openMenu(mode: Menu['mode'], id: string, event: React.MouseEvent<HTMLButtonElement>) {
     if (readOnly || composing.current) return;
     const current = read(),
       index = current.findIndex((b) => b.id === id),
       block = current[index];
     if (!block) return;
     const selection = element.current ? selectionPoints(element.current) : null;
-    keyboardMenuTrigger.current = trigger ?? null;
-    setActiveId(id);
+    activateBlock(id);
     onFinish();
     setNotice('');
     setFormatTarget(null);
     const hiddenIds = [...reading.current.hidden(current)];
-    const extending = extend && !!menu?.scope;
+    const extending = mode === 'convert' && event.shiftKey && !!menu?.scope;
     const anchorIndex = extending
       ? current.findIndex((b) => b.id === selectionAnchor.current)
       : index;
@@ -846,6 +850,7 @@ export function ParagraphEditor({
       query: '',
       index: 0,
       selection: selection?.start.blockId === id ? selection : null,
+      ...(event.detail === 0 ? { returnFocus: event.currentTarget } : {}),
       ...(mode === 'convert' ? { scope, hiddenIds } : {}),
     });
   }
@@ -1114,15 +1119,19 @@ export function ParagraphEditor({
     return () => input?.removeEventListener('cancel', cancel);
   }, [supported]);
   function pickImage(target: Menu, replace = false) {
-    fileTarget.current = { menu: structuredClone(target), replace };
+    const { returnFocus, ...snapshot } = target;
+    fileTarget.current = {
+      menu: { ...structuredClone(snapshot), ...(returnFocus ? { returnFocus } : {}) },
+      replace,
+    };
     fileInput.current!.value = '';
     fileInput.current!.click();
   }
   function restoreMenuFocus(target: Menu) {
     const editor = element.current;
     if (!editor) return;
-    if (!target.selection && target.mode !== 'slash' && keyboardMenuTrigger.current?.isConnected) {
-      keyboardMenuTrigger.current.focus({ preventScroll: true });
+    if (target.returnFocus?.isConnected) {
+      target.returnFocus.focus({ preventScroll: true });
       return;
     }
     editor.focus();
@@ -1445,7 +1454,7 @@ export function ParagraphEditor({
                 type="button"
                 data-block-selector
                 aria-label={`选择块：${block.text || block.type}`}
-                onClick={(event) => openMenu('convert', block.id, event.shiftKey)}
+                onClick={(event) => openMenu('convert', block.id, event)}
               >
                 选择块
               </button>
@@ -1531,7 +1540,7 @@ export function ParagraphEditor({
           }} />}
           {active.type === 'image' && (
             <button
-              onClick={() =>
+              onClick={(event) =>
                 pickImage(
                   {
                     id: active.id,
@@ -1539,7 +1548,8 @@ export function ParagraphEditor({
                     mode: 'insert',
                     query: '',
                     index: 0,
-                    selection: selectionPoints(element.current!),
+                    selection: null,
+                    returnFocus: event.currentTarget,
                   },
                   true,
                 )
@@ -1749,7 +1759,11 @@ export function ParagraphEditor({
               className="block-handle-row"
               key={control.id}
               style={{ top: control.top }}
-              data-reveal={activeId === control.id || !!menu?.scope?.some((block) => block.id === control.id) || !!drag.preview?.ids.includes(control.id)}
+              data-reveal={
+                activeId === control.id ||
+                menu?.scope?.some((block) => block.id === control.id) ||
+                drag.preview?.ids.includes(control.id)
+              }
             >
               <button
                 type="button"
@@ -1757,7 +1771,7 @@ export function ParagraphEditor({
                 data-block-selector
                 aria-label={`选择块：${control.name}`}
                 title="选择内容块；Shift 连续选择；拖动调整顺序"
-                onFocus={() => setActiveId(control.id)}
+                onFocus={() => activateBlock(control.id)}
                 onMouseDown={(event) => event.preventDefault()}
                 onPointerDown={(event) => drag.begin(event, control.id)}
                 onKeyDown={(event) => {
@@ -1790,9 +1804,7 @@ export function ParagraphEditor({
                 }}
                 aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown Alt+ArrowLeft Alt+ArrowRight Delete"
                 onClick={(event) => {
-                  if (!drag.consumeClick()) {
-                    openMenu('convert', control.id, event.shiftKey, event.detail === 0 ? event.currentTarget : undefined);
-                  }
+                  if (!drag.consumeClick()) openMenu('convert', control.id, event);
                 }}
               >
                 <CardIcon name="更多" />
@@ -1805,7 +1817,7 @@ export function ParagraphEditor({
                   <button
                     type="button"
                     aria-label="插入块"
-                    onClick={(event) => openMenu('insert', control.id, false, event.detail === 0 ? event.currentTarget : undefined)}
+                    onClick={(event) => openMenu('insert', control.id, event)}
                   >
                     ＋
                   </button>
@@ -1813,7 +1825,7 @@ export function ParagraphEditor({
                     <button
                       type="button"
                       aria-label="块菜单"
-                      onClick={(event) => openMenu('convert', control.id, false, event.detail === 0 ? event.currentTarget : undefined)}
+                      onClick={(event) => openMenu('convert', control.id, event)}
                     >
                       <CardIcon name="更多" />
                     </button>
@@ -1898,16 +1910,9 @@ export function ParagraphEditor({
         }}
         onPointerMove={(event) => {
           const block = (event.target as Element).closest<HTMLElement>('[data-block-id]');
-          if (!menu && block) {
-            const id = block.dataset.blockId!;
-            // A hovered table has its own cell coordinates. Keep the selected
-            // cell within a table, but never carry another table's range over.
-            if (id !== activeId) {
-              const cell = (event.target as Element).closest<HTMLElement>('[data-cell]');
-              setActiveCell(cell?.dataset.cell ?? '0,0');
-            }
-            setActiveId(id);
-          }
+          if (menu || !block || document.activeElement?.closest('.block-tools')) return;
+          const cell = (event.target as Element).closest<HTMLElement>('[data-cell]');
+          activateBlock(block.dataset.blockId!, cell?.dataset.cell);
         }}
         onInput={(event) => {
           if (readOnly) return;
@@ -2236,6 +2241,7 @@ export function ParagraphEditor({
             event.preventDefault();
           if (event.key === 'Escape') {
             event.preventDefault();
+            setFormatTarget(null);
             window.getSelection()?.removeAllRanges();
             (document.activeElement as HTMLElement | null)?.blur();
             event.currentTarget.blur();

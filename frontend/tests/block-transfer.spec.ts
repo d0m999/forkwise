@@ -1,3 +1,4 @@
+import { clickBlockHandle } from './block-handle-fixture';
 import { test, expect, place } from './writing-board-fixture';
 import { preserveClipboard } from './clipboard-fixture';
 
@@ -99,10 +100,8 @@ test('跨层连续范围副本只重建选区内父子，外部父项不带入�
   await workspace.open(page);
   await page.getByRole('button', { name: '跨层范围', exact: true }).click();
   await page.getByRole('button', { name: '编辑正文', exact: true }).click();
-  await page.getByRole('button', { name: '选择块：子项', exact: true }).click();
-  await page
-    .getByRole('button', { name: '选择块：尾段', exact: true })
-    .click({ modifiers: ['Shift'] });
+  await clickBlockHandle(page.getByRole('button', { name: '选择块：子项', exact: true }));
+  await clickBlockHandle(page.getByRole('button', { name: '选择块：尾段', exact: true }), true);
   await page.getByRole('menuitem', { name: '创建副本', exact: true }).click();
   await expect.poll(async () => (await workspace.state()).cards[0]!.body.blocks.length).toBe(5);
   expect(
@@ -309,7 +308,7 @@ test('剪贴板拒绝保留原文与历史；显式块选区Delete全删留空�
     name: '选择块：必须保留的原文',
     exact: true,
   });
-  await handle.click();
+  await clickBlockHandle(handle);
   await page.getByRole('menuitem', { name: '剪切所选块', exact: true }).click();
   await expect(page.getByRole('alert')).toContainText('剪贴板写入失败，原文已保留');
   expect(await workspace.state()).toEqual(before);
@@ -361,10 +360,8 @@ test('连续列表整组缩进和键盘排序，后代去重且每动作一次�
   await workspace.open(page);
   await page.getByRole('button', { name: '批量缩进', exact: true }).click();
   await page.getByRole('button', { name: '编辑正文', exact: true }).click();
-  await page.getByRole('button', { name: '选择块：乙', exact: true }).click();
-  await page
-    .getByRole('button', { name: '选择块：丙', exact: true })
-    .click({ modifiers: ['Shift'] });
+  await clickBlockHandle(page.getByRole('button', { name: '选择块：乙', exact: true }));
+  await clickBlockHandle(page.getByRole('button', { name: '选择块：丙', exact: true }), true);
   await page.getByRole('menuitem', { name: '增加缩进', exact: true }).click();
   await expect
     .poll(async () =>
@@ -431,7 +428,7 @@ test('真实浏览器剪贴板复制粘贴保结构且剪切成功才删除', as
   const editor = page.getByRole('textbox', { name: '卡片正文', exact: true });
   const guard = await preserveClipboard(page, info, '父项\n子项');
   try {
-    await page.getByRole('button', { name: '选择块：父项', exact: true }).click();
+    await clickBlockHandle(page.getByRole('button', { name: '选择块：父项', exact: true }));
     await page.getByRole('menuitem', { name: '复制所选块', exact: true }).click();
     await info.attach('actual-clipboard-api', {
       body: JSON.stringify(await guard.wrote('父项\n子项')),
@@ -454,7 +451,7 @@ test('真实浏览器剪贴板复制粘贴保结构且剪切成功才删除', as
     await expect
       .poll(async () => (await workspace.state()).cards[0]!.body.blocks)
       .toEqual(originals);
-    await page.getByRole('button', { name: '选择块：父项', exact: true }).click();
+    await clickBlockHandle(page.getByRole('button', { name: '选择块：父项', exact: true }));
     await page.getByRole('menuitem', { name: '剪切所选块', exact: true }).click();
     await expect
       .poll(async () => (await workspace.state()).cards[0]!.body.blocks.map((b) => b.id))
@@ -567,10 +564,8 @@ test('Shift柄连续选择含折叠后代且去重，文字拖选不触发块选
   expect(await page.evaluate(() => getSelection()?.toString())).not.toBe('');
   await expect(editor.locator('[data-block-selected="true"]')).toHaveCount(0);
   await page.getByRole('button', { name: '收起：父项', exact: true }).click();
-  await page.getByRole('button', { name: '选择块：开头文字可拖选', exact: true }).click();
-  await page
-    .getByRole('button', { name: '选择块：结束', exact: true })
-    .click({ modifiers: ['Shift'] });
+  await clickBlockHandle(page.getByRole('button', { name: '选择块：开头文字可拖选', exact: true }));
+  await clickBlockHandle(page.getByRole('button', { name: '选择块：结束', exact: true }), true);
   await expect(page.getByText('已选择 4 个块', { exact: true })).toBeVisible();
   await expect(page.getByText(/包含 1 个隐藏块/)).toBeVisible();
   await page.getByRole('menuitem', { name: '创建副本', exact: true }).click();

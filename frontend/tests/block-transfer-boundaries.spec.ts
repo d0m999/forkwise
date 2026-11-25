@@ -1,3 +1,4 @@
+import { clickBlockHandle } from './block-handle-fixture';
 import { test, expect, place, type Workspace } from './writing-board-fixture';
 import type { Page } from '@playwright/test';
 import type { Block } from '../../backend/src/mapping/contracts';
@@ -110,15 +111,11 @@ test('文字操作取消旧块区，Shift柄从新锚点开始；多块不偷偷
     { id: 'b', type: 'text', text: '乙' },
     { id: 'c', type: 'text', text: '丙' },
   ]);
-  await page.getByRole('button', { name: '选择块：甲', exact: true }).click();
+  await clickBlockHandle(page.getByRole('button', { name: '选择块：甲', exact: true }));
   await editor.locator('[data-block-id="b"]').click();
-  await page
-    .getByRole('button', { name: '选择块：丙', exact: true })
-    .click({ modifiers: ['Shift'] });
+  await clickBlockHandle(page.getByRole('button', { name: '选择块：丙', exact: true }), true);
   await expect(page.getByText('已选择 1 个块', { exact: true })).toBeVisible();
-  await page
-    .getByRole('button', { name: '选择块：乙', exact: true })
-    .click({ modifiers: ['Shift'] });
+  await clickBlockHandle(page.getByRole('button', { name: '选择块：乙', exact: true }), true);
   await expect(page.getByText('已选择 2 个块', { exact: true })).toBeVisible();
   await expect(
     page.getByRole('menuitem', { name: '转为一级标题', exact: true }),
@@ -216,7 +213,7 @@ test('剪切等待外部写入时正文已改或编辑区关闭，晚到成功�
         }),
     }),
   );
-  await page.getByRole('button', { name: '选择块：原文', exact: true }).click();
+  await clickBlockHandle(page.getByRole('button', { name: '选择块：原文', exact: true }));
   await page.getByRole('menuitem', { name: '剪切所选块', exact: true }).click();
   await editor.fill('原文已继续输入');
   await expect
@@ -226,7 +223,7 @@ test('剪切等待外部写入时正文已改或编辑区关闭，晚到成功�
   await page.evaluate(() => (window as any).resolveClipboard());
   await expect(page.getByRole('alert')).toContainText('已复制但未剪切');
   expect(await workspace.state()).toEqual(before);
-  await page.getByRole('button', { name: '选择块：原文已继续输入', exact: true }).click();
+  await clickBlockHandle(page.getByRole('button', { name: '选择块：原文已继续输入', exact: true }));
   await page.getByRole('menuitem', { name: '剪切所选块', exact: true }).click();
   await page.getByRole('button', { name: '关闭正文', exact: true }).click();
   await page.evaluate(() => (window as any).resolveClipboard());
@@ -340,7 +337,7 @@ test('R1-S01 普通段落粘贴到嵌套列表后保持顶层与格式，一次�
   const before = await workspace.state();
   const guard = await preserveClipboard(page, info, '带格式原段');
   try {
-    await page.getByRole('button', { name: '选择块：带格式原段', exact: true }).click();
+    await clickBlockHandle(page.getByRole('button', { name: '选择块：带格式原段', exact: true }));
     await page.getByRole('menuitem', { name: '复制所选块', exact: true }).click();
     await guard.wrote('带格式原段');
     expect(await workspace.state()).toEqual(before);

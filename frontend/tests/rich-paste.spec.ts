@@ -1,3 +1,4 @@
+import { clickBlockHandle } from './block-handle-fixture';
 import { test, expect, place } from './writing-board-fixture';
 import type { Page } from '@playwright/test';
 test.use({ actionTimeout: 6000 });
@@ -514,7 +515,7 @@ test('导入表格保留后方正文输入位置，复制同时保留可读纯�
       },
     }),
   );
-  await page.getByRole('button', { name: '选择块：table', exact: true }).click();
+  await clickBlockHandle(page.getByRole('button', { name: '选择块：table', exact: true }));
   await page.getByRole('menuitem', { name: '复制所选块', exact: true }).click();
   await expect.poll(() => page.evaluate(() => (window as any).copiedBody?.plain)).toBe('甲\t乙');
   const copied = await page.evaluate(() => (window as any).copiedBody);

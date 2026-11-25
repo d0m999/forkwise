@@ -1,3 +1,4 @@
+import { clickBlockHandle } from './block-handle-fixture';
 import { test, expect, place } from './writing-board-fixture';
 test.use({ actionTimeout: 6000 });
 
@@ -443,7 +444,7 @@ test('代码内普通富文和明确Markdown粘贴均为块内纯文字与空行
       value: async () => '\n**literal**\n\n> plain',
     }),
   );
-  await page.getByRole('button', { name: /^选择块：/ }).click();
+  await clickBlockHandle(page.getByRole('button', { name: /^选择块：/ }));
   await page.getByRole('menuitem', { name: '粘贴为 Markdown', exact: true }).click();
   await expect
     .poll(async () =>
