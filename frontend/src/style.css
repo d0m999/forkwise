@@ -1063,7 +1063,7 @@ body:has(.workspace[data-board-full="true"]) .card-tooltip { display: none; }
 .block-handle-row:hover .block-handle,
 .block-handle:focus-visible { opacity: 1; pointer-events: auto; }
 
-.block-tools { left: auto; right: 100%; width: 22px; }
+.block-tools { left: auto; right: 100%; width: 22px; z-index: 1; }
 .paragraph-editor [data-block-dragging="true"] { opacity: .35; outline: 1px dashed var(--editor-focus); }
 .block-drop-line { position: fixed; z-index: 100; border-top: 2px solid var(--editor-focus); pointer-events: none; }
 .block-drop-line span { position: absolute; bottom: 3px; right: 0; background: var(--card-color-ffffff); color: var(--editor-focus); font-size: 12px; }
