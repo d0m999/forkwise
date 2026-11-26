@@ -23,6 +23,7 @@ export function CardMenu({
   anchor,
   card,
   value,
+  attachmentWriteBlocked,
   blocked,
   onEdit,
   onBody,
@@ -35,6 +36,7 @@ export function CardMenu({
 }: {
   anchor: RefObject<HTMLElement | null>;
   card: Card;
+  attachmentWriteBlocked: boolean;
   blocked: boolean;
   value: Appearance;
   onEdit: (origin?: HTMLButtonElement) => void;
@@ -229,7 +231,7 @@ export function CardMenu({
               >
                 打开写字板
               </button>
-              <AddAttachmentButton blocked={blocked} onAdd={file => { close(); onAddAttachment(file); }} />
+              <AddAttachmentButton blocked={attachmentWriteBlocked} onAdd={file => { close(); onAddAttachment(file); }} />
               <button disabled={blocked} onClick={() => { close(false); onDelete(); }}>删除卡片</button>
               {onRemoveFromGroup && <button disabled={blocked} onClick={event => { event.stopPropagation(); close(false); onRemoveFromGroup(); }}>移出组合</button>}
             </>

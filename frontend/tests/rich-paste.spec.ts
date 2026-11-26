@@ -699,6 +699,11 @@ test('明确粘贴为Markdown冻结原文字选区，异步读取后光标移动
   await page.getByRole('button', { name: '编辑正文', exact: true }).click();
   const editor = page.getByRole('textbox', { name: '卡片正文', exact: true });
   await editor.fill('ABCD');
+  const board = page.getByRole('complementary', { name: '写字板', exact: true });
+  await expect
+    .poll(async () => (await workspace.state()).cards[0]!.body.blocks.map((b) => b.text))
+    .toEqual(['ABCD']);
+  await expect(board.getByText('正文已保存', { exact: true })).toBeVisible();
   await select(page, 1, 3);
   await page.evaluate(() =>
     Object.defineProperty(navigator.clipboard, 'readText', {

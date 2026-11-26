@@ -119,6 +119,7 @@ import type { Tag } from "../../backend/src/mapping/contracts";
 const brandMark = new URL('../../assets/brand/forkwise-basic-kit/01-logos/logo-mark.svg', import.meta.url).href;
 
 // 结构类命令的读已过期失败靠一次刷新收敛：命令集与错误码集中在这里，新增错误码不必改条件里的长行。
+const ATTACHMENT_READ_FAILED = "附件已保存，列表读取失败";
 const STALE_READ_COMMANDS = new Set(['attachment.attach', 'attachment.detach', 'connector.reconnect', 'connector.path', 'connector.move', 'connector.delete', 'connector.style', 'connector.reverse', 'connector.label', 'canvas.layer', 'canvas.duplicate', 'canvas.paste', 'canvas.cut', 'canvas.paste-cut']);
 const STALE_READ_CODES = new Set(['VERSION_CONFLICT', 'NOT_FOUND', 'ID_CONFLICT', 'CUT_STATE_CONFLICT', 'CUT_NOT_FOUND', 'CUT_RESTORE_MISSING', 'CUT_OUTER_CHANGED', 'CUT_OUTER_UNKNOWN']);
 // 一次提交的附加回调集中在具名选项里，避免位置参数与 undefined 占位。
@@ -148,6 +149,7 @@ type CardData = {
   onRemoveAttachment: (attachmentId: string) => void;
   onAddAttachment: (file: File) => void;
   attachmentTargets: Card[];
+  attachmentWriteBlocked: boolean;
   onCopyAttachment: (targetId: string, item: NonNullable<Card['attachments']>['items'][number]) => void;
   onCanvasChoice: () => void;
   onDelete: () => void;
@@ -204,6 +206,7 @@ function ThoughtCard({ data, selected }: NodeProps<Node<CardData>>) {
           card={data.card}
           value={data.appearanceValue}
           blocked={data.historyBlocked}
+          attachmentWriteBlocked={data.attachmentWriteBlocked}
           onEdit={data.onEdit}
           onBody={data.onBody}
           onAI={data.onAI}
@@ -272,7 +275,7 @@ function ThoughtCard({ data, selected }: NodeProps<Node<CardData>>) {
         {data.card.aiOrigin.mode === 'simulate' ? '模拟整理' : 'AI 候选'}
       </span>}
       <CardAttachmentList card={data.card} projectCards={data.attachmentTargets} blocked={data.historyBlocked}
-        onOpen={data.onOpenAttachment} onRemove={data.onRemoveAttachment} onAdd={data.onAddAttachment} onCopy={data.onCopyAttachment} />
+        writeBlocked={data.attachmentWriteBlocked} onOpen={data.onOpenAttachment} onRemove={data.onRemoveAttachment} onAdd={data.onAddAttachment} onCopy={data.onCopyAttachment} />
       <CardTagSummary card={data.card} tags={data.tags} onOpen={data.onBody} />
       {text && data.appearanceValue.showPreview && (
         <div
@@ -710,17 +713,25 @@ function Workspace() {
   const [draftFailure, setDraftFailure] = useState<DraftSaveFailure | null>(null);
   const [savingDraft, setSavingDraft] = useState<CardSaveOwner | null>(null);
   const [savingBodyAction, setSavingBodyAction] = useState<CardSaveOwner | null>(null);
-  const [previousProjectFailure, setPreviousProjectFailure] = useState<{ commandId: string; message: string } | null>(null);
+  const [previousProjectFeedback, setPreviousProjectFeedback] = useState<{ commandId: string; message: string } | null>(null);
+  const [attachmentResult, setAttachmentResult] = useState<{
+    projectId: string;
+    outcome: "saved" | "rejected";
+    message: string;
+  } | null>(null);
+  const [attachmentProjectSwitches, setAttachmentProjectSwitches] = useState(0);
   const pendingAction = useRef<{
     command: Command;
     onDone?: () => void;
     onSettled?: () => void;
     selectionIntent?: SelectionIntent;
     receipt?: Awaited<ReturnType<typeof api.execute>>;
+    attachmentReadFailed?: true;
     rejected?: string;
     bodyFailure?: { message: string; owner: CardSaveOwner };
     options?: ActionOptions;
   } | null>(null);
+  const preparingActions = useRef(0);
   const cardDeletion = useRef<ReturnType<typeof captureCardDeletion>>(null);
   const selectionDeletion = useRef<ReturnType<typeof captureSelectionDeletion>>(null);
   const previewPoseAcks = useRef(createDerivedPoseAcknowledgements(() => authority.current)).current;
@@ -1565,48 +1576,60 @@ function Workspace() {
     return true;
   };
   function belongsToPreviousProject(command: Command) {
-    return isShapePlacementOrAttachment(command) && command.projectId !== authority.current?.project.id;
+    return (command.type === "card.attachment.add" || isShapePlacementOrAttachment(command)) &&
+      command.projectId !== authority.current?.project.id;
   }
   function blocksNewAction(commandId?: string) {
-    const pending = pendingAction.current?.command;
-    if (!pending || pending.commandId === commandId) return false;
-    if (!belongsToPreviousProject(pending)) fail(new Error("请先重试未完成的保存"));
+    const pending = pendingAction.current;
+    if (!pending || pending.command.commandId === commandId) return false;
+    if (!pending.attachmentReadFailed && !belongsToPreviousProject(pending.command)) fail(new Error("请先重试未完成的保存"));
     return true;
   }
   const select = async (id: string, navigationRow?: HTMLButtonElement) => {
     if (historyLock.current || historyCommand.current || strokeDraw.hasPending()) return;
     if (blocksNewAction()) return;
-    editorEpoch.current++;
-    breakBodyGroup();
-    if (
-      !(await shapeMove.flush()) || !(await connectorLabel.finish()) || !(await shapeText.finish()) || !(await texts.finish()) ||
-      !(await appearance.flush()) ||
-      !(await cardLayout.flush()) ||
-      !(await pose.flush()) ||
-      !(await flush())
-    )
-      return;
-    if (id === authority.current?.project.id) return;
-    setBusy(true);
+    const switchingProjects = id !== authority.current?.project.id;
+    if (switchingProjects) setAttachmentProjectSwitches(count => count + 1);
     try {
-      if (!(await handoff(id))) return;
-      setEditing(null);
-      bodyBinding.current = null;
-      setDeletedBody(null);
-      setBodyCard(null);
-      setPlacing(false);
-      setShapePreset(null);
-      if (!pinned) {
-        if (navigationRow && document.activeElement === navigationRow) navigation.current?.focus();
-        setNav(false);
+      editorEpoch.current++;
+      breakBodyGroup();
+      if (
+        !(await shapeMove.flush()) || !(await connectorLabel.finish()) || !(await shapeText.finish()) || !(await texts.finish()) ||
+        !(await appearance.flush()) ||
+        !(await cardLayout.flush()) ||
+        !(await pose.flush()) ||
+        !(await flush())
+      )
+        return;
+      if (id === authority.current?.project.id) return;
+      setBusy(true);
+      try {
+        if (!(await handoff(id))) return;
+        const pending = pendingAction.current;
+        if (pending?.attachmentReadFailed && pending.command.projectId !== id) {
+          pendingAction.current = null;
+          recordAttachmentResult(pending.command.projectId, "saved");
+        }
+        setEditing(null);
+        bodyBinding.current = null;
+        setDeletedBody(null);
+        setBodyCard(null);
+        setPlacing(false);
+        setShapePreset(null);
+        if (!pinned) {
+          if (navigationRow && document.activeElement === navigationRow) navigation.current?.focus();
+          setNav(false);
+        }
+        history.replaceState(null, "", "?project=" + encodeURIComponent(id));
+        setStatus("已保存到本机");
+        setError("");
+      } catch (e) {
+        fail(e);
+      } finally {
+        setBusy(false);
       }
-      history.replaceState(null, "", "?project=" + encodeURIComponent(id));
-      setStatus("已保存到本机");
-      setError("");
-    } catch (e) {
-      fail(e);
     } finally {
-      setBusy(false);
+      if (switchingProjects) setAttachmentProjectSwitches(count => count - 1);
     }
   };
   function fail(e: unknown) {
@@ -1971,12 +1994,18 @@ function Workspace() {
       resolving.current = false;
     }
   }
+  function recordAttachmentResult(projectId: string, outcome: "saved" | "rejected", message = "") {
+    setAttachmentResult({ projectId, outcome, message });
+  }
   async function action(command: Command, onDone?: () => void, options: ActionOptions = {}) {
     // 同一 commandId 的页面内重试不是首次发送：权限类拒绝仍须按结果未知保留恢复记录（D467）。
     const retrying = !!pendingAction.current || !!options.sealed;
     const previousProject = () => belongsToPreviousProject(command);
-    // A retained, already sent command owns its frozen input, not the active project's tools or drafts.
-    const previousProjectRetry = previousProject() && pendingAction.current?.command === command;
+    const previousAttachmentAdd = () => command.type === "card.attachment.add" && previousProject();
+    const replayingSameCommand = pendingAction.current?.command === command;
+    const rereadingAttachment = command.type === "card.attachment.add" && replayingSameCommand && !!pendingAction.current?.receipt;
+    // A retained command or an attachment selected before switching owns its source, not the active draft.
+    const previousProjectRetry = previousProject() && replayingSameCommand;
     const attemptStartEpoch = editorEpoch.current;
     let actionEpoch = attemptStartEpoch;
     if (connectorCreate.hasPending()) return false;
@@ -2002,45 +2031,50 @@ function Workspace() {
     if (blocksNewAction(command.commandId)) return;
     const structural = command.type.startsWith('group.') || command.type.startsWith('frame.') || command.type === 'canvas.delete-selection' || command.type === 'text.delete';
     const resumingStructure = structural && !!pendingAction.current;
-    if (!resumingStructure && !previousProjectRetry) {
-      actionEpoch = ++editorEpoch.current;
-      breakBodyGroup();
-      if (
-        !(await shapeMove.flush()) || !(await connectorLabel.finish()) || !(await shapeText.finish()) || !(await texts.finish()) ||
-        !(await appearance.flush()) ||
-        !(await cardLayout.flush()) ||
-        !(await pose.flush()) ||
-        !(await flush())
-      )
-        return;
-      if (imageCommand) return finishImage();
-      if (command.type === "stroke.create" && command.projectId !== authority.current?.project.id) {
-        fail(new Error("笔迹所属项目已变化，请在原项目明确恢复")); return false;
-      }
-      if (options.beforeSubmit && !(await options.beforeSubmit(attemptStartEpoch, actionEpoch))) return false;
-      if (!retrying) {
-        previewPoseAcks.updatePlacement(command);
-        if (command.type === 'frame.create' || command.type === 'frame.move')
-          command.expected.poses = previewPoseAcks.versions(command.projectId, command.expected.poses);
-        if (command.type === 'attachment.attach' || command.type === 'attachment.detach') {
-          const target = command.expected.target;
-          target.versionId = previewPoseAcks.version(command.projectId, target.itemId, target.versionId);
+    if (!resumingStructure && !previousProjectRetry && !previousAttachmentAdd() && !rereadingAttachment) {
+      preparingActions.current++;
+      try {
+        actionEpoch = ++editorEpoch.current;
+        breakBodyGroup();
+        if (
+          !(await shapeMove.flush()) || !(await connectorLabel.finish()) || !(await shapeText.finish()) || !(await texts.finish()) ||
+          !(await appearance.flush()) ||
+          !(await cardLayout.flush()) ||
+          !(await pose.flush()) ||
+          !(await flush())
+        )
+          return;
+        if (imageCommand) return finishImage();
+        if (command.type === "stroke.create" && command.projectId !== authority.current?.project.id) {
+          fail(new Error("笔迹所属项目已变化，请在原项目明确恢复")); return false;
         }
-        if (command.type === 'frame.move') {
-          if (command.followers && command.expectedFollowers) {
-            const expected = command.expectedFollowers;
-            const { dx, dy } = command.payload;
-            try {
-              command.followers = await Promise.all(command.followers.map(async follower => {
-                const version = previewPoseAcks.version(command.projectId, follower.itemId, expected[follower.itemId]!);
-                if (version === expected[follower.itemId]) return follower;
-                const { pose } = await previewPoseAcks.read(command.projectId, follower.itemId, version);
-                return { ...follower, x: pose.x + dx, y: pose.y + dy };
-              }));
-            } catch (failure) { fail(failure); return false; }
-            command.expectedFollowers = previewPoseAcks.versions(command.projectId, expected);
+        if (options.beforeSubmit && !(await options.beforeSubmit(attemptStartEpoch, actionEpoch))) return false;
+        if (!retrying) {
+          previewPoseAcks.updatePlacement(command);
+          if (command.type === 'frame.create' || command.type === 'frame.move')
+            command.expected.poses = previewPoseAcks.versions(command.projectId, command.expected.poses);
+          if (command.type === 'attachment.attach' || command.type === 'attachment.detach') {
+            const target = command.expected.target;
+            target.versionId = previewPoseAcks.version(command.projectId, target.itemId, target.versionId);
+          }
+          if (command.type === 'frame.move') {
+            if (command.followers && command.expectedFollowers) {
+              const expected = command.expectedFollowers;
+              const { dx, dy } = command.payload;
+              try {
+                command.followers = await Promise.all(command.followers.map(async follower => {
+                  const version = previewPoseAcks.version(command.projectId, follower.itemId, expected[follower.itemId]!);
+                  if (version === expected[follower.itemId]) return follower;
+                  const { pose } = await previewPoseAcks.read(command.projectId, follower.itemId, version);
+                  return { ...follower, x: pose.x + dx, y: pose.y + dy };
+                }));
+              } catch (failure) { fail(failure); return false; }
+              command.expectedFollowers = previewPoseAcks.versions(command.projectId, expected);
+            }
           }
         }
+      } finally {
+        preparingActions.current--;
       }
     }
     // 落盘发生在发送之前：保存失败就中止，目标不产生任何写入，源内容仍可由源历史恢复。
@@ -2055,18 +2089,31 @@ function Workspace() {
       ...(structural
         ? { selectionIntent: { projectId: command.projectId, generation: canvasSelection.generation() } } : {}) };
     pendingAction.current = pending;
+    delete pending.attachmentReadFailed;
     const pendingCommand = pending.command;
     const savingOwner: CardSaveOwner | null = pendingCommand.type === "body.edit"
       ? { projectId: pendingCommand.projectId, cardId: pendingCommand.payload.id, field: "body", commandId: pendingCommand.commandId }
       : null;
     if (savingOwner) setSavingBodyAction(savingOwner);
     setBusy(true);
-    if (!previousProject()) setStatus("正在保存…");
+    if (!previousProject() && !rereadingAttachment) setStatus("正在保存…");
     let executed = !!pending.receipt;
+    const settlePreviousSave = () => {
+      pendingAction.current = null;
+      setPreviousProjectFeedback(current => current?.commandId === command.commandId ? null : current);
+      if (command.type === "card.attachment.add") {
+        recordAttachmentResult(command.projectId, "saved");
+        if (!previousProject()) {
+          setStatus("已保存到本机");
+          setError("");
+        }
+      }
+      return true;
+    };
     try {
       if (pending.rejected) {
         await refresh(command.projectId);
-        if (previousProject()) setPreviousProjectFailure({ commandId: command.commandId, message: pending.rejected });
+        if (previousProject()) setPreviousProjectFeedback({ commandId: command.commandId, message: pending.rejected });
         else fail(new Error(pending.rejected));
         return false;
       }
@@ -2075,24 +2122,29 @@ function Workspace() {
         const receipt = await api.execute(command);
         // 服务端已受理：先清恢复记录；随后画面读取失败只需重读，不再重放请求。
         try { options?.onCommitted?.(); } catch { /* 清理失败时保留记录，下次按原 commandId 幂等重放 */ }
-        if (structural) pending.receipt = receipt;
+        if (structural || command.type === "card.attachment.add") pending.receipt = receipt;
         executed = true;
       }
       if (command.projectId !== authority.current?.project.id) {
-        if (previousProject()) {
-          pendingAction.current = null;
-          setPreviousProjectFailure(current => current?.commandId === command.commandId ? null : current);
-          return true;
-        }
+        if (previousProject()) return settlePreviousSave();
         if (!(await handoff(command.projectId))) return;
       } else {
         await refresh(command.projectId, pending.selectionIntent);
-        if (!(await flush())) return;
+        if (previousAttachmentAdd()) return settlePreviousSave();
+        if (!rereadingAttachment && !(await flush())) return;
       }
       if (command.type === "stroke.create") { strokeJournal.confirm(command); scanStrokeRecoveries(); }
-      setStatus("已保存到本机");
-      setError("");
+      if (rereadingAttachment) {
+        setStatus(current => current === ATTACHMENT_READ_FAILED ? "已保存到本机" : current);
+      } else {
+        setStatus("已保存到本机");
+        setError("");
+      }
       pendingAction.current = null;
+      if (command.type === "card.attachment.add") {
+        setAttachmentResult(current => current?.projectId === command.projectId ? null : current);
+        setPreviousProjectFeedback(current => current?.commandId === command.commandId ? null : current);
+      }
       pending.onSettled?.();
       if (!pending.selectionIntent || authority.current?.project.id === pending.selectionIntent.projectId &&
         canvasSelection.generation() === pending.selectionIntent.generation) pending.onDone?.();
@@ -2100,6 +2152,35 @@ function Workspace() {
     } catch (e) {
       // 只有“还没拿到回执”的拒绝才是提交侧结果；之后的读取失败已经不代表没提交。
       if (!executed) options?.onRejected?.(e, retrying ? 'replay' : 'first');
+      if (command.type === "card.attachment.add") {
+        if (executed) {
+          if (previousAttachmentAdd()) return settlePreviousSave();
+          pending.attachmentReadFailed = true;
+          if (!rereadingAttachment) setStatus(ATTACHMENT_READ_FAILED);
+          return false;
+        }
+        const permissionDenied = e instanceof MappingError &&
+          ["UNAUTHORIZED", "PROJECT_FORBIDDEN", "UNTRUSTED_PRINCIPAL"].includes(e.code);
+        // 授权先于幂等回执读取。重放时的权限拒绝不能确认首次写入结果。
+        const rejected = e instanceof MappingError &&
+          (["VERSION_CONFLICT", "INVALID_ATTACHMENT", "NOT_FOUND"].includes(e.code) ||
+            (permissionDenied && !replayingSameCommand));
+        if (rejected) {
+          if (!previousAttachmentAdd()) {
+            try { await refresh(command.projectId); } catch { /* 读回失败不改变已明确的拒绝。 */ }
+          }
+          pendingAction.current = null;
+          setPreviousProjectFeedback(current => current?.commandId === command.commandId ? null : current);
+          recordAttachmentResult(command.projectId, "rejected", failureMessage(e));
+        } else {
+          setPreviousProjectFeedback({
+            commandId: command.commandId,
+            message: `上一项目附件保存结果待确认 · ${failureMessage(e)}`,
+          });
+        }
+        if (!previousAttachmentAdd()) fail(e);
+        return false;
+      }
       if ((structural || ['thought.create', 'shape.create', 'stroke.create'].includes(command.type)) && !executed && !pending.rejected && e instanceof MappingError &&
         ['VERSION_CONFLICT', 'NOT_FOUND', 'UNAUTHORIZED', 'PROJECT_FORBIDDEN', 'UNTRUSTED_PRINCIPAL'].includes(e.code)) {
         pending.rejected = e.message;
@@ -2116,7 +2197,7 @@ function Workspace() {
           try { await refresh(command.projectId); } catch { /* Retain the explicit rejection if the read also fails. */ }
         }
       }
-      if ((command.type === "thought.delete" || command.type === "shape.delete" || command.type === "stroke.delete" || command.type.startsWith("tag.") || command.type === "card.tags" || command.type === "card.attachment.add" || command.type === "card.attachment.remove") && e instanceof MappingError && ["VERSION_CONFLICT", "INVALID_ATTACHMENT", "TAG_NAME_CONFLICT", "NOT_FOUND", "UNAUTHORIZED", "PROJECT_FORBIDDEN", "UNTRUSTED_PRINCIPAL"].includes(e.code)) {
+      if ((command.type === "thought.delete" || command.type === "shape.delete" || command.type === "stroke.delete" || command.type.startsWith("tag.") || command.type === "card.tags" || command.type === "card.attachment.remove") && e instanceof MappingError && ["VERSION_CONFLICT", "INVALID_ATTACHMENT", "TAG_NAME_CONFLICT", "NOT_FOUND", "UNAUTHORIZED", "PROJECT_FORBIDDEN", "UNTRUSTED_PRINCIPAL"].includes(e.code)) {
         pendingAction.current = null;
         try { await refresh(command.projectId); } catch { /* Keep the unconfirmed view; authorization polling owns retraction. */ }
       }
@@ -2124,7 +2205,7 @@ function Workspace() {
         pending.bodyFailure = { message: failureMessage(e), owner: savingOwner };
         setStatus("保存未完成");
       } else if (previousProject()) {
-        setPreviousProjectFailure(current => pendingAction.current === pending
+        setPreviousProjectFeedback(current => pendingAction.current === pending
           ? { commandId: command.commandId, message: failureMessage(e) }
           : current?.commandId === command.commandId ? null : current);
       } else fail(e);
@@ -2153,7 +2234,7 @@ function Workspace() {
       }
       if (pending.command.type === 'group.scale' || pending.command.type === 'group.rotate90') groupGeometry.discard();
       if (previousProject) {
-        setPreviousProjectFailure(current => current?.commandId === pending.command.commandId ? null : current);
+        setPreviousProjectFeedback(current => current?.commandId === pending.command.commandId ? null : current);
         return;
       }
       setError('');
@@ -2162,7 +2243,7 @@ function Workspace() {
         ? '已保留当前保存状态，请重新明确删除' : pending.command.type.startsWith('frame.')
           ? '已保留当前保存状态，请重新明确分区操作' : '已保留当前保存状态，请重新明确组合操作');
     } catch (failure) {
-      if (previousProject) setPreviousProjectFailure({ commandId: pending.command.commandId, message: failureMessage(failure) });
+      if (previousProject) setPreviousProjectFeedback({ commandId: pending.command.commandId, message: failureMessage(failure) });
       else fail(failure);
     }
     finally { setBusy(false); }
@@ -3248,10 +3329,11 @@ function Workspace() {
       },
     },
   }));
-  function addAttachment(projectId: string, targetId: string, assetId: string, name: string) {
+  const attachmentWriteBlocked = busy || historyBlocked || !!pendingAction.current || attachmentProjectSwitches > 0;
+  function addAttachment(projectId: string, targetId: string, assetId: string, name: string, uploadTarget?: Card) {
     const current = authority.current;
-    const target = current?.cards.find(value => value.id === targetId);
-    if (current?.project.id !== projectId || !target) return;
+    const target = current?.project.id === projectId ? current.cards.find(value => value.id === targetId) : uploadTarget;
+    if (!target) return;
     return action({ commandId: crypto.randomUUID(), projectId, type: 'card.attachment.add',
       expected: { attachments: target.attachments?.versionId ?? null },
       payload: { id: target.id, assetId, name } });
@@ -3325,25 +3407,38 @@ function Workspace() {
       onRemoveAttachment: (attachmentId) => {
         const current = authority.current;
         const target = current?.cards.find(value => value.id === card.id);
-        if (!current || !target?.attachments) return;
+        if (!current || current.project.id !== state?.project.id || !target?.attachments || attachmentWriteBlocked) return;
         void action({ commandId: crypto.randomUUID(), projectId: current.project.id, type: 'card.attachment.remove',
           expected: { attachments: target.attachments.versionId },
           payload: { id: target.id, attachmentId } });
       },
       attachmentTargets: state!.cards,
+      attachmentWriteBlocked,
       onCopyAttachment: (targetId, item) => {
-        if (!busy && !historyBlocked) void addAttachment(state!.project.id, targetId, item.assetId, item.name);
+        if (!attachmentWriteBlocked) void addAttachment(state!.project.id, targetId, item.assetId, item.name);
       },
       onAddAttachment: (file) => {
         const current = authority.current;
-        if (!current || current.project.id !== state?.project.id || busy || historyBlocked) return;
+        const target = current?.cards.find(value => value.id === card.id);
+        if (!current || current.project.id !== state?.project.id || !target || attachmentWriteBlocked) return;
+        const projectId = current.project.id, uploadId = crypto.randomUUID();
         void (async () => {
           try {
             const payload = await fileAssetPayload(file);
             const assetId = crypto.randomUUID();
-            await api.execute({ commandId: crypto.randomUUID(), projectId: current.project.id, type: 'asset.save', expected: null, payload: { id: assetId, ...payload, kind: 'file' } });
-            await addAttachment(current.project.id, card.id, assetId, payload.name);
-          } catch (error) { fail(error instanceof Error ? error : new Error('未能添加附件')); }
+            await api.execute({ commandId: uploadId, projectId, type: 'asset.save', expected: null, payload: { id: assetId, ...payload, kind: 'file' } });
+            if (workspaceRevoked.current) return;
+            if (authority.current?.project.id !== projectId &&
+              (preparingActions.current || pendingAction.current || historyLock.current || historyCommand.current || connectorCreate.hasPending())) {
+              recordAttachmentResult(projectId, "rejected", "请先完成当前项目的保存，再回原卡重新添加附件");
+              return;
+            }
+            await addAttachment(projectId, target.id, assetId, payload.name, target);
+          } catch (error) {
+            if (workspaceRevoked.current) return;
+            recordAttachmentResult(projectId, "rejected", failureMessage(error));
+            if (authority.current?.project.id === projectId) fail(error);
+          }
         })();
       },
       onCanvasChoice: () => { editorEpoch.current++; },
@@ -3380,7 +3475,8 @@ function Workspace() {
       },
     },
   }));
-  const currentBody = state?.cards.find((c) => c.id === bodyCard);
+  const currentBodyData = nodes.find(node => node.data.card.id === bodyCard)?.data;
+  const currentBody = currentBodyData?.card;
   const panelCard =
     currentBody ??
     (deletedBody &&
@@ -3397,13 +3493,14 @@ function Workspace() {
   const pending = pendingAction.current;
   const previousProjectPending = pending && belongsToPreviousProject(pending.command) ? pending : null;
   const currentProjectPending = previousProjectPending ? null : pending;
+  const attachmentReadPending = currentProjectPending?.attachmentReadFailed ? currentProjectPending : null;
   const pendingBodyFailure = currentProjectPending?.bodyFailure;
   const retryFailure = pendingBodyFailure
     ? pendingBodyFailure.owner.projectId === state?.project.id ? pendingBodyFailure : null
     : failedDraft;
   const currentBodyFailed = !currentBodySaving &&
     (ownsCurrentBody(failedDraft?.owner) || ownsCurrentBody(pendingBodyFailure?.owner));
-  const previousProjectSave = previousProjectFailure && previousProjectFailure.commandId === previousProjectPending?.command.commandId
+  const previousProjectSave = previousProjectFeedback && previousProjectFeedback.commandId === previousProjectPending?.command.commandId
     ? previousProjectPending : null;
   const bodyRetryAvailable = !pose.error && !conflict && !historyCommand.current;
   const blockingBodyDraft = bodyRetryAvailable && failedDraft?.owner.field === "body" &&
@@ -3442,7 +3539,7 @@ function Workspace() {
             return;
           }
           const pending = pendingAction.current;
-          if (pending && !belongsToPreviousProject(pending.command)) void action(pending.command, pending.onDone, pending.options);
+          if (pending && !pending.attachmentReadFailed && !belongsToPreviousProject(pending.command)) void action(pending.command, pending.onDone, pending.options);
           else if (hasActiveCardDraft() || !pending && Object.keys(drafts.current).length) void flush();
           else if (!pending) location.reload();
         }}
@@ -4229,6 +4326,10 @@ function Workspace() {
           }}
         >
           {currentBody && <ProjectTags key={state!.project.id + ':' + currentBody.id} state={state!} card={currentBody} blocked={busy || historyBlocked} execute={action} refresh={refresh} undo={id => void travel('undo', id)} />}
+          {currentBodyData && <CardAttachmentList key={currentBodyData.card.id}
+            card={currentBodyData.card} projectCards={currentBodyData.attachmentTargets} blocked={currentBodyData.historyBlocked} writeBlocked={currentBodyData.attachmentWriteBlocked}
+            onOpen={currentBodyData.onOpenAttachment} onRemove={currentBodyData.onRemoveAttachment}
+            onAdd={currentBodyData.onAddAttachment} onCopy={currentBodyData.onCopyAttachment} showAddWhenEmpty />}
           {currentBody && <BodyFind key={state!.project.id + ":" + currentBody.id + ":" + bodyOpened} projectId={state!.project.id} card={currentBody} updating={!!draftView[draftKey(state!.project.id, currentBody.id, "body")]} seed={searchSeed?.result.cardId === currentBody.id ? searchSeed : null} onReading={setBodySearchReading} />}
           {!currentBody ? (
             <section className="deleted-body" aria-label="已删除卡片">
@@ -4398,8 +4499,21 @@ function Workspace() {
         </div>
       )}
       <div className="save-state">
-        {previousProjectSave && previousProjectFailure && <>
-          <span role="alert">{previousProjectFailure.message}</span>
+        {attachmentReadPending && <>
+          {saveStatus !== ATTACHMENT_READ_FAILED && <span role="alert">{ATTACHMENT_READ_FAILED}</span>}
+          <button type="button" disabled={busy || historyBlocked}
+            onClick={() => void action(attachmentReadPending.command, attachmentReadPending.onDone, attachmentReadPending.options)}>
+            重新读取附件
+          </button>
+        </>}
+        {state && attachmentResult && attachmentResult.projectId !== state.project.id && <>
+          <span role={attachmentResult.outcome === "rejected" ? "alert" : undefined} aria-live="polite">
+            {attachmentResult.outcome === "saved" ? "上一项目附件已保存" : `上一项目附件未添加 · ${attachmentResult.message}`}
+          </span>
+          <button onClick={() => setAttachmentResult(null)}>关闭附件提示</button>
+        </>}
+        {previousProjectSave && previousProjectFeedback && <>
+          <span role="alert">{previousProjectFeedback.message}</span>
           <span data-previous-project-save-controls onMouseDown={event => event.preventDefault()}>
             <button disabled={busy || historyBlocked || previousProjectSave.rejected !== undefined}
               onClick={() => void action(previousProjectSave.command, previousProjectSave.onDone, previousProjectSave.options)}>重试上一项目保存</button>
