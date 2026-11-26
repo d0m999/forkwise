@@ -5,11 +5,13 @@ import { freeLineGeometry, type ConnectorPoint } from './connector-geometry';
 import type { ConnectorTarget } from './connector-targets';
 import { ConnectorLabel, type LabelEditor } from './connector-label';
 
-export function ConnectorEntries({ values, choose, preview }: { values: ConnectorTarget[];
+export function ConnectorEntries({ values, direct, choose, preview }: { values: ConnectorTarget[]; direct: boolean;
   choose: (value: ConnectorTarget, element: HTMLElement) => void; preview: (value: ConnectorTarget) => void }) {
   const names = { top: '上', right: '右', bottom: '下', left: '左' };
   return <>{values.map(value => <button key={JSON.stringify([value.targetKind ?? 'item', value.itemId, value.side])} type="button"
     className="connector-entry nodrag nopan" aria-label={value.label + ' 连线起点：' + names[value.side]}
+    title="从这里拖动连线"
+    data-direct-entry={direct || undefined}
     data-connector-kind={value.targetKind ?? 'item'} data-connector-item={value.itemId} data-connector-side={value.side}
     onFocus={() => preview(value)} onClick={event => { if (event.detail === 0) choose(value, event.currentTarget); }}
     onKeyDown={event => { if (event.nativeEvent.isComposing || event.keyCode === 229) { event.preventDefault(); event.stopPropagation(); } }}
@@ -54,11 +56,17 @@ export function CanvasConnector({ value, selected, choose, resolve, drag, focus,
   </svg><ConnectorLabel value={value} path={path} origin={line} geometry={line.path} editor={labelEditor} choose={choose} onPositionPreview={onPositionPreview} /></>;
 }
 
-export function ConnectorPreview({ draft }: { draft: ConnectorDraft | null }) {
+export function ConnectorPreview({ draft, snap }: { draft: ConnectorDraft | null; snap?: ConnectorTarget | undefined }) {
   if (!draft) return null;
   const line = freeLineGeometry(draft.start, draft.end);
-  return <svg role="img" aria-label="连线预览" className="canvas-connector connector-preview"
-    width={line.width} height={line.height} style={{ left: line.x, top: line.y }}>
-    <path d={line.path} />
-  </svg>;
+  return <>
+    <svg role="img" aria-label="连线预览" className="canvas-connector connector-preview"
+      width={line.width} height={line.height} style={{ left: line.x, top: line.y }}>
+      <path d={line.path} />
+    </svg>
+    {snap && <span className="connector-snap-target" aria-hidden="true" data-connector-kind={snap.targetKind ?? 'item'}
+      data-connector-item={snap.itemId} data-connector-side={snap.side} style={{ left: draft.end.x, top: draft.end.y }}>
+      <span>{snap.label}</span>
+    </span>}
+  </>;
 }

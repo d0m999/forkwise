@@ -32,9 +32,12 @@ export function ConnectorPathControls({ value, blocked, choose, remove, move, ap
   const [labelPosition, setLabelPosition] = useState(String((value.label?.position ?? 0.5) * 100));
   useEffect(() => { setLabelPosition(String((value.label?.position ?? 0.5) * 100)); }, [value.id, value.label?.position]);
   return <div className="creation-tools connector-tools" role="group" aria-label="连线路径" style={{ whiteSpace: 'normal', flexWrap: 'wrap' }}>
+    <strong className="connector-tool-title">连线</strong>
+    {([['straight', '直线'], ['elbow', '折线'], ['curve', '曲线']] as const).map(([path, name]) =>
+      <button key={path} type="button" aria-pressed={value.path === path} disabled={blocked} onClick={event => choose(path, event.currentTarget)}>{name}</button>)}
+    <button type="button" disabled={blocked} onClick={event => editLabel(event.currentTarget)}>{value.label ? '编辑文字' : '添加文字'}</button>
     <ConnectorAppearance value={value.style} blocked={blocked} change={appearance} />
     <button type="button" disabled={blocked} onClick={reverse}>反转方向</button>
-    <button type="button" disabled={blocked} onClick={event => editLabel(event.currentTarget)}>{value.label ? '编辑文字' : '添加文字'}</button>
     {value.label && <>
       <label>标签字号<select disabled={blocked} value={value.label.fontSize} onChange={event => labelStyle({ fontSize: Number(event.target.value) })}>
         {[...new Set([12, 16, 24, 32, value.label.fontSize])].sort((a, b) => a - b).map(size => <option key={size} value={size}>{size} px</option>)}
@@ -57,8 +60,6 @@ export function ConnectorPathControls({ value, blocked, choose, remove, move, ap
         <p id={positionInstructions}>0% 为起点，100% 为终点；Enter 应用，Esc 取消</p>
       </form>
     </>}
-    {([['straight', '直线'], ['elbow', '折线'], ['curve', '曲线']] as const).map(([path, name]) =>
-      <button key={path} type="button" aria-pressed={value.path === path} disabled={blocked} onClick={event => choose(path, event.currentTarget)}>{name}</button>)}
     <button type="button" disabled={blocked} onClick={remove}>删除连线</button>
     <button type="button" disabled={move.blocked || (value.start.kind === 'bound' && value.end.kind === 'bound')} aria-describedby={move.active ? instructions : undefined}
       onClick={event => { if (!move.active && !move.composing()) move.start(event.currentTarget); }}
@@ -76,15 +77,16 @@ export function ConnectorPathControls({ value, blocked, choose, remove, move, ap
   </div>;
 }
 
-export function ConnectorCreateControls({ active, focusFree, blocked, composing, start, preview, choose, cancel }: {
-  active: boolean; focusFree: boolean; blocked: boolean; composing: () => boolean; start: (origin: HTMLElement) => void;
+export function ConnectorCreateControls({ active, allowBlank, focusFree, blocked, composing, start, preview, choose, cancel }: {
+  active: boolean; allowBlank: boolean; focusFree: boolean; blocked: boolean; composing: () => boolean; start: (origin: HTMLElement) => void;
   preview: (dx?: number, dy?: number) => void; choose: () => void; cancel: () => void;
 }) {
   const free = useRef<HTMLButtonElement>(null), instructions = useId();
   useLayoutEffect(() => { if (active && focusFree) free.current?.focus(); }, [active, focusFree]);
   return <div className="creation-tools connector-tools" role="group" aria-label="键盘创建连线" style={{ whiteSpace: 'normal', flexWrap: 'wrap' }}>
-    <button type="button" disabled={blocked} onClick={event => start(event.currentTarget)}
-      onKeyDown={event => { if (event.nativeEvent.isComposing || event.keyCode === 229 || composing()) { event.preventDefault(); event.stopPropagation(); } }}>从空白处开始连线</button>
+    {!active && <strong className="connector-tool-title">从空白或圆点拖动连线</strong>}
+    {allowBlank && <button type="button" disabled={blocked} onClick={event => start(event.currentTarget)}
+      onKeyDown={event => { if (event.nativeEvent.isComposing || event.keyCode === 229 || composing()) { event.preventDefault(); event.stopPropagation(); } }}>从空白处开始连线</button>}
     {active && <><button ref={free} type="button" aria-label="连线自由终点" aria-describedby={instructions} disabled={blocked}
       onFocus={() => preview()} onClick={event => { if (event.detail === 0 && !composing()) choose(); }}
       onKeyDown={event => {

@@ -55,7 +55,7 @@ import { useConnectorTargets } from './connector-targets';
 import { CanvasConnector, ConnectorPreview, ConnectorEntries } from './canvas-connector';
 import { useConnectorLabelEdit } from './connector-label-edit';
 import { DetachedConnectorLabelEditor } from './connector-label';
-import type { CanvasConnector as Connector } from '../../backend/src/mapping/connector-contracts';
+import { endpointKey, type CanvasConnector as Connector } from '../../backend/src/mapping/connector-contracts';
 import { ShapeTools, type ShapeType } from './shape-tools';
 import { useCanvasTexts } from './text-session';
 import { ProjectSearch } from './project-search';
@@ -1276,7 +1276,7 @@ function Workspace() {
       const rect = element.getBoundingClientRect();
       return flow.screenToFlowPosition({ x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 }, { snapToGrid: false });
     },
-    origin: client => connectorTargets.origin(client),
+    origin: connectorTargets.origin,
     execute: command => api.execute(command), read: projectId => api.project(projectId),
     publish: (value, id) => {
       if (authority.current?.project.id !== value.project.id) return;
@@ -3507,6 +3507,18 @@ function Workspace() {
   const showEmptyCanvas = state && !spatialItems(state).length && !state.frames?.length &&
     !state.groups?.length && !state.connectors?.length && !textNodes.length;
   const showingPlacement = placing || texts.placing || frameTool || shapePreset || strokeDraw.mode || connectorCreate.mode;
+  const selectedCardCanConnect = !showingPlacement && !panTool && !editing && !attachmentPick && !connectorLabel.session &&
+    !imageGeometry.cropping && !connectorCreationBlocked() && !historyBlocked &&
+    state?.cards.some(card => card.item.id === exclusiveItemId);
+  const connectorEntries = exportVisual || connectorEdit.keyboardMoving ? [] :
+    connectorCreate.mode || connectorCreate.keyboardActive || connectorEdit.keyboardEndpoint ? connectorTargets.values :
+    selectedCardCanConnect ? connectorTargets.values.filter(value => !value.targetKind && value.itemId === exclusiveItemId) : [];
+  const connectorDraft = connectorCreate.draft?.projectId === state?.project.id ? connectorCreate.draft : null;
+  const draftEnd = connectorDraft?.endEndpoint;
+  const draftStart = connectorDraft?.startEndpoint;
+  const connectorSnap = draftEnd?.kind === 'bound' && (draftStart?.kind !== 'bound' || endpointKey(draftStart) !== endpointKey(draftEnd))
+    ? connectorTargets.values.find(value => value.itemId === draftEnd.itemId && value.targetKind === draftEnd.targetKind && value.side === draftEnd.side)
+    : undefined;
   // Opening a modal shifts focus, which would end these editing rounds.
   const guideEditInProgress = !!editing || !!connectorLabel.session || frameMove.hasKeyboardResize() ||
     texts.nodes.some(node => node.data.editing) ||
@@ -3873,7 +3885,7 @@ function Workspace() {
           if (imageGeometry.cropping?.projectId === state?.project.id && state && event.button === 0 && !(event.target as Element).closest('.image-crop')) {
             event.preventDefault(); event.stopPropagation(); return;
           }
-          if (connectorCreate.input(event)) return;
+          if (connectorCreate.input(event, connectorEntries)) return;
           if (strokeDraw.start(event)) return;
           if (shapeText.session && (event.target as Element).closest('.react-flow__node, .react-flow__pane') && !(event.target as Element).closest('.shape-text-session, .shape-text-actions')) {
             event.preventDefault(); event.stopPropagation(); return;
@@ -3918,7 +3930,10 @@ function Workspace() {
               "controls.zoomOut.ariaLabel": "缩小",
               "controls.fitView.ariaLabel": "适应画布",
             }}
-            nodes={orderCanvas([...nodes, ...textNodes, ...imageNodes(state.images ?? [], state.project.id, selection, (id, extend) => void chooseCanvasItem(id, extend), busy || historyBlocked || composition.current || !!pendingAction.current || placing || !!shapePreset || texts.placing || panTool || !!strokeDraw.mode || !!shapeText.session || texts.geometryBlocked, imageGeometry, (value, dx, dy) => { if (canvasMove.start(value.item.id)) canvasMove.finish({ x: value.item.pose.x + dx, y: value.item.pose.y + dy }); }, singleItemId, memberAction, annotationAction, layerProps), ...shapeNodes(state.shapes ?? [], selection, (id, extend) => void chooseCanvasItem(id, extend), busy || historyBlocked || placing || !!shapePreset || texts.placing || panTool, id => void beginShapeText(id), !!shapeText.session, (id, trigger) => void beginShapeAppearance(id, trigger), value => void removeShape(value), shapeMove.positions, shapeMove, composition.current || !!pendingAction.current || pose.pending || pose.dragging || canvasMove.dragging || texts.hasPending() || appearance.pending || cardLayout.pending, singleItemId, memberAction, annotationAction, layerProps), ...strokeNodes(state.strokes ?? [], selection, (id, extend) => void chooseStrokeItem(id, extend), value => void removeStroke(value), busy || historyBlocked || !!pendingAction.current || placing || !!shapePreset || texts.placing || panTool || !!strokeDraw.mode, singleItemId, memberAction, annotationAction, itemId => !!state.groups?.some(group => group.memberItemIds.includes(itemId)) || (flowSelection.includes(itemId) && flowSelection.length > 1))].map(node => groupGeometry.project({ ...node, selected: exportVisual ? false : flowSelection.includes(node.id), position: frameMove.positions[node.id] ?? canvasMove.positions[node.id] ?? shapeMove.positions[node.id] ?? attachmentPreview[node.id] ?? node.position, draggable: node.draggable !== false && !groupGeometry.active && !strokeDraw.mode && !busy && !historyBlocked && !panTool && !placing && !shapePreset && !texts.placing && !texts.geometryBlocked && !shapeText.session && !connectorLabel.session && !shapeMove.pending })), state, selection, { temporaryRaise: !exportVisual && pureCardSelection && !layerHoldActive })}
+            nodes={orderCanvas([...nodes, ...textNodes, ...imageNodes(state.images ?? [], state.project.id, selection, (id, extend) => void chooseCanvasItem(id, extend), busy || historyBlocked || composition.current || !!pendingAction.current || placing || !!shapePreset || texts.placing || panTool || !!strokeDraw.mode || !!shapeText.session || texts.geometryBlocked, imageGeometry, (value, dx, dy) => { if (canvasMove.start(value.item.id)) canvasMove.finish({ x: value.item.pose.x + dx, y: value.item.pose.y + dy }); }, singleItemId, memberAction, annotationAction, layerProps), ...shapeNodes(state.shapes ?? [], selection, (id, extend) => void chooseCanvasItem(id, extend), busy || historyBlocked || placing || !!shapePreset || texts.placing || panTool, id => void beginShapeText(id), !!shapeText.session, (id, trigger) => void beginShapeAppearance(id, trigger), value => void removeShape(value), shapeMove.positions, shapeMove, composition.current || !!pendingAction.current || pose.pending || pose.dragging || canvasMove.dragging || texts.hasPending() || appearance.pending || cardLayout.pending, singleItemId, memberAction, annotationAction, layerProps), ...strokeNodes(state.strokes ?? [], selection, (id, extend) => void chooseStrokeItem(id, extend), value => void removeStroke(value), busy || historyBlocked || !!pendingAction.current || placing || !!shapePreset || texts.placing || panTool || !!strokeDraw.mode, singleItemId, memberAction, annotationAction, itemId => !!state.groups?.some(group => group.memberItemIds.includes(itemId)) || (flowSelection.includes(itemId) && flowSelection.length > 1))].map(node => groupGeometry.project({ ...node,
+              // A captured connector keeps shape interaction locked, but its hit test must still see foreground shapes.
+              ...(connectorCreate.pointerActive && node.type === 'canvasShape' && { style: { ...node.style, pointerEvents: 'auto' } }),
+              selected: exportVisual ? false : flowSelection.includes(node.id), position: frameMove.positions[node.id] ?? canvasMove.positions[node.id] ?? shapeMove.positions[node.id] ?? attachmentPreview[node.id] ?? node.position, draggable: node.draggable !== false && !groupGeometry.active && !strokeDraw.mode && !busy && !historyBlocked && !panTool && !placing && !shapePreset && !texts.placing && !texts.geometryBlocked && !shapeText.session && !connectorLabel.session && !shapeMove.pending })), state, selection, { temporaryRaise: !exportVisual && pureCardSelection && !layerHoldActive })}
             onNodeClick={(event, node) => {
               awaitBodySelection.current = false;
               clearConnectorSelection(event.shiftKey);
@@ -4041,10 +4056,10 @@ function Workspace() {
                 resolve={connectorTargets.resolve} blocked={busy || historyBlocked || composition.current || !!pendingAction.current}
                 start={(endpoint, event) => connectorEdit.start(value, endpoint, event)} activate={(endpoint, origin) => connectorEdit.startKeyboard(value, endpoint, origin)} />)}
               <ConnectorPreview draft={connectorEdit.draft?.projectId === state.project.id ? connectorEdit.draft : null} />
-              <ConnectorPreview draft={connectorCreate.draft?.projectId === state.project.id ? connectorCreate.draft : null} />
-              {!connectorEdit.keyboardMoving && (connectorCreate.mode || connectorEdit.keyboardEndpoint) && <ConnectorEntries values={connectorTargets.values}
+              <ConnectorPreview draft={connectorDraft} snap={connectorSnap} />
+              <ConnectorEntries values={connectorEntries} direct={!connectorCreate.mode && !connectorEdit.keyboardEndpoint && !connectorCreate.keyboardActive}
                 choose={connectorEdit.keyboardEndpoint ? connectorEdit.chooseAnchor : connectorCreate.chooseAnchor}
-                preview={connectorEdit.keyboardEndpoint ? connectorEdit.previewAnchor : connectorCreate.previewAnchor} />}
+                preview={connectorEdit.keyboardEndpoint ? connectorEdit.previewAnchor : connectorCreate.previewAnchor} />
               <StrokePreview draft={strokeDraw.draft} />
               {shapeText.session && <ShapeTextEditor key={shapeText.session.projectId + ":" + shapeText.session.value.id}
                 session={shapeText.session} locked={shapeText.locked} error={shapeText.error}
@@ -4094,7 +4109,8 @@ function Workspace() {
             {!showNoProjects && <p>粘贴纯文字可新建带正文的卡片，粘贴单张图片可添加独立图片</p>}
           </section>
         )}
-        {state && connectorCreate.mode && <ConnectorCreateControls active={connectorCreate.keyboardActive} focusFree={connectorCreate.draft?.startEndpoint.kind === 'free'}
+        {state && (connectorCreate.mode || connectorCreate.keyboardActive) && <ConnectorCreateControls active={connectorCreate.keyboardActive}
+          allowBlank={connectorCreate.mode} focusFree={connectorCreate.draft?.startEndpoint.kind === 'free'}
           blocked={connectorCreate.keyboardBlocked()} composing={() => composition.current} start={connectorCreate.startBlank}
           preview={connectorCreate.previewFree} choose={connectorCreate.chooseFree} cancel={connectorCreate.cancelDraft} />}
         {state && connectorEdit.keyboardEndpoint && <ConnectorEndpointControls endpoint={connectorEdit.keyboardEndpoint}
@@ -4189,6 +4205,7 @@ function Workspace() {
               {shapePreset && <span>点击画布放置{shapePreset === "roundedRectangle" ? "圆角矩形" : shapePreset === "rectangle" ? "矩形" : shapePreset === "ellipse" ? "椭圆" : shapePreset === "diamond" ? "菱形" : "三角形"}</span>}
               {texts.placing && <span>点击画布开始输入</span>}
               {strokeDraw.mode && <span>{strokeDraw.mode === "pen" ? "拖动绘制普通笔迹" : "拖动绘制荧光笔迹"}</span>}
+              {frameTool && <span>拖动画出分区</span>}
               {attachmentPick && <span aria-live="polite">点击要附着的卡片</span>}
               {texts.error && <span role="alert">{texts.error}</span>}
               {placing && <span>点击画布放置卡片</span>}

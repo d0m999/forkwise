@@ -526,12 +526,47 @@ body:has(.workspace[data-board-full="true"]) .card-tooltip { display: none; }
 .connector-label-position p { margin: 0; font-size: 12px; }
 .connector-label:not(.connector-label-session) { cursor: grab; touch-action: none; user-select: none; }
 .canvas-connector:focus-visible { outline: var(--connector-focus-width) solid var(--canvas-selection-color); outline-offset: var(--connector-focus-offset); }
-.connector-preview path { pointer-events: none; }
-.connector-entry { position: absolute; transform: translate(-50%, -50%); width: var(--connector-endpoint-size); height: var(--connector-endpoint-size); padding: 0; border: var(--connector-control-border-width) solid var(--canvas-selection-color); border-radius: var(--connector-endpoint-radius); background: var(--connector-endpoint-surface); z-index: var(--connector-controls-layer); cursor: crosshair; pointer-events: auto; }
+.connector-preview path { stroke-width: 3px; stroke-dasharray: 5 4; pointer-events: none; }
+.connector-snap-target {
+  position: absolute;
+  z-index: calc(var(--connector-controls-layer) + 1);
+  width: 18px;
+  height: 18px;
+  transform: translate(-50%, -50%);
+  border: 3px solid var(--canvas-selection-color);
+  border-radius: 50%;
+  box-shadow: 0 0 0 2px var(--connector-endpoint-surface);
+  pointer-events: none;
+}
+.connector-snap-target span {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: 22ch;
+  padding: 3px 8px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border-radius: 4px;
+  background: var(--canvas-selection-color);
+  color: var(--connector-endpoint-surface);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.25;
+}
+.connector-entry { position: absolute; transform: translate(-50%, -50%); width: var(--connector-endpoint-size); height: var(--connector-endpoint-size); padding: 0; border: var(--connector-control-border-width) solid var(--canvas-selection-color); border-radius: var(--connector-endpoint-radius); background: var(--connector-endpoint-surface); z-index: var(--connector-controls-layer); cursor: crosshair; touch-action: none; pointer-events: auto; }
+.connector-entry[data-direct-entry="true"] { --connector-entry-offset: 10px; }
+.connector-entry[data-direct-entry="true"][data-connector-side="top"] { translate: 0 calc(-1 * var(--connector-entry-offset)); }
+.connector-entry[data-direct-entry="true"][data-connector-side="right"] { translate: var(--connector-entry-offset) 0; }
+.connector-entry[data-direct-entry="true"][data-connector-side="bottom"] { translate: 0 var(--connector-entry-offset); }
+.connector-entry[data-direct-entry="true"][data-connector-side="left"] { translate: calc(-1 * var(--connector-entry-offset)) 0; }
+.connector-entry:hover { background: var(--canvas-selection-color); }
 .connector-entry:focus-visible { outline: var(--connector-focus-width) solid var(--canvas-selection-color); outline-offset: var(--connector-focus-offset); }
-.connector-endpoint { position: absolute; transform: translate(-50%, -50%); width: var(--connector-endpoint-size); height: var(--connector-endpoint-size); padding: 0; border: var(--connector-control-border-width) solid var(--canvas-selection-color); border-radius: var(--connector-endpoint-radius); background: var(--connector-endpoint-surface); z-index: var(--connector-controls-layer); cursor: grab; touch-action: none; pointer-events: auto; }
+.connector-endpoint { position: absolute; transform: translate(-50%, -50%); width: var(--connector-endpoint-size); height: var(--connector-endpoint-size); padding: 0; border: var(--connector-control-border-width) solid var(--canvas-selection-color); border-radius: 3px; background: var(--connector-endpoint-surface); z-index: var(--connector-controls-layer); cursor: grab; touch-action: none; pointer-events: auto; }
 .connector-endpoint:focus-visible { outline: var(--connector-focus-width) solid var(--canvas-selection-color); outline-offset: var(--connector-focus-offset); }
-.connector-tools { bottom: var(--connector-tools-bottom); z-index: var(--connector-controls-layer); }
+.connector-tools { bottom: var(--connector-tools-bottom); z-index: var(--connector-controls-layer); width: max-content; max-width: calc(100% - var(--connector-toolbar-gutter)); }
+.connector-tool-title { padding-inline: 6px; font-size: 12px; color: var(--canvas-chrome-ink); }
 .body-editor {
   position: absolute;
   right: 0;
@@ -1656,8 +1691,10 @@ body:has(.workspace > .project-nav) :is(.card-floating, .text-actions, .shape-te
   background: var(--card-color-ffffff);
   border: 1px solid #94a3b8;
   border-radius: 4px 4px 0 0;
+  cursor: grab;
   pointer-events: auto;
 }
+.canvas-frame-name[aria-pressed=true] { color: var(--canvas-selection-color); border-color: currentColor; font-weight: 600; }
 .canvas-frame-editor {
   position: absolute;
   left: 0;
@@ -1679,11 +1716,24 @@ body:has(.workspace > .project-nav) :is(.card-floating, .text-actions, .shape-te
 .canvas-group-outline {
   position: absolute;
   pointer-events: none;
-  border: 1px solid var(--canvas-selection-color);
+  border: 1px dashed #94a3b8;
   border-radius: 6px;
   opacity: 0.5;
 }
-.canvas-group-outline[data-selected="true"] { border-width: 2px; opacity: 1; }
+.canvas-group-outline[data-selected="true"],
+.canvas-group-outline[data-entered="true"] { border-color: var(--canvas-selection-color); opacity: 1; }
+.canvas-group-outline[data-selected="true"] { border-width: 2px; }
+.canvas-group-context {
+  position: absolute;
+  left: -1px;
+  top: 100%;
+  padding: 2px 6px;
+  border-radius: 0 0 4px 4px;
+  background: var(--card-color-ffffff);
+  color: var(--canvas-selection-color);
+  font-size: 12px;
+  white-space: nowrap;
+}
 .canvas-selection-anchor { position: absolute; pointer-events: none; }
 .canvas-group-tools {
   display: flex;
@@ -1699,6 +1749,7 @@ body:has(.workspace > .project-nav) :is(.card-floating, .text-actions, .shape-te
   pointer-events: auto;
   z-index: 30;
 }
+.canvas-group-count { padding-inline: 4px; color: var(--canvas-chrome-ink); font-size: 12px; white-space: nowrap; }
 
 .canvas-frame[data-drop-candidate=true] { border-color: #2563eb; box-shadow: 0 0 0 3px #2563eb55; }
 .frame-resize-overlay { position: absolute; box-sizing: border-box; border: 1px solid transparent; overflow: visible; pointer-events: none; z-index: calc(var(--connector-controls-layer) + 1); }

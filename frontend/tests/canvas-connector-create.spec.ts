@@ -23,6 +23,8 @@ test('两端自由普通连线拖动时预览且松开只保存一条直线', as
     const tool = page.getByRole('button', { name: '连线', exact: true });
     expect(await tool.count(), '创作底栏必须提供普通连线入口；缺入口应即时失败').toBe(1);
     await tool.click(); await expect(tool).toHaveAttribute('aria-pressed', 'true');
+    const guidance = page.getByRole('group', { name: '键盘创建连线', exact: true });
+    await expect(guidance.getByText(/空白.*圆点|圆点.*空白/)).toBeVisible({ timeout: 1500 });
     const pane = await page.locator('.react-flow__pane').boundingBox();
     expect(pane).not.toBeNull();
     const start = { x: Math.round(pane!.x + pane!.width * 0.25), y: Math.round(pane!.y + pane!.height * 0.32) };
@@ -230,6 +232,7 @@ test('创建普通连线拒绝两端绑定同一个对象', async ({ page, works
     await page.mouse.move(box.x + box.width, box.y + box.height / 2); await page.mouse.down();
     await page.mouse.move(box.x + box.width / 2, box.y, { steps: 5 });
     await expect(page.getByRole('img', { name: '连线预览', exact: true })).toBeVisible();
+    await expect(page.locator('.connector-snap-target')).toHaveCount(0);
     await page.mouse.up();
     await expect.poll(async () => commands.length > 0 || await page.getByRole('img', { name: '连线预览', exact: true }).count() === 0).toBe(true);
     expect(commands, '同一对象两边自连应在提交前拒绝').toHaveLength(0);
@@ -309,4 +312,146 @@ test('包含Unicode和引号的画布项身份可准确绑定', async ({ page, w
   const start = { x: box.x + box.width - 2, y: box.y + box.height / 2 }, end = { x: 820, y: 540 };
   await connectorGesture(page, workspace, start, end, { start: { kind: 'bound', itemId, side: 'right' },
     end: { kind: 'free', point: await connectorWorldPoint(page, end) }, screenStart: { x: box.x + box.width, y: start.y }, screenEnd: end });
+});
+
+test('选中卡片后直接从边缘圆点拖线，松手前标明绑定目标', async ({ page, workspace }) => {
+  const source = await seedConnectorCard(page, workspace, 'direct-source', 75, 150);
+  const target = await seedConnectorCard(page, workspace, 'direct-target', 420, 400);
+  const sourceNode = page.locator(`.react-flow__node[data-id="${source.item.id}"]`);
+  await sourceNode.getByRole('button', { name: source.title, exact: true }).click();
+  const tool = page.getByRole('button', { name: '连线', exact: true });
+  await expect(tool).toHaveAttribute('aria-pressed', 'false');
+  const entries = page.locator(`.connector-entry[data-connector-item="${source.item.id}"]`);
+  await expect(entries, '默认选择工具下，单张卡片应显示四个连接圆点').toHaveCount(4, { timeout: 1500 });
+  const right = entries.and(page.locator('[data-connector-side="right"]'));
+  await expect(right).toHaveAttribute('title', '从这里拖动连线');
+  for (const zoomOut of [false, true]) {
+    if (zoomOut) {
+      await page.getByRole('button', { name: '缩小', exact: true }).click();
+      await expect.poll(() => page.locator('.react-flow__viewport').evaluate(el => new DOMMatrix(getComputedStyle(el).transform).a)).toBeLessThan(1);
+    }
+    for (const side of ['上', '右', '下', '左']) {
+      const resize = sourceNode.getByRole('button', { name: '调整卡片尺寸：' + side, exact: true });
+      expect(await resize.evaluate(handle => {
+        const box = handle.getBoundingClientRect();
+        return document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2) === handle;
+      }), '新增连线圆点不能盖住卡片边中调整尺寸的手柄').toBe(true);
+    }
+  }
+
+  const before = await workspace.state();
+  await right.click();
+  expect((await workspace.state()).project.revision).toBe(before.project.revision);
+  await expect(sourceNode).toHaveClass(/\bselected\b/);
+  const from = (await right.boundingBox())!;
+  const sourceBox = await connectorSurfaceBox(page, source.item.id);
+  const to = await connectorSurfaceBox(page, target.item.id);
+  const edgePoint = { x: to.x + 3, y: to.y + to.height / 2 + 30 };
+  await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(edgePoint.x, edgePoint.y, { steps: 8 });
+  const snap = page.locator('.connector-snap-target');
+  await expect(snap).toBeVisible({ timeout: 1500 });
+  await expect(snap).toHaveAttribute('data-connector-item', target.item.id);
+  await expect(snap).toHaveAttribute('data-connector-side', 'left');
+  const previewEnds = await connectorSvgEnds(page.getByRole('img', { name: '连线预览', exact: true }).locator('path'));
+  expect(previewEnds.start.x).toBeCloseTo(sourceBox.x + sourceBox.width, 0);
+  expect(previewEnds.start.y).toBeCloseTo(sourceBox.y + sourceBox.height / 2, 0);
+  expect(previewEnds.end.x).toBeCloseTo(to.x, 0);
+  expect(previewEnds.end.y).toBeCloseTo(to.y + to.height / 2, 0);
+  expect((await workspace.state()).project.revision).toBe(before.project.revision);
+  await page.keyboard.press('Escape');
+  await page.mouse.up();
+  await expect(snap).toHaveCount(0);
+  await expect(sourceNode).toHaveClass(/\bselected\b/);
+  expect((await workspace.state()).project.revision).toBe(before.project.revision);
+
+  await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(edgePoint.x, edgePoint.y, { steps: 8 });
+  await expect(snap).toBeVisible();
+  await page.mouse.up();
+  await expect.poll(async () => (await workspace.state()).connectors?.length).toBe(1);
+  expect((await workspace.state()).connectors![0]).toMatchObject({
+    start: { kind: 'bound', itemId: source.item.id, side: 'right' },
+    end: { kind: 'bound', itemId: target.item.id, side: 'left' },
+  });
+  await expect(page.getByRole('button', { name: '选择', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await expect(tool).toHaveAttribute('aria-pressed', 'false');
+  await expect(page.getByRole('button', { name: '添加文字', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '曲线', exact: true })).toBeVisible();
+  await expect(snap).toHaveCount(0);
+});
+
+test('卡片圆点可用键盘开始连线，Esc 保留原焦点且不提交', async ({ page, workspace }) => {
+  const source = await seedConnectorCard(page, workspace, 'keyboard-direct-source', 75, 150);
+  const target = await seedConnectorCard(page, workspace, 'keyboard-direct-target', 420, 400);
+  const sourceNode = page.locator(`.react-flow__node[data-id="${source.item.id}"]`);
+  await sourceNode.getByRole('button', { name: source.title, exact: true }).click();
+  const right = page.locator(`.connector-entry[data-connector-item="${source.item.id}"][data-connector-side="right"]`);
+  const left = page.locator(`.connector-entry[data-connector-item="${source.item.id}"][data-connector-side="left"]`);
+  const destination = page.locator(`.connector-entry[data-connector-item="${target.item.id}"][data-connector-side="left"]`);
+  const before = await workspace.state();
+  await right.focus();
+  await page.keyboard.press('Enter');
+  await expect(page.getByRole('img', { name: '连线预览', exact: true })).toBeVisible();
+  await left.focus();
+  await expect(page.locator('.connector-snap-target')).toHaveCount(0);
+  await page.keyboard.press('Enter');
+  await expect(page.getByRole('alert')).toContainText('同一个对象');
+  expect(await workspace.state()).toEqual(before);
+  await page.keyboard.press('Escape');
+  await expect(right).toBeFocused();
+  await page.keyboard.press('Enter');
+  for (let step = 0; step < 12; step++) {
+    if (await destination.evaluate(element => element === document.activeElement)) break;
+    await page.keyboard.press('Tab');
+  }
+  await expect(destination).toBeFocused();
+  await expect(page.locator('.connector-snap-target')).toHaveAttribute('data-connector-item', target.item.id);
+  await page.keyboard.press('Escape');
+  await expect(right).toBeFocused();
+  await expect(page.locator('.connector-snap-target')).toHaveCount(0);
+  expect(await workspace.state()).toEqual(before);
+});
+
+test('卡面可见但目标边被前景物件挡住时保持自由端', async ({ page, workspace }) => {
+  const source = await seedConnectorCard(page, workspace, 'visible-edge-source', 75, 150);
+  const target = await seedConnectorCard(page, workspace, 'obscured-edge-target', 420, 400);
+  const projectId = (await workspace.state()).project.id;
+  await workspace.execute(page, {
+    commandId: crypto.randomUUID(), projectId, type: 'shape.create', expected: null,
+    payload: { id: 'cover-card-edge', content: { shapeType: 'rectangle', shortText: '遮住卡边', fill: '#f5ccbb' },
+      pose: { x: 390, y: 440, width: 35, height: 110 } },
+  });
+  await page.reload();
+  await expect(page.getByRole('img', { name: '遮住卡边', exact: true })).toBeVisible();
+  const sourceNode = page.locator(`.react-flow__node[data-id="${source.item.id}"]`);
+  await sourceNode.getByRole('button', { name: source.title, exact: true }).click();
+  const right = page.locator(`.connector-entry[data-connector-item="${source.item.id}"][data-connector-side="right"]`);
+  const from = (await right.boundingBox())!;
+  const to = await connectorSurfaceBox(page, target.item.id);
+  const drop = { x: to.x + 8, y: to.y + 120 };
+  const hits = await page.evaluate(({ drop, edgeX }) => [drop.x, edgeX].map(x =>
+    document.elementFromPoint(x, drop.y)?.closest<HTMLElement>('.react-flow__node')?.dataset.id), { drop, edgeX: to.x + 1 });
+  const cover = (await workspace.state()).shapes!.find(shape => shape.id === 'cover-card-edge')!;
+  expect(hits).toEqual([target.item.id, cover.item.id]);
+  await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2);
+  await page.mouse.down();
+  try {
+    await page.mouse.move(drop.x, to.y + 20, { steps: 8 });
+    const snap = page.locator('.connector-snap-target');
+    await expect(snap).toHaveAttribute('data-connector-item', target.item.id, { timeout: 1500 });
+    await expect(snap).toHaveAttribute('data-connector-side', 'left');
+    await page.mouse.move(drop.x, drop.y, { steps: 8 });
+    await expect(page.getByRole('img', { name: '连线预览', exact: true })).toBeVisible();
+    expect(await page.evaluate(({ drop, edgeX }) => [drop.x, edgeX].map(x =>
+      document.elementFromPoint(x, drop.y)?.closest<HTMLElement>('.react-flow__node')?.dataset.id), { drop, edgeX: to.x + 1 })).toEqual(hits);
+    await expect(page.locator('.connector-snap-target')).toHaveCount(0, { timeout: 1500 });
+  } finally { await page.mouse.up(); }
+  await expect.poll(async () => (await workspace.state()).connectors?.length).toBe(1);
+  expect((await workspace.state()).connectors![0]).toMatchObject({
+    start: { kind: 'bound', itemId: source.item.id, side: 'right' },
+    end: { kind: 'free', point: await connectorWorldPoint(page, drop) },
+  });
 });

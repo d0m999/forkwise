@@ -164,7 +164,7 @@ export function CanvasFrames({ state, preview, selectedId, selectedIds = [], cho
             }} />
           <input aria-label="分区背景" type="text" placeholder="透明" value={background} readOnly={blocked}
             onChange={event => { const next = event.target.value; setBackground(next); notifyDraft(name, next); }} onKeyDown={event => event.stopPropagation()} />
-          <button type="button" disabled={blocked}
+          <button type="button" disabled={blocked} title="仅移除外框，保留内容"
             onClick={() => {
               const session = editing;
               execute(deleteFrameCommand(state, frame), () => choose(null),
@@ -179,7 +179,8 @@ export function CanvasFrames({ state, preview, selectedId, selectedIds = [], cho
             onDoubleClick={() => begin(frame)}>{frame.name}</button>
           {selectedId === frame.id && <div className="canvas-frame-actions nodrag nopan" role="toolbar" aria-label="分区操作">
             <button type="button" disabled={blocked} onClick={() => begin(frame)}>重命名分区</button>
-            <button type="button" disabled={blocked} onClick={() => execute(deleteFrameCommand(state, frame), () => choose(null))}>删除分区</button>
+            <button type="button" disabled={blocked} title="仅移除外框，保留内容"
+              onClick={() => execute(deleteFrameCommand(state, frame), () => choose(null))}>删除分区</button>
           </div>}
         </div>}
       </div>

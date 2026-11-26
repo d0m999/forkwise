@@ -9,6 +9,9 @@ import type { ConnectorTarget } from './connector-targets';
 
 type Create = Extract<Command, { type: 'connector.create' }>;
 export type ConnectorDraft = { projectId: string; start: ConnectorPoint; end: ConnectorPoint; startEndpoint: ConnectorEndpoint; endEndpoint: ConnectorEndpoint };
+function bindTarget(target: ConnectorTarget): Extract<ConnectorEndpoint, { kind: 'bound' }> {
+  return { kind: 'bound', itemId: target.itemId, ...(target.targetKind ? { targetKind: target.targetKind } : {}), side: target.side };
+}
 const MIN_DRAG_PX = 4;
 const MIN_FREE_LENGTH = 1;
 type Adapters = {
@@ -17,7 +20,7 @@ type Adapters = {
   prepare: (projectId: string) => Promise<boolean>;
   point: (client: ConnectorPoint) => ConnectorPoint;
   center: () => ConnectorPoint | null;
-  origin: (client: ConnectorPoint) => { endpoint: ConnectorEndpoint; point: ConnectorPoint } | null;
+  origin: (client: ConnectorPoint, lookup?: 'card-edge') => { endpoint: ConnectorEndpoint; point: ConnectorPoint } | null;
   execute: (command: Create) => Promise<Receipt>;
   read: (projectId: string) => Promise<ProjectState>;
   publish: (state: ProjectState, id: string) => void;
@@ -37,14 +40,17 @@ export function useConnectorCreate(adapters: Adapters) {
   const keyboard = useRef<{ value: ConnectorDraft; origin: HTMLElement } | null>(null);
   const active = useRef<{ value: ConnectorDraft; pointerId: number; element: HTMLElement; startClient: ConnectorPoint } | null>(null);
   const pending = useRef<Create | null>(null), activation = useRef(0), click = useRef<ConnectorPoint | null>(null);
+  const preparingDirect = useRef(false);
   const confirmed = useRef<Receipt | null>(null);
-  async function activate() {
-    const projectId = latest.current.current()?.project.id;
-    if (!projectId || latest.current.blocked() || pending.current || active.current) return;
+  async function prepare(projectId: string, ready: () => void) {
     const epoch = ++activation.current;
     if (!(await latest.current.prepare(projectId))) return;
-    if (activation.current !== epoch || latest.current.current()?.project.id !== projectId || latest.current.blocked()) return;
-    setError(''); setMode(true);
+    if (activation.current === epoch && latest.current.current()?.project.id === projectId && !latest.current.blocked()) ready();
+  }
+  async function activate() {
+    const projectId = latest.current.current()?.project.id;
+    if (!projectId || keyboardBlocked()) return;
+    await prepare(projectId, () => { setError(''); setMode(true); });
   }
   function cancelDraft() {
     const keys = keyboard.current;
@@ -117,8 +123,19 @@ export function useConnectorCreate(adapters: Adapters) {
     pending.current = command; confirmed.current = null;
     setFocusId(fromKeyboard ? command.payload.id : null); setDraft(value); setWorking(true); setError(''); void send(command);
   }
+  function finish(value: ConnectorDraft, fromKeyboard = false) {
+    if (mode) { submit(value, fromKeyboard); return; }
+    // The explicit tool has already flushed editors. A direct connection
+    // uses the same preflight only when the user confirms a valid endpoint.
+    preparingDirect.current = true;
+    setDraft(value);
+    void prepare(value.projectId, () => submit(value, fromKeyboard)).finally(() => {
+      preparingDirect.current = false;
+      if (!pending.current) setDraft(null);
+    });
+  }
   function keyboardBlocked() {
-    return latest.current.blocked() || !!pending.current || !!active.current;
+    return latest.current.blocked() || !!pending.current || preparingDirect.current || !!active.current;
   }
   function startBlank(origin: HTMLElement) {
     const projectId = latest.current.current()?.project.id, point = latest.current.center();
@@ -139,37 +156,42 @@ export function useConnectorCreate(adapters: Adapters) {
     if (!captured || keyboardBlocked() || captured.value.projectId !== latest.current.current()?.project.id) return;
     if (Math.hypot(captured.value.end.x - captured.value.start.x, captured.value.end.y - captured.value.start.y) < MIN_FREE_LENGTH) { cancelDraft(); return; }
     const value = { ...captured.value, endEndpoint: { kind: 'free' as const, point: captured.value.end } };
-    keyboard.current = null; submit(value, true);
+    keyboard.current = null; finish(value, true);
   }
   function previewAnchor(target: ConnectorTarget) {
     const captured = keyboard.current;
     if (!captured || captured.value.projectId !== latest.current.current()?.project.id) return;
-    captured.value = { ...captured.value, end: target.point, endEndpoint: { kind: 'bound', itemId: target.itemId, ...(target.targetKind ? { targetKind: target.targetKind } : {}), side: target.side } };
+    captured.value = { ...captured.value, end: target.point, endEndpoint: bindTarget(target) };
     setDraft(captured.value);
   }
   function chooseAnchor(target: ConnectorTarget, origin: HTMLElement) {
     const projectId = latest.current.current()?.project.id;
-    if (!mode || !projectId || latest.current.blocked() || pending.current || active.current) return;
-    const endpoint: ConnectorEndpoint = { kind: 'bound', itemId: target.itemId, ...(target.targetKind ? { targetKind: target.targetKind } : {}), side: target.side };
+    if (!projectId || keyboardBlocked()) return;
+    const endpoint = bindTarget(target);
     const captured = keyboard.current;
     if (!captured) {
-      const value = { projectId, start: target.point, end: target.point, startEndpoint: endpoint, endEndpoint: endpoint };
-      keyboard.current = { value, origin }; setDraft(value); return;
+      const value: ConnectorDraft = { projectId, start: target.point, end: target.point, startEndpoint: endpoint,
+        endEndpoint: { kind: 'free', point: target.point } };
+      keyboard.current = { value, origin }; setDraft(value); setError('');
+      return;
     }
     if (captured.value.projectId !== projectId) { cancelDraft(); return; }
     if (captured.value.startEndpoint.kind === 'bound' && endpointKey(captured.value.startEndpoint) === endpointKey({ kind: 'bound', ...target })) {
       setError('普通连线不能连接同一个对象'); return;
     }
-    keyboard.current = null; submit({ ...captured.value, end: target.point, endEndpoint: endpoint }, true);
+    keyboard.current = null; finish({ ...captured.value, end: target.point, endEndpoint: endpoint }, true);
   }
-  function input(event: PointerEvent<HTMLElement>) {
+  function input(event: PointerEvent<HTMLElement>, entries: ConnectorTarget[] = []) {
     if (event.type === 'pointerdown') {
-      if (!mode || event.button !== 0 || latest.current.blocked() || pending.current || active.current || keyboard.current) return false;
+      if (event.button !== 0 || keyboardBlocked() || keyboard.current) return false;
       const target = event.target as Element, projectId = latest.current.current()?.project.id;
-      const entry = target.closest('.connector-entry');
-      if (!projectId || (!entry && (!target.closest('.react-flow__pane') || target.closest('button, input, textarea, [contenteditable=true], .react-flow__controls')))) return false;
-      const client = { x: event.clientX, y: event.clientY }, bound = latest.current.origin(client);
-      if (entry && !bound) return false;
+      const entry = target.closest<HTMLElement>('.connector-entry');
+      const anchor = entry && entries.find(value => value.itemId === entry.dataset.connectorItem &&
+        value.side === entry.dataset.connectorSide && (value.targetKind ?? 'item') === entry.dataset.connectorKind);
+      if (!projectId || (entry ? !anchor : !mode || !target.closest('.react-flow__pane') ||
+        target.closest('button, input, textarea, [contenteditable=true], .react-flow__controls'))) return false;
+      const client = { x: event.clientX, y: event.clientY };
+      const bound = anchor ? { endpoint: bindTarget(anchor), point: anchor.point } : latest.current.origin(client);
       const start = bound?.point ?? latest.current.point(client);
       const value = { projectId, start, end: start, startEndpoint: bound?.endpoint ?? { kind: 'free' as const, point: start }, endEndpoint: { kind: 'free' as const, point: start } };
       active.current = { value, pointerId: event.pointerId, element: event.currentTarget, startClient: client };
@@ -180,7 +202,7 @@ export function useConnectorCreate(adapters: Adapters) {
     if (!captured || captured.pointerId !== event.pointerId) return false;
     if (captured.value.projectId !== latest.current.current()?.project.id) { cancelDraft(); return false; }
     event.preventDefault(); event.stopPropagation();
-    const client = { x: event.clientX, y: event.clientY }, bound = latest.current.origin(client);
+    const client = { x: event.clientX, y: event.clientY }, bound = latest.current.origin(client, 'card-edge');
     const end = bound?.point ?? latest.current.point(client);
     const value = { ...captured.value, end, endEndpoint: bound?.endpoint ?? { kind: 'free' as const, point: end } };
     if (event.type === 'pointermove') { captured.value = value; setDraft(value); return true; }
@@ -193,16 +215,18 @@ export function useConnectorCreate(adapters: Adapters) {
     }
     active.current = null; click.current = { x: event.clientX, y: event.clientY };
     if (captured.element.hasPointerCapture(event.pointerId)) captured.element.releasePointerCapture(event.pointerId);
-    submit(value); return true;
+    finish(value);
+    return true;
   }
   function consumeClick(client: ConnectorPoint) {
     const end = click.current; click.current = null;
     return !!end && end.x === client.x && end.y === client.y;
   }
   return { mode, draft, working, error: error || restored.error, retryable: !!pending.current, retry, rejected, abandon,
+    pointerActive: !!active.current,
     recoveries: pending.current ? [] : restored.records.filter(record => record.command.projectId === latest.current.current()?.project.id), recover,
     activate, deactivate, input, cancelDraft, consumeClick, chooseAnchor, previewAnchor, focusId, focused: () => setFocusId(null),
     keyboardActive: !!keyboard.current, keyboardBlocked, startBlank, previewFree, chooseFree,
-    hasGesture: () => !!active.current || !!keyboard.current, hasPending: () => !!active.current || !!keyboard.current || !!pending.current || !!restored.error ||
+    hasGesture: () => !!active.current || !!keyboard.current, hasPending: () => !!active.current || !!keyboard.current || preparingDirect.current || !!pending.current || !!restored.error ||
       restored.records.some(record => record.command.projectId === latest.current.current()?.project.id) };
 }

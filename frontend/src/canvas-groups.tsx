@@ -33,7 +33,10 @@ export function CanvasGroups({ state, selection, positions, geometry, blocked, c
       const { x, y, width, height } = groupOutlineBounds(members);
       return <div key={group.id} role="group" aria-label="组合" className="canvas-group-outline" data-group-id={group.id}
         data-selected={selection.targets.some(t => t.kind === 'group' && t.id === group.id)}
-        style={{ left: x, top: y, width, height }} />;
+        data-entered={selection.enteredGroupId === group.id}
+        style={{ left: x, top: y, width, height }}>
+        {selection.enteredGroupId === group.id && <span className="canvas-group-context">组合内</span>}
+      </div>;
     })}
     {geometry.scalable && (['nw', 'ne', 'sw', 'se'] as const).map(corner => <button key={corner}
       className="card-resize nodrag nopan" aria-label={`调整组合尺寸：${({ nw: '左上', ne: '右上', sw: '左下', se: '右下' })[corner]}`}
@@ -47,6 +50,7 @@ export function CanvasGroups({ state, selection, positions, geometry, blocked, c
         className="canvas-group-tools card-floating nodrag nopan"
         style={{ ...placement?.toolbar, maxWidth: placement?.maxWidth, visibility: placement ? undefined : "hidden" }}
         onPointerDown={event => event.stopPropagation()} onClick={event => event.stopPropagation()}>
+      <strong className="canvas-group-count">{groupId ? '组合' : '已选'} {groupId ? selected.length + ' 个成员' : selection.targets.length + ' 项'}</strong>
       {selection.targets.length > 1 && <><button disabled={blocked} onClick={create}>组合所选对象</button><span>不含连线</span></>}
       {selection.targets.length > 0 && (() => {
         const parents = selection.targets.map(target => {
