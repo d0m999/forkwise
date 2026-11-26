@@ -15,9 +15,10 @@ export type ConnectorLabel = z.infer<typeof ConnectorLabelSchema>;
 export const DEFAULT_CONNECTOR_STYLE: Readonly<ConnectorStyle> = Object.freeze({
   startMarker: 'none', endMarker: 'open-arrow', color: '#626e81', width: 4, dash: 'solid',
 });
+export const ConnectorPointImportCheck = z.object({ x: z.number().finite(), y: z.number().finite() });
 const FreeEndpoint = z.object({
   kind: z.literal('free'),
-  point: z.object({ x: z.number().finite(), y: z.number().finite() }).strict(),
+  point: ConnectorPointImportCheck.strict(),
 }).strict();
 const BoundEndpoint = z.object({
   kind: z.literal('bound'),

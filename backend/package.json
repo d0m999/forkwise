@@ -17,7 +17,7 @@
     "db:generate": "drizzle-kit generate",
     "restore": "tsx scripts/restore.ts",
     "build:canvas": "npm --prefix canvas run check && npm --prefix canvas run build",
-    "build:workspace": "npm --prefix ../frontend run check && npm --prefix ../frontend run build && tsc -p tsconfig.build.json && mkdir -p dist/workspace dist/src/workers && cp -R ../frontend/dist/. dist/workspace/ && cp src/workers/*.mjs dist/src/workers/ && node scripts/copy-search-vendor.mjs",
+    "build:workspace": "npm --prefix ../frontend run check && npm --prefix ../frontend run build && tsc -p tsconfig.build.json && mkdir -p dist/workspace dist/src/workers && cp -R ../frontend/dist/. dist/workspace/ && cp src/workers/*.mjs dist/src/workers/ && node scripts/copy-search-vendor.mjs && node scripts/workspace-build-info.mjs",
     "start:workspace": "node dist/src/workspace-server.js"
   },
   "dependencies": {

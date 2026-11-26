@@ -69,7 +69,7 @@ export function ExportMenu({ project, disabled, report, image }: {
       if (!root.current?.contains(event.target as Node)) setOpen(false);
     };
     const escape = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape') return;
+      if (event.key !== 'Escape' || document.querySelector('dialog[open]')) return;
       event.preventDefault();
       event.stopImmediatePropagation();
       closeAndFocus();

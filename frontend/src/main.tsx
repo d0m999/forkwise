@@ -9,6 +9,7 @@ import { nextPaste, pasteTranslation, type PasteSequence } from "./canvas-snapsh
 import { SnapshotMenu } from "./snapshot-menu";
 import { CanvasToolButton } from "./canvas-tool-button";
 import { ExportMenu } from "./export-menu";
+import { WorkspaceBackup } from "./workspace-backup";
 import { ImportPackage, importDialogOpen } from "./import-package";
 import { WorkspaceProjectDialog } from './workspace-project-dialog';
 import { WorkspaceGuide, type GuideAccessResult } from './workspace-guide';
@@ -354,6 +355,7 @@ function Workspace() {
   const workspaceRevoked = useRef(false);
   const [guideAccess, setGuideAccess] = useState<'pending' | 'allowed' | 'retry' | 'denied'>('pending');
   const guideDialog = useRef<HTMLDialogElement>(null);
+  const backupDialog = useRef<HTMLDialogElement>(null);
   const navigation = useRef<HTMLButtonElement>(null);
   type AnnotationPick = { projectId: string; itemId: string; trigger: HTMLButtonElement };
   const [annotationPick, setAnnotationPickView] = useState<AnnotationPick | null>(null);
@@ -460,7 +462,7 @@ function Workspace() {
     };
     const outside = (event: PointerEvent) => {
       const target = event.target as Element;
-      if (!attachmentPick.trigger.contains(target) && !target.closest(".react-flow__node-thought, [data-workspace-guide]")) setAnnotationPick(null);
+      if (!attachmentPick.trigger.contains(target) && !target.closest(".react-flow__node-thought, [data-workspace-guide], [data-workspace-backup]")) setAnnotationPick(null);
     };
     window.addEventListener("keydown", onKey, true);
     document.addEventListener("pointerdown", outside, true);
@@ -929,7 +931,7 @@ function Workspace() {
       if (target.closest("dialog.project-search, dialog.shape-appearance-dialog, dialog.organize-dialog, dialog.attachment-copy-dialog")) return;
       // 导入和改名是模态表单：打开期间画布动作历史一律不动。
       // 这里直接返回、不 preventDefault，名称输入框的原生撤销照常生效。
-      if (importDialogOpen() || renameDialog.current?.open) return;
+      if (importDialogOpen() || renameDialog.current?.open || backupDialog.current?.open) return;
       // Text inputs and title rounds own native text undo; non-text controls
       // such as the appearance checkbox use the project's action history.
       const input = target.closest("input");
@@ -1527,6 +1529,7 @@ function Workspace() {
       if (
         event.key !== "Escape" ||
         event.defaultPrevented ||
+        backupDialog.current?.open ||
         event.isComposing ||
         event.keyCode === 229 ||
         composition.current ||
@@ -3024,7 +3027,7 @@ function Workspace() {
       if (!(event.metaKey || event.ctrlKey) || event.altKey || event.repeat || event.isComposing || event.keyCode === 229) return;
       const key = event.key.toLowerCase();
       if (key !== "c" && key !== "d" && key !== "x") return;
-      if (editing(event.target) || busy || historyBlocked || composition.current || pendingAction.current) return;
+      if (backupDialog.current?.open || editing(event.target) || busy || historyBlocked || composition.current || pendingAction.current) return;
       const current = authority.current;
       if (!current) return;
       const canAct = key === "x"
@@ -3036,7 +3039,7 @@ function Workspace() {
       if (key === "x") void cutSelection(); else if (key === "c") void copySelection(); else void duplicateSelection();
     };
     const paste = (event: ClipboardEvent) => {
-      if (editing(event.target) || busy || historyBlocked || composition.current || pendingAction.current) return;
+      if (backupDialog.current?.open || editing(event.target) || busy || historyBlocked || composition.current || pendingAction.current) return;
       const data = event.clipboardData;
       const raw = data?.getData(CANVAS_CLIPBOARD_TYPE);
       if (raw) { event.preventDefault(); event.stopPropagation(); void pasteSnapshot(raw); return; }
@@ -3680,7 +3683,7 @@ function Workspace() {
       data-revision={state?.project.revision}
       onClickCapture={event => {
         const target = event.target as Element;
-        if (target.closest('[data-workspace-guide]')) return;
+        if (target.closest('[data-workspace-guide], [data-workspace-backup]')) return;
         if (connectorLabel.currentSession() && !connectorLabelHistoryBusy && !target.closest('.connector-label-session') &&
           (!target.closest('.connector-tools') || target.closest('.connector-label-position input')) &&
           (target.closest('.react-flow__controls') || !target.closest('.react-flow__node, .react-flow__pane, .canvas-connector, .connector-label'))) {
@@ -3833,6 +3836,7 @@ function Workspace() {
           {canOpenGuide && <button type="button" aria-haspopup="dialog" data-workspace-guide aria-disabled={guideEditInProgress}
             title={guideEditInProgress ? '结束当前操作后可查看引导' : undefined}
             onMouseDown={event => event.preventDefault()} onClick={openGuide}>画布引导</button>}
+          {workspaceAccess === 'ready' && <WorkspaceBackup dialog={backupDialog} disabled={!!attachmentPick || guideEditInProgress} />}
           {state && <button onClick={() => setOrganizing({ projectId: state.project.id })}
             disabled={busy || historyBlocked} aria-haspopup="dialog">AI 整理记录</button>}
           {state && <button onClick={() => setOrganizing({ projectId: state.project.id, verification: true })}

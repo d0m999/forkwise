@@ -29,8 +29,7 @@ import { initializeTags } from './tags.js';
 import { initializeSearchState } from './search-state.js';
 import { initializeCuts } from './cut.js';
 import { initializeOrganize } from './organize-store.js';
-
-const WORKSPACE_DATABASE_FILENAME = 'workspace.sqlite';
+import { WORKSPACE_APPLICATION_ID, WORKSPACE_DATABASE_FILENAME, WORKSPACE_DATABASE_VERSION } from './workspace-storage-contract.js';
 const workspaceWalFilename = `${WORKSPACE_DATABASE_FILENAME}-wal`;
 const workspaceShmFilename = `${WORKSPACE_DATABASE_FILENAME}-shm`;
 const workspaceAccessFilename = 'local-access.json';
@@ -100,7 +99,6 @@ export function readWorkspaceAccessFile(directory: string): string {
 // Separate from research.sqlite: opening the workspace never runs legacy migrations,
 // activation recovery, background jobs, or retention cleanup.
 export function openMapping(directory: string, options: CommitOptions = {}): Mapping {
-  const applicationId = 1179472720;
   const { existing } = inspectWorkspaceDirectory(directory);
   mkdirSync(directory, { recursive: true, mode: 0o700 });
   const path = join(directory, WORKSPACE_DATABASE_FILENAME);
@@ -112,8 +110,8 @@ export function openMapping(directory: string, options: CommitOptions = {}): Map
       if (
         length !== 100 ||
         header.subarray(0, 16).toString() !== 'SQLite format 3\0' ||
-        header.readUInt32BE(68) !== applicationId ||
-        header.readUInt32BE(60) !== 1
+        header.readUInt32BE(68) !== WORKSPACE_APPLICATION_ID ||
+        header.readUInt32BE(60) !== WORKSPACE_DATABASE_VERSION
       )
         throw new Error('数据库不是受支持的开放工作台格式；原件已保留');
     } finally {
@@ -126,8 +124,8 @@ export function openMapping(directory: string, options: CommitOptions = {}): Map
   const db = new Database(path);
   try {
     if (!existing) {
-      db.pragma(`application_id = ${applicationId}`);
-      db.pragma('user_version = 1');
+      db.pragma(`application_id = ${WORKSPACE_APPLICATION_ID}`);
+      db.pragma(`user_version = ${WORKSPACE_DATABASE_VERSION}`);
     }
     db.pragma('journal_mode = WAL');
     db.pragma('foreign_keys = ON');

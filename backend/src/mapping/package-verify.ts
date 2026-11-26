@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { z } from 'zod';
+import { ConnectorPointImportCheck } from './connector-contracts.js';
 import { ImageContentImportCheck } from './image-contracts.js';
 import { OrganizeArchiveImportCheck } from './organize-archive.js';
 import { OrganizeOrigin } from './organize-contracts.js';
@@ -154,7 +155,7 @@ function requireItem(failures: PackageFailure[], path: string, value: unknown, r
     fail(failures, 'RECORD_FIELD', `${path}.pose.rotation`, '0/90/180/270', value.pose.rotation);
 }
 
-function verifyRecords(mapping: Record<string, unknown>, failures: PackageFailure[]) {
+export function verifyProjectRecords(mapping: Record<string, unknown>, failures: PackageFailure[]) {
   list(mapping, 'cards').forEach((value, index) => {
     const path = `mapping.cards[${index}]`;
     if (!isRecord(value)) {
@@ -243,6 +244,8 @@ function verifyRecords(mapping: Record<string, unknown>, failures: PackageFailur
         fail(failures, 'RECORD_FIELD', `${path}.${end}`, 'endpoint object', endpoint);
         continue;
       }
+      if (endpoint.kind === 'free' && !ConnectorPointImportCheck.safeParse(endpoint.point).success)
+        fail(failures, 'RECORD_FIELD', `${path}.${end}.point`, 'point with finite x and y', endpoint.point);
       if (endpoint.kind === 'bound') {
         requireString(failures, `${path}.${end}.itemId`, endpoint.itemId);
         if (!['top', 'right', 'bottom', 'left'].includes(endpoint.side as string))
@@ -298,6 +301,36 @@ function verifyRecords(mapping: Record<string, unknown>, failures: PackageFailur
     if (typeof value.name !== 'string' || !value.name) fail(failures, 'RECORD_FIELD', `${path}.name`, 'non-empty string', value.name);
     if (typeof value.color !== 'string' || !value.color) fail(failures, 'RECORD_FIELD', `${path}.color`, 'non-empty string', value.color);
     if (typeof value.deleted !== 'boolean') fail(failures, 'RECORD_FIELD', `${path}.deleted`, 'boolean', value.deleted);
+  });
+}
+
+function projectTargetIds(mapping: Record<string, unknown>) {
+  const item = new Set<string>();
+  for (const name of ['cards', 'texts', 'shapes', 'strokes', 'images'] as const) {
+    for (const value of list(mapping, name)) {
+      const canvasItem = isRecord(value) ? value.item : undefined;
+      if (isRecord(canvasItem) && typeof canvasItem.id === 'string') item.add(canvasItem.id);
+    }
+  }
+  const frame = new Set(list(mapping, 'frames').flatMap(value => isRecord(value) && typeof value.id === 'string' ? [value.id] : []));
+  const group = new Set(list(mapping, 'groups').flatMap(value => isRecord(value) && typeof value.itemId === 'string' ? [value.itemId] : []));
+  return { item, frame, group };
+}
+
+export function verifyConnectorTargets(
+  mapping: Record<string, unknown>, failures: PackageFailure[],
+  targets: Readonly<Record<string, ReadonlySet<string>>> = projectTargetIds(mapping),
+) {
+  list(mapping, 'connectors').forEach((value, index) => {
+    if (!isRecord(value)) return;
+    for (const end of ['start', 'end'] as const) {
+      const endpoint = value[end];
+      if (!isRecord(endpoint) || endpoint.kind !== 'bound') continue;
+      const kind = typeof endpoint.targetKind === 'string' ? endpoint.targetKind : 'item';
+      const ids = Object.hasOwn(targets, kind) ? targets[kind] : undefined;
+      if (typeof endpoint.itemId !== 'string' || !ids?.has(endpoint.itemId))
+        fail(failures, 'REFERENCE', `mapping.connectors[${index}].${end}.itemId`, `known ${kind} endpoint`, endpoint.itemId);
+    }
   });
 }
 
@@ -469,7 +502,7 @@ function verifyManifest(manifest: Record<string, unknown>, files: Map<string, Bu
     });
   }
 
-  verifyRecords(map, failures);
+  verifyProjectRecords(map, failures);
 
   const versionKeys = new Set<string>();
   const verificationBindings = new Map<string, VerificationBinding>();
@@ -548,15 +581,8 @@ function verifyManifest(manifest: Record<string, unknown>, files: Map<string, Bu
     if (isRecord(value)) requireVersion('attachment', value.id, value.versionId, `mapping.attachments[${index}].versionId`);
   });
 
-  const itemIds = new Set<string>();
-  for (const name of ['cards', 'texts', 'shapes', 'strokes', 'images'] as const) {
-    for (const value of list(map, name)) {
-      const item = isRecord(value) ? value.item : undefined;
-      if (isRecord(item) && typeof item.id === 'string') itemIds.add(item.id);
-    }
-  }
-  const frameIds = new Set(list(map, 'frames').flatMap((frame) => (isRecord(frame) && typeof frame.id === 'string' ? [frame.id] : [])));
-  const groupItemIds = new Set(list(map, 'groups').flatMap((group) => (isRecord(group) && typeof group.itemId === 'string' ? [group.itemId] : [])));
+  const targets = projectTargetIds(map);
+  const { item: itemIds, frame: frameIds, group: groupItemIds } = targets;
   const tagIds = new Set(list(map, 'tags').flatMap((tag) => (isRecord(tag) && typeof tag.id === 'string' ? [tag.id] : [])));
   const endpointIds = new Set([...itemIds, ...frameIds, ...groupItemIds]);
   if (!Array.isArray(manifest.resources)) fail(failures, 'RESOURCE_FIELD', 'resources', 'array', manifest.resources);
@@ -626,18 +652,7 @@ function verifyManifest(manifest: Record<string, unknown>, files: Map<string, Bu
       return isRecord(resource) && typeof resource.path === 'string' ? files.get(resource.path)?.toString('utf8') : undefined;
     } };
   })) fail(failures, 'VERIFICATION_EVIDENCE', path, '可回查的 SEC 原文与锚点', reason);
-  const kindIds: Record<string, Set<string>> = { item: itemIds, frame: frameIds, group: groupItemIds };
-  list(map, 'connectors').forEach((value, index) => {
-    if (!isRecord(value)) return;
-    for (const end of ['start', 'end'] as const) {
-      const endpoint = isRecord(value[end]) ? value[end] as Record<string, unknown> : undefined;
-      if (endpoint?.kind !== 'bound') continue;
-      const kind = typeof endpoint.targetKind === 'string' ? endpoint.targetKind : 'item';
-      const ids = kindIds[kind] ?? new Set<string>();
-      if (typeof endpoint.itemId !== 'string' || !ids.has(endpoint.itemId))
-        fail(failures, 'REFERENCE', `mapping.connectors[${index}].${end}.itemId`, `known ${kind} endpoint`, endpoint.itemId);
-    }
-  });
+  verifyConnectorTargets(map, failures, targets);
   list(map, 'containment').forEach((row, index) => {
     if (!isRecord(row)) return;
     if (typeof row.id === 'string' && !endpointIds.has(row.id)) fail(failures, 'REFERENCE', `mapping.containment[${index}].id`, 'known member', row.id);
