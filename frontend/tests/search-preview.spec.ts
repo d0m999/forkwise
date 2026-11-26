@@ -54,7 +54,7 @@ test("宽窗自动首卡阅读后缩窄保留预览而不是退回列表", async
   await dialog.getByRole("searchbox", { name: "关键词" }).fill("库存");
   await expect(preview.getByText("1 / 1", { exact: true })).toBeVisible();
   await preview.getByLabel("只读正文滚动区域").press("ArrowDown");
-  await page.setViewportSize({ width: 650, height: 700 });
+  await page.setViewportSize({ width: 760, height: 900 });
   await expect(preview).toBeVisible();
   await expect(dialog.getByRole("button", { name: "返回结果列表", exact: true })).toBeVisible();
   await expect(preview.getByText("1 / 1", { exact: true })).toBeVisible();
@@ -245,7 +245,14 @@ test("40/60只读全文首命中导航，切卡不动地图，窄窗列表与预
     d.querySelector(".search-preview")!.getBoundingClientRect().width,
   ]);
   expect(widths[0]! / (widths[0]! + widths[1]!)).toBeCloseTo(0.4, 2);
-  await preview.getByRole("button", { name: "下一处", exact: true }).click();
+  const openCard = preview.getByRole("button", { name: "在画布中打开", exact: true });
+  const nextHit = preview.getByRole("button", { name: "下一处", exact: true });
+  await expect(openCard).toBeEnabled();
+  const navigationBackground = await nextHit.evaluate(
+    (element) => getComputedStyle(element).backgroundColor,
+  );
+  await expect(openCard).not.toHaveCSS("background-color", navigationBackground);
+  await nextHit.click();
   await expect(preview.getByText("2 / 2", { exact: true })).toBeVisible();
   await expect(
     preview.getByRole("button", { name: "下一处", exact: true }),
@@ -260,12 +267,14 @@ test("40/60只读全文首命中导航，切卡不动地图，窄窗列表与预
   expect((await workspace.state()).project.revision).toBe(
     before.project.revision,
   );
-  await page.setViewportSize({ width: 650, height: 700 });
+  await page.setViewportSize({ width: 760, height: 900 });
   await expect(preview).toBeVisible();
   await dialog
     .getByRole("button", { name: "返回结果列表", exact: true })
     .click();
   await expect(preview).not.toBeVisible();
+  await expect(dialog.getByRole("searchbox", { name: "关键词", exact: true })).toHaveValue("库存");
+  await expect(dialog.locator("[data-card-id=alpha]")).toHaveAttribute("aria-selected", "true");
   await dialog.locator("[data-card-id=beta]").click();
   await expect(
     preview.getByRole("heading", { name: "beta", exact: true }),
@@ -971,9 +980,15 @@ test("表格同偏移命中按单元格保位，导航横向显露宽表格和�
         host = element.closest<HTMLElement>(".imported-table, pre")!;
       const rect = range.getBoundingClientRect(),
         bounds = host.getBoundingClientRect();
+      // Scroll limits can leave both edges within the same device pixel.
+      const devicePixel = (edge: number) => Math.round(edge * devicePixelRatio);
       return {
-        visible: rect.left >= bounds.left && rect.right <= bounds.right,
+        visible:
+          devicePixel(rect.left) >= devicePixel(bounds.left) &&
+          devicePixel(rect.right) <= devicePixel(bounds.right),
         cell: element.closest<HTMLElement>("[data-cell]")?.dataset.cell,
+        hostTag: host.tagName,
+        scrollLeft: host.scrollLeft,
       };
     });
   await expect.poll(async () => (await visibleHit()).visible).toBe(true);
@@ -986,6 +1001,9 @@ test("表格同偏移命中按单元格保位，导航横向显露宽表格和�
   await preview.getByRole("button", { name: "下一处" }).click();
   await expect(preview.getByText("3 / 3", { exact: true })).toBeVisible();
   await expect.poll(async () => (await visibleHit()).visible).toBe(true);
+  const codeHit = await visibleHit();
+  expect(codeHit.hostTag).toBe("PRE");
+  expect(codeHit.scrollLeft).toBeGreaterThan(0);
 });
 
 test("正文查找快速改回已完成的关键词不会停在等待状态", async ({
