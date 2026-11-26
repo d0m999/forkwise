@@ -111,3 +111,64 @@ test("正文图片期望宽保存、窄面板临时约束、一次手势一次�
     )
     .toBeUndefined();
 });
+
+for (const folded of [false, true]) {
+  test(`正文图片拖宽保存后留在原阅读位置${folded ? '，前置章节保持折叠' : ''}`, async ({ page, workspace }) => {
+    await place(page, '正文图片调宽阅读');
+    const state = await workspace.state(), card = state.cards[0]!;
+    const execute = (type: string, payload: unknown, expected: unknown = null) => workspace.execute(page, {
+      commandId: crypto.randomUUID(), projectId: state.project.id, type, payload, expected,
+    });
+    await execute('asset.save', { id: 'reading-image', name: '图文段落.svg', mime: 'image/svg+xml', base64: picture.toString('base64') });
+    await execute('body.edit', { id: card.id, blocks: [
+      ...(folded ? [
+        { id: 'fold-heading', type: 'heading', level: 1, text: '预先收起的章节' },
+        { id: 'fold-text', type: 'text', text: '折叠之后不占高度。'.repeat(100) },
+        { id: 'open-heading', type: 'heading', level: 1, text: '正在阅读的章节' },
+      ] : []),
+      ...Array.from({ length: 9 }, (_, i) => ({ id: `before-${i}`, type: 'text', text: `第 ${i} 段，记录当前阅读位置。`.repeat(6) })),
+      { id: 'reading-photo', type: 'image', assetId: 'reading-image', name: '图文段落.svg', mime: 'image/svg+xml', naturalWidth: 1200, naturalHeight: 600, width: 300 },
+      ...Array.from({ length: 8 }, (_, i) => ({ id: `after-${i}`, type: 'text', text: '图片后面的段落。'.repeat(12) })),
+    ] }, card.body.versionId);
+    await page.getByRole('button', { name: '编辑正文', exact: true }).click();
+    const block = page.locator('[data-block-id="reading-photo"]'), image = block.locator('img');
+    if (folded) {
+      await page.getByRole('button', { name: '收起：预先收起的章节', exact: true }).click();
+      await expect(page.locator('[data-block-id="fold-text"]')).toBeHidden();
+    }
+    await expect(image).toHaveJSProperty('naturalWidth', 1200);
+    const target = await image.evaluate(el => {
+      const scroll = el.closest('.board-scroll')!;
+      scroll.scrollTop += el.getBoundingClientRect().top - scroll.getBoundingClientRect().top - 100;
+      const bounds = el.getBoundingClientRect();
+      const x = bounds.x + bounds.width / 2, y = bounds.y + bounds.height / 2;
+      return { x, y, visible: document.elementFromPoint(x, y) === el };
+    });
+    expect(target.visible).toBe(true);
+    await page.mouse.click(target.x, target.y);
+    const scrollState = () => image.evaluate(el => ({ top: el.getBoundingClientRect().top, scroll: el.closest('.board-scroll')!.scrollTop }));
+    const before = await scrollState();
+    expect(before.scroll).toBeGreaterThan(200);
+    const beforeRevision = (await workspace.state()).project.revision;
+    const grip = page.getByRole('slider', { name: '调整正文图片宽度' });
+    const bounds = (await grip.boundingBox())!;
+    const x = bounds.x + bounds.width / 2, y = bounds.y + bounds.height / 2;
+    await page.mouse.move(x, y);
+    await page.mouse.down();
+    await page.mouse.move(x - 55, y, { steps: 8 });
+    await page.mouse.up();
+    await expect.poll(async () => (await workspace.state()).cards[0]!.body.blocks.find(b => b.id === 'reading-photo')!.width).toBe(245);
+    await expect(page.getByRole('status')).toHaveText('已保存到本机');
+    const resized = await scrollState();
+    expect(Math.abs(resized.top - before.top)).toBeLessThanOrEqual(1);
+    expect(Math.abs(resized.scroll - before.scroll)).toBeLessThanOrEqual(1);
+    const revision = (await workspace.state()).project.revision;
+    expect(revision).toBe(beforeRevision + 1);
+    if (folded) await expect(page.locator('[data-block-id="fold-text"]')).toBeHidden();
+    await page.getByRole('button', { name: '查看大图', exact: true }).click();
+    await page.keyboard.press('Escape');
+    await expect(block).toBeFocused();
+    expect(await scrollState()).toEqual(resized);
+    expect((await workspace.state()).project.revision).toBe(revision);
+  });
+}

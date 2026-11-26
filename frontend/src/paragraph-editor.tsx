@@ -169,6 +169,7 @@ export function ParagraphEditor({
   const gifPreferences = useRef(new Map<string, boolean>());
   const [viewer, setViewer] = useState<{ block: Block; anchor: ReadingAnchor | null } | null>(null);
   const returningFromImage = useRef<typeof viewer>(null);
+  const imageWidthReading = useRef<ReadingAnchor | null>(null);
   function openImage(block: Block) {
     const scroller = element.current!.closest<HTMLElement>('.board-scroll')!;
     onFinish();
@@ -364,6 +365,11 @@ export function ParagraphEditor({
     for (const node of Array.from(editor.children)) {
       const child = node as HTMLElement;
       child.hidden = hidden.has(child.dataset.blockId!);
+    }
+    if (imageWidthReading.current) {
+      const scroller = editor.closest<HTMLElement>('.board-scroll')!;
+      restoreReadingAnchor(scroller, imageWidthReading.current);
+      imageWidthReading.current = null;
     }
     const measure = () => {
       const top = wrap.getBoundingClientRect().top;
@@ -1538,6 +1544,10 @@ export function ParagraphEditor({
             const current = read(), index = current.findIndex(b => b.id === active.id);
             if (index < 0 || !sameBlock(current[index]!, active)) { setNotice('原图片已变化，请重新选择'); return; }
             if (sameBlock(active, next)) return;
+            if (next.width !== active.width && !composing.current) {
+              const scroller = imageTarget.node.closest<HTMLElement>('.board-scroll')!;
+              imageWidthReading.current = captureReadingAnchor(scroller);
+            }
             current[index] = next;
             apply(current, { blockId: active.id, offset: 0 }, 'formatImage');
           }} />}

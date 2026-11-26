@@ -1395,9 +1395,31 @@ body:has(.workspace > .project-nav) :is(.card-floating, .text-actions, .shape-te
 .body-image-actions { position: absolute; bottom: calc(var(--body-control-gap) + var(--body-save-state-clearance, 0px)); left: var(--body-content-padding); right: var(--body-content-padding); z-index: 9; max-height: 40%; overflow: auto; background: var(--body-media-background); }
 .body-image-actions > button, .body-image-actions > .body-image-details { background: var(--body-media-background); }
 .body-image-viewer { position: fixed; inset: 0; z-index: 1000; display: flex; flex-direction: column; background: var(--image-viewer-background); color: var(--image-viewer-ink); }
-.body-image-viewer-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: var(--body-control-gap); padding: var(--body-content-padding); }
+.body-image-viewer-toolbar { position: relative; display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: var(--body-control-gap); padding: var(--body-content-padding); }
 .body-image-viewer-toolbar button { color: inherit; }
 .body-image-viewer-toolbar button:hover { color: var(--image-viewer-ink); background: var(--editor-focus); }
+.body-image-viewer-feedback {
+  position: absolute;
+  z-index: 1;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: var(--body-control-gap);
+  width: max-content;
+  max-width: calc(100% - 2 * var(--body-content-padding));
+  box-sizing: border-box;
+  padding: var(--body-control-gap) var(--body-content-padding);
+  border-radius: var(--body-status-radius);
+  background: var(--image-viewer-background);
+  text-align: center;
+  pointer-events: none;
+}
+.body-image-viewer-feedback:empty { display: none; }
+.body-image-viewer-feedback button { pointer-events: auto; }
 .body-image-stage { position: relative; flex: 1; min-height: 0; overflow: hidden; display: flex; align-items: center; justify-content: center; touch-action: none; cursor: grab; }
 .body-image-stage:active { cursor: grabbing; }
 :root { --image-handle-size: 10px; --image-selection-offset: 3px; }

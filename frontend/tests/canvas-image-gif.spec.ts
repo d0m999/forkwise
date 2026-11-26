@@ -107,3 +107,53 @@ test('独立GIF首帧降级保持原图可读，大图Tab跳过禁用播放控�
   await expect(viewer.getByRole('button', { name: '查看原图', exact: true })).toBeFocused();
   await page.keyboard.press('Escape'); await expect(visual).toBeFocused();
 });
+
+test('窄窗旋转过的小裁剪动图失败提示可读，重试后仍保画布裁剪与焦点', async ({ page, workspace }) => {
+  await page.setViewportSize({ width: 760, height: 900 });
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  const projectId = (await workspace.state()).project.id;
+  const execute = (type: string, payload: unknown) => workspace.execute(page, {
+    commandId: crypto.randomUUID(), projectId, type, payload, expected: null,
+  });
+  const bytes = twoFrameGif();
+  await execute('asset.save', { id: 'cropped-gif-asset', name: '裁剪后动图.gif', mime: 'image/gif', base64: bytes.toString('base64') });
+  await execute('image.create', { id: 'cropped-gif-item', content: { assetId: 'cropped-gif-asset', crop: { x: 0.35, y: 0.3, width: 0.12, height: 0.2 } },
+    pose: { x: 170, y: 155, width: 100, height: 100, rotation: 90 } });
+  await page.reload();
+  const visual = page.getByRole('img', { name: '裁剪后动图.gif', exact: true });
+  await expect(page.getByRole('button', { name: '播放动图', exact: true })).toBeEnabled();
+  let reads = 0;
+  await page.route('**/assets/cropped-gif-asset/content', async route => {
+    if (++reads === 1) await route.fulfill({ status: 503, body: 'temporary read failure' });
+    else await route.continue();
+  });
+  const before = await workspace.state();
+  await visual.dblclick();
+  const viewer = page.getByRole('dialog', { name: '图片大图' });
+  const retry = viewer.getByRole('button', { name: '重新加载动图', exact: true });
+  await expect(retry).toBeVisible();
+  const alert = viewer.locator('[role="alert"]');
+  await expect(alert).toContainText('动图加载失败');
+  const bounds = await alert.boundingBox();
+  expect(bounds!.width).toBeGreaterThan(100);
+  expect(bounds!.height).toBeLessThan(80);
+  await expect(viewer.getByRole('alert')).toBeVisible();
+  expect(await alert.evaluate(el => {
+    const bounds = el.getBoundingClientRect();
+    for (let parent = el.parentElement; parent; parent = parent.parentElement) {
+      const style = getComputedStyle(parent), clip = parent.getBoundingClientRect();
+      if (['hidden', 'clip'].includes(style.overflowX) && (clip.left > bounds.left || clip.right < bounds.right)) return false;
+      if (['hidden', 'clip'].includes(style.overflowY) && (clip.top > bounds.top || clip.bottom < bounds.bottom)) return false;
+    }
+    return true;
+  })).toBe(true);
+  expect(bounds!.x).toBeGreaterThanOrEqual(0);
+  expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(760);
+  await retry.click();
+  await expect(viewer.getByRole('button', { name: '播放动图', exact: true })).toBeEnabled();
+  await expect(alert).toHaveCount(0);
+  expect(reads).toBe(2);
+  await page.keyboard.press('Escape');
+  await expect(visual).toBeFocused();
+  expect(await workspace.state()).toEqual(before);
+});

@@ -1,11 +1,23 @@
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 
-export function ImageViewerFrame({ label, width, height, resetKey, toolbar, children, onClose }: {
+export function useImageViewerRetry() {
+  const [attempt, setAttempt] = useState(0);
+  const [message, setFailure] = useState<string | null>(null);
+  const retry = () => {
+    setFailure(null);
+    setAttempt(value => value + 1);
+  };
+  return { attempt, setFailure, loadFailure: message ? { message, retry } : undefined };
+}
+
+export function ImageViewerFrame({ label, width, height, resetKey, toolbar, loadFailure, children, onClose }: {
   label: string; width: number; height: number; resetKey?: string; toolbar?: ReactNode;
+  loadFailure?: { message: string; retry: () => void } | undefined;
   children: (style: CSSProperties) => ReactNode; onClose: () => void;
 }) {
   const dialog = useRef<HTMLDivElement>(null), stage = useRef<HTMLDivElement>(null);
+  const closeButton = useRef<HTMLButtonElement>(null);
   const [view, setView] = useState({ scale: 1, x: 0, y: 0, fit: true });
   const pan = useRef<{ pointer: number; x: number; y: number; originalX: number; originalY: number } | null>(null);
   function fit() {
@@ -13,7 +25,7 @@ export function ImageViewerFrame({ label, width, height, resetKey, toolbar, chil
     setView({ scale: Math.min(1, area.clientWidth / width, area.clientHeight / height), x: 0, y: 0, fit: true });
   }
   useLayoutEffect(fit, [width, height, resetKey]);
-  useLayoutEffect(() => { dialog.current!.querySelector<HTMLButtonElement>('[aria-label="关闭大图"]')!.focus(); }, []);
+  useLayoutEffect(() => { closeButton.current!.focus(); }, []);
   useEffect(() => {
     const observer = new ResizeObserver(() => { if (view.fit) fit(); });
     observer.observe(stage.current!); return () => observer.disconnect();
@@ -40,7 +52,16 @@ export function ImageViewerFrame({ label, width, height, resetKey, toolbar, chil
       <button aria-label="缩小图片" onClick={() => zoom(0.8)}>−</button>
       <output aria-label="图片缩放比例">{Math.round(view.scale * 100)}%</output>
       <button aria-label="放大图片" onClick={() => zoom(1.25)}>＋</button>
-      {toolbar}<button aria-label="关闭大图" onClick={onClose}>关闭</button>
+      {toolbar}
+      <div className="body-image-viewer-feedback" data-image-viewer-gif-feedback="" />
+      {loadFailure && <div className="body-image-viewer-feedback">
+        <span role="alert">{loadFailure.message}</span>
+        <button type="button" onClick={event => {
+          if (document.activeElement === event.currentTarget) closeButton.current!.focus();
+          loadFailure.retry();
+        }}>重新加载图片</button>
+      </div>}
+      <button ref={closeButton} aria-label="关闭大图" onClick={onClose}>关闭</button>
     </div>
     <div ref={stage} className="body-image-stage" onWheel={event => { event.preventDefault(); event.stopPropagation(); zoom(event.deltaY < 0 ? 1.1 : 1 / 1.1); }}
       onPointerDown={event => {

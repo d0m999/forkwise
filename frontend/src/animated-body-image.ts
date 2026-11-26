@@ -16,8 +16,9 @@ export function animateBodyImage(
   preferences: Map<string, boolean>,
   preferenceKey?: string,
 ) {
-  const button = (canvas.closest("[data-gif-scope]") ??
-    canvas.parentElement)!.querySelector<HTMLButtonElement>(
+  const scope = canvas.closest("[data-gif-scope]");
+  const viewerFeedback = scope?.querySelector("[data-image-viewer-gif-feedback]");
+  const button = (scope ?? canvas.parentElement)!.querySelector<HTMLButtonElement>(
     "[data-gif-toggle]",
   )!;
   const key =
@@ -105,10 +106,10 @@ export function animateBodyImage(
     label('retry', '重新加载动图');
     if (!failure) {
       failure = document.createElement("span");
-      failure.className = "image-load-error";
+      if (!viewerFeedback) failure.className = "image-load-error";
       failure.setAttribute("role", "alert");
       failure.textContent = "动图加载失败，原文件仍保留";
-      canvas.parentElement!.append(failure);
+      (viewerFeedback ?? canvas.parentElement)!.append(failure);
     }
   }
   const toggle = (event: MouseEvent) => {
@@ -148,6 +149,9 @@ export function animateBodyImage(
     decoder = undefined;
     failure?.remove();
     failure = undefined;
+    if (viewerFeedback && document.activeElement === button) {
+      scope?.querySelector<HTMLButtonElement>('[aria-label="关闭大图"]')?.focus({ preventScroll: true });
+    }
     button.disabled = true;
     label('loading', '正在加载动图');
     canvas.dataset.playing = "false";

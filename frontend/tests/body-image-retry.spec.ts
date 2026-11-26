@@ -14,8 +14,11 @@ test("GIF临时读取失败可在正文和大图同框重试，真实帧恢复�
   page.on("pageerror", (error) => errors.push(error.message));
   let requests = 0,
     failNext = true;
+  let releaseViewerRetry!: () => void;
+  const viewerRetryGate = new Promise<void>((resolve) => { releaseViewerRetry = resolve; });
   await page.route("**/assets/*/content", async (route) => {
     requests++;
+    if (requests === 4) await viewerRetryGate;
     if (failNext) {
       failNext = false;
       await route.fulfill({ status: 503, body: "temporary read failure" });
@@ -89,10 +92,21 @@ test("GIF临时读取失败可在正文和大图同框重试，真实帧恢复�
     large = viewer.getByRole("img");
   await expect.poll(() => requests).toBe(3);
   const largeOriginal = await large.elementHandle();
-  await viewer
-    .getByRole("button", { name: "重新加载动图", exact: true })
-    .click();
-  await expect.poll(() => requests).toBe(4);
+  const viewerRetry = viewer.getByRole("button", { name: "重新加载动图", exact: true });
+  const close = viewer.getByRole("button", { name: "关闭大图", exact: true });
+  try {
+    await close.focus();
+    await page.keyboard.press("Shift+Tab");
+    await expect(viewerRetry).toBeFocused();
+    await page.keyboard.press("Enter");
+    await expect.poll(() => requests).toBe(4);
+    await expect(viewer.getByRole("button", { name: "正在加载动图", exact: true })).toBeDisabled();
+    await expect(close).toBeFocused({ timeout: 2000 });
+    await page.keyboard.press("Tab");
+    await expect(viewer.getByRole("button", { name: "适应窗口", exact: true })).toBeFocused();
+  } finally {
+    releaseViewerRetry();
+  }
   expect(await large.evaluate((el, prior) => el === prior, largeOriginal)).toBe(
     true,
   );

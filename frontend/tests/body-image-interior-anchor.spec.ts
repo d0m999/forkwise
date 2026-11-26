@@ -77,9 +77,21 @@ test("高图内部阅读点在真实宽高变化和大图关闭后仍指向同�
   expect(
     Math.abs(narrow.fraction - original.fraction) * narrow.height,
   ).toBeLessThanOrEqual(1);
-  await image.click({
-    position: { x: narrow.width / 2, y: narrow.height * narrow.fraction + 70 },
+  // Click the visible pixels directly. Locator.click can first scroll a
+  // partially clipped tall image away from the position under test.
+  const point = await image.evaluate((el) => {
+    const photo = el.getBoundingClientRect();
+    const scroller = el.closest(".board-scroll")!.getBoundingClientRect();
+    const x = photo.left + photo.width / 2;
+    const y = Math.max(photo.top, scroller.top) + 72;
+    return { x, y, hitsImage: document.elementFromPoint(x, y) === el };
   });
+  expect(point.hitsImage).toBe(true);
+  await page.mouse.click(point.x, point.y);
+  const beforeOpen = await measure();
+  expect(
+    Math.abs(beforeOpen.fraction - original.fraction) * beforeOpen.height,
+  ).toBeLessThanOrEqual(1);
   await page.getByRole("button", { name: "查看大图", exact: true }).click();
   await page.setViewportSize({ width: 1360, height: 900 });
   await page.getByRole("button", { name: "关闭大图", exact: true }).click();
