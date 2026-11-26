@@ -3796,11 +3796,9 @@ function Workspace() {
           {state && <ProjectSearch key={state.project.id} projectId={state.project.id} revision={state.project.revision} tags={state.tags ?? []} cards={state.cards} onOpen={openSearch} disabled={busy || historyBlocked} />}
           <ImportPackage
             disabled={busy || historyBlocked}
-            onImported={(id) => {
-              void select(id).finally(() => {
-                if (!workspaceRevoked.current) void api.projects().then(publishProjects).catch(() => { /* 保留当前可见项目 */ });
-              });
-            }}
+            onImported={(id) => select(id).finally(() => {
+              if (!workspaceRevoked.current) void api.projects().then(publishProjects).catch(() => { /* 保留当前可见项目 */ });
+            })}
           />
           {state && (
             <button

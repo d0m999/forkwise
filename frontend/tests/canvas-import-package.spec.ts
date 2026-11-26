@@ -95,10 +95,31 @@ test('预览校验后导入隔离研究：取消无副作用、确认后逐项�
   await expect(second.trigger).toBeFocused();
   expect((await projectsOf(page, workspace.origin)).length).toBe(tabsBefore);
 
+  await page.setViewportSize({ width: 760, height: 900 });
   const third = await openPackage(page, packagePath!);
   await third.dialog.getByLabel('新研究名称').fill('导入副本·中文');
-  await third.dialog.getByRole('button', { name: '导入为新研究', exact: true }).click();
+  await page.keyboard.press('Shift+Tab');
+  const confirm = third.dialog.getByRole('button', { name: '导入为新研究', exact: true });
+  await expect(confirm).toBeFocused();
+  await expect(confirm).toBeInViewport({ ratio: 1 });
+  let release!: () => void;
+  const opening = new Promise<void>(resolve => { release = resolve; });
+  const openingMap = (url: URL) => /^\/api\/mapping\/projects\/[^/]+\/map$/.test(url.pathname) &&
+    url.pathname !== `/api/mapping/projects/${source.project.id}/map`;
+  await page.route(openingMap, async route => {
+    await opening;
+    await route.continue();
+  });
+  try {
+    await page.keyboard.press('Enter');
+    await expect(third.dialog).toHaveCount(0);
+    await expect(third.trigger).toBeDisabled();
+  } finally {
+    release();
+  }
   await expect(page.getByRole('tab', { selected: true })).toContainText('导入副本·中文');
+  await page.unroute(openingMap);
+  await expect(third.trigger).toBeFocused({ timeout: 4000 });
   await expect(page.getByRole('tab')).toHaveCount(tabsBefore + 1);
   await expect(page.getByRole('tab', { name: new RegExp(manifest.mapping.project.name) })).toBeVisible();
 

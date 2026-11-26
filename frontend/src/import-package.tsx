@@ -53,7 +53,7 @@ function readAttempt(key: string): Attempt | null {
 
 export function ImportPackage({ disabled, onImported }: {
   disabled: boolean;
-  onImported: (projectId: string) => void;
+  onImported: (projectId: string) => Promise<void>;
 }) {
   const picker = useRef<HTMLInputElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
@@ -65,6 +65,7 @@ export function ImportPackage({ disabled, onImported }: {
   // 迟到的预览结果属于已经关闭或已被替换的那一次选择，直接丢弃。
   const selection = useRef(0);
   const [open, setOpen] = useState(false);
+  const [restoreTriggerFocus, setRestoreTriggerFocus] = useState(false);
   const [source, setSource] = useState<{
     fileName: string; base64: string; attemptKey: string; preview: ImportPreview; retryReadFailed: boolean;
   } | null>(null);
@@ -87,6 +88,12 @@ export function ImportPackage({ disabled, onImported }: {
     else if (verifying) form.current?.focus({ preventScroll: true });
     else closeButton.current?.focus({ preventScroll: true });
   }, [open, source, verifying]);
+
+  useEffect(() => {
+    if (!restoreTriggerFocus || disabled) return;
+    setRestoreTriggerFocus(false);
+    if (!open && document.activeElement === document.body) trigger.current?.focus({ preventScroll: true });
+  }, [disabled, open, restoreTriggerFocus]);
 
   function close() {
     if (submitting) return;
@@ -202,12 +209,13 @@ export function ImportPackage({ disabled, onImported }: {
       setPhase('idle');
     }
     if (refusal) setMessage(refusal.message);
+    let closedAfterImport = false;
     try {
       sessionStorage.removeItem(key);
       if (!refusal) {
         dialog.current?.close();
         setOpen(false);
-        requestAnimationFrame(() => trigger.current?.focus({ preventScroll: true }));
+        closedAfterImport = true;
       }
     } catch {
       const result = refusal?.message ?? '项目已导入';
@@ -220,7 +228,11 @@ export function ImportPackage({ disabled, onImported }: {
     }
     if (!refusal) {
       setSource(null);
-      onImported(attempt.projectId);
+      try {
+        await onImported(attempt.projectId);
+      } finally {
+        if (closedAfterImport) setRestoreTriggerFocus(true);
+      }
     }
   }
 
