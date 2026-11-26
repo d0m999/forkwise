@@ -119,12 +119,12 @@ import type { Tag } from "../../backend/src/mapping/contracts";
 const brandMark = new URL('../../assets/brand/forkwise-basic-kit/01-logos/logo-mark.svg', import.meta.url).href;
 
 // 结构类命令的读已过期失败靠一次刷新收敛：命令集与错误码集中在这里，新增错误码不必改条件里的长行。
-const STALE_READ_COMMANDS = new Set(['connector.reconnect', 'connector.path', 'connector.move', 'connector.delete', 'connector.style', 'connector.reverse', 'connector.label', 'canvas.layer', 'canvas.duplicate', 'canvas.paste', 'canvas.cut', 'canvas.paste-cut']);
+const STALE_READ_COMMANDS = new Set(['attachment.attach', 'attachment.detach', 'connector.reconnect', 'connector.path', 'connector.move', 'connector.delete', 'connector.style', 'connector.reverse', 'connector.label', 'canvas.layer', 'canvas.duplicate', 'canvas.paste', 'canvas.cut', 'canvas.paste-cut']);
 const STALE_READ_CODES = new Set(['VERSION_CONFLICT', 'NOT_FOUND', 'ID_CONFLICT', 'CUT_STATE_CONFLICT', 'CUT_NOT_FOUND', 'CUT_RESTORE_MISSING', 'CUT_OUTER_CHANGED', 'CUT_OUTER_UNKNOWN']);
 // 一次提交的附加回调集中在具名选项里，避免位置参数与 undefined 占位。
 // persist 必须在真正发送前落盘最终命令；重试同一请求时沿用同一份 options，否则成功回执不会清理恢复记录。
 type ActionOptions = {
-  beforeSubmit?: () => boolean | Promise<boolean>;
+  beforeSubmit?: (attemptStartEpoch: number, actionEpoch: number) => boolean | Promise<boolean>;
   sealed?: boolean;
   onSettled?: () => void;
   persist?: (command: Command) => void;
@@ -331,6 +331,9 @@ function matchesFailedDraft(draft: Draft | undefined, failure: DraftSaveFailure)
 function failureMessage(error: unknown) {
   return error instanceof Error ? error.message : "本机服务暂时不可用";
 }
+function isShapePlacementOrAttachment(command: Command) {
+  return command.type === "shape.create" || command.type === "attachment.attach" || command.type === "attachment.detach";
+}
 
 function draftKey(projectId: string, cardId: string, field: Draft["field"]) {
   return JSON.stringify([projectId, cardId, field]);
@@ -343,19 +346,13 @@ function Workspace() {
   const [guideAccess, setGuideAccess] = useState<'pending' | 'allowed' | 'retry' | 'denied'>('pending');
   const guideDialog = useRef<HTMLDialogElement>(null);
   const navigation = useRef<HTMLButtonElement>(null);
-  const [attachTarget, setAttachTarget] = useState<string | null>(null);
-  useEffect(() => {
-    if (!attachTarget) return;
-    const onKey = (event: KeyboardEvent) => {
-      if (event.isComposing || event.key === 'Process') return;
-      if (event.key !== 'Escape') return;
-      event.preventDefault();
-      event.stopPropagation();
-      setAttachTarget(null);
-    };
-    window.addEventListener('keydown', onKey, true);
-    return () => window.removeEventListener('keydown', onKey, true);
-  }, [attachTarget]);
+  type AnnotationPick = { projectId: string; itemId: string; trigger: HTMLButtonElement };
+  const [annotationPick, setAnnotationPickView] = useState<AnnotationPick | null>(null);
+  const annotationPickIntent = useRef<AnnotationPick | null>(null);
+  function setAnnotationPick(next: AnnotationPick | null) {
+    annotationPickIntent.current = next;
+    setAnnotationPickView(next);
+  }
   const canvasSelection = useCanvasSelection(state);
   const disabledMovePointer = useRef<{ card: Element; pointerId: number } | null>(null);
   const selection = canvasSelection.directItemIds, setSelection = canvasSelection.setItems;
@@ -372,7 +369,12 @@ function Workspace() {
   const [frameDrawMemberIds, setFrameDrawMemberIds] = useState<string[]>([]);
   const [framePreview, setFramePreview] = useState<FrameRect | null>(null);
   const frameDrag = useRef<{ projectId: string; state: ProjectState; start: { x: number; y: number } } | null>(null);
-  const [shapePreset, setShapePreset] = useState<ShapeType | null>(null);
+  const [shapePreset, setShapePresetView] = useState<ShapeType | null>(null);
+  const shapePlacement = useRef<{ preset: ShapeType } | null>(null);
+  function setShapePreset(preset: ShapeType | null) {
+    shapePlacement.current = preset ? { preset } : null;
+    setShapePresetView(preset);
+  }
   const shapeCreating = useRef(false);
   const [snap, setSnap] = useState(true);
   const [guides, setGuides] = useState<Guide[]>([]);
@@ -427,7 +429,36 @@ function Workspace() {
   }, [state, canvasSelection.value]);
   const selectedConnector = selectedConnectors.length === 1 ? selectedConnectors[0]! : null;
   const exclusiveConnector = !canvasSelection.value.targets.length && !selectedFrameIds.length ? selectedConnector : null;
-  const exclusiveCardItemId = !selectedConnectors.length && !selectedFrameIds.length ? singleItemId : null;
+  const exclusiveItemId = !selectedConnectors.length && !selectedFrameIds.length ? singleItemId : null;
+  const attachmentPick = annotationPick?.projectId === state?.project.id && annotationPick?.itemId === exclusiveItemId ? annotationPick : null;
+  useEffect(() => {
+    if (!attachmentPick) {
+      if (annotationPick) setAnnotationPick(null);
+      return;
+    }
+    const onKey = (event: KeyboardEvent) => {
+      const target = event.target as Element;
+      const canvasTarget = target.id === "project-canvas" || target.closest(".react-flow__node-thought, .react-flow__pane");
+      const sourceToolbar = attachmentPick.trigger.closest("[role=toolbar]");
+      if (event.key !== "Escape" || event.defaultPrevented || event.isComposing || event.keyCode === 229 ||
+        !(canvasTarget || sourceToolbar?.contains(target)) ||
+        target.closest("input, textarea, [contenteditable=true], dialog, [role=dialog], [role=menu], [aria-expanded=true], .text-color-panel")) return;
+      event.preventDefault();
+      event.stopPropagation();
+      setAnnotationPick(null);
+      if (attachmentPick.trigger.isConnected) attachmentPick.trigger.focus({ preventScroll: true });
+    };
+    const outside = (event: PointerEvent) => {
+      const target = event.target as Element;
+      if (!attachmentPick.trigger.contains(target) && !target.closest(".react-flow__node-thought, [data-workspace-guide]")) setAnnotationPick(null);
+    };
+    window.addEventListener("keydown", onKey, true);
+    document.addEventListener("pointerdown", outside, true);
+    return () => {
+      window.removeEventListener("keydown", onKey, true);
+      document.removeEventListener("pointerdown", outside, true);
+    };
+  }, [annotationPick, attachmentPick]);
   function setSelectedConnector(id: string | null) { setSelectedConnectors(id ? [id] : []); }
   const strokeSelected = selection.some(id => state?.strokes?.some(stroke => stroke.item.id === id));
   const [layerHold, setLayerHold] = useState<{ projectId: string; generation: number } | null>(null);
@@ -679,6 +710,7 @@ function Workspace() {
   const [draftFailure, setDraftFailure] = useState<DraftSaveFailure | null>(null);
   const [savingDraft, setSavingDraft] = useState<CardSaveOwner | null>(null);
   const [savingBodyAction, setSavingBodyAction] = useState<CardSaveOwner | null>(null);
+  const [previousProjectFailure, setPreviousProjectFailure] = useState<{ commandId: string; message: string } | null>(null);
   const pendingAction = useRef<{
     command: Command;
     onDone?: () => void;
@@ -1290,7 +1322,8 @@ function Workspace() {
       expected: Object.fromEntries(prepared.map(line => [line.id, line.versionId])), payload: { ids: prepared.map(line => line.id) } });
   }
   function chooseSelectionTool() {
-    if (strokeDraw.hasPending() || connectorCreate.hasPending()) return;
+    if (strokeDraw.hasPending() || connectorCreate.hasPending()) return false;
+    setAnnotationPick(null);
     connectorEdit.cancel();
     connectorCreate.deactivate();
     strokeDraw.setMode(null);
@@ -1299,8 +1332,10 @@ function Workspace() {
     texts.setPlacing(false);
     setPanTool(false);
     setFrameTool(false);
+    return true;
   }
   function beginCreationToolChoice() {
+    setAnnotationPick(null);
     const epoch = ++editorEpoch.current;
     connectorEdit.cancel();
     connectorCreate.deactivate();
@@ -1529,12 +1564,18 @@ function Workspace() {
     setWorkspaceAccess('ready');
     return true;
   };
+  function belongsToPreviousProject(command: Command) {
+    return isShapePlacementOrAttachment(command) && command.projectId !== authority.current?.project.id;
+  }
+  function blocksNewAction(commandId?: string) {
+    const pending = pendingAction.current?.command;
+    if (!pending || pending.commandId === commandId) return false;
+    if (!belongsToPreviousProject(pending)) fail(new Error("请先重试未完成的保存"));
+    return true;
+  }
   const select = async (id: string, navigationRow?: HTMLButtonElement) => {
     if (historyLock.current || historyCommand.current || strokeDraw.hasPending()) return;
-    if (pendingAction.current) {
-      fail(new Error("请先重试未完成的保存"));
-      return;
-    }
+    if (blocksNewAction()) return;
     editorEpoch.current++;
     breakBodyGroup();
     if (
@@ -1583,6 +1624,10 @@ function Workspace() {
   function nextSaveDraft(excludedCard?: string) {
     return [unconfirmed.current, ...closedDrafts.current, ...Object.values(drafts.current)]
       .find(draft => draft && draft.cardId !== excludedCard) ?? undefined;
+  }
+  function hasActiveCardDraft() {
+    const projectId = authority.current?.project.id, draft = nextSaveDraft();
+    return !!projectId && !!draft && draft.projectId === projectId;
   }
   async function flush(
     limit = Infinity,
@@ -1929,13 +1974,18 @@ function Workspace() {
   async function action(command: Command, onDone?: () => void, options: ActionOptions = {}) {
     // 同一 commandId 的页面内重试不是首次发送：权限类拒绝仍须按结果未知保留恢复记录（D467）。
     const retrying = !!pendingAction.current || !!options.sealed;
+    const previousProject = () => belongsToPreviousProject(command);
+    // A retained, already sent command owns its frozen input, not the active project's tools or drafts.
+    const previousProjectRetry = previousProject() && pendingAction.current?.command === command;
+    const attemptStartEpoch = editorEpoch.current;
+    let actionEpoch = attemptStartEpoch;
     if (connectorCreate.hasPending()) return false;
     if (!retrying && ['thought.create', 'shape.create', 'stroke.create', 'canvas.duplicate', 'canvas.paste'].includes(command.type) && !('placement' in command && command.placement) && authority.current?.project.id === command.projectId)
       Object.assign(command, { placement: { expected: captureSpatial(authority.current) } });
     const imageCommand = command.type.startsWith('image.');
     const backgroundImage = () => imageCommand && command.projectId !== authority.current?.project.id;
     const finishImage = async () => {
-      if (options.beforeSubmit && !(await options.beforeSubmit())) return false;
+      if (options.beforeSubmit && !(await options.beforeSubmit(attemptStartEpoch, actionEpoch))) return false;
       try { await api.execute(command); }
       catch (failure) {
         if (failure instanceof MappingError && ['image.transform', 'image.rotate', 'image.delete', 'image.crop'].includes(command.type) &&
@@ -1949,17 +1999,11 @@ function Workspace() {
     };
     if (backgroundImage()) return finishImage();
     if (historyLock.current || historyCommand.current) return;
-    if (
-      pendingAction.current &&
-      pendingAction.current.command.commandId !== command.commandId
-    ) {
-      fail(new Error("请先重试未完成的保存"));
-      return;
-    }
+    if (blocksNewAction(command.commandId)) return;
     const structural = command.type.startsWith('group.') || command.type.startsWith('frame.') || command.type === 'canvas.delete-selection' || command.type === 'text.delete';
     const resumingStructure = structural && !!pendingAction.current;
-    if (!resumingStructure) {
-      editorEpoch.current++;
+    if (!resumingStructure && !previousProjectRetry) {
+      actionEpoch = ++editorEpoch.current;
       breakBodyGroup();
       if (
         !(await shapeMove.flush()) || !(await connectorLabel.finish()) || !(await shapeText.finish()) || !(await texts.finish()) ||
@@ -1973,7 +2017,7 @@ function Workspace() {
       if (command.type === "stroke.create" && command.projectId !== authority.current?.project.id) {
         fail(new Error("笔迹所属项目已变化，请在原项目明确恢复")); return false;
       }
-      if (options.beforeSubmit && !(await options.beforeSubmit())) return false;
+      if (options.beforeSubmit && !(await options.beforeSubmit(attemptStartEpoch, actionEpoch))) return false;
       if (!retrying) {
         previewPoseAcks.updatePlacement(command);
         if (command.type === 'frame.create' || command.type === 'frame.move')
@@ -2017,12 +2061,13 @@ function Workspace() {
       : null;
     if (savingOwner) setSavingBodyAction(savingOwner);
     setBusy(true);
-    setStatus("正在保存…");
+    if (!previousProject()) setStatus("正在保存…");
     let executed = !!pending.receipt;
     try {
       if (pending.rejected) {
         await refresh(command.projectId);
-        fail(new Error(pending.rejected));
+        if (previousProject()) setPreviousProjectFailure({ commandId: command.commandId, message: pending.rejected });
+        else fail(new Error(pending.rejected));
         return false;
       }
       if (command.type === "stroke.create") { strokeJournal.write(command); scanStrokeRecoveries(); }
@@ -2034,6 +2079,11 @@ function Workspace() {
         executed = true;
       }
       if (command.projectId !== authority.current?.project.id) {
+        if (previousProject()) {
+          pendingAction.current = null;
+          setPreviousProjectFailure(current => current?.commandId === command.commandId ? null : current);
+          return true;
+        }
         if (!(await handoff(command.projectId))) return;
       } else {
         await refresh(command.projectId, pending.selectionIntent);
@@ -2058,10 +2108,13 @@ function Workspace() {
       }
       if (!executed && e instanceof MappingError &&
         ((STALE_READ_COMMANDS.has(command.type) && STALE_READ_CODES.has(e.code)) ||
-          (command.type === 'connector.reconnect' && e.code === 'INVALID_ENDPOINT'))) {
+          (command.type === 'connector.reconnect' && e.code === 'INVALID_ENDPOINT') ||
+          (command.type === 'attachment.attach' && e.status === 400 && e.code === 'INVALID_COMMAND'))) {
         pendingAction.current = null;
         onDone?.();
-        try { await refresh(command.projectId); } catch { /* Retain the explicit rejection if the read also fails. */ }
+        if (authority.current?.project.id === command.projectId) {
+          try { await refresh(command.projectId); } catch { /* Retain the explicit rejection if the read also fails. */ }
+        }
       }
       if ((command.type === "thought.delete" || command.type === "shape.delete" || command.type === "stroke.delete" || command.type.startsWith("tag.") || command.type === "card.tags" || command.type === "card.attachment.add" || command.type === "card.attachment.remove") && e instanceof MappingError && ["VERSION_CONFLICT", "INVALID_ATTACHMENT", "TAG_NAME_CONFLICT", "NOT_FOUND", "UNAUTHORIZED", "PROJECT_FORBIDDEN", "UNTRUSTED_PRINCIPAL"].includes(e.code)) {
         pendingAction.current = null;
@@ -2070,6 +2123,10 @@ function Workspace() {
       if (savingOwner) {
         pending.bodyFailure = { message: failureMessage(e), owner: savingOwner };
         setStatus("保存未完成");
+      } else if (previousProject()) {
+        setPreviousProjectFailure(current => pendingAction.current === pending
+          ? { commandId: command.commandId, message: failureMessage(e) }
+          : current?.commandId === command.commandId ? null : current);
       } else fail(e);
       return false;
     } finally {
@@ -2077,10 +2134,10 @@ function Workspace() {
       setBusy(false);
     }
   }
-  async function abandonStructure() {
-    const pending = pendingAction.current;
-    if (!pending?.rejected || busy) return;
+  async function abandonStructure(pending: NonNullable<typeof pendingAction.current>) {
+    if (pendingAction.current !== pending || !pending.rejected || busy) return;
     setBusy(true);
+    const previousProject = belongsToPreviousProject(pending.command);
     try {
       await refresh(pending.command.projectId);
       if (pendingAction.current !== pending) return;
@@ -2089,18 +2146,25 @@ function Workspace() {
       pending.onSettled?.();
       if (pending.command.type === 'stroke.create') pending.onDone?.();
       if (pending.command.type === 'thought.create') setPlacing(false);
-      if (pending.command.type === 'shape.create') setShapePreset(null);
+      if (pending.command.type === 'shape.create') pending.onDone?.();
       if (pending.command.type === 'frame.edit' && authority.current?.project.id === pending.command.projectId) {
         frameEditorFocus.current = { projectId: pending.command.projectId, id: pending.command.payload.id };
         setFrameEditorEpoch(value => value + 1);
       }
       if (pending.command.type === 'group.scale' || pending.command.type === 'group.rotate90') groupGeometry.discard();
+      if (previousProject) {
+        setPreviousProjectFailure(current => current?.commandId === pending.command.commandId ? null : current);
+        return;
+      }
       setError('');
       setStatus(['thought.create', 'shape.create', 'stroke.create'].includes(pending.command.type)
         ? '已放弃本次创建，可重新放置' : pending.command.type === 'text.delete'
         ? '已保留当前保存状态，请重新明确删除' : pending.command.type.startsWith('frame.')
           ? '已保留当前保存状态，请重新明确分区操作' : '已保留当前保存状态，请重新明确组合操作');
-    } catch (failure) { fail(failure); }
+    } catch (failure) {
+      if (previousProject) setPreviousProjectFailure({ commandId: pending.command.commandId, message: failureMessage(failure) });
+      else fail(failure);
+    }
     finally { setBusy(false); }
   }
   async function createProject() {
@@ -2411,14 +2475,38 @@ function Workspace() {
     } else if (!extend) setSelection([]);
   }
   async function createShape(x: number, y: number) {
-    if (!state || !shapePreset || shapeCreating.current) return;
+    const placement = shapePlacement.current;
+    if (!state || !placement || shapeCreating.current) return;
     shapeCreating.current = true;
+    const projectId = state.project.id, id = crypto.randomUUID();
+    const selectionGeneration = canvasSelection.generation();
+    let submitted = false, epoch: number | undefined;
     try {
       await action({
-        commandId: crypto.randomUUID(), projectId: state.project.id, type: "shape.create", expected: null,
-        payload: { id: crypto.randomUUID(), content: { shapeType: shapePreset, shortText: "" },
+        commandId: crypto.randomUUID(), projectId, type: "shape.create", expected: null,
+        payload: { id, content: { shapeType: placement.preset, shortText: "" },
           pose: { x, y, width: 180, height: 120 } },
-      }, () => setShapePreset(null));
+      }, () => {
+        const current = authority.current;
+        if (workspaceRevoked.current || current?.project.id !== projectId || shapePlacement.current !== placement) return;
+        setShapePreset(null);
+        const shape = current.shapes?.find(value => value.id === id);
+        if (!shape || editorEpoch.current !== epoch || canvasSelection.generation() !== selectionGeneration) return;
+        awaitBodySelection.current = false;
+        clearConnectorSelection();
+        setFrameSelection(null);
+        canvasSelection.set({ targets: [{ kind: "item", itemId: shape.item.id }], enteredGroupId: null });
+      }, { beforeSubmit: (attemptStart, actionEpoch) => {
+        if (submitted) {
+          if (epoch === attemptStart) epoch = actionEpoch;
+          return true; // Settle this command even if a newer UI intent owns the canvas.
+        }
+        if (workspaceRevoked.current || authority.current?.project.id !== projectId ||
+          shapePlacement.current !== placement || editorEpoch.current !== actionEpoch) return false;
+        submitted = true;
+        epoch = actionEpoch;
+        return true;
+      } });
     } finally { shapeCreating.current = false; }
   }
   async function createCard(x: number, y: number) {
@@ -3106,12 +3194,42 @@ function Workspace() {
       !!connectorLabel.session || !!imageGeometry.cropping || texts.hasPending(),
     apply: (operation: LayerOperation) => { void applyLayer(operation); },
   } : undefined;
+  function annotationTargetAvailable() {
+    return authority.current?.project.id === attachmentPick?.projectId && !busy && !historyBlocked &&
+      !historyLock.current && !historyCommand.current && !composition.current && !pendingAction.current &&
+      !connectorCreate.hasPending();
+  }
+  function annotationAction(itemId: string) {
+    if (!state || exclusiveItemId !== itemId) return;
+    const row = state.attachments?.find(value => value.id === itemId);
+    const blocked = busy || historyBlocked || composition.current || !!pendingAction.current;
+    if (row?.target) {
+      const target = state.cards.find(card => card.item.id === row.target?.itemId);
+      if (!target) return;
+      return <button disabled={blocked} title={`附着到：${target.title || "未命名卡片"}`} onClick={() => {
+        void action({ commandId: crypto.randomUUID(), projectId: state.project.id, type: "attachment.detach",
+          expected: { attachment: row.versionId, target: { itemId: target.item.id, versionId: target.item.versionId } },
+          payload: { itemId } });
+      }}>解除附着</button>;
+    }
+    return <button disabled={blocked} aria-pressed={attachmentPick?.itemId === itemId} onClick={event => {
+      if (attachmentPick) { setAnnotationPick(null); return; }
+      if (state.containment?.find(value => value.id === itemId)?.parent) {
+        setError("该批注在框架或组合内，需先移出");
+        return;
+      }
+      if (!chooseSelectionTool()) return;
+      setError("");
+      setAnnotationPick({ projectId: state.project.id, itemId, trigger: event.currentTarget });
+    }}>附着到卡片</button>;
+  }
   const attachmentPreview = state ? attachmentPreviewPositions(state, { pose: pose.positions, canvas: canvasMove.positions, frame: frameMove.positions, geometry: groupGeometry.poses }) : {};
   const textNodes = texts.nodes.map((node) => ({
     ...node,
     data: {
       ...node.data,
       singleSelection: node.data.singleSelection && singleItemId === node.id,
+      annotation: annotationAction(node.id),
       removeFromGroup: memberAction(node.id),
       remove: singleItemId === node.id ? () => { void removeText(node.data.value.id); } : undefined,
       layer: layerProps,
@@ -3160,7 +3278,7 @@ function Workspace() {
     draggable:
       !busy && !historyBlocked && !pose.pending && !placing && !panTool,
     data: {
-      showMenu: exclusiveCardItemId === card.item.id,
+      showMenu: exclusiveItemId === card.item.id,
       layer: layerProps,
       card,
       previewBody: (() => {
@@ -3250,7 +3368,7 @@ function Workspace() {
       strokeSelected,
       movingDisabled: strokeSelected || busy || historyBlocked || pose.pending || shapeMove.pending || shapeMove.dragging || texts.geometryBlocked || !!shapeText.session,
       historyBlocked,
-      resizable: exclusiveCardItemId === card.item.id,
+      resizable: exclusiveItemId === card.item.id,
       onResize: (event, direction) => resize.start(event, card, direction),
       onResizeKey: (event, direction) => resize.key(event, card, direction),
       onMove: (dx, dy) => {
@@ -3276,19 +3394,23 @@ function Workspace() {
   const currentBodySaving = ownsCurrentBody(savingDraft) || ownsCurrentBody(savingBodyAction);
   const failedDraft = draftFailure && draftFailure.owner.projectId === state?.project.id &&
     matchesFailedDraft(nextSaveDraft(), draftFailure) ? draftFailure : null;
-  const pendingBodyFailure = pendingAction.current?.bodyFailure;
+  const pending = pendingAction.current;
+  const previousProjectPending = pending && belongsToPreviousProject(pending.command) ? pending : null;
+  const currentProjectPending = previousProjectPending ? null : pending;
+  const pendingBodyFailure = currentProjectPending?.bodyFailure;
   const retryFailure = pendingBodyFailure
     ? pendingBodyFailure.owner.projectId === state?.project.id ? pendingBodyFailure : null
     : failedDraft;
   const currentBodyFailed = !currentBodySaving &&
     (ownsCurrentBody(failedDraft?.owner) || ownsCurrentBody(pendingBodyFailure?.owner));
-  const pending = pendingAction.current?.command;
+  const previousProjectSave = previousProjectFailure && previousProjectFailure.commandId === previousProjectPending?.command.commandId
+    ? previousProjectPending : null;
   const bodyRetryAvailable = !pose.error && !conflict && !historyCommand.current;
   const blockingBodyDraft = bodyRetryAvailable && failedDraft?.owner.field === "body" &&
     pendingBodyFailure?.owner.projectId === failedDraft.owner.projectId ? failedDraft : null;
   const boardDraftFailure = currentBodyFailed && ownsCurrentBody(blockingBodyDraft?.owner);
   const boardSaveFailure = currentBodyFailed && bodyRetryAvailable && !boardDraftFailure && ownsCurrentBody(retryFailure?.owner) &&
-    (!pending || retryFailure === pendingBodyFailure);
+    (!currentProjectPending || retryFailure === pendingBodyFailure);
   const boardStatus = !currentBody ? "已删除 · 内容保留"
     : currentBodyFailed ? "保存未完成"
     : currentBodySaving ? "正在保存…"
@@ -3308,7 +3430,7 @@ function Workspace() {
         {[visibleError, pose.error].filter(Boolean).join("；")}
       </span>
       {blockingBodyDraft && <span>请先处理未完成的正文保存，再重试本次操作</span>}
-      <button
+      {(!previousProjectPending || historyCommand.current || pose.error || hasActiveCardDraft()) && <button
         disabled={busy || !!pose.conflict || (!!conflict && !pose.error) || !!blockingBodyDraft}
         onClick={() => {
           if (historyCommand.current) {
@@ -3320,9 +3442,9 @@ function Workspace() {
             return;
           }
           const pending = pendingAction.current;
-          if (pending) void action(pending.command, pending.onDone, pending.options);
-          else if (Object.keys(drafts.current).length) void flush();
-          else location.reload();
+          if (pending && !belongsToPreviousProject(pending.command)) void action(pending.command, pending.onDone, pending.options);
+          else if (hasActiveCardDraft() || !pending && Object.keys(drafts.current).length) void flush();
+          else if (!pending) location.reload();
         }}
       >
         {historyCommand.current
@@ -3330,7 +3452,7 @@ function Workspace() {
             ? "重试撤销"
             : "重试重做"
           : "重试保存"}
-      </button>
+      </button>}
     </>
   ) : null;
   const draftSaveFailure = blockingBodyDraft ? (
@@ -3573,6 +3695,8 @@ function Workspace() {
         className={panelCard ? "canvas with-editor" : "canvas"}
         data-exporting={exportVisual ? 'true' : undefined}
         data-no-projects={showNoProjects || undefined}
+        data-attachment-pick={attachmentPick ? true : undefined}
+        data-drawing-tool={texts.placing ? "text" : shapePreset ? "shape" : strokeDraw.mode || undefined}
         tabIndex={0}
         onDragOver={event => {
           if (!event.dataTransfer.types.includes('Files')) return;
@@ -3624,6 +3748,29 @@ function Workspace() {
             payload: { id: crypto.randomUUID(), title: '', text, x: point.x - 140, y: point.y - 80 } });
         }}
         onClickCapture={(event) => {
+          if (attachmentPick && state?.project.id === attachmentPick.projectId && annotationTargetAvailable()) {
+            const item = (event.target as Element).closest<HTMLElement>(".react-flow__node-thought");
+            const card = state.cards.find(value => value.item.id === item?.dataset.id);
+            if (card) {
+              event.preventDefault();
+              event.stopPropagation();
+              const { itemId, projectId } = attachmentPick;
+              let submitted = false;
+              void action({ commandId: crypto.randomUUID(), projectId: state.project.id, type: "attachment.attach",
+                expected: { attachment: state.attachments?.find(row => row.id === itemId)?.versionId ?? null,
+                  target: { itemId: card.item.id, versionId: card.item.versionId },
+                  containment: state.containment?.find(row => row.id === itemId)?.versionId ?? null },
+                payload: { itemId, targetItemId: card.item.id } }, undefined, { beforeSubmit: (_, actionEpoch) => {
+                if (submitted) return true;
+                if (annotationPickIntent.current !== attachmentPick || authority.current?.project.id !== projectId ||
+                  editorEpoch.current !== actionEpoch) return false;
+                setAnnotationPick(null);
+                submitted = true;
+                return true;
+              } });
+              return;
+            }
+          }
           const disabledMove = disabledMovePointer.current;
           // A release on the preview can retarget Chrome's click to the whole card.
           if (event.detail > 0 && disabledMove && (event.target as Element).closest(".thought-card") === disabledMove.card &&
@@ -3707,6 +3854,11 @@ function Workspace() {
               { x: touch.clientX, y: touch.clientY });
         }}
         onPointerDownCapture={(event) => {
+          if (attachmentPick && annotationTargetAvailable() && event.button === 0 && (event.target as Element).closest(".react-flow__node-thought")) {
+            event.preventDefault();
+            event.stopPropagation();
+            return;
+          }
           const disabledCard = event.isPrimary && event.button === 0
             ? (event.target as Element).closest('.move-handle[aria-disabled="true"]')?.closest(".thought-card")
             : null;
@@ -3766,19 +3918,8 @@ function Workspace() {
               "controls.zoomOut.ariaLabel": "缩小",
               "controls.fitView.ariaLabel": "适应画布",
             }}
-            nodes={orderCanvas([...nodes, ...textNodes, ...imageNodes(state.images ?? [], state.project.id, selection, (id, extend) => void chooseCanvasItem(id, extend), busy || historyBlocked || composition.current || !!pendingAction.current || placing || !!shapePreset || texts.placing || panTool || !!strokeDraw.mode || !!shapeText.session || texts.geometryBlocked, imageGeometry, (value, dx, dy) => { if (canvasMove.start(value.item.id)) canvasMove.finish({ x: value.item.pose.x + dx, y: value.item.pose.y + dy }); }, singleItemId, memberAction, layerProps), ...shapeNodes(state.shapes ?? [], selection, (id, extend) => void chooseCanvasItem(id, extend), busy || historyBlocked || placing || !!shapePreset || texts.placing || panTool, id => void beginShapeText(id), !!shapeText.session, (id, trigger) => void beginShapeAppearance(id, trigger), value => void removeShape(value), shapeMove.positions, shapeMove, composition.current || !!pendingAction.current || pose.pending || pose.dragging || canvasMove.dragging || texts.hasPending() || appearance.pending || cardLayout.pending, singleItemId, memberAction, layerProps), ...strokeNodes(state.strokes ?? [], selection, (id, extend) => void chooseStrokeItem(id, extend), value => void removeStroke(value), busy || historyBlocked || !!pendingAction.current || placing || !!shapePreset || texts.placing || panTool || !!strokeDraw.mode, singleItemId, memberAction, itemId => !!state.groups?.some(group => group.memberItemIds.includes(itemId)) || (flowSelection.includes(itemId) && flowSelection.length > 1))].map(node => groupGeometry.project({ ...node, selected: exportVisual ? false : flowSelection.includes(node.id), position: frameMove.positions[node.id] ?? canvasMove.positions[node.id] ?? shapeMove.positions[node.id] ?? attachmentPreview[node.id] ?? node.position, draggable: node.draggable !== false && !groupGeometry.active && !strokeDraw.mode && !busy && !historyBlocked && !panTool && !placing && !shapePreset && !texts.placing && !texts.geometryBlocked && !shapeText.session && !connectorLabel.session && !shapeMove.pending })), state, selection, { temporaryRaise: !exportVisual && pureCardSelection && !layerHoldActive })}
+            nodes={orderCanvas([...nodes, ...textNodes, ...imageNodes(state.images ?? [], state.project.id, selection, (id, extend) => void chooseCanvasItem(id, extend), busy || historyBlocked || composition.current || !!pendingAction.current || placing || !!shapePreset || texts.placing || panTool || !!strokeDraw.mode || !!shapeText.session || texts.geometryBlocked, imageGeometry, (value, dx, dy) => { if (canvasMove.start(value.item.id)) canvasMove.finish({ x: value.item.pose.x + dx, y: value.item.pose.y + dy }); }, singleItemId, memberAction, annotationAction, layerProps), ...shapeNodes(state.shapes ?? [], selection, (id, extend) => void chooseCanvasItem(id, extend), busy || historyBlocked || placing || !!shapePreset || texts.placing || panTool, id => void beginShapeText(id), !!shapeText.session, (id, trigger) => void beginShapeAppearance(id, trigger), value => void removeShape(value), shapeMove.positions, shapeMove, composition.current || !!pendingAction.current || pose.pending || pose.dragging || canvasMove.dragging || texts.hasPending() || appearance.pending || cardLayout.pending, singleItemId, memberAction, annotationAction, layerProps), ...strokeNodes(state.strokes ?? [], selection, (id, extend) => void chooseStrokeItem(id, extend), value => void removeStroke(value), busy || historyBlocked || !!pendingAction.current || placing || !!shapePreset || texts.placing || panTool || !!strokeDraw.mode, singleItemId, memberAction, annotationAction, itemId => !!state.groups?.some(group => group.memberItemIds.includes(itemId)) || (flowSelection.includes(itemId) && flowSelection.length > 1))].map(node => groupGeometry.project({ ...node, selected: exportVisual ? false : flowSelection.includes(node.id), position: frameMove.positions[node.id] ?? canvasMove.positions[node.id] ?? shapeMove.positions[node.id] ?? attachmentPreview[node.id] ?? node.position, draggable: node.draggable !== false && !groupGeometry.active && !strokeDraw.mode && !busy && !historyBlocked && !panTool && !placing && !shapePreset && !texts.placing && !texts.geometryBlocked && !shapeText.session && !connectorLabel.session && !shapeMove.pending })), state, selection, { temporaryRaise: !exportVisual && pureCardSelection && !layerHoldActive })}
             onNodeClick={(event, node) => {
-              if (attachTarget && state.cards.some(card => card.item.id === node.id)) {
-                const card = state.cards.find(value => value.item.id === node.id)!;
-                const itemId = attachTarget;
-                setAttachTarget(null);
-                void action({ commandId: crypto.randomUUID(), projectId: state.project.id, type: 'attachment.attach',
-                  expected: { attachment: state.attachments?.find(row => row.id === itemId)?.versionId ?? null,
-                    target: { itemId: card.item.id, versionId: card.item.versionId },
-                    containment: state.containment?.find(row => row.id === itemId)?.versionId ?? null },
-                  payload: { itemId, targetItemId: card.item.id } });
-                return;
-              }
               awaitBodySelection.current = false;
               clearConnectorSelection(event.shiftKey);
               canvasSelection.choose(node.id, event.shiftKey);
@@ -3982,7 +4123,7 @@ function Workspace() {
               cut={() => void cutSelection()} copy={() => void copySelection()} paste={() => void pasteSelection()} duplicate={() => void duplicateSelection()} />
             <CanvasToolButton label="选择"
               aria-disabled={strokeDraw.hasPending() || connectorCreate.hasPending() || undefined}
-              aria-pressed={!placing && !shapePreset && !strokeDraw.mode && !connectorCreate.mode && !panTool && !texts.placing && !frameTool}
+              aria-pressed={!placing && !shapePreset && !strokeDraw.mode && !connectorCreate.mode && !panTool && !texts.placing && !frameTool && !attachmentPick}
               onClick={chooseSelectionTool}
             />
             <CanvasToolButton label="移动"
@@ -3990,6 +4131,7 @@ function Workspace() {
               aria-pressed={panTool}
               onClick={() => {
                 if (strokeDraw.hasPending()) return;
+                setAnnotationPick(null);
                 editorEpoch.current++;
                 connectorEdit.cancel();
                 connectorCreate.deactivate();
@@ -4022,6 +4164,7 @@ function Workspace() {
             <CanvasToolButton label="连线" aria-pressed={connectorCreate.mode} disabled={busy || historyBlocked || connectorCreate.hasPending() || strokeDraw.hasPending()}
               onClick={() => {
                 if (!authority.current?.project.id || connectorCreationBlocked() || connectorCreate.hasPending()) return;
+                setAnnotationPick(null);
                 connectorEdit.cancel();
                 void connectorCreate.activate();
               }} />
@@ -4044,6 +4187,9 @@ function Workspace() {
               {imageInput.recoveries.filter(record => record.input.placement.projectId === state.project.id).map(record =>
                 <button key={record.key} disabled={busy || historyBlocked} onClick={() => void imageInput.recover(record.key)}>恢复未确认图片</button>)}
               {shapePreset && <span>点击画布放置{shapePreset === "roundedRectangle" ? "圆角矩形" : shapePreset === "rectangle" ? "矩形" : shapePreset === "ellipse" ? "椭圆" : shapePreset === "diamond" ? "菱形" : "三角形"}</span>}
+              {texts.placing && <span>点击画布开始输入</span>}
+              {strokeDraw.mode && <span>{strokeDraw.mode === "pen" ? "拖动绘制普通笔迹" : "拖动绘制荧光笔迹"}</span>}
+              {attachmentPick && <span aria-live="polite">点击要附着的卡片</span>}
               {texts.error && <span role="alert">{texts.error}</span>}
               {placing && <span>点击画布放置卡片</span>}
             </div>
@@ -4235,6 +4381,14 @@ function Workspace() {
         </div>
       )}
       <div className="save-state">
+        {previousProjectSave && previousProjectFailure && <>
+          <span role="alert">{previousProjectFailure.message}</span>
+          <span data-previous-project-save-controls onMouseDown={event => event.preventDefault()}>
+            <button disabled={busy || historyBlocked || previousProjectSave.rejected !== undefined}
+              onClick={() => void action(previousProjectSave.command, previousProjectSave.onDone, previousProjectSave.options)}>重试上一项目保存</button>
+            {previousProjectSave.rejected && <button disabled={busy} onClick={() => void abandonStructure(previousProjectSave)}>放弃本次创建</button>}
+          </span>
+        </>}
         {connectorCreate.error && <><span role="alert">{connectorCreate.error}</span>
           {connectorCreate.retryable && <button disabled={connectorCreate.working} onClick={() => void connectorCreate.retry()}>重试保存连线</button>}
           {connectorCreate.rejected && <button disabled={connectorCreate.working} onClick={() => void connectorCreate.abandon()}>放弃本次连线</button>}</>}
@@ -4307,33 +4461,11 @@ function Workspace() {
             )}
           </>
         )}
-        {state && singleItemId && !state.cards.some(card => card.item.id === singleItemId) && (
-          state.attachments?.some(row => row.id === singleItemId) ? (
-            <button onClick={() => {
-              const row = state.attachments!.find(value => value.id === singleItemId)!;
-              const card = state.cards.find(value => value.item.id === row.target?.itemId);
-              if (!row.target || !card) return;
-              void action({ commandId: crypto.randomUUID(), projectId: state.project.id, type: 'attachment.detach',
-                expected: { attachment: row.versionId, target: { itemId: row.target.itemId, versionId: card.item.versionId } },
-                payload: { itemId: row.id } });
-            }}>解除附着</button>
-          ) : (
-            <button onClick={() => {
-              if (state.containment?.find(row => row.id === singleItemId)?.parent) {
-                setError('该批注在框架或组合内，需先移出');
-                return;
-              }
-              setError('');
-              setAttachTarget(singleItemId);
-            }}>附着到卡片</button>
-          )
-        )}
-        {attachTarget && <span>点击要附着的卡片</span>}
         {!!visibleError && retryFailure === pendingBodyFailure && error && error !== visibleError && <span role="alert">{error}</span>}
         {!boardDraftFailure && draftSaveFailure}
         {saveFailure && !boardSaveFailure && saveFailure}
-        {saveFailure && pendingAction.current?.rejected && <button disabled={busy} onClick={() => void abandonStructure()}>
-          {['thought.create', 'shape.create', 'stroke.create'].includes(pendingAction.current.command.type) ? '放弃本次创建' : pendingAction.current.command.type === 'text.delete' ? '放弃本次删除' : pendingAction.current.command.type.startsWith('frame.') ? '放弃本次分区操作' : '放弃本次组合操作'}
+        {saveFailure && currentProjectPending?.rejected && <button disabled={busy} onClick={() => void abandonStructure(currentProjectPending)}>
+          {['thought.create', 'shape.create', 'stroke.create'].includes(currentProjectPending.command.type) ? '放弃本次创建' : currentProjectPending.command.type === 'text.delete' ? '放弃本次删除' : currentProjectPending.command.type.startsWith('frame.') ? '放弃本次分区操作' : '放弃本次组合操作'}
         </button>}
       </div>
       {renaming && (

@@ -1,4 +1,4 @@
-import { useRef } from "react";
+import { useRef, type ReactNode } from "react";
 import { ShapeTextAction } from "./shape-text-editor";
 import type { Node, NodeProps } from "@xyflow/react";
 import { shapeLabels } from "./shape-tools";
@@ -8,7 +8,7 @@ import type { LayerMenuProps } from "./layer-menu";
 
 type ShapeData = { value: CanvasShape; blocked: boolean; choose: (extend: boolean) => void; edit: () => void; remove: () => void;
   appearance: (trigger: HTMLButtonElement) => void; editable: boolean; resizable: boolean; resizeBlocked: boolean; geometry: ShapeResizeAPI;
-  removeFromGroup?: (() => void) | undefined; layer?: LayerMenuProps | undefined };
+  annotation?: ReactNode; removeFromGroup?: (() => void) | undefined; layer?: LayerMenuProps | undefined };
 
 export function CanvasShapeNode({ data, selected }: NodeProps<Node<ShapeData>>) {
   const anchor = useRef<HTMLDivElement>(null);
@@ -47,7 +47,7 @@ export function CanvasShapeNode({ data, selected }: NodeProps<Node<ShapeData>>) 
         border: polygon ? undefined : `${content.strokeWidth ?? 1}px solid ${content.stroke ?? "#cbd5e1"}`,
         borderRadius: content.shapeType === "ellipse" ? "50%" : content.shapeType === "roundedRectangle" ? 12 : 0,
         position: "relative",
-        outline: selected ? "2px solid var(--canvas-selection-color)" : undefined, outlineOffset: 3,
+        outline: selected ? "2px solid var(--drawing-selection-color)" : undefined, outlineOffset: 3,
         display: "flex", alignItems: "center", justifyContent: "center",
         padding: 8, whiteSpace: "pre-wrap", overflow: "hidden",
       }}
@@ -65,9 +65,9 @@ export function CanvasShapeNode({ data, selected }: NodeProps<Node<ShapeData>>) 
       onKeyDown={event => resize.key(event, handle as keyof typeof shapeHandles)}
       onMouseDown={event => event.stopPropagation()} onClick={event => event.stopPropagation()}
       style={{ position: "absolute", left: handle.includes("w") ? 0 : "100%", top: handle.includes("n") ? 0 : "100%",
-        transform: "translate(-50%, -50%)", width: 10, height: 10, padding: 0, border: "1px solid var(--canvas-selection-color)", background: "var(--card-color-ffffff)",
+        transform: "translate(-50%, -50%)", width: 10, height: 10, padding: 0, border: "1px solid var(--drawing-selection-color)", background: "var(--card-color-ffffff)",
         cursor: handle === "nw" || handle === "se" ? "nwse-resize" : "nesw-resize", zIndex: 10 }} />)}
-    {selected && data.editable && <ShapeTextAction anchor={anchor} edit={data.edit} appearance={data.appearance} remove={data.remove} removeFromGroup={data.removeFromGroup} layer={data.layer} />}
+    {selected && data.editable && <ShapeTextAction anchor={anchor} edit={data.edit} appearance={data.appearance} remove={data.remove} removeFromGroup={data.removeFromGroup} layer={data.layer} annotation={data.annotation} />}
     </>
   );
 }
@@ -77,7 +77,7 @@ export function shapeNodes(
   edit: (id: string) => void, editing: boolean, appearance: (id: string, trigger: HTMLButtonElement) => void,
   remove: (value: CanvasShape) => void,
   poses: Record<string, CanvasShape["item"]["pose"]>, geometry: ShapeResizeAPI, resizeBlocked: boolean, singleItemId: string | null,
-  memberAction: (itemId: string) => (() => void) | undefined, layer?: LayerMenuProps | undefined,
+  memberAction: (itemId: string) => (() => void) | undefined, annotationAction: (itemId: string) => ReactNode, layer?: LayerMenuProps | undefined,
 ): Node<ShapeData>[] {
   return shapes.map(value => {
     const pose = poses[value.item.id] ?? value.item.pose, disabled = blocked || geometry.pending;
@@ -94,7 +94,7 @@ export function shapeNodes(
     connectable: false,
     data: { value: { ...value, item: { ...value.item, pose } }, blocked: disabled, choose: extend => choose(value.item.id, extend),
       edit: () => edit(value.id), appearance: trigger => appearance(value.id, trigger), remove: () => remove(value),
-      removeFromGroup: memberAction(value.item.id),
+      removeFromGroup: memberAction(value.item.id), annotation: annotationAction(value.item.id),
       editable: singleItemId === value.item.id && !disabled && !editing, resizable: singleItemId === value.item.id && !editing, resizeBlocked: blocked || editing || resizeBlocked, geometry, layer },
   }; });
 }

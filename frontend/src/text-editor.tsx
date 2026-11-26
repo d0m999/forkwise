@@ -1,4 +1,5 @@
-import { textColors, textAlignments } from "./text-options";
+import { TextColorPicker } from "./text-color-picker";
+import { textAlignments } from "./text-options";
 import { TextToolbar } from "./text-toolbar";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { TextContent } from "../../backend/src/mapping/text-contracts";
@@ -23,8 +24,7 @@ export function TextEditor({
 }) {
   const editor = useRef<HTMLDivElement>(null),
     range = useRef<Range | null>(null);
-  const [bold, setBold] = useState(false),
-    [colors, setColors] = useState(false);
+  const [bold, setBold] = useState(false), [colors, setColors] = useState(false);
   const [color, setColor] = useState<string | undefined>();
   const composing = useRef(false);
   const latest = useRef(content);
@@ -73,15 +73,6 @@ export function TextEditor({
     document.addEventListener("selectionchange", sync);
     return () => document.removeEventListener("selectionchange", sync);
   }, []);
-  useEffect(() => {
-    if (!colors) return;
-    const escape = (event: KeyboardEvent) => {
-      if (event.key !== "Escape" || event.defaultPrevented || composing.current || event.isComposing || event.keyCode === 229) return;
-      event.preventDefault(); event.stopImmediatePropagation(); setColors(false);
-    };
-    window.addEventListener("keydown", escape, true);
-    return () => window.removeEventListener("keydown", escape, true);
-  }, [colors]);
   function restore() {
     editor.current!.focus();
     if (range.current) {
@@ -127,7 +118,6 @@ export function TextEditor({
     }
     emit();
     sync();
-    setColors(false);
   }
   return (
     <>
@@ -139,13 +129,8 @@ export function TextEditor({
         >
           B
         </button>
-        <button
-          aria-label="文字颜色"
-          style={{ color }}
-          onClick={() => setColors((value) => !value)}
-        >
-          颜色
-        </button>
+        <TextColorPicker open={colors} setOpen={setColors} color={color} restoreFocus={restore}
+          apply={value => format("foreColor", value ?? hexColor(getComputedStyle(editor.current!).color))} />
         <label>
           字号
           <input
@@ -175,29 +160,6 @@ export function TextEditor({
             {label}
           </button>
         ))}
-        {colors && (
-          <div className="text-color-panel">
-            {textColors.map(({ key: color, label }) => (
-              <button
-                key={color}
-                className={`textColor-${color}`}
-                onClick={(event) =>
-                  format(
-                    "foreColor",
-                    hexColor(
-                      color === "default"
-                        ? getComputedStyle(editor.current!).color
-                        : getComputedStyle(event.currentTarget).color,
-                    ),
-                  )
-                }
-              >
-                {label}
-                文字
-              </button>
-            ))}
-          </div>
-        )}
       </TextToolbar>
       <div
         ref={editor}

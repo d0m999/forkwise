@@ -1,9 +1,10 @@
-import { useLayoutEffect, useRef, useState } from "react";
+import { useLayoutEffect, useRef, useState, type MouseEvent } from "react";
 import { createPortal } from "react-dom";
 import { api, MappingError, type Command, type ProjectState } from "./api";
 import { ShapeAppearanceRecovery, type ShapeAppearanceRecord, type ShapeAppearanceConflict, type ShapeAppearanceFields, type ShapeAppearanceCopy } from "./shape-appearance-recovery";
 import type { CanvasShape } from "../../backend/src/mapping/shape-contracts";
 import { readOwnShapeRecoveryTarget } from "./shape-recovery-target";
+import { placeCanvasPopup } from "./nearby-canvas-controls";
 
 export type ShapeAppearanceBinding = { projectId: string; value: CanvasShape; trigger?: HTMLButtonElement; journal?: ShapeAppearanceRecovery; record?: ShapeAppearanceRecord };
 type Edit = Extract<Command, { type: "shape.edit" }>;
@@ -51,17 +52,42 @@ export function ShapeAppearance({ binding, publish, close }: {
     if (!needsRead.current) return;
     publish(await api.project(binding.projectId)); needsRead.current = false; persist();
   }
+  const backdropStarted = useRef(false);
+  function onBackdrop(event: MouseEvent<HTMLDialogElement>) {
+    if (event.target !== event.currentTarget) return false;
+    const box = event.currentTarget.getBoundingClientRect();
+    return event.clientX < box.left || event.clientX > box.right || event.clientY < box.top || event.clientY > box.bottom;
+  }
   function dismiss() {
     if (running.current || pending.current || needsRead.current || conflictRef.current || unconfirmedAfterSave()) return;
     try { journal.remove(); close(); } catch { setError("恢复记录无法移除，当前输入仍保留"); }
   }
   useLayoutEffect(() => {
-    dialog.current?.showModal();
+    const panel = dialog.current!;
+    panel.showModal();
+    const surface = document.querySelector<HTMLElement>(`.react-flow__node[data-id="${CSS.escape(binding.value.item.id)}"] > [role="img"]`);
+    function position() {
+      if (!binding.trigger || !surface) return;
+      const toolbar = binding.trigger.isConnected ? binding.trigger.closest<HTMLElement>("[role=toolbar]") ?? binding.trigger : surface;
+      const point = placeCanvasPopup(surface, toolbar, panel);
+      panel.dataset.anchored = point ? "true" : "false";
+      panel.style.left = point ? `${point.left}px` : "";
+      panel.style.top = point ? `${point.top}px` : "";
+    }
+    position();
+    const resize = new ResizeObserver(position);
+    resize.observe(panel);
+    window.addEventListener("resize", position);
     const unload = (event: BeforeUnloadEvent) => {
       if (changed() || pending.current || needsRead.current) { event.preventDefault(); event.returnValue = ""; }
     };
     window.addEventListener("beforeunload", unload);
-    return () => { window.removeEventListener("beforeunload", unload); dialog.current?.close(); };
+    return () => {
+      resize.disconnect();
+      window.removeEventListener("resize", position);
+      window.removeEventListener("beforeunload", unload);
+      panel.close();
+    };
   }, []);
   function change(key: keyof Fields, input: string) {
     if (running.current) return;
@@ -188,8 +214,14 @@ export function ShapeAppearance({ binding, publish, close }: {
   return createPortal(<dialog ref={dialog} aria-label="形状外观" className="shape-appearance-dialog"
     onCancel={event => { event.preventDefault(); if (!composing.current) dismiss(); }}
     onKeyDown={event => event.stopPropagation()}
-    onCompositionStart={() => { composing.current = true; }} onCompositionEnd={() => { composing.current = false; }}
-    style={{ width: 280 }}>
+    onPointerDown={event => { backdropStarted.current = event.button === 0 && onBackdrop(event); }}
+    onPointerCancel={() => { backdropStarted.current = false; }}
+    onClick={event => {
+      const fromBackdrop = backdropStarted.current;
+      backdropStarted.current = false;
+      if (fromBackdrop && event.detail > 0 && onBackdrop(event)) dismiss();
+    }}
+    onCompositionStart={() => { composing.current = true; }} onCompositionEnd={() => { composing.current = false; }}>
     <form className="shape-appearance-form" onSubmit={event => { event.preventDefault(); void save(); }}>
       <h2 className="shape-appearance-heading">形状外观</h2>
       <label>填充颜色<input aria-label="填充颜色" placeholder="未设置" value={fields.fill} readOnly={working}

@@ -1006,6 +1006,18 @@ test("文字工具条在视口顶部右缘保持完整可操作，编辑颜色�
     .poll(async () => ((await workspace.state()) as any).texts[0].content)
     .toMatchObject({ fontSize: 24, align: "right" });
   await page.getByRole("button", { name: "编辑文字", exact: true }).click();
+  const editor = page.getByRole("textbox", { name: "独立文字", exact: true });
+  // Formatting saves may still be settling when the editor is requested.
+  // The selected-object toolbar has a color button with the same name.
+  await expect(editor).toBeFocused();
+  expect(await editor.evaluate(element => {
+    const selection = window.getSelection(), anchor = selection?.anchorNode;
+    if (!anchor || !selection?.isCollapsed || !element.contains(anchor)) return false;
+    const prefix = document.createRange();
+    prefix.selectNodeContents(element);
+    prefix.setEnd(anchor, selection.anchorOffset);
+    return prefix.toString() === element.textContent;
+  })).toBe(true);
   await assertBounds();
   await page.getByRole("button", { name: "文字颜色", exact: true }).click();
   const palette = (await page.locator(".text-color-panel").boundingBox())!;
@@ -1013,7 +1025,7 @@ test("文字工具条在视口顶部右缘保持完整可操作，编辑颜色�
   expect(palette.y).toBeGreaterThanOrEqual(canvas.y);
   expect(palette.y + palette.height).toBeLessThanOrEqual(viewport.height - 8);
   await page.getByRole("button", { name: "红色文字", exact: true }).click();
-  const editor = page.getByRole("textbox", { name: "独立文字" });
+  await expect(editor).toBeFocused();
   await editor.pressSequentially("观察");
   await editor.press("Escape");
   await expect
@@ -1025,4 +1037,94 @@ test("文字工具条在视口顶部右缘保持完整可操作，编辑颜色�
     path: process.env.FORKWISE_ISSUE22_VISUAL_PATH!,
     fullPage: true,
   });
+});
+
+test("独立文字颜色面板只处理自身键盘，恢复编辑选区并让后来点中的对象保有焦点", async ({ page, workspace }) => {
+  const { project } = await workspace.state();
+  await workspace.execute(page, {
+    commandId: crypto.randomUUID(), projectId: project.id, type: "shape.create", expected: null,
+    payload: { id: "next-color-target", content: { shapeType: "rectangle", shortText: "另一个对象" },
+      pose: { x: 620, y: 340, width: 160, height: 100 } },
+  });
+  await page.reload();
+  await page.getByRole("button", { name: "文字", exact: true }).click();
+  await page.locator(".react-flow__pane").click({ position: { x: 200, y: 220 } });
+  const editor = page.getByRole("textbox", { name: "独立文字", exact: true });
+  const trigger = page.getByRole("button", { name: "文字颜色", exact: true });
+  const first = page.getByRole("button", { name: "默认文字", exact: true });
+  const last = page.getByRole("button", { name: "紫色文字", exact: true });
+  const red = page.getByRole("button", { name: "红色文字", exact: true });
+  await editor.fill("Alpha Beta");
+  await editor.press("ControlOrMeta+a");
+  await editor.press("ArrowLeft");
+  for (let i = 0; i < 5; i++) await editor.press("Shift+ArrowRight");
+  await trigger.click();
+  await expect(first).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(first).toHaveCount(0);
+  await expect(editor).toBeFocused();
+  expect(await page.evaluate(() => window.getSelection()?.toString())).toBe("Alpha");
+  await trigger.click();
+  await red.press("Enter");
+  await expect(editor).toBeFocused();
+  expect(await page.evaluate(() => window.getSelection()?.toString())).toBe("Alpha");
+  await page.keyboard.press("Escape");
+  await expect(editor).toHaveCount(0);
+  await expect.poll(async () => (await workspace.state()).texts?.[0]?.content.runs)
+    .toEqual([{ text: "Alpha", color: "#ad343e" }, { text: " Beta" }]);
+
+  await trigger.click();
+  await last.press("Tab");
+  const size = page.getByRole("spinbutton", { name: "文字字号" });
+  await expect(size).toBeFocused();
+  await expect(first).toHaveCount(0);
+  await trigger.click();
+  await red.press("Enter");
+  await expect(trigger).toBeFocused();
+  await expect.poll(async () => (await workspace.state()).texts?.[0]?.content.runs)
+    .toEqual([{ text: "Alpha", color: "#ad343e" }, { text: " Beta", color: "#ad343e" }]);
+  await trigger.click();
+  const shape = page.getByRole("img", { name: "另一个对象", exact: true });
+  await shape.click();
+  await expect(shape).toBeFocused();
+  await expect(first).toHaveCount(0);
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("toolbar", { name: "形状操作" })).toHaveCount(0);
+});
+
+test("底边文字在编辑与对象状态的色板均翻到可见区域，底排可真实点击保存", async ({ page, workspace }) => {
+  const viewport = page.viewportSize()!;
+  await page.getByRole("button", { name: "文字", exact: true }).click();
+  await page.locator(".react-flow__pane").click({ position: { x: 125, y: viewport.height - 145 } });
+  const editor = page.getByRole("textbox", { name: "独立文字", exact: true });
+  const trigger = page.getByRole("button", { name: "文字颜色", exact: true });
+  const palette = page.getByRole("group", { name: "文字颜色选项", exact: true });
+  await editor.fill("靠底边");
+  await editor.press("ControlOrMeta+a");
+  async function selectColor(name: string) {
+    await trigger.click();
+    await expect(palette).toBeVisible();
+    const toggle = (await trigger.boundingBox())!, popup = (await palette.boundingBox())!;
+    const canvas = (await page.locator("#project-canvas").boundingBox())!;
+    expect(popup.y).toBeGreaterThanOrEqual(canvas.y);
+    expect(popup.y + popup.height).toBeLessThanOrEqual(toggle.y);
+    expect(popup.x + popup.width).toBeLessThanOrEqual(viewport.width);
+    const swatch = page.getByRole("button", { name, exact: true });
+    const color = await swatch.evaluate(element => getComputedStyle(element).color);
+    await swatch.click();
+    await expect(palette).toHaveCount(0);
+    return color;
+  }
+  const purple = await selectColor("紫色文字");
+  await expect(editor).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(editor).toHaveCount(0);
+  const body = page.locator(".canvas-text-content");
+  await expect(body.locator("span")).toHaveCSS("color", purple);
+  const original = (await workspace.state()).texts?.[0]?.content.runs[0]?.color;
+  const blue = await selectColor("蓝色文字");
+  await expect(trigger).toBeFocused();
+  await expect(body.locator("span")).toHaveCSS("color", blue);
+  await expect.poll(async () => (await workspace.state()).texts?.[0]?.content.runs[0]?.color)
+    .not.toBe(original);
 });

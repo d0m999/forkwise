@@ -118,6 +118,10 @@ function readPositions(surface: HTMLElement, bar: HTMLElement, popup?: HTMLEleme
   return { toolbar: toolbarPosition, popup: popupPosition, maxWidth: bounds.width, maxHeight: bounds.height };
 }
 
+export function placeCanvasPopup(surface: HTMLElement, toolbar: HTMLElement, popup: HTMLElement) {
+  return readPositions(surface, toolbar, popup)?.popup ?? null;
+}
+
 export function useNearbyCanvasControls(
   anchor: RefObject<HTMLElement | null>,
   toolbar: RefObject<HTMLElement | null>,
@@ -142,7 +146,7 @@ export function useNearbyCanvasControls(
   }, [active, anchor, popup, toolbar]);
   const placePopup = useCallback((element: HTMLElement) =>
     active && anchor.current && toolbar.current
-      ? readPositions(anchor.current, toolbar.current, element)?.popup ?? null
+      ? placeCanvasPopup(anchor.current, toolbar.current, element)
       : null, [active, anchor, toolbar]);
 
   useLayoutEffect(position);

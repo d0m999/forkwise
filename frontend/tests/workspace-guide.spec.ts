@@ -420,7 +420,7 @@ test('项目范围的真实 403 撤下引导，允许原项目继续建卡', asy
 test('左上方对象工具与导航重叠时，真实指针仍可打开引导', async ({ page, workspace }) => {
   await page.getByRole('button', { name: '形状', exact: true }).click();
   await page.getByRole('menuitem', { name: '矩形', exact: true }).click();
-  await page.locator('.react-flow__pane').click({ position: { x: 40, y: 94 } });
+  await page.locator('.react-flow__pane').click({ position: { x: 40, y: 108 } });
   await expect(page.getByRole('status')).toHaveText('已保存到本机');
   await page.getByRole('img', { name: '矩形', exact: true }).click();
   const tools = page.getByRole('toolbar', { name: '形状操作' });

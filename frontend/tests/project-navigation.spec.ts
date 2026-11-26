@@ -490,3 +490,20 @@ for (const outcome of ['延迟', '失败']) {
     await expect(page.getByRole('main')).toHaveAccessibleName(title + '画布');
   });
 }
+
+test("首屏读取研究失败后可通过重试重新加载原项目", async ({ page, workspace }) => {
+  const { project } = await workspace.state();
+  let reads = 0;
+  await page.route(url => url.pathname === "/api/mapping/projects", async route => {
+    if (route.request().method() === "GET" && ++reads === 1)
+      await route.fulfill({ status: 503, json: { message: "首次读取项目列表暂不可用" } });
+    else await route.continue();
+  });
+  await page.reload();
+  await expect(page.getByRole("alert")).toHaveText("首次读取项目列表暂不可用");
+  expect(reads).toBe(1);
+  await page.getByRole("button", { name: "重试保存", exact: true }).click();
+  await expect(page.getByRole("tab", { selected: true })).toHaveAttribute("title", project.id, { timeout: 3500 });
+  await expect(page.getByRole("status")).toHaveText("已保存到本机");
+  expect(reads).toBeGreaterThan(1);
+});

@@ -1547,14 +1547,15 @@ body:has(.workspace > .project-nav) :is(.card-floating, .text-actions, .shape-te
 .search-document [data-fold-for][aria-expanded=true] svg { transform: rotate(90deg); }
 :root { --text-tool-anchor-gap: 8px; --text-tool-stroke: 1px; --text-tool-radius: 6px; --text-tool-font-size: 14px; --text-tool-line-height: 20px; --text-tool-gap: 4px; --text-tool-inset: 3px; --text-tool-input-width: 56px; --text-tool-handle-size: 8px; --text-tool-handle-radius: 2px; --text-tool-palette-width: 320px; --text-tool-input-height: 108px; }
 .canvas-text { position: relative; color: var(--tag-ink); min-height: 1.5em; }
+.canvas-text[data-selected] { outline: 1px solid var(--drawing-selection-color); outline-offset: 3px; }
 .canvas-text-content, .canvas-text-input { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; line-height: inherit; text-align: inherit; min-height: 1.5em; width: 100%; margin: 0; padding: 0; border: 0; background: transparent; }
 .canvas-text-input { display: block; resize: none; outline: var(--text-tool-stroke) solid var(--tag-border); height: var(--text-tool-input-height); }
 .text-actions { position: fixed; z-index: 40; display: flex; flex-wrap: wrap; background: var(--tag-surface); border: var(--text-tool-stroke) solid var(--tag-border); border-radius: var(--text-tool-radius); white-space: nowrap; font-size: var(--text-tool-font-size); line-height: var(--text-tool-line-height); text-align: left; }
-.canvas-text-input[contenteditable] { height: auto; min-height: 1.5em; cursor: text; }
+.canvas-text-input[contenteditable] { height: auto; min-height: 1.5em; cursor: text; outline-color: var(--drawing-selection-color); }
 .canvas-text-content:focus-visible { outline: var(--text-tool-stroke) solid var(--editor-focus); outline-offset: var(--text-tool-gap); }
 .text-actions label { display: flex; align-items: center; gap: var(--text-tool-gap); padding: var(--text-tool-inset); }
 .text-actions input { width: var(--text-tool-input-width); min-width: 0; }
-.text-resize { position: absolute; width: var(--text-tool-handle-size); height: var(--text-tool-handle-size); padding: 0; border: var(--text-tool-stroke) solid var(--tag-border); background: var(--tag-surface); border-radius: var(--text-tool-handle-radius); z-index: 1; }
+.text-resize { position: absolute; width: var(--text-tool-handle-size); height: var(--text-tool-handle-size); padding: 0; border: var(--text-tool-stroke) solid var(--drawing-selection-color); background: var(--tag-surface); border-radius: var(--text-tool-handle-radius); z-index: 1; }
 .text-resize-w, .text-resize-e { top: calc(50% - var(--text-tool-gap)); cursor: ew-resize; }
 .text-resize-w, .text-resize-nw, .text-resize-sw { left: calc(-1 * var(--text-tool-gap)); }
 .text-resize-e, .text-resize-ne, .text-resize-se { right: calc(-1 * var(--text-tool-gap)); }
@@ -1566,19 +1567,49 @@ body:has(.workspace > .project-nav) :is(.card-floating, .text-actions, .shape-te
 .text-color-panel { position: absolute; top: 100%; left: 0; max-width: var(--text-tool-palette-width); display: flex; flex-wrap: wrap; background: var(--tag-surface); border: var(--text-tool-stroke) solid var(--tag-border); border-radius: var(--text-tool-radius); padding: var(--text-tool-gap); }
 :root {
   --canvas-selection-color: #2563eb;
+  --drawing-selection-color: #ac6043;
   --canvas-chrome-ink: #182235;
   --canvas-chrome-muted: #58677e;
   --canvas-chrome-heading-font-size: 16px;
 }
 .canvas-preset-menu { padding: var(--body-tool-gap); background: var(--card-color-ffffff); border: var(--text-tool-stroke) solid var(--card-menu-border); border-radius: var(--body-panel-radius); box-shadow: 0 5px 18px var(--card-menu-shadow); }
-.shape-appearance-dialog { border: var(--text-tool-stroke) solid var(--card-menu-border); border-radius: var(--search-radius-12); padding: var(--body-overlay-inset); color: var(--canvas-chrome-ink); }
+.shape-appearance-dialog {
+  box-sizing: border-box;
+  width: min(320px, calc(100vw - 32px));
+  max-height: calc(100dvh - 96px);
+  border: var(--text-tool-stroke) solid var(--tag-border);
+  border-radius: var(--search-radius-12);
+  padding: var(--body-overlay-inset);
+  color: var(--canvas-chrome-ink);
+  box-shadow: 0 8px 24px var(--card-menu-shadow);
+}
+.shape-appearance-dialog[data-anchored="true"] { position: fixed; inset: auto; margin: 0; }
+.shape-appearance-dialog[data-anchored="true"]::backdrop { background: transparent; }
 .shape-appearance-form { display: grid; gap: var(--body-content-padding); }
 .shape-appearance-heading { margin: 0; font-size: var(--canvas-chrome-heading-font-size); }
+.shape-appearance-form > label { display: grid; grid-template-columns: 6em minmax(0, 1fr); align-items: center; gap: 8px; }
+.shape-appearance-form > label > input { width: 100%; border: 1px solid var(--tag-border); border-radius: 5px; padding: 5px 7px; font: inherit; }
+.shape-appearance-actions button[type="submit"] { background: #faeddc; color: #583d2a; }
+.shape-appearance-actions button[type="submit"]:disabled { opacity: .55; }
 .shape-appearance-hint { margin: 0; color: var(--canvas-chrome-muted); font-size: var(--body-note-font-size); }
 .shape-appearance-conflict { display: grid; gap: var(--body-section-gap); }
 .shape-appearance-actions { display: flex; gap: var(--body-section-gap); }
 .shape-text-actions { padding: var(--body-control-gap); background: var(--card-color-ffffff); }
-.shape-text-actions--floating { position: fixed; z-index: 1000; border: var(--text-tool-stroke) solid var(--card-menu-border); border-radius: var(--body-panel-radius); }
+.shape-text-actions--floating {
+  position: fixed;
+  z-index: 40;
+  box-sizing: border-box;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  border: var(--text-tool-stroke) solid var(--card-menu-border);
+  border-radius: var(--body-panel-radius);
+  box-shadow: 0 5px 18px var(--card-menu-shadow);
+}
+.canvas[data-drawing-tool="text"] :is(.react-flow__pane, .react-flow__node) { cursor: text; }
+.canvas[data-drawing-tool]:not([data-drawing-tool="text"]) :is(.react-flow__pane, .react-flow__node) { cursor: crosshair; }
+.canvas[data-attachment-pick] .thought-card { outline: 1px dashed var(--workspace-focus); outline-offset: 4px; }
+.canvas[data-attachment-pick] .thought-card:is(:hover, :focus-within) { outline: 2px solid var(--workspace-focus); cursor: crosshair; }
 .shape-text-actions--editor { position: absolute; top: 100%; left: 0; min-width: 100%; }
 
 .image-crop { position: absolute; z-index: 20; outline: none; }

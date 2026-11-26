@@ -109,7 +109,7 @@ async function enter(page: Page, data: Awaited<ReturnType<typeof seed>>) {
 for (const both of [true, false]) {
   test(`旧looseA新框${both ? '完整A+B' : '仅B'}按本次全集替换`, async ({ page, workspace }) => {
     const data = await seed(page, workspace); await data.a.click(); await selected(page, [data.aId]);
-    await rectangle(page, { x: 1000, y: both ? 100 : 340 }, { x: 1160, y: 460 });
+    await rectangle(page, { x: 1000, y: both ? 35 : 340 }, { x: 1160, y: 460 });
     await selected(page, both ? [data.aId, data.bId] : [data.bId]); await unchanged(page, workspace, data);
   });
 }
@@ -149,12 +149,12 @@ test('entered Shift追加及Esc取消恢复完整选择和上下文，尾随up�
 test('缩小视图后仍以本次完整矩形选旧A和新B', async ({ page, workspace }) => {
   const data = await seed(page, workspace); await page.getByRole('button', { name: '缩小', exact: true }).click();
   expect((await view(page)).z).toBeLessThan(1); await data.a.click(); await selected(page, [data.aId]);
-  await rectangle(page, { x: 1000, y: 100 }, { x: 1160, y: 460 }); await selected(page, [data.aId, data.bId]);
+  await rectangle(page, { x: 1000, y: 35 }, { x: 1160, y: 460 }); await selected(page, [data.aId, data.bId]);
   await unchanged(page, workspace, data);
 });
 test('mouseup不同终点且无额外move，最终矩形包含A+B', async ({ page, workspace }) => {
   const data = await seed(page, workspace); await data.a.click(); await selected(page, [data.aId]);
-  await rectangle(page, { x: 1000, y: 100 }, { x: 1160, y: 260 }, false, { x: 1160, y: 460 });
+  await rectangle(page, { x: 1000, y: 35 }, { x: 1160, y: 260 }, false, { x: 1160, y: 460 });
   await selected(page, [data.aId, data.bId]); await unchanged(page, workspace, data);
 });
 test('held pointer autoPan的新矩形从未完整包含变成包含，停止move后仍正确命中', async ({ page, workspace }) => {

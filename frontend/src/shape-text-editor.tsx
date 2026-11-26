@@ -1,35 +1,22 @@
-import { useLayoutEffect, useRef, useState, type RefObject } from "react";
+import { useLayoutEffect, useRef, type ReactNode, type RefObject } from "react";
 import { createPortal } from "react-dom";
-import { useViewport } from "@xyflow/react";
+import { useNearbyCanvasControls } from "./nearby-canvas-controls";
 import type { ShapeTextConflict, ShapeTextSession } from "./shape-text-save";
 import { LayerMenu, type LayerMenuProps } from "./layer-menu";
 
-export function ShapeTextAction({ anchor, edit, appearance, remove, removeFromGroup, layer }: {
+export function ShapeTextAction({ anchor, edit, appearance, remove, removeFromGroup, layer, annotation }: {
   anchor: RefObject<HTMLDivElement | null>; edit: () => void; appearance: (trigger: HTMLButtonElement) => void; remove: () => void;
-  removeFromGroup?: (() => void) | undefined; layer?: LayerMenuProps | undefined;
+  annotation?: ReactNode; removeFromGroup?: (() => void) | undefined; layer?: LayerMenuProps | undefined;
 }) {
-  const element = useRef<HTMLDivElement>(null), viewport = useViewport();
-  const [point, setPoint] = useState({ left: 8, top: 8 });
-  useLayoutEffect(() => {
-    const measure = () => {
-      const box = anchor.current?.getBoundingClientRect(), menu = element.current?.getBoundingClientRect();
-      if (!box || !menu) return;
-      setPoint({ left: Math.max(8, Math.min(box.left, innerWidth - menu.width - 8)),
-        top: box.top - menu.height - 8 >= 8 ? box.top - menu.height - 8 : Math.min(box.bottom + 8, innerHeight - menu.height - 8) });
-    };
-    measure();
-    const observer = new ResizeObserver(measure);
-    if (anchor.current) observer.observe(anchor.current);
-    window.addEventListener("resize", measure);
-    window.addEventListener("scroll", measure, true);
-    return () => { observer.disconnect(); window.removeEventListener("resize", measure); window.removeEventListener("scroll", measure, true); };
-  }, [viewport.x, viewport.y, viewport.zoom]);
+  const element = useRef<HTMLDivElement>(null);
+  const { positions, placePopup } = useNearbyCanvasControls(anchor, element);
   return createPortal(<div ref={element} className="shape-text-actions shape-text-actions--floating" role="toolbar" aria-label="形状操作"
-    style={point}>
+    style={{ ...positions?.toolbar, maxWidth: positions?.maxWidth, visibility: positions ? undefined : "hidden" }}>
     <button onClick={event => { event.stopPropagation(); edit(); }}>编辑形状文字</button>
     <button aria-haspopup="dialog" onClick={event => appearance(event.currentTarget)}>形状外观</button>
     <button onClick={remove}>删除形状</button>
-    {layer && <LayerMenu {...layer} />}
+    {annotation}
+    {layer && <LayerMenu {...layer} placePopup={placePopup} />}
     {removeFromGroup && <button onClick={event => { event.stopPropagation(); removeFromGroup(); }}>移出组合</button>}
   </div>, document.body);
 }

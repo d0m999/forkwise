@@ -39,7 +39,7 @@ export function ShapeTools({ placing, disabled, choose }: {
     }}>
       {(Object.entries(shapeLabels) as [ShapeType, string][]).map(([type, label]) =>
         <button key={type} role="menuitem" disabled={disabled} style={{ textAlign: "left" }}
-          onClick={() => { setOpen(false); choose(type); }}>{label}</button>)}
+          onClick={() => { setOpen(false); trigger.current?.focus({ preventScroll: true }); choose(type); }}>{label}</button>)}
     </div>}
   </div>;
 }

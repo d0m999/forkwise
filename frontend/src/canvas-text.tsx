@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState } from "react";
+import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { useReactFlow } from "@xyflow/react";
 import { TextObjectTools } from "./text-object-tools";
 import { TextEditor } from "./text-editor";
@@ -21,6 +21,7 @@ export type TextData = {
   copy: () => void;
   remove?: (() => void) | undefined;
   removeFromGroup?: (() => void) | undefined;
+  annotation?: ReactNode;
   layer?: LayerMenuProps | undefined;
   transform: (next: CanvasText, origin: CanvasText) => void;
   compose: (active: boolean, content?: TextContent) => void;
@@ -96,6 +97,7 @@ export function CanvasTextNode({ data, selected }: NodeProps<Node<TextData>>) {
     <article
       ref={element}
       className="canvas-text"
+      data-selected={selected && !data.editing || undefined}
       style={{
         transform: geometry.preview
           ? `translate(${geometry.preview.item.pose.x - data.value.item.pose.x}px, ${geometry.preview.item.pose.y - data.value.item.pose.y}px)`
@@ -117,6 +119,7 @@ export function CanvasTextNode({ data, selected }: NodeProps<Node<TextData>>) {
           copy={data.copy}
           remove={data.remove}
           removeFromGroup={data.removeFromGroup}
+          annotation={data.annotation}
           layer={data.layer}
         />
       )}
