@@ -1,3 +1,4 @@
+import { CanvasToolButton } from "./canvas-tool-button";
 import { useEffect, useRef, useState } from "react";
 import type { CanvasStroke } from "../../backend/src/mapping/stroke-contracts";
 
@@ -13,22 +14,24 @@ export function StrokeTools({ active, disabled, choose }: {
     const outside = (event: PointerEvent) => {
       if (!root.current?.contains(event.target as Node)) setOpen(false);
     };
-    const escape = (event: KeyboardEvent) => {
-      if (event.key !== "Escape" || event.isComposing || event.keyCode === 229) return;
-      event.preventDefault(); setOpen(false); trigger.current?.focus();
-    };
     document.addEventListener("pointerdown", outside, true);
-    window.addEventListener("keydown", escape);
-    return () => {
-      document.removeEventListener("pointerdown", outside, true);
-      window.removeEventListener("keydown", escape);
-    };
+    return () => document.removeEventListener("pointerdown", outside, true);
   }, [open]);
-  return <div ref={root} style={{ position: "relative" }}>
-    <button ref={trigger} disabled={disabled} aria-haspopup="menu" aria-expanded={open}
-      aria-pressed={active !== null} onClick={() => setOpen(value => !value)}>画笔</button>
+  return <div ref={root} className="canvas-tool-presets"
+    onBlur={event => {
+      if (!event.currentTarget.contains(event.relatedTarget)) setOpen(false);
+    }}
+    onKeyDown={event => {
+      if (!open || event.key !== "Escape" || event.defaultPrevented || event.nativeEvent.isComposing || event.keyCode === 229) return;
+      event.preventDefault();
+      event.stopPropagation();
+      setOpen(false);
+      trigger.current?.focus();
+    }}>
+    <CanvasToolButton label="画笔" ref={trigger} disabled={disabled} aria-haspopup="menu" aria-expanded={open}
+      aria-pressed={active !== null} onClick={() => setOpen(value => !value)} />
     {open && <div role="menu" aria-label="画笔类型" className="canvas-preset-menu" style={{
-      position: "absolute", bottom: "calc(100% + 12px)", left: 0,
+      position: "absolute", bottom: "calc(100% + 12px)", right: 0,
       display: "grid", minWidth: 144,
     }}>
       {([['pen', '普通笔'], ['highlighter', '荧光笔']] as const).map(([kind, label]) =>

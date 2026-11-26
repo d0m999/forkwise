@@ -7,6 +7,7 @@ import { pasteJournal, pasteNotCommitted, type PasteAttempt } from "./paste-reco
 import type { CopyRef } from "./canvas-snapshot";
 import { nextPaste, pasteTranslation, type PasteSequence } from "./canvas-snapshot-geometry";
 import { SnapshotMenu } from "./snapshot-menu";
+import { CanvasToolButton } from "./canvas-tool-button";
 import { ExportMenu } from "./export-menu";
 import { ImportPackage, importDialogOpen } from "./import-package";
 import { WorkspaceProjectDialog } from './workspace-project-dialog';
@@ -92,6 +93,7 @@ import {
   type ProjectState,
 } from "./api";
 import "./style.css";
+import "./canvas-toolbar.css";
 import {
   DraftRecovery,
   draftAssetIds,
@@ -1264,6 +1266,17 @@ function Workspace() {
     void action({ commandId: crypto.randomUUID(), projectId: current.project.id, type: 'connector.reverse',
       expected: Object.fromEntries(prepared.map(line => [line.id, line.versionId])), payload: { ids: prepared.map(line => line.id) } });
   }
+  function chooseSelectionTool() {
+    if (strokeDraw.hasPending() || connectorCreate.hasPending()) return;
+    connectorEdit.cancel();
+    connectorCreate.deactivate();
+    strokeDraw.setMode(null);
+    setPlacing(false);
+    setShapePreset(null);
+    texts.setPlacing(false);
+    setPanTool(false);
+    setFrameTool(false);
+  }
   function beginCreationToolChoice() {
     const epoch = ++editorEpoch.current;
     connectorEdit.cancel();
@@ -1423,6 +1436,7 @@ function Workspace() {
         return;
       }
       if (shapeText.session || connectorLabel.session || texts.nodes.some(node => node.data.editing)) return;
+      chooseSelectionTool();
       event.preventDefault();
       canvasSelection.set({ targets: [], enteredGroupId: null });
       setFrameSelection(null);
@@ -3450,20 +3464,18 @@ function Workspace() {
           </svg>
         </button>
         <div className="workspace-actions">
-          <button
-            disabled={!state || busy || historyBlocked || imageGeometry.hasPending(state.project.id) || imageInput.hasPending(state.project.id)}
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={() => void travel("undo")}
-          >
-            撤销
-          </button>
-          <button
-            disabled={!state || busy || historyBlocked || imageGeometry.hasPending(state.project.id) || imageInput.hasPending(state.project.id)}
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={() => void travel("redo")}
-          >
-            重做
-          </button>
+          <div className="canvas-history-tools" role="group" aria-label="项目历史">
+            <CanvasToolButton label="撤销"
+              disabled={!state || busy || historyBlocked || imageGeometry.hasPending(state.project.id) || imageInput.hasPending(state.project.id)}
+              onMouseDown={e => e.preventDefault()}
+              onClick={() => void travel("undo")}
+            />
+            <CanvasToolButton label="重做"
+              disabled={!state || busy || historyBlocked || imageGeometry.hasPending(state.project.id) || imageInput.hasPending(state.project.id)}
+              onMouseDown={e => e.preventDefault()}
+              onClick={() => void travel("redo")}
+            />
+          </div>
           {state && <ProjectSearch key={state.project.id} projectId={state.project.id} revision={state.project.revision} tags={state.tags ?? []} cards={state.cards} onOpen={openSearch} disabled={busy || historyBlocked} />}
           <ImportPackage
             disabled={busy || historyBlocked}
@@ -3807,7 +3819,7 @@ function Workspace() {
             }}
           >
             <Background gap={24} size={1.5} color="var(--canvas-grid-color)" bgColor="var(--canvas-grid-surface)" />
-            <Controls showInteractive={false} />
+            <Controls className="canvas-zoom-tools" position="bottom-right" orientation="horizontal" showInteractive={false} />
             <ViewportPortal>
               <CanvasFrames drawMemberIds={frameDrawMemberIds} dropCandidateId={frameDropCandidate} key={`${state.project.id}:${frameEditorEpoch}`} state={state} preview={framePreview} selectedId={exportVisual ? null : selectedFrameId} selectedIds={exportVisual ? [] : selectedFrameIds} choose={chooseFrame}
                 focusId={frameEditorFocus.current?.projectId === state.project.id ? frameEditorFocus.current.id : null}
@@ -3915,27 +3927,18 @@ function Workspace() {
           <span>已选 {selectedConnectors.length} 条连线</span><button type="button" disabled={busy || historyBlocked || composition.current || !!pendingAction.current || connectorEdit.hasPending()} onClick={reverseConnectors}>反转方向</button>
         </div>}
         {state && (
-          <div className="creation-tools" aria-label="创作工具">
+          <div className="canvas-tool-dock" role="group" aria-label="创作工具">
             <SnapshotMenu canCopy={canCopySelection(state, canvasSelection.value, selectedConnectors, selectedFrameIds)}
               canCut={canCutSelection(state, canvasSelection.value, selectedConnectors, selectedFrameIds)}
               blocked={busy || historyBlocked || composition.current || !!pendingAction.current}
               cut={() => void cutSelection()} copy={() => void copySelection()} paste={() => void pasteSelection()} duplicate={() => void duplicateSelection()} />
-            <button
+            <CanvasToolButton label="选择"
+              aria-disabled={strokeDraw.hasPending() || connectorCreate.hasPending() || undefined}
               aria-pressed={!placing && !shapePreset && !strokeDraw.mode && !connectorCreate.mode && !panTool && !texts.placing && !frameTool}
-              onClick={() => {
-                if (strokeDraw.hasPending() || connectorCreate.hasPending()) return;
-                connectorEdit.cancel();
-                connectorCreate.deactivate();
-                strokeDraw.setMode(null);
-                setPlacing(false);
-                setShapePreset(null);
-                texts.setPlacing(false);
-                setPanTool(false); setFrameTool(false);
-              }}
-            >
-              选择
-            </button>
-            <button
+              onClick={chooseSelectionTool}
+            />
+            <CanvasToolButton label="移动"
+              aria-disabled={strokeDraw.hasPending() || undefined}
               aria-pressed={panTool}
               onClick={() => {
                 if (strokeDraw.hasPending()) return;
@@ -3946,58 +3949,56 @@ function Workspace() {
                 setPlacing(false);
                 setShapePreset(null);
                 texts.setPlacing(false);
+                setFrameTool(false);
                 setPanTool(true);
               }}
-            >
-              移动
-            </button>
-            <button
-              aria-label="对齐吸附"
-              aria-pressed={snap}
-              title="拖动时按住 Alt 临时关闭"
-              onClick={() => setSnap((value) => !value)}
-            >
-              对齐吸附：{snap ? "开" : "关"}
-            </button>
-            <button aria-pressed={frameTool} disabled={busy || historyBlocked || strokeDraw.drawing}
+            />
+            <CanvasToolButton label="对齐吸附" aria-pressed={snap}
+              hint={snap ? "对齐吸附：开（拖动时按 Alt 临时关闭）" : "对齐吸附：关"}
+              onClick={() => setSnap(value => !value)}
+            />
+            <CanvasToolButton label="分区" aria-pressed={frameTool} disabled={busy || historyBlocked || strokeDraw.drawing}
               onClick={() => {
                 beginCreationToolChoice();
                 strokeDraw.setMode(null); setPlacing(false); setShapePreset(null); texts.setPlacing(false); setPanTool(false); setFrameTool(false);
                 setFrameTool(true);
-              }}>分区</button>
-            <button
+              }} />
+            <span className="canvas-tool-divider" aria-hidden="true" />
+            <CanvasToolButton label="卡片" hint="新建卡片"
               aria-pressed={placing}
               disabled={busy || historyBlocked}
               onClick={chooseCardPlacement}
             >
-              卡片
-            </button>
-            <button aria-pressed={connectorCreate.mode} disabled={busy || historyBlocked || connectorCreate.hasPending() || strokeDraw.hasPending()}
+              <span className="canvas-tool-label">卡片</span>
+            </CanvasToolButton>
+            <CanvasToolButton label="连线" aria-pressed={connectorCreate.mode} disabled={busy || historyBlocked || connectorCreate.hasPending() || strokeDraw.hasPending()}
               onClick={() => {
                 if (!authority.current?.project.id || connectorCreationBlocked() || connectorCreate.hasPending()) return;
                 connectorEdit.cancel();
                 void connectorCreate.activate();
-              }}>连线</button>
-            <button aria-pressed={texts.placing} disabled={busy || historyBlocked || strokeDraw.drawing} onClick={() => { beginCreationToolChoice(); strokeDraw.setMode(null); setPlacing(false); setShapePreset(null); setPanTool(false); setFrameTool(false); texts.setPlacing(true); }}>文字</button>
+              }} />
+            <CanvasToolButton label="文字" aria-pressed={texts.placing} disabled={busy || historyBlocked || strokeDraw.drawing} onClick={() => { beginCreationToolChoice(); strokeDraw.setMode(null); setPlacing(false); setShapePreset(null); setPanTool(false); setFrameTool(false); texts.setPlacing(true); }} />
             <ShapeTools placing={shapePreset} disabled={busy || historyBlocked || strokeDraw.drawing} choose={type => {
               beginCreationToolChoice();
               strokeDraw.setMode(null); setPlacing(false); texts.setPlacing(false); setPanTool(false); setFrameTool(false); setShapePreset(type);
             }} />
             <StrokeTools active={strokeDraw.mode} disabled={busy || historyBlocked || strokeDraw.drawing} choose={chooseStroke} />
-            <button disabled={busy || historyBlocked || imageInput.pending || strokeDraw.drawing} onClick={() => imageFile.current?.click()}>图片</button>
+            <CanvasToolButton label="图片" disabled={busy || historyBlocked || imageInput.pending || strokeDraw.drawing} onClick={() => imageFile.current?.click()} />
             <input ref={imageFile} type="file" hidden accept="image/jpeg,image/png,image/webp,image/gif,image/svg+xml"
               onChange={event => { const file = event.currentTarget.files?.[0]; event.currentTarget.value = ''; if (file) void imageInput.begin(file); }} />
-            {imageInput.error && <section aria-label="图片导入失败">
-              <p role="alert">{imageInput.error}</p>
-              <button onClick={() => void imageInput.retry()}>重试图片保存</button>
-            </section>}
-            {imageInput.active && <button disabled={!imageInput.cancellable} onClick={imageInput.cancel}>取消图片导入</button>}
-            {imageInput.recoveryError && <p role="alert">{imageInput.recoveryError}</p>}
-            {imageInput.recoveries.filter(record => record.input.placement.projectId === state.project.id).map(record =>
-              <button key={record.key} disabled={busy || historyBlocked} onClick={() => void imageInput.recover(record.key)}>恢复未确认图片</button>)}
-            {shapePreset && <span>点击画布放置{shapePreset === "roundedRectangle" ? "圆角矩形" : shapePreset === "rectangle" ? "矩形" : shapePreset === "ellipse" ? "椭圆" : shapePreset === "diamond" ? "菱形" : "三角形"}</span>}
-            {texts.error && <span role="alert">{texts.error}</span>}
-            {placing && <span>点击画布放置卡片</span>}
+            <div className="canvas-tool-feedback">
+              {imageInput.error && <section aria-label="图片导入失败">
+                <p role="alert">{imageInput.error}</p>
+                <button onClick={() => void imageInput.retry()}>重试图片保存</button>
+              </section>}
+              {imageInput.active && <button disabled={!imageInput.cancellable} onClick={imageInput.cancel}>取消图片导入</button>}
+              {imageInput.recoveryError && <p role="alert">{imageInput.recoveryError}</p>}
+              {imageInput.recoveries.filter(record => record.input.placement.projectId === state.project.id).map(record =>
+                <button key={record.key} disabled={busy || historyBlocked} onClick={() => void imageInput.recover(record.key)}>恢复未确认图片</button>)}
+              {shapePreset && <span>点击画布放置{shapePreset === "roundedRectangle" ? "圆角矩形" : shapePreset === "rectangle" ? "矩形" : shapePreset === "ellipse" ? "椭圆" : shapePreset === "diamond" ? "菱形" : "三角形"}</span>}
+              {texts.error && <span role="alert">{texts.error}</span>}
+              {placing && <span>点击画布放置卡片</span>}
+            </div>
           </div>
         )}
       </main>

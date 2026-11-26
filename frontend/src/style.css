@@ -891,11 +891,6 @@ body:has(.workspace[data-board-full="true"]) .card-tooltip { display: none; }
   right: auto !important;
   left: 70px;
 }
-.react-flow__controls {
-  bottom: 16px !important;
-  box-shadow: none !important;
-  border: 1px solid #dce0e7;
-}
 .react-flow__node:focus-visible {
   outline: 2px solid #365ec9;
   border-radius: 9px;
@@ -924,7 +919,11 @@ body:has(.workspace[data-board-full="true"]) .card-tooltip { display: none; }
   .workspace-brand strong,
   .project-search-trigger span,
   .project-search-trigger kbd { display: none; }
-  .project-tabs { max-width: 48vw; }
+  /* Keep the scroll edge aligned to a CSS pixel when the full tab width is available. */
+  .project-tabs {
+    max-width: 48vw;
+    max-width: round(down, 48vw, 1px);
+  }
   .project-tabs > button { max-width: 160px; padding-inline: 10px; }
   .workspace-actions { gap: 0; }
   .workspace-actions .project-search-trigger { margin: 0; border-color: transparent; }

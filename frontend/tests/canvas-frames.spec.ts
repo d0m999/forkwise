@@ -788,7 +788,7 @@ test('分区编辑成功 ACK 在途改选空白后结束原会话，不抢回焦
     const name = page.getByRole('textbox', { name: '分区名称', exact: true }); await name.fill('已确认的分区名称'); await name.press('Enter');
     await expect.poll(() => attempts.length).toBe(1); expect(attempts[0].status).toBe(200);
     const pane = (await page.locator('.react-flow__pane').boundingBox())!;
-    await page.mouse.click(pane.x + pane.width - 30, pane.y + pane.height - 60);
+    await page.mouse.click(pane.x + pane.width - 30, pane.y + pane.height - 130);
     await expect(page.locator('[data-frame-id="' + f.frame.id + '"]')).toHaveAttribute('data-selected', 'false');
     release(); await expect(page.getByRole('status')).toHaveText('已保存到本机');
     await expect(name).toHaveCount(0);
@@ -822,7 +822,7 @@ for (const mode of ['unknown-ack', 'confirmed-read-failure'] as const) {
       const committed = await workspace.state(), historyUrl = workspace.origin + '/api/mapping/projects/' + f.before.project.id + '/history';
       const history = await (await page.request.get(historyUrl)).json();
       const pane = (await page.locator('.react-flow__pane').boundingBox())!;
-      await page.mouse.click(pane.x + pane.width - 30, pane.y + pane.height - 60);
+      await page.mouse.click(pane.x + pane.width - 30, pane.y + pane.height - 130);
       await retry.click(); await expect(retry).toHaveCount(0); await expect(name).toHaveCount(0);
       await expect(page.getByRole('button', { name: '等待确认的分区', exact: true })).not.toBeFocused();
       await expect(page.locator('[data-frame-id="' + f.frame.id + '"]')).toHaveAttribute('data-selected', 'false');
@@ -847,7 +847,7 @@ test('分区编辑表单删除 ACK 在途改选，成功结束原会话且 undo 
     await page.getByRole('button', { name: '删除分区', exact: true }).click();
     await expect.poll(() => attempts.length).toBe(1); expect(attempts[0].status).toBe(200);
     const pane = (await page.locator('.react-flow__pane').boundingBox())!;
-    await page.mouse.click(pane.x + pane.width - 30, pane.y + pane.height - 60);
+    await page.mouse.click(pane.x + pane.width - 30, pane.y + pane.height - 130);
     release(); await expect(page.getByRole('status')).toHaveText('已保存到本机');
     expect((await workspace.state()).frames).toEqual([]);
     await page.getByRole('button', { name: '撤销', exact: true }).click();

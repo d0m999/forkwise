@@ -1,0 +1,238 @@
+.workspace {
+  --canvas-dock-bottom: 34px;
+  --canvas-corner-bottom: 38px;
+  --canvas-tool-size: 38px;
+  --canvas-tool-gap: 3px;
+  --canvas-tool-active: #fff0de;
+  --canvas-tool-active-ink: #623c2a;
+  --canvas-tool-shadow: 0 8px 30px #292b290a, 0 2px 6px #292b2905;
+}
+
+.canvas-tool-dock,
+.canvas-history-tools,
+.react-flow__controls.canvas-zoom-tools {
+  display: flex;
+  align-items: center;
+  gap: var(--canvas-tool-gap);
+  box-sizing: border-box;
+  background: var(--card-color-ffffff);
+  color: var(--workspace-ink);
+  border: 1px solid var(--workspace-line);
+  border-radius: 10px;
+  box-shadow: var(--canvas-tool-shadow);
+}
+
+.canvas-tool-dock {
+  position: absolute;
+  z-index: 5;
+  inset-inline-start: 50%;
+  bottom: var(--canvas-dock-bottom);
+  transform: translateX(-50%);
+  padding: 6px;
+  width: max-content;
+  max-width: calc(100% - 2 * var(--workspace-gutter));
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
+.canvas-history-tools {
+  position: fixed;
+  bottom: var(--canvas-corner-bottom);
+  inset-inline-start: var(--workspace-gutter);
+  padding: 2px;
+}
+
+.workspace:is([data-board-full="true"], :not([data-revision]), :has(> .project-nav, > .recovery-error, > .recovery-panel)) .canvas-history-tools {
+  --canvas-history-tip-top: 100%;
+  --canvas-history-tip-bottom: auto;
+  position: static;
+  padding: 0;
+  border-color: transparent;
+  box-shadow: none;
+}
+
+.react-flow__controls.canvas-zoom-tools {
+  bottom: var(--canvas-corner-bottom);
+  inset-inline-end: var(--workspace-gutter);
+  margin: 0;
+  padding: 2px;
+}
+
+.canvas-tool-button,
+.canvas-zoom-tools .react-flow__controls-button {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-width: var(--canvas-tool-size);
+  height: var(--canvas-tool-size);
+  padding: 0;
+  color: inherit;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+}
+
+.canvas-zoom-tools.horizontal .react-flow__controls-button {
+  border: 1px solid transparent;
+}
+
+.canvas-zoom-tools .react-flow__controls-button svg {
+  max-width: 15px;
+  max-height: 15px;
+}
+
+.canvas-tool-button:has(.canvas-tool-label) {
+  padding-inline: 8px;
+  border-color: var(--workspace-line);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.canvas-tool-button[aria-pressed="true"] {
+  background: var(--canvas-tool-active);
+  color: var(--canvas-tool-active-ink);
+  box-shadow: inset 0 -2px currentColor;
+}
+
+.canvas-tool-button:not(:disabled, [aria-disabled="true"], [aria-pressed="true"]):hover,
+.canvas-zoom-tools .react-flow__controls-button:hover:not(:disabled) {
+  background: var(--canvas-grid-surface);
+  color: var(--workspace-ink);
+}
+
+.canvas-tool-button:focus-visible,
+.canvas-zoom-tools .react-flow__controls-button:focus-visible {
+  outline: 2px solid var(--workspace-focus);
+  outline-offset: -2px;
+}
+
+.canvas-tool-button:is(:disabled, [aria-disabled="true"]),
+.canvas-zoom-tools .react-flow__controls-button:disabled {
+  cursor: not-allowed;
+  opacity: 1;
+  pointer-events: auto;
+  border: 1px dashed var(--workspace-line);
+}
+
+.canvas-tool-button:disabled:hover,
+.canvas-tool-button[aria-disabled="true"]:hover {
+  background: transparent;
+}
+
+.canvas-tool-button:is(:disabled, [aria-disabled="true"]) > :is(svg, .canvas-tool-label) {
+  opacity: .5;
+}
+
+.canvas-tool-divider {
+  width: 1px;
+  height: 21px;
+  margin-inline: 3px;
+  background: var(--workspace-line);
+}
+
+.canvas-tool-presets {
+  position: relative;
+}
+
+.canvas-tool-hint,
+.canvas-zoom-tools .react-flow__controls-button:focus-visible::after {
+  position: absolute;
+  z-index: 1;
+  bottom: 100%;
+  inset-inline-start: 50%;
+  transform: translateX(-50%);
+  box-sizing: border-box;
+  padding: 5px 8px;
+  border-radius: 5px;
+  background: var(--workspace-ink);
+  color: var(--card-color-ffffff);
+  font-size: 12px;
+  font-weight: 400;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.canvas-tool-hint {
+  display: none;
+}
+
+.canvas-tool-button:not([aria-expanded="true"]):is(:hover, :focus-visible) .canvas-tool-hint {
+  display: block;
+}
+
+.canvas-history-tools .canvas-tool-hint {
+  top: var(--canvas-history-tip-top, auto);
+  bottom: var(--canvas-history-tip-bottom, 100%);
+  inset-inline-start: 0;
+  transform: none;
+}
+
+.canvas-zoom-tools .react-flow__controls-button:focus-visible::after {
+  content: attr(aria-label);
+  inset-inline: auto 0;
+  transform: none;
+}
+
+.canvas-tool-feedback:empty { display: none; }
+
+.canvas-tool-feedback:not(:empty) {
+  position: absolute;
+  bottom: calc(100% + 32px);
+  inset-inline-start: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  box-sizing: border-box;
+  width: max-content;
+  max-width: 100%;
+  padding: 4px 8px;
+  background: var(--card-color-ffffff);
+  border: 1px solid var(--workspace-line);
+  border-radius: 6px;
+  box-shadow: var(--canvas-tool-shadow);
+  color: var(--workspace-ink);
+  font-size: 12px;
+}
+
+.canvas-tool-feedback p {
+  margin: 0;
+}
+
+.canvas:has(.canvas-tool-dock) > .connector-tools {
+  bottom: calc(var(--canvas-corner-bottom) + 54px);
+}
+
+/* The board can narrow the live canvas to 480px on a desktop window. */
+.workspace:has(.canvas.with-editor) {
+  --canvas-corner-bottom: 94px;
+  --canvas-tool-size: 34px;
+  --canvas-tool-gap: 2px;
+}
+
+.canvas.with-editor .canvas-tool-dock {
+  max-width: calc(100% - 16px);
+  padding: 5px;
+}
+
+@media (max-width: 850px) {
+  .workspace {
+    --canvas-corner-bottom: 94px;
+    --canvas-tool-size: 36px;
+  }
+}
+
+@media (max-width: 500px) {
+  .workspace {
+    --canvas-corner-bottom: 130px;
+    --canvas-tool-size: 34px;
+  }
+
+  .canvas-tool-divider {
+    display: none;
+  }
+}

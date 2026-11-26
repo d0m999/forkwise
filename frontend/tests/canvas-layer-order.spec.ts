@@ -248,7 +248,7 @@ test("撤销重做、删除恢复、新建置顶、保存重开后UI与权威投
   await page.getByLabel("卡片标题", { exact: true }).fill("新卡");
   await page.getByLabel("卡片标题", { exact: true }).press("Enter");
   await expect(page.getByRole("status")).toHaveText("已保存到本机");
-  await page.locator(".react-flow__pane").click({ position: { x: pane.width - 40, y: pane.height - 40 } });
+  await page.locator(".react-flow__pane").click({ position: { x: pane.width - 40, y: pane.height - 130 } });
   const created = await workspace.state();
   expect(order(created).at(-1)).toBe(created.cards.find(value => value.title === "新卡")!.item.id);
 });

@@ -1,3 +1,4 @@
+import { CanvasToolButton } from "./canvas-tool-button";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useViewport } from "@xyflow/react";
@@ -58,11 +59,9 @@ export function SnapshotMenu({ canCopy, canCut, blocked, cut, copy, paste, dupli
     menu.current?.querySelector<HTMLButtonElement>("button:not(:disabled)")?.focus();
   }, [open, point]);
   return <>
-    <button ref={trigger} type="button" aria-haspopup="menu" aria-expanded={open} aria-disabled={blocked}
+    <CanvasToolButton label="复制" ref={trigger} aria-haspopup="menu" aria-expanded={open} aria-disabled={blocked}
       onPointerDown={event => event.stopPropagation()}
-      onClick={event => { event.stopPropagation(); if (!blocked) setOpen(value => !value); }}>
-      复制
-    </button>
+      onClick={event => { event.stopPropagation(); if (!blocked) setOpen(value => !value); }} />
     {open && createPortal(<div ref={menu} role="menu" aria-label="复制操作" className="layer-menu-popup"
       style={{ position: "fixed", left: point?.left ?? 0, top: point?.top ?? 0, visibility: point ? "visible" : "hidden" }}
       onPointerDown={event => event.stopPropagation()} onClick={event => event.stopPropagation()}
