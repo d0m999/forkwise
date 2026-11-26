@@ -221,10 +221,10 @@ button[aria-current="true"] {
 }
 .canvas {
   position: absolute;
-  inset: 44px 0 0;
+  inset: 44px var(--agent-chat-width, 0px) 0 0;
 }
 .canvas.with-editor {
-  right: var(--board-width, 544px);
+  right: calc(var(--board-width, 544px) + var(--agent-chat-width, 0px));
 }
 .workspace[data-board-full="true"] .canvas.with-editor { visibility: hidden; pointer-events: none; }
 body:has(.workspace[data-board-full="true"]) .card-floating,
@@ -375,7 +375,7 @@ body:has(.workspace[data-board-full="true"]) .card-tooltip { display: none; }
 .connector-tools { bottom: var(--connector-tools-bottom); z-index: var(--connector-controls-layer); }
 .body-editor {
   position: absolute;
-  right: 0;
+  right: var(--agent-chat-width, 0px);
   top: 44px;
   bottom: 0;
   width: 360px;
@@ -478,7 +478,7 @@ body:has(.workspace[data-board-full="true"]) .card-tooltip { display: none; }
 .save-state {
   position: absolute;
   bottom: 8px;
-  right: 16px;
+  right: calc(16px + var(--agent-chat-width, 0px));
   z-index: 8;
   max-width: min(600px, 90vw);
   display: flex;
@@ -702,8 +702,8 @@ body:has(.workspace[data-board-full="true"]) .card-tooltip { display: none; }
   }
   .save-state {
     bottom: 10px;
-    right: 8px;
-    max-width: 90vw;
+    right: calc(8px + var(--agent-chat-width, 0px));
+    max-width: calc(90vw - var(--agent-chat-width, 0px));
   }
   .creation-tools span {
     display: none;

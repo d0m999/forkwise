@@ -11,6 +11,8 @@ import { SearchQuerySchema } from './search-contracts.js';
 import { EXECUTE_FALLBACK_CODE } from './recovery-contract.js';
 import { versionDomains } from './read-contracts.js';
 import { readableMarkdown } from './readable-summary.js';
+import type { AgentChat } from '../agent-chat/chat.js';
+import type { ChatGptAuthorization } from '../agent-chat/siwc.js';
 
 // 命令接口的 JSON 请求体上限（asset.save、canvas.paste、project.import 共用）。
 export const EXECUTE_BODY_LIMIT = 48 * 1024 * 1024;
@@ -22,6 +24,7 @@ export function createWorkspaceApp(
   mapping: Mapping,
   origin: string,
   staticFile: (path: string) => Response,
+  agent?: { chat: AgentChat; authorization: ChatGptAuthorization },
 ) {
   const url = new URL(origin);
   requireThat(
@@ -45,9 +48,11 @@ export function createWorkspaceApp(
       '仅允许本机页面访问',
       403,
     );
+    const oauthNavigation = agent && c.req.method === 'GET' &&
+      (c.req.path === '/auth/callback' || c.req.path === '/auth/result');
     const site = c.req.header('sec-fetch-site');
     requireThat(
-      !site || site === 'none' || site === 'same-origin',
+      oauthNavigation || !site || site === 'none' || site === 'same-origin',
       'CROSS_SITE',
       '拒绝跨站访问',
       403,
@@ -98,6 +103,36 @@ export function createWorkspaceApp(
     mapping.saveWorkspaceGuide(preference, c.get('principal'));
     return c.body(null, 204);
   });
+  if (agent) {
+    app.use('/api/agent-chat/*', async (c, next) => {
+      mapping.access.human(c.get('principal'));
+      await next();
+    });
+    app.get('/api/agent-chat/status', (c) => c.json(agent.authorization.status()));
+    app.post('/api/agent-chat/authorization', async (c) => c.json({ url: await agent.authorization.begin() }));
+    app.get('/auth/callback', async (c) => {
+      try {
+        await agent.authorization.finish(new URL(c.req.url));
+        return c.redirect('/auth/result?state=complete', 303);
+      } catch {
+        return c.redirect('/auth/result?state=failed', 303);
+      }
+    });
+    app.get('/auth/result', (c) => c.text(c.req.query('state') === 'complete'
+      ? '授权流程已完成。请返回见岔工作台。'
+      : '授权未完成。请返回见岔工作台，查看状态或重试。'));
+    app.get('/api/agent-chat/conversations', (c) => c.json({ conversations: agent.chat.list() }));
+    app.post('/api/agent-chat/conversations', async (c) => {
+      z.object({}).strict().parse(await c.req.json());
+      return c.json(agent.chat.create(), 201);
+    });
+    app.get('/api/agent-chat/conversations/:id', async (c) =>
+      c.json(await agent.chat.get(z.uuid().parse(c.req.param('id')))));
+    app.post('/api/agent-chat/conversations/:id/turns', async (c) => {
+      const { text } = z.object({ text: z.string().trim().min(1).max(32_000) }).strict().parse(await c.req.json());
+      return c.json(await agent.chat.send(z.uuid().parse(c.req.param('id')), text), 202);
+    });
+  }
   const backup = mapping.backup;
   if (backup) {
     app.get('/api/workspace/backup', (c) => c.json(backup.status(c.get('principal'))));

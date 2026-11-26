@@ -33,12 +33,15 @@ export function WritingBoard({ projectId, cardId, opened, title, status, onClose
   }, [preferred, narrow, max, workspaceWidth]);
   useLayoutEffect(() => {
     const workspace = board.current!.closest<HTMLElement>(".workspace")!;
-    const measure = () => setWorkspaceWidth(workspace.clientWidth);
+    const measure = () => {
+      const chatWidth = workspace.querySelector<HTMLElement>("#agent-chat")?.offsetWidth ?? 0;
+      setWorkspaceWidth(workspace.clientWidth - chatWidth);
+    };
     measure();
     const observer = new ResizeObserver(measure);
     observer.observe(workspace);
     const mutation = new MutationObserver(measure);
-    mutation.observe(workspace, { attributes: true, attributeFilter: ["style"] });
+    mutation.observe(workspace, { attributes: true, attributeFilter: ["style", "data-agent-chat-open"] });
     return () => { observer.disconnect(); mutation.disconnect(); };
   }, []);
   useLayoutEffect(() => {

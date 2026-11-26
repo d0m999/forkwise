@@ -26,6 +26,8 @@ const origin = `http://127.0.0.1:${port}`;
 // 环境校验先于工作台模块加载：缺目录时立即失败，不因新增映射模块拖慢启动。
 const { openMapping } = await import('./mapping/storage.js');
 const { createWorkspaceApp } = await import('./mapping/http.js');
+const { AgentChat, openAgentChatDirectory } = await import('./agent-chat/chat.js');
+const { ChatGptAuthorization } = await import('./agent-chat/siwc.js');
 const mapping = openMapping(directory, {
   workspaceBackup: {
     version,
@@ -33,6 +35,9 @@ const mapping = openMapping(directory, {
     identityFile: process.env.FORKWISE_BACKUP_IDENTITY,
   },
 });
+const chatDirectory = openAgentChatDirectory(directory);
+const authorization = new ChatGptAuthorization(chatDirectory, origin);
+const chat = new AgentChat(chatDirectory, version, () => authorization.token());
 const types: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
@@ -48,7 +53,7 @@ const app = createWorkspaceApp(mapping, origin, (path) => {
   )
     return new Response('资源不存在', { status: 404 });
   return new Response(readFileSync(file), { headers: { 'Content-Type': types[extname(file)]! } });
-});
+}, { chat, authorization });
 const server = serve({ fetch: app.fetch, hostname: '127.0.0.1', port }, () => {
   const accessPath = resolve(directory, 'local-access.json');
   let fd: number | undefined;
@@ -88,6 +93,7 @@ function close() {
   server.close(() => {
     mapping.close();
   });
+  void chat.close();
   if ('closeIdleConnections' in server) server.closeIdleConnections();
   // Accepted preconnections/incomplete HTTP requests are not classified as
   // idle by Node. Explicit shutdown closes them after synchronous Mapping

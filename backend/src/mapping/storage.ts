@@ -59,6 +59,7 @@ function inspectWorkspaceDirectory(directory: string) {
   let existing = false;
   let sidecar = false;
   let accessFile = false;
+  let agentChat = false;
   try {
     const directoryInfo = lstatSync(directory);
     if (!directoryInfo.isDirectory()) throw new Error('请使用独立的真实数据目录');
@@ -69,6 +70,10 @@ function inspectWorkspaceDirectory(directory: string) {
       if (entry === WORKSPACE_DATABASE_FILENAME) existing = true;
       if (entry === workspaceAccessFilename) accessFile = true;
       if (entry === workspaceWalFilename || entry === workspaceShmFilename) sidecar = true;
+      if (entry === 'agent-chat' && info.isDirectory() && info.uid === process.getuid?.() && (info.mode & 0o077) === 0) {
+        agentChat = true;
+        continue;
+      }
       if (!workspaceDataFilenames.has(entry))
         throw new Error('数据目录包含旧资料或链接，请使用新的隔离目录');
       requirePrivateWorkspaceFile(info);
@@ -78,6 +83,7 @@ function inspectWorkspaceDirectory(directory: string) {
   }
   if (!existing && sidecar) throw new Error('缺失主库，残留 WAL/SHM 已保留；请先恢复完整副本');
   if (!existing && accessFile) throw new Error('缺失主库，启动凭证原件已保留');
+  if (!existing && agentChat) throw new Error('缺失主库，本机对话原件已保留');
   return { existing, accessFile };
 }
 

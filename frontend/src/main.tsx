@@ -10,6 +10,7 @@ import { SnapshotMenu } from "./snapshot-menu";
 import { ExportMenu } from "./export-menu";
 import { ImportPackage, importDialogOpen } from "./import-package";
 import { WorkspaceGuide } from "./workspace-guide";
+import { AgentChat } from "./agent-chat";
 import { WorkspaceBackup } from "./workspace-backup";
 import { renderCanvasPng, type CanvasExportVisual } from "./canvas-export";
 import { useCanvasImageInput } from "./canvas-image-input";
@@ -296,6 +297,7 @@ function draftKey(projectId: string, cardId: string, field: Draft["field"]) {
   return JSON.stringify([projectId, cardId, field]);
 }
 function Workspace() {
+  const [chatOpen, setChatOpen] = useState(false);
   const [state, setState] = useState<ProjectState | null>(null);
   const [launchReady, setLaunchReady] = useState(false);
   const [launchEmpty, setLaunchEmpty] = useState(false);
@@ -761,7 +763,7 @@ function Workspace() {
       if (event.isComposing || event.keyCode === 229 || composition.current)
         return;
       const target = event.target as HTMLElement;
-      if (backupDialog.current?.open || target.closest("dialog.project-search, dialog.shape-appearance-dialog, dialog.organize-dialog, dialog.attachment-copy-dialog")) return;
+      if (backupDialog.current?.open || target.closest(".agent-chat, dialog.project-search, dialog.shape-appearance-dialog, dialog.organize-dialog, dialog.attachment-copy-dialog")) return;
       // 导入对话框是模态表单，不是原生 <dialog>：打开期间画布动作历史一律不动。
       // 这里直接返回、不 preventDefault，名称输入框的原生撤销照常生效。
       if (importDialogOpen()) return;
@@ -2609,7 +2611,7 @@ function Workspace() {
   }
   useEffect(() => {
     const editing = (target: EventTarget | null) => target instanceof Element &&
-      !!target.closest("input, textarea, [contenteditable=true], dialog, [role=dialog], [role=menu]");
+      !!target.closest(".agent-chat, input, textarea, [contenteditable=true], dialog, [role=dialog], [role=menu]");
     const keydown = (event: KeyboardEvent) => {
       if (!(event.metaKey || event.ctrlKey) || event.altKey || event.repeat || event.isComposing || event.keyCode === 229) return;
       const key = event.key.toLowerCase();
@@ -3091,6 +3093,7 @@ function Workspace() {
   return (
     <div
       className="workspace"
+      data-agent-chat-open={chatOpen || undefined}
       data-snapshot={state?.snapshot}
       data-revision={state?.project.revision}
       onClickCapture={event => {
@@ -3193,7 +3196,11 @@ function Workspace() {
           if (!root) throw new Error('画布尚未完成绘制，无法导出');
           return renderCanvasPng(root, setExportVisual, () => exportCaptureIntact(snapshot.snapshot));
         }} />}
+        <button type="button" aria-expanded={chatOpen} aria-controls="agent-chat" onClick={() => setChatOpen(open => !open)}>
+          Codex 对话
+        </button>
       </header>
+      <AgentChat open={chatOpen} />
       {nav && (
         <aside className="project-nav">
           <div className="nav-heading">
