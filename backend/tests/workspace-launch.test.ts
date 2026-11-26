@@ -14,3 +14,19 @@ it('启动命令未显式指定数据目录时直接拒绝，不回退到旧 .da
   expect(result.status).toBe(1);
   expect(result.stderr).toContain('请显式设置 FORKWISE_DATA_DIR');
 });
+
+it('作为受控宿主导入时只公开启动函数，不主动运行 CLI 预检', () => {
+  const env = { ...process.env };
+  delete env.FORKWISE_DATA_DIR;
+  const result = spawnSync(process.execPath, [
+    '--import', 'tsx', '--input-type=module', '--eval',
+    'const { startWorkspace } = await import("./src/workspace-server.ts"); if (typeof startWorkspace !== "function") process.exit(2)',
+  ], {
+    cwd: fileURLToPath(new URL('..', import.meta.url)),
+    env,
+    encoding: 'utf8',
+    timeout: 10000,
+  });
+  expect(result.status).toBe(0);
+  expect(result.stderr).toBe('');
+});

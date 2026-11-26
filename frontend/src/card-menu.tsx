@@ -28,6 +28,7 @@ export function CardMenu({
   onEdit,
   onBody,
   onAI,
+  onVerification,
   onAddAttachment,
   onDelete,
   onRemoveFromGroup,
@@ -42,6 +43,7 @@ export function CardMenu({
   onEdit: (origin?: HTMLButtonElement) => void;
   onBody: () => void;
   onAI: () => void;
+  onVerification?: (() => void) | undefined;
   onAddAttachment: (file: File) => void;
   onDelete: () => void;
   onRemoveFromGroup?: (() => void) | undefined;
@@ -231,6 +233,14 @@ export function CardMenu({
               >
                 打开写字板
               </button>
+              {onVerification && (
+                <button type="button" disabled={blocked} aria-haspopup="dialog" onClick={() => {
+                  close();
+                  onVerification();
+                }}>
+                  公开查证
+                </button>
+              )}
               <AddAttachmentButton blocked={attachmentWriteBlocked} onAdd={file => { close(); onAddAttachment(file); }} />
               <button disabled={blocked} onClick={() => { close(false); onDelete(); }}>删除卡片</button>
               {onRemoveFromGroup && <button disabled={blocked} onClick={event => { event.stopPropagation(); close(false); onRemoveFromGroup(); }}>移出组合</button>}

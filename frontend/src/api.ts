@@ -3,7 +3,7 @@ import type { MediaAsset, ImageAsset } from '../../backend/src/mapping/media';
 import type { CutStateView } from '../../backend/src/mapping/cut-contracts';
 import type { ImportPreview } from '../../backend/src/mapping/package-import';
 import type { CanvasShape } from '../../backend/src/mapping/shape-contracts';
-import type { OrganizeRequest, OrganizeSummary, OrganizeTask } from '../../backend/src/mapping/organize-contracts';
+import type { OrganizeRequest, OrganizeStatus, OrganizeSummary, OrganizeTask, OrganizeTaskView } from '../../backend/src/mapping/organize-contracts';
 import type {
   CardIdentity,
   Command,
@@ -66,16 +66,16 @@ function organizePath(projectId: string) {
   return `/projects/${encodeURIComponent(projectId)}/organize`;
 }
 export const api = {
-  organizeStatus: (projectId: string) => request<{ model: string | null }>(`${organizePath(projectId)}/status`),
-  organizeList: (projectId: string, cardId?: string) => request<OrganizeSummary[]>(cardId
+  organizeStatus: (projectId: string, verification = false) => request<OrganizeStatus>(`${organizePath(projectId)}/status${verification ? '?kind=verification' : ''}`),
+  organizeList: (projectId: string, cardId?: string, verification = false) => request<OrganizeSummary[]>((cardId
     ? `/projects/${encodeURIComponent(projectId)}/cards/${encodeURIComponent(cardId)}/organize/tasks`
-    : `${organizePath(projectId)}/tasks`),
+    : `${organizePath(projectId)}/tasks`) + (verification ? '?kind=verification' : '')),
   organizeStart: (projectId: string, input: OrganizeRequest) =>
     request<OrganizeTask>(`${organizePath(projectId)}/tasks`, input),
   organizeCancelStart: (projectId: string, input: OrganizeRequest) =>
     request<OrganizeTask>(`${organizePath(projectId)}/tasks/cancel-start`, input),
   organizeTask: (projectId: string, taskId: string) =>
-    request<OrganizeTask>(`${organizePath(projectId)}/tasks/${encodeURIComponent(taskId)}`),
+    request<OrganizeTaskView>(`${organizePath(projectId)}/tasks/${encodeURIComponent(taskId)}`),
   organizeRetry: (projectId: string, taskId: string, attempt: number, requestId: string) =>
     request<OrganizeTask>(`${organizePath(projectId)}/tasks/${encodeURIComponent(taskId)}/retry`, { attempt, requestId }),
   organizeCancel: (projectId: string, taskId: string, attempt: number) =>

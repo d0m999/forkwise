@@ -26,9 +26,10 @@ export type Workspace = {
   installOriginalTagColor: (id: string, color: string) => Promise<void>;
   installOriginalShapeItem: (id: string, itemId: string) => Promise<void>;
 };
-export const test = base.extend<{ workspace: Workspace; workspaceStartsEmpty: boolean }>({
+export const test = base.extend<{ workspace: Workspace; workspaceStartsEmpty: boolean; verificationTransport: boolean | 'denied-retry' | 'gaps-on-retry' }>({
   workspaceStartsEmpty: [false, { option: true }],
-  workspace: async ({ page, workspaceStartsEmpty }, use, testInfo) => {
+  verificationTransport: [false, { option: true }],
+  workspace: async ({ page, workspaceStartsEmpty, verificationTransport }, use, testInfo) => {
     const directory = mkdtempSync(join(tmpdir(), "forkwise-issue10-"));
     const evidence = process.env.FORKWISE_ISSUE10_RESOURCE_LOG;
     const record = (event: Record<string, unknown>) => {
@@ -47,10 +48,15 @@ export const test = base.extend<{ workspace: Workspace; workspaceStartsEmpty: bo
       }
     }
     async function start() {
-      server = spawn(process.execPath, ["dist/src/workspace-server.js"], {
+      const entry = verificationTransport ? "tests/fixtures/verification-transport.mjs" : "dist/src/workspace-server.js";
+      server = spawn(process.execPath, [entry], {
         cwd: resolve("../backend"),
         env: {
           ...process.env,
+          OPENAI_API_KEY: undefined,
+          FORKWISE_OPENAI_ORGANIZE_QUALIFICATION: undefined,
+          SEC_USER_AGENT: undefined,
+          FORKWISE_TEST_SEC_RETRY_SCENARIO: typeof verificationTransport === 'string' ? verificationTransport : undefined,
           FORKWISE_DATA_DIR: directory,
           FORKWISE_PORT: new URL(origin).port,
         },

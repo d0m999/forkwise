@@ -22,7 +22,28 @@ export function initializeMedia(db: Database.Database) {
 export function readAsset(db: Database.Database, projectId: string, id: string): MediaAsset {
   const value = readAssetRow(db, projectId, id);
   requireThat(value, 'MEDIA_NOT_PERSISTED', '所需媒体尚未持久保存，请完成或移除媒体后重试', 409);
-  return JSON.parse(value) as MediaAsset;
+  let asset: MediaAsset;
+  try {
+    asset = JSON.parse(value) as MediaAsset;
+  } catch {
+    requireThat(false, 'ASSET_CORRUPT', '原件记录损坏，无法读取');
+  }
+  verifyAssetBytes(asset);
+  return asset;
+}
+
+export function verifyAssetBytes(asset: Pick<MediaAsset, 'base64' | 'hash'>) {
+  requireThat(
+    typeof asset?.base64 === 'string' && asset.base64.length > 0,
+    'ASSET_CORRUPT',
+    '原件字节损坏，无法读取',
+  );
+  const bytes = Buffer.from(asset.base64, 'base64');
+  requireThat(
+    bytes.length > 0 && assetHash(bytes) === asset.hash,
+    'ASSET_CORRUPT',
+    '原件字节损坏，无法读取',
+  );
 }
 export function saveAsset(
   db: Database.Database,
@@ -104,7 +125,7 @@ function readAssetRow(db: Database.Database, projectId: string, id: string) {
 }
 
 // 资源写入统一经此校验：redo 恢复历史资源时也不能覆盖同 ID 的不可变内容。
-function writeAssetRow(db: Database.Database, projectId: string, value: MediaAsset) {
+export function writeAssetRow(db: Database.Database, projectId: string, value: MediaAsset) {
   const serialized = JSON.stringify(value);
   const existing = readAssetRow(db, projectId, value.id);
   requireThat(!existing || existing === serialized, 'ID_CONFLICT', '不可变资源身份已使用', 409);

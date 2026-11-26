@@ -1,5 +1,22 @@
 import type Database from 'better-sqlite3';
+import { digest } from '../domain/canonical.js';
 import type { Card, Change } from './contracts.js';
+import type { VerificationBinding, VerificationOrigin } from './verification-contracts.js';
+
+export function verificationBindingVersion(thoughtVersionId: string, bodyVersionId: string) {
+  return JSON.stringify([thoughtVersionId, bodyVersionId]);
+}
+
+export function verificationContentHash(title: string, blocks: unknown) {
+  return digest({ title, blocks });
+}
+
+export function matchesVerificationBinding(binding: VerificationBinding | undefined,
+  origin: VerificationOrigin | undefined, title: string, blocks: unknown) {
+  if (!binding || !origin) return !binding && !origin;
+  return binding.origin.assetId === origin.assetId && binding.origin.hash === origin.hash && binding.origin.fixture === origin.fixture &&
+    binding.contentHash === verificationContentHash(title, blocks);
+}
 
 // Immutable records are independent of the mutable current-card projection.
 export function retainCardVersions(db: Database.Database, projectId: string, card: Card) {
@@ -7,6 +24,11 @@ export function retainCardVersions(db: Database.Database, projectId: string, car
     'INSERT OR IGNORE INTO mapping_versions(project_id,domain,id,version_id,value) VALUES(?,?,?,?,?)',
   );
   insert.run(projectId, 'body', card.body.id, card.body.versionId, JSON.stringify(card.body));
+  if (card.verificationOrigin) {
+    const binding: VerificationBinding = { id: card.id, origin: card.verificationOrigin,
+      contentHash: verificationContentHash(card.title, card.body.blocks) };
+    insert.run(projectId, 'verificationOrigin', card.id, verificationBindingVersion(card.versionId, card.body.versionId), JSON.stringify(binding));
+  }
   insert.run(projectId, 'pose', card.item.id, card.item.versionId, JSON.stringify(card.item));
   if (card.cardTags) insert.run(projectId, 'cardTags', card.cardTags.id, card.cardTags.versionId, JSON.stringify(card.cardTags));
   if (card.attachments)

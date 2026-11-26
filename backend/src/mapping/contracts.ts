@@ -19,6 +19,7 @@ import { TITLE_COLORS } from './presentation-values.js';
 import { bodyText } from './body-text.js';
 import { SearchConditionsSchema, type SearchStateView } from './search-contracts.js';
 import type { OrganizeOrigin } from './organize-contracts.js';
+import type { VerificationOrigin } from './verification-contracts.js';
 const Id = z.string().min(1).max(160);
 const Name = z.string().trim().min(1).max(240);
 export const MAX_AGENT_BATCH_POSES = 200;
@@ -257,6 +258,7 @@ export const MappingCommand = z.discriminatedUnion('type', [
     payload: z.object({
       taskId: Id,
       attempt: z.int().positive(),
+      outputAttempt: z.int().positive().optional(),
       x: z.number().finite(),
       y: z.number().finite(),
       copyWhileCut: z.literal(true).optional(),
@@ -272,6 +274,7 @@ export interface Project {
 }
 export interface Card {
   aiOrigin?: OrganizeOrigin;
+  verificationOrigin?: VerificationOrigin;
   cardTags?: { id: string; versionId: string; tagIds: string[] };
   attachments?: CardAttachmentSet;
   id: string;

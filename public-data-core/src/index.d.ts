@@ -11,7 +11,7 @@ export interface Snapshot {
   httpLastModified: string | null;
   publishedAt: null;
   cached: boolean;
-  path: string;
+  path: string | null;
   lineage?: FilingRecord & { indexUrl: string; indexHash: string };
   history?: HistoryRecord & { indexUrl: string; indexHash: string };
 }
@@ -22,7 +22,7 @@ export class SourceError extends Error {
 export class SecClient {
   constructor(options: {
     userAgent: string;
-    cacheDirectory: string;
+    cacheDirectory: string | null;
     request?: typeof fetch;
   });
   fetchFiling(
@@ -46,10 +46,25 @@ export class SecClient {
   ): Promise<Snapshot>;
 }
 export function secUrl(cik: string, dataset?: string): string;
-export function companyFacts(
-  snapshot: Snapshot,
-  query: { taxonomy: string; tag: string; unit: string; knownByDate?: string },
-): { status: string; facts: Record<string, unknown>[]; gaps: string[] };
+export interface CompanyFact {
+  subject: { name: string | null };
+  period: { start: string; end: string };
+  periodKind: 'duration_unclassified' | 'instant';
+  rawValue: string | null;
+  numericLexeme: string | null;
+  disclosureVersion: string;
+  publishedOn: string;
+  form: string | null;
+  anchor: { pointer: string; snapshotHash: string };
+  [key: string]: unknown;
+}
+type CompanyFactQuery = { taxonomy: string; tag: string; unit: string; knownByDate?: string; exactPeriod?: { start: string | null; end: string } };
+type CompanyFactResult = { status: string; facts: CompanyFact[]; gaps: string[]; unitCovered: boolean; entityName: string | null };
+export function companyFacts(snapshot: Snapshot, query: CompanyFactQuery): CompanyFactResult;
+export function companyFactsReader(raw: string, requireUniqueAnchors: boolean): (
+  snapshot: Pick<Snapshot, 'dataset' | 'cik' | 'hash' | 'url' | 'retrievedAt' | 'adapterVersion'>,
+  query: CompanyFactQuery,
+) => CompanyFactResult;
 export function compareFacts(
   left: Record<string, any>,
   right: Record<string, any>,

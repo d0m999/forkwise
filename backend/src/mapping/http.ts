@@ -18,6 +18,12 @@ export const EXECUTE_BODY_LIMIT = 48 * 1024 * 1024;
 const PACKAGE_REQUEST_OVERHEAD = 4 * 1024;
 export const PACKAGE_MAX_BYTES = Math.floor((EXECUTE_BODY_LIMIT - PACKAGE_REQUEST_OVERHEAD) / 4) * 3;
 
+function isVerificationKind(kind: string | undefined) {
+  requireThat(kind === undefined || kind === 'organize' || kind === 'verification',
+    'INVALID_COMMAND', '任务类别只能是 organize 或 verification', 400);
+  return kind === 'verification';
+}
+
 export function createWorkspaceApp(
   mapping: Mapping,
   origin: string,
@@ -129,11 +135,11 @@ export function createWorkspaceApp(
     ),
   );
   app.get('/api/mapping/projects/:id/organize/status', (c) =>
-    c.json(mapping.organize.status(c.req.param('id'), c.get('principal'))));
+    c.json(mapping.organize.status(c.req.param('id'), c.get('principal'), isVerificationKind(c.req.query('kind')))));
   app.get('/api/mapping/projects/:id/cards/:cardId/organize/tasks', (c) =>
-    c.json(mapping.organize.list(c.req.param('id'), c.req.param('cardId'), c.get('principal'))));
+    c.json(mapping.organize.list(c.req.param('id'), c.req.param('cardId'), c.get('principal'), isVerificationKind(c.req.query('kind')))));
   app.get('/api/mapping/projects/:id/organize/tasks', (c) =>
-    c.json(mapping.organize.list(c.req.param('id'), undefined, c.get('principal'))));
+    c.json(mapping.organize.list(c.req.param('id'), undefined, c.get('principal'), isVerificationKind(c.req.query('kind')))));
   app.post('/api/mapping/projects/:id/organize/tasks', async (c) => {
     const { task, created } = await mapping.organize.start(c.req.param('id'), await c.req.json(), c.get('principal'));
     return c.json(task, created ? 201 : 200);

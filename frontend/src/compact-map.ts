@@ -106,6 +106,7 @@ export async function readCompactMap(
     cards.push({
       id: item.id,
       ...(item.aiOrigin ? { aiOrigin: item.aiOrigin } : {}),
+      ...(item.verificationOrigin ? { verificationOrigin: item.verificationOrigin } : {}),
       title: item.title,
       versionId: item.versionId,
       item: item.item,

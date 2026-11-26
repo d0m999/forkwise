@@ -87,10 +87,12 @@ export function duplicatePlan(state: ProjectState, selection: CanvasSelection, c
   } as Command;
   return { command, objectCopyIds: objects.filter(v => source.roots.includes(v.sourceItemId)).map(({ kind, copyId }) => ({ kind, copyId })), connectorCopyIds: source.connectors.flatMap((line, index) => connectorIds.includes(line.id) && !(source.inside(line.start) && source.inside(line.end)) ? [connectors[index]!.copyId] : []) };
 }
-function freezeObject(value: Located): FrozenObject {
+function freezeObject(value: Located, projectId: string): FrozenObject {
   const base = { sourceId: value.value.id, itemId: value.value.item.id, stack: value.value.item.createdOrder ?? 0, pose: structuredClone(value.value.item.pose) };
   if (value.kind === 'card') return { ...base, kind: 'card', title: value.value.title, blocks: structuredClone(value.value.body.blocks),
     ...(value.value.aiOrigin ? { aiOrigin: { mode: value.value.aiOrigin.mode } } : {}),
+    ...(value.value.verificationOrigin ? { verificationSource: { projectId, cardId: value.value.id,
+      thoughtVersionId: value.value.versionId, bodyVersionId: value.value.body.versionId } } : {}),
     tagIds: value.value.cardTags ? [...value.value.cardTags.tagIds] : null, appearance: value.value.appearance ? { titleColor: value.value.appearance.titleColor, showPreview: value.value.appearance.showPreview } : null, ...(value.value.item.heightPolicy ? { heightPolicy: structuredClone(value.value.item.heightPolicy) } : {}), ...(value.value.attachments?.items.length ? { attachments: value.value.attachments.items.map(item => ({ id: item.id, assetId: item.assetId, name: item.name })) } : {}) };
   return { ...base, kind: value.kind, content: structuredClone(value.value.content) } as FrozenObject;
 }
@@ -103,7 +105,7 @@ export function captureClipboard(state: ProjectState, selection: CanvasSelection
     containment: (state.containment ?? []).flatMap(edge => edge.parent && source.ids.has(edge.id) && source.ids.has(edge.parent.id) ? [{ itemId: edge.id, parentItemId: edge.parent.id }] : []) } : { version: 1 as const };
   const document: CanvasClipboardDocument = {
     kind: 'forkwise-canvas-snapshot', ...tree,
-    objects: [...source.objects.map(freezeObject),
+    objects: [...source.objects.map(value => freezeObject(value, state.project.id)),
       ...source.groups.map(v => ({ kind: 'group' as const, sourceId: v.id, itemId: v.itemId, stack: v.createdOrder, pose: structuredClone(v.bounds) })),
       ...source.frames.map(v => ({ kind: 'frame' as const, sourceId: v.id, itemId: v.id, stack: state.frames!.indexOf(v), pose: structuredClone(v.pose), name: v.name, background: v.background }))],
     connectors: source.connectors.map(line => ({ path: line.path, start: freezeEnd(state, line.start, source.inside), end: freezeEnd(state, line.end, source.inside),
@@ -153,6 +155,8 @@ export function pastePlan(projectId: string, document: CanvasClipboardDocument, 
   const copyIds = new Map(document.objects.map(v => [v.itemId, crypto.randomUUID()]));
   const mapEnd = (end: FrozenEnd) => end.kind === 'bound' ? { kind: 'bound' as const, copyId: copyIds.get(end.itemId)!, side: end.side, ...(end.targetKind ? { targetKind: end.targetKind } : {}) } : end;
   const objects = document.objects.map(({ sourceId: _, itemId, ...value }) => ({ ...value, copyId: copyIds.get(itemId)! }));
+  for (const value of objects) if (value.kind === 'card' && value.verificationSource?.projectId !== projectId)
+    delete value.verificationSource;
   const connectors = document.connectors.map(line => ({ ...line, copyId: crypto.randomUUID(), start: mapEnd(line.start), end: mapEnd(line.end) }));
   const roots = document.version === 2 ? document.roots! : document.objects.map(v => v.itemId);
   const rootCopies = new Set(roots.map(id => copyIds.get(id)!));

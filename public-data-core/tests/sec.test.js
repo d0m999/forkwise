@@ -47,6 +47,21 @@ test('固定来源、真实联系配置、不可变本地快照及显式缓存�
     const again=await client.fetch('1');assert.equal(again.path,first.path);assert.equal(calls,2);
   } finally {await rm(dir,{recursive:true,force:true});}
 });
+test('明确选择无磁盘缓存时仍可取得原文，拒绝缓存重读且不发起第二次请求', async () => {
+  const userAgent = 'Synthetic Tests test@example.invalid';
+  assert.throws(() => new SecClient({ userAgent }), /缓存目录/);
+  let calls = 0;
+  const client = new SecClient({ userAgent, cacheDirectory: null, request: async () => {
+    calls++;
+    return new Response(raw);
+  } });
+  const snapshot = await client.fetch('1');
+  assert.equal(snapshot.path, null);
+  assert.equal(snapshot.raw, raw);
+  assert.equal(snapshot.hash, sha(raw));
+  await assert.rejects(client.fetch('1', 'companyfacts', { cachedHash: snapshot.hash }), error => error.code === 'CACHE_REQUIRED');
+  assert.equal(calls, 1);
+});
 test('403 不重试，不保存失败正文；重定向或跨主体结果停止',async()=>{
   const dir=await mkdtemp(join(tmpdir(),'public-data-'));let calls=0;
   try {

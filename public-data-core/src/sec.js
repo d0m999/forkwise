@@ -52,7 +52,7 @@ export class SecClient {
         "CONTACT_REQUIRED",
         "请配置包含真实联系邮箱的 SEC_USER_AGENT，不能编造联系人",
       );
-    if (!cacheDirectory)
+    if (!cacheDirectory && cacheDirectory !== null)
       throw new SourceError("CACHE_REQUIRED", "需要使用者自己的本机缓存目录");
     this.userAgent = userAgent;
     this.cacheDirectory = cacheDirectory;
@@ -115,6 +115,7 @@ export class SecClient {
     const snapshotPath = (hash) =>
       join(this.cacheDirectory, sha(url) + "-" + hash + ".snapshot.json");
     if (cachedHash) {
+      if (!this.cacheDirectory) throw new SourceError('CACHE_REQUIRED', '该客户端不使用本地缓存');
       if (!/^[a-f0-9]{64}$/.test(cachedHash))
         throw new SourceError("INVALID_SNAPSHOT", "快照指纹无效");
       let path = snapshotPath(cachedHash),
@@ -243,6 +244,8 @@ export class SecClient {
         httpLastModified: response.headers.get("last-modified"),
         publishedAt: null,
       };
+      if (this.cacheDirectory === null)
+        return { ...snapshot, cached: false, path: null };
       await mkdir(this.cacheDirectory, { recursive: true, mode: 0o700 });
       const path = snapshotPath(snapshot.hash);
       try {

@@ -3,6 +3,9 @@ import type { z } from 'zod';
 import { ImageContentImportCheck } from './image-contracts.js';
 import { OrganizeArchiveImportCheck } from './organize-archive.js';
 import { OrganizeOrigin } from './organize-contracts.js';
+import { VerificationBinding, VerificationOrigin } from './verification-contracts.js';
+import { invalidVerificationReferences, verificationReferences, type VerificationReference } from './verification-evidence.js';
+import { matchesVerificationBinding, verificationBindingVersion } from './versions.js';
 import { SECRET_KEYS } from './secret-keys.js';
 import { ShapeContentImportCheck } from './shape-contracts.js';
 import { StrokeContentImportCheck } from './stroke-contracts.js';
@@ -162,6 +165,8 @@ function verifyRecords(mapping: Record<string, unknown>, failures: PackageFailur
     requireString(failures, `${path}.versionId`, value.versionId);
     if (value.aiOrigin !== undefined && !OrganizeOrigin.safeParse(value.aiOrigin).success)
       fail(failures, 'RECORD_FIELD', `${path}.aiOrigin`, 'AI origin', 'invalid');
+    if (value.verificationOrigin !== undefined && value.aiOrigin !== undefined)
+      fail(failures, 'RECORD_FIELD', `${path}.verificationOrigin`, '独立 SEC 原文来源', 'invalid');
     if (typeof value.title !== 'string') fail(failures, 'RECORD_FIELD', `${path}.title`, 'string', value.title);
     if (!isRecord(value.body)) fail(failures, 'RECORD_FIELD', `${path}.body`, 'body object', value.body);
     else {
@@ -348,6 +353,7 @@ function verifyAssets(mapping: Record<string, unknown>, resources: Record<string
 const VERSION_DOMAINS = new Set([
   'body', 'pose', 'appearance', 'cardTags', 'attachments', 'attachment',
   'tag', 'shape', 'stroke', 'image', 'connector', 'group', 'containment', 'frame', 'text',
+  'verificationOrigin',
 ]);
 
 function verifyManifest(manifest: Record<string, unknown>, files: Map<string, Buffer>, failures: PackageFailure[]): PackageFailure[] {
@@ -356,18 +362,17 @@ function verifyManifest(manifest: Record<string, unknown>, files: Map<string, Bu
   if (typeof manifest.exportedAt !== 'string' || !manifest.exportedAt) fail(failures, 'EXPORTED_AT', 'exportedAt', 'non-empty string', manifest.exportedAt);
   if (typeof manifest.projectId !== 'string' || !manifest.projectId) fail(failures, 'PROJECT_ID', 'projectId', 'non-empty string', manifest.projectId);
   if (typeof manifest.revision !== 'number') fail(failures, 'REVISION', 'revision', 'number', manifest.revision);
-  if (!isRecord(manifest.extensions)) {
-    fail(failures, 'EXTENSIONS', 'extensions', 'object', manifest.extensions);
-  } else if (manifest.extensions.forkwiseOrganize !== undefined) {
+  const extensions = isRecord(manifest.extensions) ? manifest.extensions : undefined;
+  if (!extensions) fail(failures, 'EXTENSIONS', 'extensions', 'object', manifest.extensions);
+  const organize = extensions?.forkwiseOrganize === undefined ? undefined :
     // 只读取检查结果，导入仍保存原始扩展，包括整理归档里的未知键。
-    const parsed = OrganizeArchiveImportCheck.safeParse(manifest.extensions.forkwiseOrganize, { reportInput: true });
-    if (!parsed.success) {
-      for (const issue of parsed.error.issues.slice(0, 20)) {
-        const suffix = issue.path.map((key) => typeof key === 'number' ? `[${key}]` : `.${String(key)}`).join('');
-        const input = issue.input;
-        const actual = input === null ? 'null' : Array.isArray(input) ? 'array' : typeof input;
-        fail(failures, 'ORGANIZE_ARCHIVE_FIELD', `extensions.forkwiseOrganize${suffix}`, issue.message, actual);
-      }
+    OrganizeArchiveImportCheck.safeParse(extensions.forkwiseOrganize, { reportInput: true });
+  if (organize && !organize.success) {
+    for (const issue of organize.error.issues.slice(0, 20)) {
+      const suffix = issue.path.map((key) => typeof key === 'number' ? `[${key}]` : `.${String(key)}`).join('');
+      const input = issue.input;
+      const actual = input === null ? 'null' : Array.isArray(input) ? 'array' : typeof input;
+      fail(failures, 'ORGANIZE_ARCHIVE_FIELD', `extensions.forkwiseOrganize${suffix}`, issue.message, actual);
     }
   }
   const projectId = typeof manifest.projectId === 'string' ? manifest.projectId : '';
@@ -467,6 +472,8 @@ function verifyManifest(manifest: Record<string, unknown>, files: Map<string, Bu
   verifyRecords(map, failures);
 
   const versionKeys = new Set<string>();
+  const verificationBindings = new Map<string, VerificationBinding>();
+  const verification: VerificationReference[] = [];
   versions.forEach((value, index) => {
     if (!isRecord(value)) {
       fail(failures, 'RECORD_FIELD', `mapping.versions[${index}]`, 'object', value);
@@ -490,6 +497,14 @@ function verifyManifest(manifest: Record<string, unknown>, files: Map<string, Bu
     const key = `${value.domain}\u0000${value.id}\u0000${value.versionId}`;
     if (versionKeys.has(key)) fail(failures, 'DUPLICATE_ID', path, 'unique (domain,id,versionId)', key.replaceAll('\u0000', '/'));
     versionKeys.add(key);
+    if (value.domain === 'verificationOrigin') {
+      const parsed = VerificationBinding.safeParse(value.value);
+      if (!parsed.success) fail(failures, 'VERSION_FIELD', path, '冻结的查证卡来源', 'invalid');
+      else {
+        verificationBindings.set(key, parsed.data);
+        verification.push({ origin: parsed.data.origin, path });
+      }
+    }
   });
   const requireVersion = (domain: string, id: unknown, versionId: unknown, path: string) => {
     if (typeof id !== 'string' || typeof versionId !== 'string') return;
@@ -500,6 +515,14 @@ function verifyManifest(manifest: Record<string, unknown>, files: Map<string, Bu
     const body = isRecord(value.body) ? value.body : undefined;
     const item = isRecord(value.item) ? value.item : undefined;
     if (body) requireVersion('body', body.id, body.versionId, `mapping.cards[${index}].body`);
+    const bound = typeof value.id === 'string' && typeof value.versionId === 'string' && typeof body?.versionId === 'string'
+      ? verificationBindings.get(`verificationOrigin\u0000${value.id}\u0000${verificationBindingVersion(value.versionId, body.versionId)}`) : undefined;
+    if (value.verificationOrigin !== undefined || bound) {
+      const origin = VerificationOrigin.optional().safeParse(value.verificationOrigin);
+      if (!origin.success || typeof value.title !== 'string' ||
+          !matchesVerificationBinding(bound, origin.data, value.title, body?.blocks))
+        fail(failures, 'VERSION_FIELD', `mapping.cards[${index}].verificationOrigin`, '冻结版本与查证来源一致', 'missing or invalid');
+    }
     if (item) requireVersion('pose', item.id, item.versionId, `mapping.cards[${index}].item`);
     if (isRecord(value.appearance)) requireVersion('appearance', value.appearance.id, value.appearance.versionId, `mapping.cards[${index}].appearance`);
     if (isRecord(value.cardTags)) requireVersion('cardTags', value.cardTags.id, value.cardTags.versionId, `mapping.cards[${index}].cardTags`);
@@ -564,11 +587,17 @@ function verifyManifest(manifest: Record<string, unknown>, files: Map<string, Bu
   });
   verifyAssets(map, resources.filter(isRecord), files, failures);
   // 引用必须落在 mapping.assets 的行上：导入只为资产行入库，原件字节可以只在 ZIP 里。
-  const assetRowIds = new Set(list(map, 'assets').flatMap((value) => (isRecord(value) && typeof value.id === 'string' ? [value.id] : [])));
+  const assetRows = new Map(list(map, 'assets').flatMap((value) => (isRecord(value) && typeof value.id === 'string' ? [[value.id, value] as const] : [])));
   const requireAsset = (id: unknown, path: string) => {
     if (typeof id !== 'string' || !id) return;
-    if (!assetRowIds.has(id)) fail(failures, 'REFERENCE', path, `asset ${id}`, 'missing');
+    if (!assetRows.has(id)) fail(failures, 'REFERENCE', path, `asset ${id}`, 'missing');
   };
+  if (organize?.success) organize.data.forEach((archive, archiveIndex) => {
+    archive.tasks.forEach((task, taskIndex) => {
+      const path = `extensions.forkwiseOrganize[${archiveIndex}].tasks[${taskIndex}]`;
+      verification.push(...verificationReferences(task, path));
+    });
+  });
   list(map, 'cards').forEach((card, index) => {
     if (!isRecord(card)) return;
     const body = isRecord(card.body) ? card.body : undefined;
@@ -588,6 +617,15 @@ function verifyManifest(manifest: Record<string, unknown>, files: Map<string, Bu
   list(map, 'images').forEach((image, index) => {
     if (isRecord(image) && isRecord(image.content)) requireAsset(image.content.assetId, `mapping.images[${index}].content.assetId`);
   });
+  for (const { path, reason } of invalidVerificationReferences(verification, id => {
+    const asset = assetRows.get(id);
+    if (!asset) return;
+    return { kind: asset.kind, mime: asset.mime, hash: asset.hash, raw: () => {
+      if (typeof asset.base64 === 'string' && asset.base64) return Buffer.from(asset.base64, 'base64').toString('utf8');
+      const resource = resources.find(value => isRecord(value) && value.id === id);
+      return isRecord(resource) && typeof resource.path === 'string' ? files.get(resource.path)?.toString('utf8') : undefined;
+    } };
+  })) fail(failures, 'VERIFICATION_EVIDENCE', path, '可回查的 SEC 原文与锚点', reason);
   const kindIds: Record<string, Set<string>> = { item: itemIds, frame: frameIds, group: groupItemIds };
   list(map, 'connectors').forEach((value, index) => {
     if (!isRecord(value)) return;

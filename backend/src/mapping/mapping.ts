@@ -63,6 +63,7 @@ import { requireLayoutWrite } from './layout-scope.js';
 import { parseBodyPatch, patchedBlocks, requireContentWrite } from './content-scope.js';
 import { requireThat } from '../domain/errors.js';
 import { OrganizeTasks, type OrganizeModel } from './organize.js';
+import type { VerificationSource } from './verification.js';
 import {
   MappingCommand,
   MAX_AGENT_BATCH_POSES,
@@ -84,6 +85,8 @@ export type WorkspaceGuidePreference = 'skipped' | 'completed';
 
 export interface CommitOptions {
   organizeModel?: OrganizeModel;
+  organizeBlockedReason?: string;
+  verificationSource?: VerificationSource;
   // Local asset I/O seam for hosts and fault tests; never accepted from HTTP.
   searchAssetReader?: SearchAssetReader;
   compact?: CompactOptions;
@@ -101,7 +104,7 @@ export class Mapping {
     private readonly options: CommitOptions = {},
   ) {
     this.access = new AccessService(db);
-    this.organize = new OrganizeTasks(db, this.access, options.organizeModel);
+    this.organize = new OrganizeTasks(db, this.access, options.organizeModel, options.organizeBlockedReason, options.verificationSource);
     this.compact = new CompactMaps(db, options.compact);
     this.searchLibraries = new SearchLibraries(options.searchAssetReader);
   }
@@ -770,9 +773,9 @@ export class Mapping {
         } else if (command.type === 'thought.create' || command.type === 'organize.add') {
           const project = this.project(command.projectId);
           const p = command.type === 'thought.create'
-            ? { ...command.payload, aiOrigin: undefined }
+            ? { ...command.payload, aiOrigin: undefined, verificationOrigin: undefined }
             : { ...this.organize.takeCandidate(
-              project.id, command.payload.taskId, command.payload.attempt, command.payload.copyWhileCut,
+              project.id, command.payload.taskId, command.payload.attempt, command.payload.copyWhileCut, command.payload.outputAttempt,
             ), attachment: undefined };
           requireThat(
             !this.db.prepare('SELECT 1 FROM mapping_card_ids WHERE id=?').get(p.id),
@@ -792,6 +795,7 @@ export class Mapping {
             id: p.id,
             title: p.title,
             ...(p.aiOrigin ? { aiOrigin: p.aiOrigin } : {}),
+            ...(p.verificationOrigin ? { verificationOrigin: p.verificationOrigin } : {}),
             versionId: randomUUID(),
             body: {
               id: randomUUID(),

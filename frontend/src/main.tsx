@@ -134,6 +134,7 @@ type ActionOptions = {
 };
 
 type CardData = {
+  verificationAvailable: boolean;
   showMenu: boolean;
   tags: Tag[];
   card: Card;
@@ -144,7 +145,7 @@ type CardData = {
   onFinish: () => void;
   onEdit: (origin?: HTMLButtonElement) => void;
   onBody: () => void;
-  onAI: () => void;
+  onAI: (verification?: true) => void;
   onOpenAttachment: (assetId: string) => void;
   onRemoveAttachment: (attachmentId: string) => void;
   onAddAttachment: (file: File) => void;
@@ -209,7 +210,8 @@ function ThoughtCard({ data, selected }: NodeProps<Node<CardData>>) {
           attachmentWriteBlocked={data.attachmentWriteBlocked}
           onEdit={data.onEdit}
           onBody={data.onBody}
-          onAI={data.onAI}
+          onAI={() => data.onAI()}
+          onVerification={data.verificationAvailable ? () => data.onAI(true) : undefined}
           onAddAttachment={data.onAddAttachment}
           onDelete={data.onDelete}
           onRemoveFromGroup={data.onRemoveFromGroup}
@@ -271,6 +273,10 @@ function ThoughtCard({ data, selected }: NodeProps<Node<CardData>>) {
           编辑正文
         </button>
       </header>
+      {data.card.verificationOrigin && <button type="button" className="card-ai-origin nodrag nopan"
+        onClick={event => { event.stopPropagation(); data.onOpenAttachment(data.card.verificationOrigin!.assetId); }}>
+        {data.card.verificationOrigin.fixture ? '模拟查证 · 下载夹具原文' : '下载查证原文'}
+      </button>}
       {data.card.aiOrigin && <span className="card-ai-origin">
         {data.card.aiOrigin.mode === 'simulate' ? '模拟整理' : 'AI 候选'}
       </span>}
@@ -415,7 +421,8 @@ function Workspace() {
     observer.observe(tabs);
     return () => observer.disconnect();
   }, []);
-  const [organizing, setOrganizing] = useState<{ projectId: string; source?: Card } | null>(null);
+  const [addedCandidate, setAddedCandidate] = useState<{ projectId: string; itemId: string }>();
+  const [organizing, setOrganizing] = useState<{ projectId: string; source?: Card; verification?: true } | null>(null);
   const [organizeCancellationJournal] = useState(createOrganizeCancellationJournal);
   const [organizeCancellations, setOrganizeCancellations] = useState(() => organizeCancellationJournal.snapshot);
   const authority = useRef<ProjectState | null>(null);
@@ -744,6 +751,36 @@ function Workspace() {
   const layoutBarrier = useRef<{ cutoff: number } | null>(null);
   const flow = useReactFlow();
   const canvasStore = useStoreApi();
+  useLayoutEffect(() => {
+    if (!addedCandidate) return;
+    if (addedCandidate.projectId !== state?.project.id) {
+      setAddedCandidate(undefined);
+      return;
+    }
+    const card = state.cards.find(value => value.item.id === addedCandidate.itemId);
+    if (!card) {
+      setAddedCandidate(undefined);
+      return;
+    }
+    const measured = dimensions[card.item.id];
+    if (!measured) return;
+    const { width, height, minZoom } = canvasStore.getState();
+    if (!width || !height) return;
+    const { x, y } = card.item.pose;
+    const viewport = flow.getViewport();
+    const inset = 24;
+    const right = width - inset;
+    const bottom = height - Math.min(96, height / 3);
+    const zoom = Math.max(minZoom, Math.min(viewport.zoom, (right - inset) / measured.width,
+      (bottom - inset) / measured.height));
+    const next = zoom === viewport.zoom
+      ? { x: Math.max(inset - x * zoom, Math.min(viewport.x, right - (x + measured.width) * zoom)),
+          y: Math.max(inset - y * zoom, Math.min(viewport.y, bottom - (y + measured.height) * zoom)), zoom }
+      : { x: (inset + right - measured.width * zoom) / 2 - x * zoom,
+          y: (inset + bottom - measured.height * zoom) / 2 - y * zoom, zoom };
+    if (next.x !== viewport.x || next.y !== viewport.y || next.zoom !== viewport.zoom) void flow.setViewport(next);
+    setAddedCandidate(undefined);
+  }, [addedCandidate, state, dimensions, canvasStore, flow]);
   const marqueeSelection = useCanvasMarquee(canvasStore, state, canvasSelection);
   const titleGroup = useRef<{ cardId: string; id: string } | null>(null);
   const historyLock = useRef(false);
@@ -3329,6 +3366,12 @@ function Workspace() {
       },
     },
   }));
+  function closeWritingBoard() {
+    if (composition.current) return;
+    editorEpoch.current++;
+    breakBodyGroup(); persistDrafts(); void flush();
+    bodyBinding.current = null; setDeletedBody(null); setBodyCard(null); setSearchSeed(null); setBodySearchReading(null);
+  }
   const attachmentWriteBlocked = busy || historyBlocked || !!pendingAction.current || attachmentProjectSwitches > 0;
   function addAttachment(projectId: string, targetId: string, assetId: string, name: string, uploadTarget?: Card) {
     const current = authority.current;
@@ -3383,7 +3426,8 @@ function Workspace() {
       },
       onEdit: origin => void editCard(card.id, "title", { origin }),
       onBody: () => void editCard(card.id, "body"),
-      onAI: () => {
+      verificationAvailable: canvasSelection.value.targets.length === 1,
+      onAI: (verification) => {
         const current = authority.current;
         const source = current?.cards.find(item => item.id === card.id);
         if (!current || !source || composition.current || busy || historyBlocked) return;
@@ -3391,7 +3435,7 @@ function Workspace() {
           if (!(await flush())) return;
           const saved = authority.current?.cards.find(item => item.id === source.id);
           if (saved && authority.current?.project.id === current.project.id) {
-            setOrganizing({ projectId: current.project.id, source: saved });
+            setOrganizing({ projectId: current.project.id, source: saved, ...(verification ? { verification } : {}) });
           }
         })();
       },
@@ -3595,7 +3639,7 @@ function Workspace() {
   );
   const pendingOrganizeCancellations = organizing
     ? [...organizeCancellations.pending.values()].filter(({ projectId, request }) =>
-      projectId === organizing.projectId && (!organizing.source || request.cardId === organizing.source.id)).map(({ request }) => request)
+      projectId === organizing.projectId && !!request.verification === !!organizing.verification && (!organizing.source || request.cardId === organizing.source.id)).map(({ request }) => request)
     : [];
   const canOpenGuide = workspaceAccess === 'ready' && (guideAccess === 'allowed' || guideAccess === 'retry');
   const projectCreationUnavailable = workspaceAccess === 'revoked' || guideAccess === 'denied';
@@ -3655,6 +3699,7 @@ function Workspace() {
       {organizing && organizing.projectId === state?.project.id &&
         <OrganizeDialog projectId={organizing.projectId} {...(organizing.source ? { source: organizing.source } : {})}
           cards={state.cards}
+          verification={!!organizing.verification}
           pendingCancellations={pendingOrganizeCancellations}
           isCancellationSaved={id => organizeCancellations.saved?.has(id) ?? false}
           onPendingCancellationChange={(request, status) => {
@@ -3663,7 +3708,16 @@ function Workspace() {
             return written;
           }}
           close={() => setOrganizing(null)}
-          onAdded={async () => { await refresh(organizing.projectId); }} />}
+          onAdded={async candidateId => {
+            const projectId = organizing.projectId;
+            const fresh = await refresh(projectId);
+            const candidate = fresh.cards.find(card => card.id === candidateId);
+            if (candidate && authority.current?.project.id === projectId) {
+              setNav(false);
+              if (document.querySelector('.workspace[data-board-full="true"]')) closeWritingBoard();
+              setAddedCandidate({ projectId, itemId: candidate.item.id });
+            }
+          }} />}
       <header className="topbar">
         <button
           ref={navigation}
@@ -3783,6 +3837,8 @@ function Workspace() {
             onMouseDown={event => event.preventDefault()} onClick={openGuide}>画布引导</button>}
           {state && <button onClick={() => setOrganizing({ projectId: state.project.id })}
             disabled={busy || historyBlocked} aria-haspopup="dialog">AI 整理记录</button>}
+          {state && <button onClick={() => setOrganizing({ projectId: state.project.id, verification: true })}
+            disabled={busy || historyBlocked} aria-haspopup="dialog">公开查证记录</button>}
           <div className="project-nav-list" ref={projectNavList}>
             {navigationProjects.map((project) => (
               <button
@@ -4318,12 +4374,7 @@ function Workspace() {
           status={boardStatus}
           identifyCard={!!currentBody && (singleItemId !== currentBody.item.id || selectedConnectors.length > 0 || selectedFrameIds.length > 0)}
           saveFailure={boardFailure}
-          onClose={() => {
-            if (composition.current) return;
-            editorEpoch.current++;
-            breakBodyGroup(); persistDrafts(); void flush();
-            bodyBinding.current = null; setDeletedBody(null); setBodyCard(null); setSearchSeed(null); setBodySearchReading(null);
-          }}
+          onClose={closeWritingBoard}
         >
           {currentBody && <ProjectTags key={state!.project.id + ':' + currentBody.id} state={state!} card={currentBody} blocked={busy || historyBlocked} execute={action} refresh={refresh} undo={id => void travel('undo', id)} />}
           {currentBodyData && <CardAttachmentList key={currentBodyData.card.id}

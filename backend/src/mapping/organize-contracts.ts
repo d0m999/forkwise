@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { VerificationQuery, VerificationResult } from './verification-contracts.js';
 
 const Id = z.string().min(1).max(160);
 const Mode = z.enum(['real', 'simulate']);
@@ -11,7 +12,11 @@ export const OrganizeRequest = z.object({
   bodyVersionId: Id,
   includeTitle: z.boolean(),
   blockIds: z.array(Id).max(100),
-}).strict();
+  verification: VerificationQuery.optional(),
+}).strict().refine(request => !request.verification ||
+  (request.mode === 'real' && !request.includeTitle && !request.blockIds.length), {
+  message: '公开查证仅发送已确认的查询条件，请勿选择卡片文字',
+});
 
 export const OrganizeOutput = z.object({
   candidate: z.object({
@@ -29,7 +34,10 @@ export const OrganizeOrigin = z.object({
 export type OrganizeRequest = z.infer<typeof OrganizeRequest>;
 export const OrganizeRetry = z.object({ attempt: z.int().positive(), requestId: Id }).strict();
 export const OrganizeCancel = z.object({ attempt: z.int().positive() }).strict();
-export type OrganizeOutput = z.infer<typeof OrganizeOutput>;
+export type OrganizeStatus = { model: string | null; blockedReason?: string | null; verificationFixture?: true };
+export type OrganizeOutput = z.infer<typeof OrganizeOutput> & {
+  verification?: z.infer<typeof VerificationResult>;
+};
 export type OrganizeOrigin = z.infer<typeof OrganizeOrigin>;
 export type OrganizeInput = Pick<OrganizeRequest, 'cardId' | 'thoughtVersionId' | 'bodyVersionId'> & {
   title: string | null;
@@ -57,6 +65,8 @@ export type OrganizeTask = {
   mode: OrganizeOrigin['mode'];
   model: string | null;
   input: OrganizeInput;
+  verification?: VerificationQuery;
+  verificationFixture?: true;
   state: 'running' | 'succeeded' | 'partial' | 'failed' | 'cancelled' | 'interrupted';
   output: OrganizeOutput | null;
   outputAttempt: number | null;
@@ -80,4 +90,5 @@ export type OrganizeTask = {
   cutCopyAvailable: boolean;
   freshness: 'current' | 'changed' | 'deleted';
 };
-export type OrganizeSummary = Pick<OrganizeTask, 'id' | 'cardId' | 'mode' | 'createdAt'>;
+export type OrganizeTaskView = OrganizeTask & { retryBlockedReason?: string | null };
+export type OrganizeSummary = Pick<OrganizeTask, 'id' | 'cardId' | 'mode' | 'createdAt' | 'verificationFixture'>;

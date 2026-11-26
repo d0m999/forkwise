@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 export { SecClient, SourceError, secUrl } from "./sec.js";
-export { companyFacts, compareFacts } from "./facts.js";
+export { companyFacts, companyFactsReader, compareFacts } from "./facts.js";
 export {
   selectCompanyFactPassages,
   validateCompanyFactPassages,

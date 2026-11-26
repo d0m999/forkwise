@@ -1,11 +1,13 @@
 import { z } from 'zod';
 import { OrganizeOrigin, OrganizeUsage } from './organize-contracts.js';
+import { VerificationQuery, VerificationResult } from './verification-contracts.js';
 
 const Id = z.string().min(1);
 const State = z.enum(['running', 'succeeded', 'partial', 'failed', 'cancelled', 'interrupted']);
 const Output = z.object({
   candidate: z.object({ title: z.string(), text: z.string() }).nullable(),
   gaps: z.array(z.string()),
+  verification: VerificationResult.optional(),
 }).nullable();
 const Usage = OrganizeUsage.nullable();
 const AttemptNumber = z.int().positive();
@@ -16,6 +18,8 @@ const Task = z.object({
   cardId: Id,
   mode: OrganizeOrigin.shape.mode,
   model: z.string().nullable(),
+  verification: VerificationQuery.optional(),
+  verificationFixture: z.literal(true).optional(),
   input: z.object({
     cardId: Id,
     thoughtVersionId: Id,

@@ -26,6 +26,7 @@ const KIND_TABLES: Record<Exclude<Kind, 'tag'>, { ids: string; rows: string }> =
 };
 
 const VERSION_KIND: Record<string, Kind> = {
+  verificationOrigin: 'card',
   tag: 'tag', shape: 'shape', stroke: 'stroke', image: 'image',
   connector: 'connector', group: 'group', frame: 'frame', text: 'text',
 };

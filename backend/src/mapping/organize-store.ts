@@ -35,11 +35,13 @@ export class OrganizeStore {
     return row ? JSON.parse(row.value) as Card : null;
   }
 
-  list(projectId: string, cardId?: string): OrganizeSummary[] {
-    const fields = "SELECT id,card_id AS cardId,json_extract(task,'$.mode') AS mode,json_extract(task,'$.createdAt') AS createdAt FROM mapping_organize_tasks";
-    return (cardId
-      ? this.db.prepare(`${fields} WHERE project_id=? AND card_id=? ORDER BY rowid DESC`).all(projectId, cardId)
-      : this.db.prepare(`${fields} WHERE project_id=? ORDER BY rowid DESC`).all(projectId)) as OrganizeSummary[];
+  list(projectId: string, cardId: string | undefined, verification: boolean): OrganizeSummary[] {
+    const fields = "SELECT id,card_id AS cardId,json_extract(task,'$.mode') AS mode,json_extract(task,'$.createdAt') AS createdAt, json_type(task,'$.verificationFixture')='true' AS fixture FROM mapping_organize_tasks";
+    const kind = verification ? "json_type(task,'$.verification')='object'" : "json_type(task,'$.verification') IS NULL";
+    const rows = (cardId
+      ? this.db.prepare(`${fields} WHERE project_id=? AND card_id=? AND ${kind} ORDER BY rowid DESC`).all(projectId, cardId)
+      : this.db.prepare(`${fields} WHERE project_id=? AND ${kind} ORDER BY rowid DESC`).all(projectId)) as (OrganizeSummary & { fixture: 1 | 0 | null })[];
+    return rows.map(({ fixture, ...summary }) => ({ ...summary, ...(fixture ? { verificationFixture: true } : {}) }));
   }
 
   all(projectId: string): StoredTask[] {

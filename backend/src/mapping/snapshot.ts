@@ -19,7 +19,8 @@ import { readTexts } from './text.js';
 import { assetHash, readAsset, saveAsset } from './media.js';
 import { readTags, saveTag } from './tags.js';
 import type { Tag } from './contracts.js';
-import { retainCardVersions } from './versions.js';
+import { retainCardVersions, verificationBindingVersion, verificationContentHash } from './versions.js';
+import type { VerificationBinding } from './verification-contracts.js';
 import { nextCreatedOrder } from './created-order.js';
 import { bodyText } from './body-text.js';
 import { groupOutcome } from './group-lifecycle.js';
@@ -256,9 +257,23 @@ export function pasteCanvas(db: Database.Database, command: Paste): SnapshotWrit
     const createdOrder = created[index]!;
     if (value.kind === 'card') {
       const pose = shift(value.pose, translation.x, translation.y);
+      // Look up the original frozen version, even if its card was later edited
+      // or removed. The clipboard never brings an asset ID or its bytes.
+      const source = value.verificationSource;
+      const stored = source?.projectId === projectId
+        ? db.prepare("SELECT value FROM mapping_versions WHERE project_id=? AND domain='verificationOrigin' AND id=? AND version_id=?")
+          .get(projectId, source.cardId, verificationBindingVersion(source.thoughtVersionId, source.bodyVersionId)) as { value: string } | undefined
+        : undefined;
+      const binding = stored ? JSON.parse(stored.value) as VerificationBinding : undefined;
+      const verificationOrigin = binding && binding.contentHash === verificationContentHash(value.title, value.blocks) ? binding.origin : undefined;
+      if (verificationOrigin) {
+        const asset = readAsset(db, projectId, verificationOrigin.assetId);
+        requireThat(asset.hash === verificationOrigin.hash, 'ASSET_CORRUPT', '查证原文与回执不一致');
+      }
       const after: Card = {
         id: value.copyId, title: value.title, versionId: randomUUID(),
-        ...(value.aiOrigin ? { aiOrigin: { mode: value.aiOrigin.mode } } : {}),
+        ...(value.aiOrigin && !verificationOrigin ? { aiOrigin: { mode: value.aiOrigin.mode } } : {}),
+        ...(verificationOrigin ? { verificationOrigin } : {}),
         body: { id: randomUUID(), versionId: randomUUID(), blocks: remapBlocks(value.blocks as Block[]) },
         item: { id: randomUUID(), versionId: randomUUID(), createdOrder, pose, ...(value.heightPolicy ? { heightPolicy: { manualHeight: value.heightPolicy.manualHeight, necessaryHeight: value.heightPolicy.necessaryHeight, ...(value.heightPolicy.previewFloor !== undefined ? { previewFloor: value.heightPolicy.previewFloor } : {}) } } : {}) },
       };

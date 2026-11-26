@@ -573,3 +573,22 @@ for (const reloadWithReadFailure of [false, true]) test(reloadWithReadFailure
     releaseStarts();
   }
 });
+
+test('模型整理提交前说明发送范围和留存政策', async ({ page, workspace }) => {
+  await place(page, '发送范围示例');
+  expect((await workspace.state()).cards).toHaveLength(1);
+  // 仅提供页面读取的模型配置夹具。测试在发送前结束。
+  const submissions: string[] = [];
+  page.on('request', request => {
+    if (request.method() === 'POST' && request.url().endsWith('/organize/tasks')) submissions.push(request.url());
+  });
+  await page.route('**/organize/status', route =>
+    route.fulfill({ json: { model: 'openai/gpt-6-luna', blockedReason: null } }));
+  await page.getByRole('button', { name: 'AI', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: 'AI 整理', exact: true });
+  await dialog.getByRole('checkbox', { name: /卡片标题/ }).check();
+  await expect(dialog.getByRole('button', { name: '用模型整理' })).toHaveAccessibleDescription(
+    '发送给 OpenAI API 的内容仅限本次勾选的标题和正文文字，用于生成整理候选。请求关闭 OpenAI 的响应存储。数据留存按 API 项目的数据控制设置执行，启用前须核验零数据留存（ZDR）和不用于训练条款。',
+  );
+  expect(submissions).toEqual([]);
+});
