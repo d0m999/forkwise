@@ -23,12 +23,14 @@ test("A9-05 边缘菜单避卡且外点还合理焦点，打开菜单跨undo/red
   ).toBe(true);
   await popup.getByRole("button", { name: "杏色", exact: true }).click();
   await expect(page.getByRole("status")).toHaveText("已保存到本机");
-  await popup.getByRole("button", { name: "杏色", exact: true }).focus();
+  const apricot = popup.getByRole("button", { name: "杏色", exact: true });
+  await apricot.focus();
   await page.keyboard.press("Control+z");
   await expect(
     popup.getByRole("button", { name: "默认蓝", exact: true }),
   ).toHaveAttribute("aria-pressed", "true");
   await expect(popup).toBeVisible();
+  await expect(apricot).toBeFocused();
   await popup.getByRole("button", { name: "绿色", exact: true }).click();
   await expect(page.getByRole("status")).toHaveText("已保存到本机");
   expect((await workspace.state()).cards[0]!.appearance!.titleColor).toBe(

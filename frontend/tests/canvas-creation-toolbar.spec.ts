@@ -271,12 +271,30 @@ test('760px 重新打开有真实未确认草稿的研究，项目历史和草�
   expect(historyBottom.y).toBeLessThan((await topbar.boundingBox())!.height);
   await undo.click({ timeout: 3000 });
   await expect.poll(async () => (await workspace.state()).cards.map(card => card.title)).toEqual(['保留草稿的卡片']);
-  await redo.click({ timeout: 3000 });
-  await expect.poll(async () => (await workspace.state()).cards.map(card => card.title)).toEqual(['保留草稿的卡片', '可以撤销的卡片']);
-  await expect(recovery).toContainText('这段真实输入尚待恢复');
-  await recovery.getByRole('button', { name: '恢复草稿', exact: true }).click();
-  await expect.poll(async () => {
-    const block = (await workspace.state()).cards[0]?.body.blocks[0];
-    return block?.type === 'text' ? block.text : null;
-  }).toBe('这段真实输入尚待恢复');
+  let releaseRedo!: () => void;
+  const redoAck = new Promise<void>(resolve => { releaseRedo = resolve; });
+  await page.route(execute, async route => {
+    if (route.request().postDataJSON()?.type !== 'history.redo') return route.continue();
+    const response = await route.fetch();
+    await redoAck;
+    await route.fulfill({ response });
+  });
+  const restore = recovery.getByRole('button', { name: '恢复草稿', exact: true });
+  try {
+    await redo.click({ timeout: 3000 });
+    await expect.poll(async () => (await workspace.state()).cards.map(card => card.title)).toEqual(['保留草稿的卡片', '可以撤销的卡片']);
+    await expect(recovery).toContainText('这段真实输入尚待恢复');
+    await expect(restore).toBeVisible();
+    await expect(restore).toBeDisabled({ timeout: 2500 });
+    releaseRedo();
+    await expect(restore).toBeEnabled();
+    await restore.click();
+    await expect.poll(async () => {
+      const block = (await workspace.state()).cards[0]?.body.blocks[0];
+      return block?.type === 'text' ? block.text : null;
+    }).toBe('这段真实输入尚待恢复');
+  } finally {
+    releaseRedo();
+    await page.unrouteAll({ behavior: 'wait' });
+  }
 });

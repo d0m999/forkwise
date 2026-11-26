@@ -9,7 +9,7 @@ const scenarios = [
   ['shape', 'Shape直选仅目标原工具和尺寸入口'],
   ['image', 'Image直选仅目标原工具和尺寸入口'],
   ['stroke', 'Stroke直选仅目标删除入口'],
-  ['pureCards', '纯direct两Card保原菜单但无single尺寸入口'],
+  ['pureCards', '纯direct两Card使用选区工具，无单卡菜单与尺寸入口'],
   ['reverse', 'C先直选再Shift加G立即收起single门且direct C未换'],
 ] as const;
 
@@ -88,7 +88,7 @@ for (const [mode, title] of scenarios) {
       imageHandles: mode === 'image' ? 8 : 0, imageToolbar: mode === 'image' ? 1 : 0,
       textHandles: mode === 'text' ? 6 : 0, textToolbar: mode === 'text' ? 1 : 0,
       strokeDelete: mode === 'stroke' ? 1 : 0,
-      cardToolbars: mode === 'card' ? 1 : mode === 'pureCards' ? 2 : 0, cardHandles: mode === 'card' ? 8 : 0,
+      cardToolbars: mode === 'card' ? 1 : 0, cardHandles: mode === 'card' ? 8 : 0,
     });
     expect(commands).toEqual([]); expect(await workspace.state()).toEqual(before);
     expect(await (await page.request.get(workspace.origin + '/api/mapping/projects/' + projectId + '/history')).json()).toEqual(timeline);

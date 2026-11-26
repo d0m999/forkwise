@@ -347,15 +347,21 @@ test("纯卡前移一层后即使 createdOrder 数值未变也保持实际遮挡
   await expect.poll(async () => hitAt(page, overlap)).toBe(c);
 });
 
-test("层级菜单随画布缩放跟随触发按钮", async ({ page, workspace }) => {
-  await seed(page, workspace, [{ kind: "card", id: "a", x: 300, y: 200, width: 280, height: 160 }]);
-  const state = await workspace.state(), [a] = itemIds(state, ["a"]);
+test("画布缩放后层级菜单和触发器仍就近避让卡面且可操作", async ({ page, workspace }) => {
+  await seed(page, workspace, [
+    { kind: "card", id: "a", x: 300, y: 200, width: 280, height: 160 },
+    { kind: "card", id: "b", x: 875, y: 415 },
+  ]);
+  const state = await workspace.state(), [a, b] = itemIds(state, ["a", "b"]);
   await clickObject(page, a);
-  const trigger = page.getByRole("toolbar", { name: "卡片操作", exact: true }).getByRole("button", { name: "层级", exact: true });
+  const toolbar = page.getByRole("toolbar", { name: "卡片操作", exact: true });
+  const trigger = toolbar.getByRole("button", { name: "层级", exact: true });
   await trigger.click();
   const menu = page.getByRole("menu", { name: "层级操作", exact: true });
   await expect(menu).toBeVisible();
-  const triggerBefore = (await trigger.boundingBox())!;
+  const triggerBefore = (await trigger.boundingBox())!, menuBefore = (await menu.boundingBox())!;
+  const canvas = (await page.locator(".canvas").boundingBox())!;
+  const card = page.locator(`.react-flow__node[data-id="${a}"] .thought-card`);
   const pane = (await page.locator(".react-flow__pane").boundingBox())!;
   await page.mouse.move(pane.x + pane.width * 0.75, pane.y + pane.height * 0.35);
   await page.mouse.wheel(0, -100);
@@ -364,12 +370,19 @@ test("层级菜单随画布缩放跟随触发按钮", async ({ page, workspace }
     return box ? Math.abs(box.x - triggerBefore.x) + Math.abs(box.y - triggerBefore.y) : 0;
   }).toBeGreaterThan(5);
   await expect.poll(async () => {
-    const box = await menu.boundingBox(), anchor = await trigger.boundingBox();
-    if (!box || !anchor) return false;
-    if (Math.abs(box.x - anchor.x) > 1.5) return false;
-    return Math.abs(box.y - (anchor.y + anchor.height + 4)) <= 1.5 || Math.abs(box.y + box.height + 4 - anchor.y) <= 1.5;
+    const box = await menu.boundingBox(), cardBox = await card.boundingBox(), bar = await toolbar.boundingBox();
+    if (!box || !cardBox || !bar || Math.abs(box.x - menuBefore.x) + Math.abs(box.y - menuBefore.y) <= 5) return false;
+    const gapX = Math.max(0, box.x - cardBox.x - cardBox.width, cardBox.x - box.x - box.width);
+    const gapY = Math.max(0, box.y - cardBox.y - cardBox.height, cardBox.y - box.y - box.height);
+    const clearsToolbar = box.x >= bar.x + bar.width || box.x + box.width <= bar.x ||
+      box.y >= bar.y + bar.height || box.y + box.height <= bar.y;
+    return clearsToolbar && gapX + gapY > 0 && gapX + gapY <= 14 &&
+      box.x >= canvas.x && box.y >= canvas.y &&
+      box.x + box.width <= canvas.x + canvas.width && box.y + box.height <= canvas.y + canvas.height;
   }).toBe(true);
-  await expect(menu).toBeVisible();
+  expect(await workspace.state()).toEqual(state);
+  await chooseLayer(page, "置顶");
+  await expect.poll(async () => order(await workspace.state())).toEqual([b, a]);
 });
 
 test("层级保存真实冲突后丢弃过期命令，可按刷新后的版本重新操作", async ({ page, workspace }) => {

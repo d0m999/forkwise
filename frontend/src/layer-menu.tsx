@@ -7,6 +7,7 @@ export type LayerMenuProps = {
   availability: LayerAvailability;
   blocked: boolean;
   apply: (operation: LayerOperation) => void;
+  placePopup?: (element: HTMLElement) => { left: number; top: number } | null;
 };
 
 const operations: [LayerOperation, string][] = [
@@ -16,7 +17,7 @@ const operations: [LayerOperation, string][] = [
   ["back", "置底"],
 ];
 
-export function LayerMenu({ availability, blocked, apply }: LayerMenuProps) {
+export function LayerMenu({ availability, blocked, apply, placePopup }: LayerMenuProps) {
   const [open, setOpen] = useState(false);
   const trigger = useRef<HTMLButtonElement>(null),
     menu = useRef<HTMLDivElement>(null);
@@ -25,9 +26,15 @@ export function LayerMenu({ availability, blocked, apply }: LayerMenuProps) {
   useViewport();
   // 触发按钮由父级工具条在视口变化后重新定位，故每次渲染后都要重新测量。
   function measure() {
-    const box = trigger.current?.getBoundingClientRect(),
-      size = menu.current?.getBoundingClientRect();
-    if (!box || !size) return;
+    if (!menu.current) return;
+    if (placePopup) {
+      const position = placePopup(menu.current);
+      setPoint(current => current?.left === position?.left && current?.top === position?.top ? current : position);
+      return;
+    }
+    const box = trigger.current?.getBoundingClientRect();
+    const size = menu.current.getBoundingClientRect();
+    if (!box) return;
     const left = Math.max(8, Math.min(box.left, innerWidth - size.width - 8));
     const top = box.bottom + 4 + size.height <= innerHeight - 8
       ? box.bottom + 4
@@ -72,7 +79,7 @@ export function LayerMenu({ availability, blocked, apply }: LayerMenuProps) {
       window.removeEventListener("resize", measure);
       window.removeEventListener("scroll", measure, true);
     };
-  }, [open]);
+  }, [open, placePopup]);
   useEffect(() => {
     if (!open) {
       focused.current = false;
@@ -80,8 +87,9 @@ export function LayerMenu({ availability, blocked, apply }: LayerMenuProps) {
     }
     if (!point || focused.current) return;
     focused.current = true;
-    menu.current?.querySelector<HTMLButtonElement>("button:not(:disabled)")?.focus();
-  }, [open, point]);
+    const first = menu.current?.querySelector<HTMLButtonElement>("button:not(:disabled)");
+    (first ?? (placePopup ? menu.current : null))?.focus({ preventScroll: true });
+  }, [open, placePopup, point]);
   return (
     <>
       <button
@@ -103,6 +111,7 @@ export function LayerMenu({ availability, blocked, apply }: LayerMenuProps) {
           <div
             ref={menu}
             role="menu"
+            tabIndex={placePopup ? -1 : undefined}
             aria-label="层级操作"
             className="layer-menu-popup"
             style={{

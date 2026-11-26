@@ -68,7 +68,7 @@ import { bodyText } from "../../backend/src/mapping/body-text";
 import { WritingBoard } from "./writing-board";
 import { ParagraphEditor, type TextCursor } from "./paragraph-editor";
 import type { Block, HistoryAction } from "../../backend/src/mapping/contracts";
-import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
 import { createRoot } from "react-dom/client";
 import {
   Background,
@@ -133,7 +133,7 @@ type ActionOptions = {
 };
 
 type CardData = {
-  cardOnlySelection: boolean;
+  showMenu: boolean;
   tags: Tag[];
   card: Card;
   previewBody: Card["body"];
@@ -141,7 +141,7 @@ type CardData = {
   title: string;
   onTitle: (value: string) => void;
   onFinish: () => void;
-  onEdit: () => void;
+  onEdit: (origin?: HTMLButtonElement) => void;
   onBody: () => void;
   onAI: () => void;
   onOpenAttachment: (assetId: string) => void;
@@ -159,6 +159,7 @@ type CardData = {
   measurable: boolean;
   onComposition: (value: boolean) => void;
   onMove: (dx: number, dy: number) => void;
+  strokeSelected: boolean;
   movingDisabled: boolean;
   historyBlocked: boolean;
   resizable: boolean;
@@ -170,6 +171,14 @@ type CardData = {
 };
 function ThoughtCard({ data, selected }: NodeProps<Node<CardData>>) {
   const anchor = useRef<HTMLElement>(null);
+  const titleButton = useRef<HTMLButtonElement>(null);
+  const restoreTitleFocus = useRef(false);
+  useLayoutEffect(() => {
+    if (!data.editing && restoreTitleFocus.current) {
+      restoreTitleFocus.current = false;
+      titleButton.current?.focus({ preventScroll: true });
+    }
+  }, [data.editing]);
   const lines = useCardPresentation(
     anchor,
     data.card,
@@ -189,7 +198,7 @@ function ThoughtCard({ data, selected }: NodeProps<Node<CardData>>) {
         } as React.CSSProperties
       }
     >
-      {selected && data.cardOnlySelection && (
+      {selected && data.showMenu && (
         <CardMenu
           anchor={anchor}
           card={data.card}
@@ -205,43 +214,60 @@ function ThoughtCard({ data, selected }: NodeProps<Node<CardData>>) {
           layer={data.layer}
         />
       )}
-      <button
-        className="move-handle nodrag"
-        aria-label="移动卡片：方向键调整位置"
-        disabled={data.movingDisabled}
-        onKeyDown={(event) => {
-          const delta = {
-            ArrowLeft: [-10, 0],
-            ArrowRight: [10, 0],
-            ArrowUp: [0, -10],
-            ArrowDown: [0, 10],
-          }[event.key];
-          if (delta) {
-            event.preventDefault();
-            event.stopPropagation();
-            data.onMove(delta[0]!, delta[1]!);
-          }
-        }}
-      >
-        移动
-      </button>
-      {data.editing ? (
-        <InlineTitle
-          blocked={data.historyBlocked}
-          value={data.title}
-          onChange={data.onTitle}
-          onComposition={data.onComposition}
-          onFinish={data.onFinish}
-        />
-      ) : (
+      <header className="card-heading">
+        {data.editing ? (
+          <InlineTitle
+            blocked={data.historyBlocked}
+            value={data.title}
+            onChange={data.onTitle}
+            onComposition={data.onComposition}
+            onFinish={restoreFocus => {
+              restoreTitleFocus.current = restoreFocus;
+              data.onFinish();
+            }}
+          />
+        ) : (
+          <button
+            ref={titleButton}
+            className="title-button"
+            disabled={data.historyBlocked}
+            onClick={event => {
+              if (event.detail === 0 && !event.shiftKey) data.onEdit(event.currentTarget);
+            }}
+            onDoubleClick={event => data.onEdit(document.activeElement === event.currentTarget ? event.currentTarget : undefined)}
+          >
+            {data.title || "未命名卡片"}
+          </button>
+        )}
         <button
-          className="title-button"
-          disabled={data.historyBlocked}
-          onDoubleClick={data.onEdit}
+          className="move-handle nodrag"
+          aria-label="移动卡片：方向键调整位置"
+          disabled={data.strokeSelected}
+          aria-disabled={data.movingDisabled}
+          onKeyDown={(event) => {
+            const delta = {
+              ArrowLeft: [-10, 0],
+              ArrowRight: [10, 0],
+              ArrowUp: [0, -10],
+              ArrowDown: [0, 10],
+            }[event.key];
+            if (delta) {
+              event.preventDefault();
+              event.stopPropagation();
+              if (!data.movingDisabled) data.onMove(delta[0]!, delta[1]!);
+            }
+          }}
         >
-          {data.title || "未命名卡片"}
+          移动
         </button>
-      )}
+        <button
+          className="body-button nodrag"
+          disabled={data.historyBlocked}
+          onClick={data.onBody}
+        >
+          编辑正文
+        </button>
+      </header>
       {data.card.aiOrigin && <span className="card-ai-origin">
         {data.card.aiOrigin.mode === 'simulate' ? '模拟整理' : 'AI 候选'}
       </span>}
@@ -263,13 +289,6 @@ function ThoughtCard({ data, selected }: NodeProps<Node<CardData>>) {
           </p>
         </div>
       )}
-      <button
-        className="body-button nodrag"
-        disabled={data.historyBlocked}
-        onClick={data.onBody}
-      >
-        编辑正文
-      </button>
       {data.resizable &&
         Object.entries({
           nw: "左上",
@@ -338,6 +357,7 @@ function Workspace() {
     return () => window.removeEventListener('keydown', onKey, true);
   }, [attachTarget]);
   const canvasSelection = useCanvasSelection(state);
+  const disabledMovePointer = useRef<{ card: Element; pointerId: number } | null>(null);
   const selection = canvasSelection.directItemIds, setSelection = canvasSelection.setItems;
   const flowSelection = canvasSelection.flowSelectedItemIds;
   const singleTarget = canvasSelection.value.targets.length === 1 ? canvasSelection.value.targets[0] : undefined;
@@ -406,6 +426,8 @@ function Workspace() {
     });
   }, [state, canvasSelection.value]);
   const selectedConnector = selectedConnectors.length === 1 ? selectedConnectors[0]! : null;
+  const exclusiveConnector = !canvasSelection.value.targets.length && !selectedFrameIds.length ? selectedConnector : null;
+  const exclusiveCardItemId = !selectedConnectors.length && !selectedFrameIds.length ? singleItemId : null;
   function setSelectedConnector(id: string | null) { setSelectedConnectors(id ? [id] : []); }
   const strokeSelected = selection.some(id => state?.strokes?.some(stroke => stroke.item.id === id));
   const [layerHold, setLayerHold] = useState<{ projectId: string; generation: number } | null>(null);
@@ -1251,6 +1273,7 @@ function Workspace() {
     if (id === null) { setFrameSelection(null); return; }
     const projectId = authority.current?.project.id;
     if (!projectId || selectedFrameId === id) return;
+    if (!extend || !selectedFrameIds.includes(id)) editorEpoch.current++;
     if (!extend) { canvasSelection.set({ targets: [], enteredGroupId: null }); clearConnectorSelection(); }
     setFrameSelection({ projectId, ids: extend ? [...new Set([...selectedFrameIds, id])] : [id], generation: canvasSelection.generation() });
   }
@@ -2420,15 +2443,26 @@ function Workspace() {
       },
     );
   }
-  async function editCard(id: string, field: "title" | "body", valid = () => true, followingSelection = false) {
+  async function editCard(id: string, field: "title" | "body", {
+    valid = () => true,
+    followingSelection = false,
+    origin,
+  }: { valid?: () => boolean; followingSelection?: boolean; origin?: HTMLButtonElement | undefined } = {}) {
     if (historyLock.current || historyCommand.current) return;
     if (composition.current) return;
-    const epoch = ++editorEpoch.current;
+    const epoch = followingSelection ? editorEpoch.current : ++editorEpoch.current;
     const projectId = authority.current?.project.id;
     breakBodyGroup();
     await flush();
     if (!(await shapeMove.flush()) || !(await connectorLabel.finish()) || !(await shapeText.finish())) return;
-    if (authority.current?.project.id !== projectId || (field === "body" && epoch !== editorEpoch.current) || !valid()) return;
+    if (authority.current?.project.id !== projectId || epoch !== editorEpoch.current || !valid()) return;
+    if (field === "title") {
+      const card = authority.current?.cards.find(value => value.id === id);
+      const { targets } = canvasSelection.current();
+      const target = targets[0];
+      if (!card || targets.length !== 1 || target?.kind !== "item" || target.itemId !== card.item.id ||
+        (origin && document.activeElement !== origin)) return;
+    }
     // A failed save belongs to the old card; switching the visible editor
     // never changes that draft's target or its pending command.
     if (!followingSelection) {
@@ -2455,7 +2489,7 @@ function Workspace() {
     const identity = await api.cardIdentity(projectId, reading.result.cardId);
     if (!valid() || authority.current?.project.id !== projectId || identity.availability !== 'available' || identity.card.body.versionId !== reading.result.bodyVersion || identity.card.versionId !== reading.result.thoughtVersion) return false;
     const card = identity.card;
-    if (bodyCard) { if (!(await editCard(card.id, 'body', valid))) return false; setSearchSeed(reading); setBodySearchReading(reading); }
+    if (bodyCard) { if (!(await editCard(card.id, 'body', { valid }))) return false; setSearchSeed(reading); setBodySearchReading(reading); }
     if (!valid() || authority.current?.project.id !== projectId) return false;
     awaitBodySelection.current = true;
     clearConnectorSelection();
@@ -2492,7 +2526,7 @@ function Workspace() {
     const frame = requestAnimationFrame(() => {
       if (editorEpoch.current !== epoch || !valid()) return;
       following.current = request;
-      void editCard(card.id, "body", valid, true).finally(() => {
+      void editCard(card.id, "body", { valid, followingSelection: true }).finally(() => {
         if (following.current === request) following.current = null;
       });
     });
@@ -3096,9 +3130,6 @@ function Workspace() {
       },
     },
   }));
-  const cardOnlySelection = canvasSelection.value.targets.length > 0 && canvasSelection.value.targets.every((target) =>
-    target.kind === "item" && state?.cards.some((card) => card.item.id === target.itemId),
-  );
   function addAttachment(projectId: string, targetId: string, assetId: string, name: string) {
     const current = authority.current;
     const target = current?.cards.find(value => value.id === targetId);
@@ -3129,8 +3160,8 @@ function Workspace() {
     draggable:
       !busy && !historyBlocked && !pose.pending && !placing && !panTool,
     data: {
-      cardOnlySelection: cardOnlySelection && selection.includes(card.item.id),
-      layer: cardOnlySelection ? layerProps : undefined,
+      showMenu: exclusiveCardItemId === card.item.id,
+      layer: layerProps,
       card,
       previewBody: (() => {
         const draft = draftView[draftKey(state!.project.id, card.id, "body")];
@@ -3150,7 +3181,7 @@ function Workspace() {
           void flush();
         }
       },
-      onEdit: () => void editCard(card.id, "title"),
+      onEdit: origin => void editCard(card.id, "title", { origin }),
       onBody: () => void editCard(card.id, "body"),
       onAI: () => {
         const current = authority.current;
@@ -3216,9 +3247,10 @@ function Workspace() {
           card.appearance?.showPreview ?? DEFAULT_APPEARANCE.showPreview,
       },
       onComposition: compose,
+      strokeSelected,
       movingDisabled: strokeSelected || busy || historyBlocked || pose.pending || shapeMove.pending || shapeMove.dragging || texts.geometryBlocked || !!shapeText.session,
       historyBlocked,
-      resizable: singleItemId === card.item.id,
+      resizable: exclusiveCardItemId === card.item.id,
       onResize: (event, direction) => resize.start(event, card, direction),
       onResizeKey: (event, direction) => resize.key(event, card, direction),
       onMove: (dx, dy) => {
@@ -3592,6 +3624,15 @@ function Workspace() {
             payload: { id: crypto.randomUUID(), title: '', text, x: point.x - 140, y: point.y - 80 } });
         }}
         onClickCapture={(event) => {
+          const disabledMove = disabledMovePointer.current;
+          // A release on the preview can retarget Chrome's click to the whole card.
+          if (event.detail > 0 && disabledMove && (event.target as Element).closest(".thought-card") === disabledMove.card &&
+            (!(event.nativeEvent instanceof PointerEvent) || event.nativeEvent.pointerId === disabledMove.pointerId)) {
+            disabledMovePointer.current = null;
+            event.preventDefault();
+            event.stopPropagation();
+            return;
+          }
           if ((event.target as Element).closest('.react-flow__node, .react-flow__pane') && canvasMove.consumeCancelledClick()) {
             event.preventDefault(); event.stopPropagation(); return;
           }
@@ -3650,6 +3691,9 @@ function Workspace() {
         }}
         onPointerMoveCapture={event => { if (!connectorEdit.input(event) && !connectorCreate.input(event)) strokeDraw.move(event); }}
         onPointerUpCapture={event => { if (!connectorEdit.input(event) && !connectorCreate.input(event)) strokeDraw.finish(event); }}
+        onPointerCancelCapture={event => {
+          if (disabledMovePointer.current?.pointerId === event.pointerId) disabledMovePointer.current = null;
+        }}
         onMouseDownCapture={event => {
           const hit = (event.target as Element).closest<HTMLElement>('.react-flow__node')?.dataset.id;
           if (hit && event.button === 0 && !(event.target as Element).closest('.nodrag, input, textarea, [contenteditable=true]'))
@@ -3663,6 +3707,10 @@ function Workspace() {
               { x: touch.clientX, y: touch.clientY });
         }}
         onPointerDownCapture={(event) => {
+          const disabledCard = event.isPrimary && event.button === 0
+            ? (event.target as Element).closest('.move-handle[aria-disabled="true"]')?.closest(".thought-card")
+            : null;
+          disabledMovePointer.current = disabledCard ? { card: disabledCard, pointerId: event.pointerId } : null;
           if (frameTool && event.button === 0 && (event.target as Element).classList.contains('react-flow__pane') && state) {
             event.preventDefault(); event.stopPropagation();
             frameDrag.current = { projectId: state.project.id, state,
@@ -3828,7 +3876,7 @@ function Workspace() {
                 execute={(command, done, endEditing) => void action(command, done, { onSettled: () => {
                   if (!pendingAction.current && authority.current?.project.id === command.projectId) endEditing?.();
                 } })} move={frameMove} />
-              <CanvasGroups state={state} selection={exportVisual ? { targets: [], enteredGroupId: null } : canvasSelection.value} positions={{ ...canvasMove.positions, ...frameMove.positions, ...groupGeometry.poses }} geometry={groupGeometry}
+              <CanvasGroups state={state} selection={exportVisual ? { targets: [], enteredGroupId: null } : canvasSelection.value} positions={{ ...pose.positions, ...canvasMove.positions, ...frameMove.positions, ...groupGeometry.poses }} geometry={groupGeometry}
                 blocked={busy || historyBlocked || !!pendingAction.current || texts.hasPending()}
                 create={() => void createSelectedGroup()}
                 createFrame={() => void createSelectedFrame()}
@@ -3848,7 +3896,7 @@ function Workspace() {
                 drag={event => { if (!connectorLabel.session) connectorEdit.move(value, event); }}
                 choose={extend => { if (!connectorCreate.hasPending() && !connectorEdit.hasPending()) { editorEpoch.current++; setFrameSelection(null); if (!extend) setSelection([]);
                   setSelectedConnectors(previous => extend ? previous.includes(value.id) ? previous.filter(id => id !== value.id) : [...previous, value.id] : [value.id]); } }} />)}
-              {!connectorLabel.session && (state.connectors ?? []).filter(value => value.id === selectedConnector).map(value => <ConnectorHandles key={value.id} value={value}
+              {!connectorLabel.session && (state.connectors ?? []).filter(value => value.id === exclusiveConnector).map(value => <ConnectorHandles key={value.id} value={value}
                 resolve={connectorTargets.resolve} blocked={busy || historyBlocked || composition.current || !!pendingAction.current}
                 start={(endpoint, event) => connectorEdit.start(value, endpoint, event)} activate={(endpoint, origin) => connectorEdit.startKeyboard(value, endpoint, origin)} />)}
               <ConnectorPreview draft={connectorEdit.draft?.projectId === state.project.id ? connectorEdit.draft : null} />
@@ -3911,7 +3959,7 @@ function Workspace() {
         {state && connectorEdit.keyboardEndpoint && <ConnectorEndpointControls endpoint={connectorEdit.keyboardEndpoint}
           blocked={connectorEdit.keyboardBlocked()} composing={() => composition.current} preview={connectorEdit.previewFree}
           choose={connectorEdit.chooseFree} cancel={connectorEdit.cancel} />}
-        {state && (!connectorEdit.keyboardActive || connectorEdit.keyboardMoving) && (state.connectors ?? []).filter(value => value.id === selectedConnector).map(value =>
+        {state && (!connectorEdit.keyboardActive || connectorEdit.keyboardMoving) && (state.connectors ?? []).filter(value => value.id === exclusiveConnector).map(value =>
           <ConnectorPathControls key={value.id} value={value} blocked={busy || historyBlocked || composition.current || !!pendingAction.current || connectorEdit.hasPending()}
             appearance={style => void afterConnectorLabel(value, prepared => { void action({ commandId: crypto.randomUUID(), projectId: state.project.id, type: 'connector.style', expected: prepared.versionId, payload: { id: prepared.id, style } }); })}
             reverse={reverseConnectors}
@@ -4154,7 +4202,7 @@ function Workspace() {
                     ?.title || "原卡片"}
                 </p>
                 <pre>{entry.value.drafts.map((d) => d.value).join("\n")}</pre>
-                <button onClick={() => void restoreDraft(entry)}>
+                <button disabled={historyBlocked} onClick={() => void restoreDraft(entry)}>
                   恢复草稿
                 </button>
               </article>

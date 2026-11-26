@@ -1034,6 +1034,7 @@ body:has(.workspace[data-board-full="true"]) .card-tooltip { display: none; }
   --card-color-ffffff: #ffffff;
 }
 .title-button,
+.title-button:hover,
 .card-title {
   background: var(--card-title-color, var(--card-color-edf1fa));
 }
@@ -1148,6 +1149,7 @@ body:has(.workspace > .project-nav) :is(.card-floating, .text-actions, .shape-te
 .card-color.card-color-e8e1f5 {
   background: var(--card-color-e8e1f5);
 }
+.card-color[aria-disabled="true"] { cursor: wait; }
 .card-color.card-color-ffffff {
   background: var(--card-color-ffffff);
 }
@@ -1206,6 +1208,16 @@ body:has(.workspace > .project-nav) :is(.card-floating, .text-actions, .shape-te
   border: 0;
   bottom: 2px;
   background: transparent;
+}
+.card-heading { position: relative; }
+.thought-card :is(.title-button, .card-title):focus-visible {
+  outline-offset: -3px;
+}
+.move-handle:focus-visible {
+  outline-offset: 0;
+}
+.move-handle[aria-disabled="true"] {
+  cursor: wait;
 }
 .card-visible-tags {
   background: var(--card-color-ffffff);
@@ -1641,16 +1653,20 @@ body:has(.workspace > .project-nav) :is(.card-floating, .text-actions, .shape-te
   opacity: 0.5;
 }
 .canvas-group-outline[data-selected="true"] { border-width: 2px; opacity: 1; }
+.canvas-selection-anchor { position: absolute; pointer-events: none; }
 .canvas-group-tools {
-  position: absolute;
   display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  width: max-content;
+  max-width: calc(100vw - 16px);
   gap: 6px;
   padding: 5px;
   background: var(--card-color-ffffff);
   border: 1px solid var(--canvas-selection-color);
   border-radius: 8px;
   pointer-events: auto;
-  z-index: 1000;
+  z-index: 30;
 }
 
 .canvas-frame[data-drop-candidate=true] { border-color: #2563eb; box-shadow: 0 0 0 3px #2563eb55; }

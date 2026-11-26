@@ -41,8 +41,14 @@ test('批量移动确认后删除非首卡只采用自身布局版本并保留�
     expect(ownCommands[0]).toMatchObject({ projectId, type: 'pose.batch', expected: { [first.id]: first.item.versionId, [card.id]: card.item.versionId } });
     expect(ownCommands[0]!.payload.poses.map(value => value.id)).toEqual([first.id, card.id]);
     for (const origin of [first, card]) expect(ownCommands[0]!.payload.poses.find(value => value.id === origin.id)).toEqual({ id: origin.id, ...origin.item.pose, x: origin.item.pose.x + 10 });
-    const toolbars = page.getByRole('toolbar', { name: '卡片操作', exact: true }); await expect(toolbars).toHaveCount(2);
-    await toolbars.nth(1).getByRole('button', { name: '更多', exact: true }).click();
+    const toolbar = page.getByRole('toolbar', { name: '卡片操作', exact: true });
+    await expect(toolbar).toHaveCount(0);
+    await page.locator(`.react-flow__node[data-id="${card.item.id}"] .title-button`).click();
+    await expect(page.locator('.react-flow__node.selected')).toHaveCount(1);
+    await expect(page.locator('.react-flow__node.selected')).toHaveAttribute('data-id', card.item.id);
+    await expect(toolbar).toHaveCount(1);
+    expect(ownReplies).toHaveLength(0);
+    await toolbar.getByRole('button', { name: '更多', exact: true }).click();
     await expect(page.locator('.workspace')).toHaveAttribute('data-revision', String(before.project.revision));
     events.push('nonfirst-card-delete-intent');
     await page.getByRole('dialog', { name: '更多', exact: true }).getByRole('button', { name: '删除卡片', exact: true }).click();
@@ -68,7 +74,7 @@ test('批量移动确认后删除非首卡只采用自身布局版本并保留�
     releaseAck(); const response = await responsePromise, receipt = await response.json();
     const after = await workspace.state(), afterHistory = await (await page.request.get(historyUrl)).json() as ProjectHistory;
     console.log('issue26-batch-pose-delete', JSON.stringify({ before, history, events, ownCommands, ownReplies, saved, savedHistory, attempts,
-      deleteStatus: response.status(), receipt, after, afterHistory, boundary: 'real Shift multi-selection and first-card move-handle ArrowRight; unchanged original pose.batch payload; nonfirst card menu delete intent before real execute200 ACK; no new receipt-field prerequisite or internal-state mutation' }));
+      deleteStatus: response.status(), receipt, after, afterHistory, boundary: 'real Shift multi-selection and first-card move-handle ArrowRight; unchanged original pose.batch payload; explicitly reselect only nonfirst card and open its menu before the real execute200 ACK; no new receipt-field prerequisite or internal-state mutation' }));
     expect(response.status(), '批量移动自身确认后首次删除非首卡应采用该卡的新布局版本').toBe(200);
     expect(ownCommands).toHaveLength(1); expect(attempts).toHaveLength(1);
     expect(attempts[0]!.command).toMatchObject({ projectId, type: 'thought.delete', payload: { id: card.id }, expected: {

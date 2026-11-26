@@ -228,9 +228,10 @@ test('D414结构命令已确认但补读失败时组合键零新增请求且重�
 });
 
 
-test('D414两个loose Card的可组合选区在真实卡片菜单内组合键零写', async ({ page, workspace }) => {
+test('D414两个loose Card的可组合选区在真实选区层级菜单内组合键零写', async ({ page, workspace }) => {
   const projectId = (await workspace.state()).project.id;
-  const definitions = [{ id: 'shortcut-menu-a', title: '菜单快捷键甲', x: 100 }, { id: 'shortcut-menu-b', title: '菜单快捷键乙', x: 500 }];
+  const definitions = [{ id: 'shortcut-menu-a', title: '菜单快捷键甲', x: 100 }, { id: 'shortcut-menu-b', title: '菜单快捷键乙', x: 500 },
+    { id: 'shortcut-menu-outside', title: '未选对照卡', x: 880 }];
   const layouts = definitions.map(value => page.waitForResponse(response => response.url().endsWith('/api/mapping/execute') &&
     response.request().postDataJSON()?.type === 'card.layout' && response.request().postDataJSON()?.payload.id === value.id));
   for (const value of definitions) await workspace.execute(page, { commandId: crypto.randomUUID(), projectId, type: 'thought.create', expected: null,
@@ -240,21 +241,22 @@ test('D414两个loose Card的可组合选区在真实卡片菜单内组合键零
   await page.getByRole('button', { name: definitions[0]!.title, exact: true }).click();
   await page.getByRole('button', { name: definitions[1]!.title, exact: true }).click({ modifiers: ['Shift'] });
   const before = await workspace.state(), historyUrl = workspace.origin + '/api/mapping/projects/' + projectId + '/history';
-  expect(before.cards).toHaveLength(2); expect(before.groups).toEqual([]);
-  const ids = before.cards.map(value => value.item.id).sort();
+  expect(before.cards).toHaveLength(3); expect(before.groups).toEqual([]);
+  const ids = before.cards.filter(value => value.id !== 'shortcut-menu-outside').map(value => value.item.id).sort();
   await expect.poll(() => page.locator('.react-flow__node.selected').evaluateAll(nodes => nodes.map(node => (node as HTMLElement).dataset.id!).sort())).toEqual(ids);
   await expect(page.getByRole('button', { name: '组合所选对象', exact: true })).toBeEnabled();
   const timeline = await (await page.request.get(historyUrl)).json(), commands: any[] = [];
   page.on('request', request => { if (request.url().endsWith('/api/mapping/execute') && request.method() === 'POST') commands.push(request.postDataJSON()); });
-  const toolbars = page.getByRole('toolbar', { name: '卡片操作', exact: true }); await expect(toolbars).toHaveCount(2);
-  await toolbars.nth(0).getByRole('button', { name: '更多', exact: true }).click();
-  const menu = page.getByRole('dialog', { name: '更多', exact: true }); await expect(menu).toHaveCount(1); await expect(menu).toBeVisible();
+  await expect(page.getByRole('toolbar', { name: '卡片操作', exact: true })).toHaveCount(0);
+  await page.getByRole('toolbar', { name: '组合操作', exact: true }).getByRole('button', { name: '层级', exact: true }).click();
+  const menu = page.getByRole('menu', { name: '层级操作', exact: true }); await expect(menu).toHaveCount(1); await expect(menu).toBeVisible();
   await expect.poll(() => page.locator('.react-flow__node.selected').evaluateAll(nodes => nodes.map(node => (node as HTMLElement).dataset.id!).sort())).toEqual(ids);
   await expect(page.getByRole('button', { name: '组合所选对象', exact: true })).toBeEnabled();
-  const close = menu.getByRole('button', { name: '关闭卡片菜单', exact: true });
+  const item = menu.getByRole('menuitem', { name: '置顶', exact: true });
+  await expect(item).toBeEnabled();
   for (const modifier of ['Meta', 'Control']) {
     for (const action of ['+g', '+Shift+g']) {
-      await close.focus(); await expect(close).toBeFocused(); await page.keyboard.press(modifier + action);
+      await item.focus(); await expect(item).toBeFocused(); await page.keyboard.press(modifier + action);
     }
   }
   await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));

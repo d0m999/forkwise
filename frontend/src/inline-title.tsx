@@ -4,7 +4,7 @@ interface InlineTitleInterface {
   value: string;
   blocked: boolean;
   onChange: (value: string) => void;
-  onFinish: () => void;
+  onFinish: (restoreFocus: boolean) => void;
   onComposition: (value: boolean) => void;
 }
 
@@ -41,7 +41,7 @@ export function InlineTitle({
       onChange={(event) => onChange(event.target.value)}
       onCompositionStart={() => onComposition(true)}
       onCompositionEnd={() => onComposition(false)}
-      onBlur={onFinish}
+      onBlur={() => onFinish(false)}
       onKeyDown={(event) => {
         if (event.nativeEvent.isComposing || event.keyCode === 229) return;
         if (
@@ -49,7 +49,7 @@ export function InlineTitle({
           event.key === "Escape"
         ) {
           event.preventDefault();
-          onFinish();
+          onFinish(true);
         }
       }}
     />

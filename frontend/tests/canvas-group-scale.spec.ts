@@ -132,7 +132,10 @@ test('两Card共同可行缩放下界来自目标宽度真实标题标签，保�
     (window as typeof window & { groupMeasures: typeof observed }).groupMeasures = observed;
     Object.defineProperty(HTMLElement.prototype, 'offsetHeight', { ...original, get() {
       const height = original.get!.call(this) as number;
-      if (this.matches('.title-button') && this.textContent.length > 100 && this.closest('[data-group-measurement]')) observed.push({ width: this.parentElement.getBoundingClientRect().width, height, targetWidth: parseFloat(this.parentElement.style.width) });
+      if (this.matches('.title-button') && this.textContent.length > 100 && this.closest('[data-group-measurement]')) {
+        const card = this.closest('.thought-card') as HTMLElement;
+        observed.push({ width: card.getBoundingClientRect().width, height, targetWidth: parseFloat(card.style.width) });
+      }
       return height;
     } });
   });

@@ -29,21 +29,33 @@ test('多选中删除当前卡后剩余单卡属于系统选区清理，不自�
   await place(page, '保留乙', 400, 120);
   await page.getByRole('button', { name: '待删除甲', exact: true }).click();
   await page.locator('.react-flow__node').filter({ has: page.getByRole('button', { name: '待删除甲', exact: true }) }).getByRole('button', { name: '编辑正文', exact: true }).click();
-  await page.getByRole('button', { name: '保留乙', exact: true }).click({ modifiers: ['Shift'] });
-  await expect(page.locator('.react-flow__node.selected')).toHaveCount(2);
-  await expect(page.locator('.body-editor h2')).toHaveText('待删除甲');
-  await page.getByRole('toolbar', { name: '卡片操作', exact: true }).first().getByRole('button', { name: '更多', exact: true }).click();
-  await expect(page.getByRole('dialog', { name: '更多', exact: true })).toBeVisible();
-  await page.getByRole('button', { name: '删除卡片', exact: true }).click();
-  await expect(page.getByLabel('已删除卡片')).toBeVisible();
-  await expect(page.locator('.body-editor h2')).toHaveText('待删除甲');
-  await expect(page.locator('.react-flow__node.selected')).toHaveCount(1);
-  await page.getByRole('button', { name: '撤销删除', exact: true }).click();
-  await expect(page.locator('.react-flow__node')).toHaveCount(2);
-  await expect(page.locator('.body-editor h2')).toHaveText('待删除甲');
-  await page.getByRole('button', { name: '保留乙', exact: true }).click();
-  await expect(page.locator('.body-editor h2')).toHaveText('保留乙');
-  expect((await workspace.state()).cards).toHaveLength(2);
+  const send = gate();
+  let queued = false;
+  await page.route('**/api/mapping/execute', async route => {
+    if (route.request().postDataJSON().type !== 'thought.delete') return route.continue();
+    queued = true;
+    await send.promise;
+    await route.continue();
+  });
+  try {
+    await page.getByRole('toolbar', { name: '卡片操作', exact: true }).getByRole('button', { name: '更多', exact: true }).click();
+    await expect(page.getByRole('dialog', { name: '更多', exact: true })).toBeVisible();
+    await page.getByRole('button', { name: '删除卡片', exact: true }).click();
+    await expect.poll(() => queued).toBe(true);
+    await page.getByRole('button', { name: '保留乙', exact: true }).click({ modifiers: ['Shift'] });
+    await expect(page.locator('.react-flow__node.selected')).toHaveCount(2);
+    await expect(page.locator('.body-editor h2')).toHaveText('待删除甲');
+    send.release();
+    await expect(page.getByLabel('已删除卡片')).toBeVisible();
+    await expect(page.locator('.body-editor h2')).toHaveText('待删除甲');
+    await expect(page.locator('.react-flow__node.selected')).toHaveCount(1);
+    await page.getByRole('button', { name: '撤销删除', exact: true }).click();
+    await expect(page.locator('.react-flow__node')).toHaveCount(2);
+    await expect(page.locator('.body-editor h2')).toHaveText('待删除甲');
+    await page.getByRole('button', { name: '保留乙', exact: true }).click();
+    await expect(page.locator('.body-editor h2')).toHaveText('保留乙');
+    expect((await workspace.state()).cards).toHaveLength(2);
+  } finally { send.release(); await page.unrouteAll({ behavior: 'wait' }); }
 });
 
 test('合成中文composition不拆组合，Enter/Esc优先，关闭只收起并由同Body恢复', async ({ page, workspace }) => {

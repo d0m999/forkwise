@@ -1,8 +1,11 @@
+import { useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { groupOutlineBounds } from '../../backend/src/mapping/container-endpoints';
 import type { ProjectState } from './api';
 import { canvasItems, selectedItemIds, type CanvasSelection } from './canvas-selection';
 import type { useGroupGeometry } from './group-geometry';
 import { LayerMenu, type LayerMenuProps } from './layer-menu';
+import { useNearbyCanvasControls } from './nearby-canvas-controls';
 
 export function CanvasGroups({ state, selection, positions, geometry, blocked, create, createFrame, enter, ungroup, ungroupSelected, remove, layer }: {
   state: ProjectState; selection: CanvasSelection; positions: Record<string, { x: number; y: number; width?: number; height?: number }>;
@@ -16,6 +19,14 @@ export function CanvasGroups({ state, selection, positions, geometry, blocked, c
   const left = Math.min(...poses.map(p => p.x)), top = Math.min(...poses.map(p => p.y));
   const right = Math.max(...poses.map(p => p.x + p.width)), bottom = Math.max(...poses.map(p => p.y + p.height));
   const groupId = selection.targets.length === 1 && selection.targets[0]?.kind === 'group' ? selection.targets[0].id : null;
+  const anchor = useRef<HTMLDivElement>(null);
+  const toolbar = useRef<HTMLDivElement>(null);
+  const showTools = selected.length > 0 && (selection.targets.length > 1 || !!groupId);
+  const [portal, setPortal] = useState<HTMLElement | null>(null);
+  useLayoutEffect(() => {
+    setPortal(anchor.current?.closest<HTMLElement>(".canvas") ?? null);
+  }, [showTools]);
+  const { positions: placement, placePopup } = useNearbyCanvasControls(anchor, toolbar, undefined, showTools && !!portal);
   return <>
     {(state.groups ?? []).map(group => {
       const members = items.filter(v => group.memberItemIds.includes(v.item.id)).map(v => ({ ...v.item.pose, ...positions[v.item.id] }));
@@ -29,10 +40,13 @@ export function CanvasGroups({ state, selection, positions, geometry, blocked, c
       disabled={blocked || geometry.blocked} style={{ position: 'absolute', left: (corner.endsWith('w') ? left : right) - 5,
         top: (corner.startsWith('n') ? top : bottom) - 5, zIndex: 1001, pointerEvents: 'auto', cursor: corner === 'nw' || corner === 'se' ? 'nwse-resize' : 'nesw-resize' }}
       onPointerDown={event => geometry.start(event, corner)} />)}
-    {selected.length > 0 && (selection.targets.length > 1 || groupId) && <div role="toolbar" aria-label="组合操作"
-      className="canvas-group-tools nodrag nopan" style={{ left,
-        top: selection.targets.length > 1 && selected.every(value => 'body' in value) ? bottom + 12 : top - 48 }}
-      onPointerDown={e => e.stopPropagation()}>
+    {showTools && <>
+      <div ref={anchor} aria-hidden="true" className="canvas-selection-anchor"
+        style={{ left, top, width: right - left, height: bottom - top }} />
+      {portal && createPortal(<div ref={toolbar} role="toolbar" aria-label="组合操作"
+        className="canvas-group-tools card-floating nodrag nopan"
+        style={{ ...placement?.toolbar, maxWidth: placement?.maxWidth, visibility: placement ? undefined : "hidden" }}
+        onPointerDown={event => event.stopPropagation()} onClick={event => event.stopPropagation()}>
       {selection.targets.length > 1 && <><button disabled={blocked} onClick={create}>组合所选对象</button><span>不含连线</span></>}
       {selection.targets.length > 0 && (() => {
         const parents = selection.targets.map(target => {
@@ -48,7 +62,8 @@ export function CanvasGroups({ state, selection, positions, geometry, blocked, c
       {geometry.rotatable && <><button disabled={blocked || geometry.blocked} onClick={() => void geometry.rotate('left')}>组合左转90°</button>
         <button disabled={blocked || geometry.blocked} onClick={() => void geometry.rotate('right')}>组合右转90°</button></>}
       {selection.targets.some(t => t.kind === 'group') && !geometry.scalable && <span>含笔迹，暂仅支持整体移动</span>}
-      {layer && <LayerMenu {...layer} />}
-    </div>}
+      {layer && <LayerMenu {...layer} placePopup={placePopup} />}
+    </div>, portal)}
+    </>}
   </>;
 }
