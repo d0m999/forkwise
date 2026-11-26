@@ -59,7 +59,6 @@ for await (const line of createInterface({input: process.stdin})) {
 }
 `, { mode: 0o700 });
   vi.stubEnv('FORKWISE_CODEX_BINARY', executable);
-  vi.stubEnv('FORKWISE_CODEX_SYNTHETIC_ROUND_TRIP', undefined);
 });
 
 afterEach(async () => {
@@ -96,6 +95,30 @@ it('从空会话发问，并在原生记录变化后只读回看，禁止未核�
   await expect(chats.send(first.id, '继续')).rejects.toMatchObject({ code: 'CODEX_HISTORY_UNVERIFIED' });
   expect(JSON.parse(readFileSync(path, 'utf8')).turns).toHaveLength(2);
   expect(await chats.get(chats.create().id)).toMatchObject({ threadId: null, messages: [] });
+});
+
+it('可见的合成问答一致时，仍拦截隐藏内容变化后的原生历史', async () => {
+  const first = '第一条合成问题';
+  const terminal = '终端合成问题';
+  const third = '继续合成提问';
+  // Launchers from the earlier acceptance build must not relax this boundary.
+  vi.stubEnv('FORKWISE_CODEX_SYNTHETIC_ROUND_TRIP', JSON.stringify([first, terminal, third]));
+  const chat = chats = new AgentChat(directory, 'test', async () => 'synthetic-test-token');
+  const { id } = chat.create();
+  const { threadId } = await chat.send(id, first);
+  await expect.poll(async () => (await chat.get(id)).busy).toBe(false);
+  const path = join(directory, 'no-project', threadId + '.json');
+  const native = JSON.parse(readFileSync(path, 'utf8'));
+  native.turns.push({ id: 'terminal-turn', status: 'completed', items: [
+    { id: 'terminal-user', type: 'userMessage', content: [{ type: 'text', text: terminal }] },
+    { id: 'terminal-agent', type: 'agentMessage', text: '终端合成回答' },
+  ] });
+  native.unprojectedContext = '可见消息投影以外的未验证合成占位材料';
+  writeFileSync(path, JSON.stringify(native));
+  expect((await chat.get(id)).messages.map(message => message.text))
+    .toEqual([first, '合成回答', terminal, '终端合成回答']);
+  await expect(chat.send(id, third)).rejects.toMatchObject({ code: 'CODEX_HISTORY_UNVERIFIED' });
+  expect(JSON.parse(readFileSync(path, 'utf8')).turns).toHaveLength(2);
 });
 
 it('正式路由要求本人身份，未授权时没有原生进程或项目数据入口', async () => {

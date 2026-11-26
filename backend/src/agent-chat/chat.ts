@@ -22,7 +22,6 @@ const threadResult = z.object({ thread: nativeThread });
 const openResult = threadResult.extend({ model: z.string(), modelProvider: z.string() });
 type NativeThread = z.infer<typeof nativeThread>;
 
-const syntheticRoundTrip = z.tuple([z.string().min(1), z.string().min(1), z.string().min(1)]);
 type Turn = { id: string; status: string };
 type RunningChat = { messages: Message[] };
 const blockedHistory = () => new DomainError(
@@ -82,14 +81,11 @@ export class AgentChat {
   private readonly processes = new Set<CodexConnection>();
   private readonly file: string;
   private readonly cwd: string;
-  private readonly synthetic: z.infer<typeof syntheticRoundTrip> | undefined;
   private closing = false;
 
   constructor(directory: string, private readonly version: string, private readonly token: () => Promise<string>) {
     this.file = join(directory, 'conversations.json');
     this.cwd = privateDirectory(join(directory, 'no-project'));
-    const synthetic = process.env.FORKWISE_CODEX_SYNTHETIC_ROUND_TRIP;
-    this.synthetic = synthetic === undefined ? undefined : syntheticRoundTrip.parse(JSON.parse(synthetic));
     try {
       this.chats = z.array(savedChat).parse(JSON.parse(readPrivateFile(this.file, size => size <= 1024 * 1024).toString('utf8')));
       requireThat((lstatSync(this.file).mode & 0o077) === 0, 'CODEX_STORAGE_UNAVAILABLE', '对话索引必须是私有文件。', 503);
@@ -162,29 +158,9 @@ export class AgentChat {
     } finally { await connection.close(); }
   }
 
-  private verifyHistory(chat: SavedChat, thread: NativeThread, text: string) {
-    if (chat.checkpoint && fingerprint(thread) === chat.checkpoint) return;
-    // Controlled native acceptance can exercise a real terminal round trip
-    // before G4. The fixture permits three exact synthetic prompts only. Its
-    // terminal history must contain exclusively completed text turns.
-    if (this.synthetic && text === this.synthetic[2] && thread.turns.length === 2 &&
-      thread.turns.every((turn, index) => {
-        const user = turn.items.filter(item => item.type === 'userMessage');
-        return turn.status === 'completed' && user.length === 1 &&
-          user[0]?.content?.length === 1 && user[0].content[0]?.type === 'text' &&
-          user[0].content[0]?.text === this.synthetic?.[index] &&
-          turn.items.every(item => ['userMessage', 'agentMessage', 'reasoning'].includes(item.type));
-      })) return;
-    throw blockedHistory();
-  }
-
   async send(id: string, text: string) {
     const chat = this.find(id);
     requireThat(!this.running.has(id), 'CODEX_TURN_ACTIVE', '请等待当前回合结束。', 409);
-    if (this.synthetic) {
-      requireThat((chat.threadId ? this.synthetic[2] : this.synthetic[0]) === text,
-        'CODEX_SYNTHETIC_PROMPT_REQUIRED', '本次隔离验收只接受已登记的合成提问。', 403);
-    }
     const active: RunningChat = { messages: [] };
     this.running.set(id, active);
     this.errors.delete(id);
@@ -215,7 +191,10 @@ export class AgentChat {
         const history = await this.read(connection, previous);
         requireThat(history.status.type !== 'active' && !history.turns.some(item => item.status === 'inProgress'),
           'CODEX_TURN_ACTIVE', '请结束终端中的当前 Codex 回合，再回见岔继续。', 409);
-        this.verifyHistory(chat, history, text);
+        // The display projection omits entries used when Codex reconstructs
+        // model context. Only a recording already verified by Forkwise can
+        // resume for inference before G4. Changed recordings remain readable.
+        if (!chat.checkpoint || fingerprint(history) !== chat.checkpoint) throw blockedHistory();
         active.messages = nativeMessages(history);
       }
       const opened = openResult.safeParse(await connection.call(previous ? 'thread/resume' : 'thread/start', {
