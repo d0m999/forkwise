@@ -25,6 +25,7 @@ export function CardMenu({
   blocked,
   onEdit,
   onBody,
+  onCopyReference,
   onAI,
   onAddAttachment,
   onDelete,
@@ -38,6 +39,7 @@ export function CardMenu({
   value: Appearance;
   onEdit: () => void;
   onBody: () => void;
+  onCopyReference: () => void;
   onAI: () => void;
   onAddAttachment: (file: File) => void;
   onDelete: () => void;
@@ -287,6 +289,9 @@ export function CardMenu({
                 }}
               >
                 打开写字板
+              </button>
+              <button onClick={() => { close(); onCopyReference(); }}>
+                复制卡片引用
               </button>
               <AddAttachmentButton blocked={blocked} onAdd={file => { close(); onAddAttachment(file); }} />
               <button disabled={blocked} onClick={() => { close(false); onDelete(); }}>删除卡片</button>

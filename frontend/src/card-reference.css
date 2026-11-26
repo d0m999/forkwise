@@ -1,0 +1,15 @@
+.card-reference-dialog {
+  box-sizing: border-box;
+  width: min(30rem, calc(100% - var(--search-space-xl)));
+  padding: var(--body-overlay-inset);
+  border: var(--search-border-width) solid var(--card-menu-border);
+  border-radius: var(--search-radius-12);
+  color: inherit;
+  background: var(--card-color-ffffff);
+  box-shadow: var(--body-overlay-shadow);
+}
+.card-reference-dialog::backdrop { background: var(--search-backdrop); }
+.card-reference-dialog form { display: grid; gap: var(--search-space-md); }
+.card-reference-dialog h2 { margin: 0; font-size: var(--search-font-18); }
+.card-reference-dialog p { margin: 0; overflow-wrap: anywhere; }
+.card-reference-dialog footer { display: flex; justify-content: flex-end; gap: var(--search-space-md); }

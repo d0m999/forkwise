@@ -16,6 +16,27 @@ function readError(error: unknown, fallback: string) {
 
 // The tool is read-only. Authentication and snapshots live in Mapping, not MCP.
 export function registerCompactMapTool(server: McpServer, transport: ApiTransport) {
+  server.registerTool(
+    'forkwise_read_card_reference',
+    {
+      description:
+        '粘贴见岔复制的 forkwise:card/… 普通文本引用，读取当前授权项目内同一卡片的已保存最新版。结果提供 projectId、cardId、可用状态和实际正文版本 card.body.versionId。只有明确要求读旧版时，才使用现有版本接口 GET /api/mapping/projects/{projectId}/versions/body/{bodyId}/{versionId}。',
+      inputSchema: z.object({ reference: z.string() }).strict(),
+      annotations: { readOnlyHint: true, openWorldHint: false },
+    },
+    async ({ reference }) => {
+      try {
+        const query = new URLSearchParams({ reference });
+        const response = await transport.call(`/api/mapping/card-reference?${query}`);
+        return {
+          content: [{ type: 'text' as const, text: JSON.stringify(response) }],
+          structuredContent: { response },
+        };
+      } catch (error) {
+        return readError(error, '卡片引用读取失败');
+      }
+    },
+  );
   server.registerTool('forkwise_execute_tag_command', {
     description: '在明确项目编辑委托内管理项目标签与单卡关联顺序。与本人界面共用Mapping事务、细域expected、持久commandId和统一历史；删除须先完整读取当前标签和全部受影响cardTags版本并确认。Agent不能撤销研究历史。',
     inputSchema: z.object({ command: TagCommandSchema }).strict(),

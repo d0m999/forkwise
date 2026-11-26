@@ -94,6 +94,10 @@ export const api = {
     request<CardIdentity>(
       `/projects/${encodeURIComponent(projectId)}/cards/${encodeURIComponent(cardId)}/identity`,
     ),
+  resolveCardReference: (reference: string) =>
+    request<CardIdentity & { projectId: string; cardId: string }>(
+      `/card-reference?${new URLSearchParams({ reference })}`,
+    ),
   history: (id: string) =>
     request<ProjectHistory>("/projects/" + encodeURIComponent(id) + "/history"),
   cutState: (projectId: string, cutId: string) =>

@@ -20,6 +20,23 @@ export const EXECUTE_BODY_LIMIT = 48 * 1024 * 1024;
 const PACKAGE_REQUEST_OVERHEAD = 4 * 1024;
 export const PACKAGE_MAX_BYTES = Math.floor((EXECUTE_BODY_LIMIT - PACKAGE_REQUEST_OVERHEAD) / 4) * 3;
 
+function parseCardReference(reference: string | undefined) {
+  const [prefix, encodedProjectId, encodedCardId, extra] = reference?.split('/') ?? [];
+  if (prefix === 'forkwise:card' && encodedProjectId && encodedCardId && extra === undefined) {
+    try {
+      const projectId = decodeURIComponent(encodedProjectId);
+      const cardId = decodeURIComponent(encodedCardId);
+      if (projectId.length <= 160 && cardId.length <= 160 &&
+          encodeURIComponent(projectId) === encodedProjectId && encodeURIComponent(cardId) === encodedCardId) {
+        return { projectId, cardId };
+      }
+    } catch {
+      // 无效的 URI 转义或字符编码。
+    }
+  }
+  throw new DomainError('INVALID_CARD_REFERENCE', '卡片引用格式无效', 400);
+}
+
 export function createWorkspaceApp(
   mapping: Mapping,
   origin: string,
@@ -172,6 +189,14 @@ export function createWorkspaceApp(
   app.get('/api/mapping/projects/:id/search-state', (c) =>
     c.json(mapping.read({ type: 'search.state', projectId: c.req.param('id') }, c.get('principal'))),
   );
+  app.get('/api/mapping/card-reference', (c) => {
+    const query = c.req.queries();
+    const reference = Object.keys(query).length === 1 && query.reference?.length === 1
+      ? query.reference[0] : undefined;
+    const { projectId, cardId } = parseCardReference(reference);
+    const identity = mapping.read({ type: 'card.identity', projectId, id: cardId }, c.get('principal'));
+    return c.json({ projectId, cardId, ...identity });
+  });
   app.get('/api/mapping/projects/:id/cards/:cardId/identity', (c) =>
     c.json(
       mapping.read(

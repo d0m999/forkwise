@@ -11,6 +11,7 @@ import { ExportMenu } from "./export-menu";
 import { ImportPackage, importDialogOpen } from "./import-package";
 import { WorkspaceGuide } from "./workspace-guide";
 import { AgentChat } from "./agent-chat";
+import { CardReference } from "./card-reference";
 import { WorkspaceBackup } from "./workspace-backup";
 import { renderCanvasPng, type CanvasExportVisual } from "./canvas-export";
 import { useCanvasImageInput } from "./canvas-image-input";
@@ -138,6 +139,7 @@ type CardData = {
   onFinish: () => void;
   onEdit: () => void;
   onBody: () => void;
+  onCopyReference: () => void;
   onAI: () => void;
   onOpenAttachment: (assetId: string) => void;
   onRemoveAttachment: (attachmentId: string) => void;
@@ -192,6 +194,7 @@ function ThoughtCard({ data, selected }: NodeProps<Node<CardData>>) {
           blocked={data.historyBlocked}
           onEdit={data.onEdit}
           onBody={data.onBody}
+          onCopyReference={data.onCopyReference}
           onAI={data.onAI}
           onAddAttachment={data.onAddAttachment}
           onDelete={data.onDelete}
@@ -763,7 +766,7 @@ function Workspace() {
       if (event.isComposing || event.keyCode === 229 || composition.current)
         return;
       const target = event.target as HTMLElement;
-      if (backupDialog.current?.open || target.closest(".agent-chat, dialog.project-search, dialog.shape-appearance-dialog, dialog.organize-dialog, dialog.attachment-copy-dialog")) return;
+      if (backupDialog.current?.open || target.closest(".agent-chat, dialog.project-search, dialog.card-reference-dialog, dialog.shape-appearance-dialog, dialog.organize-dialog, dialog.attachment-copy-dialog")) return;
       // 导入对话框是模态表单，不是原生 <dialog>：打开期间画布动作历史一律不动。
       // 这里直接返回、不 preventDefault，名称输入框的原生撤销照常生效。
       if (importDialogOpen()) return;
@@ -1384,23 +1387,25 @@ function Workspace() {
       window.removeEventListener("keyup", keys);
     };
   });
-  const handoff = async (id: string) => {
+  const handoff = async (id: string, valid = () => true) => {
     const value = await api.project(id);
     const all = await api.projects();
     // Keep the old project's authority while the destination is loading: the
     // visible editors may still accept input during those requests.
-    if (!(await shapeMove.flush()) || !(await connectorLabel.finish()) || !(await shapeText.finish()) || !(await texts.finish()) || !(await pose.flush()) || !(await flush())) return false;
+    if (!valid() || !(await shapeMove.flush()) || !(await connectorLabel.finish()) || !(await shapeText.finish()) || !(await texts.finish()) ||
+      !(await pose.flush()) || !(await flush()) || !valid()) return false;
     updateState(value);
     setProjects(all);
     return true;
   };
-  const select = async (id: string) => {
+  const select = async (id: string, valid?: () => boolean) => {
     if (historyLock.current || historyCommand.current || strokeDraw.hasPending()) return;
     if (pendingAction.current) {
       fail(new Error("请先重试未完成的保存"));
       return;
     }
-    editorEpoch.current++;
+    const epoch = ++editorEpoch.current;
+    const stillSelecting = valid && (() => valid() && editorEpoch.current === epoch);
     breakBodyGroup();
     if (
       !(await shapeMove.flush()) || !(await connectorLabel.finish()) || !(await shapeText.finish()) || !(await texts.finish()) ||
@@ -1410,10 +1415,11 @@ function Workspace() {
       !(await flush())
     )
       return;
-    if (id === authority.current?.project.id) return;
+    if (stillSelecting && !stillSelecting()) return;
+    if (id === authority.current?.project.id) return true;
     setBusy(true);
     try {
-      if (!(await handoff(id))) return;
+      if (!(await handoff(id, stillSelecting))) return;
       setEditing(null);
       bodyBinding.current = null;
       setDeletedBody(null);
@@ -1424,6 +1430,7 @@ function Workspace() {
       history.replaceState(null, "", "?project=" + encodeURIComponent(id));
       setStatus("已保存到本机");
       setError("");
+      return true;
     } catch (e) {
       fail(e);
     } finally {
@@ -2279,6 +2286,61 @@ function Workspace() {
     }
     return true;
   }
+  function locateCardOnCanvas(projectId: string, card: Card) {
+    awaitBodySelection.current = true;
+    clearConnectorSelection();
+    setSelection([card.item.id]);
+    setPlacing(false); setPanTool(false); setFrameTool(false);
+    const epoch = editorEpoch.current, selectionGeneration = canvasSelection.generation();
+    const stillSelected = () => authority.current?.project.id === projectId && editorEpoch.current === epoch &&
+      canvasSelection.generation() === selectionGeneration;
+    requestAnimationFrame(() => {
+      if (!stillSelected()) return;
+      const view = document.querySelector<HTMLElement>('.canvas .react-flow');
+      if (!view) return;
+      const pose = card.item.pose;
+      const zoom = flow.getZoom();
+      // Opening the writing board changes the canvas width before React Flow's
+      // ResizeObserver has delivered it to the viewport store.
+      void flow.setViewport({
+        x: view.clientWidth / 2 - (pose.x + pose.width / 2) * zoom,
+        y: view.clientHeight / 2 - (pose.y + pose.height / 2) * zoom,
+        zoom,
+      }, { duration: matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 180 });
+      requestAnimationFrame(() => {
+        if (!stillSelected()) return;
+        document.querySelector<HTMLElement>(`.react-flow__node[data-id="${CSS.escape(card.item.id)}"] article`)?.focus({ preventScroll: true });
+      });
+    });
+  }
+  async function openCardReference(reference: string, valid: () => boolean) {
+    const sourceProject = authority.current?.project.id, epoch = editorEpoch.current;
+    const stillInSource = () => valid() && authority.current?.project.id === sourceProject;
+    const unchanged = () => stillInSource() && editorEpoch.current === epoch;
+    const interrupted = "卡片引用打开已中断，请重试";
+    if (composition.current || historyLock.current || historyCommand.current || pendingAction.current)
+      throw new Error(interrupted);
+    const target = await api.resolveCardReference(reference);
+    if (!unchanged()) throw new Error(interrupted);
+    if (target.availability === "deleted") throw new Error("这张卡片已删除");
+    if (target.availability === "not_found") throw new Error("找不到引用的卡片");
+    if (target.projectId === sourceProject) {
+      if (!(await flush()) || !unchanged()) throw new Error(interrupted);
+      await refresh(sourceProject);
+      if (!unchanged()) throw new Error(interrupted);
+    } else if (!(await select(target.projectId, stillInSource))) {
+      throw new Error(interrupted);
+    }
+    const currentTarget = () => {
+      const current = authority.current;
+      if (valid() && current?.project.id === target.projectId) return current.cards.find(card => card.id === target.cardId);
+    };
+    if (!currentTarget()) throw new Error("找不到引用的卡片");
+    if (!(await editCard(target.cardId, "body", () => !!currentTarget()))) throw new Error(interrupted);
+    const card = currentTarget();
+    if (!card) throw new Error(interrupted);
+    locateCardOnCanvas(target.projectId, card);
+  }
   async function openSearch(reading: SearchReading, valid: () => boolean) {
     const projectId = authority.current?.project.id;
     if (!valid() || !projectId || composition.current || historyLock.current) return false;
@@ -2288,18 +2350,7 @@ function Workspace() {
     const card = identity.card;
     if (bodyCard) { if (!(await editCard(card.id, 'body', valid))) return false; setSearchSeed(reading); setBodySearchReading(reading); }
     if (!valid() || authority.current?.project.id !== projectId) return false;
-    awaitBodySelection.current = true;
-    clearConnectorSelection();
-    setSelection([card.item.id]);
-    setPlacing(false); setPanTool(false); setFrameTool(false);
-    requestAnimationFrame(() => {
-      const pose = card.item.pose;
-      void flow.setCenter(pose.x + pose.width / 2, pose.y + pose.height / 2, { zoom: flow.getZoom(), duration: matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 180 });
-      requestAnimationFrame(() => {
-        const node = [...document.querySelectorAll<HTMLElement>('.react-flow__node')].find(node => node.dataset.id === card.item.id);
-        node?.querySelector<HTMLElement>('article')?.focus({ preventScroll: true });
-      });
-    });
+    locateCardOnCanvas(projectId, card);
     return true;
   }
   const following = useRef<{ projectId: string; generation: number; itemId: string } | null>(null);
@@ -2962,6 +3013,16 @@ function Workspace() {
       },
       onEdit: () => void editCard(card.id, "title"),
       onBody: () => void editCard(card.id, "body"),
+      onCopyReference: async () => {
+        const projectId = state!.project.id;
+        if (authority.current?.project.id !== projectId) return;
+        try {
+          await navigator.clipboard.writeText(`forkwise:card/${encodeURIComponent(projectId)}/${encodeURIComponent(card.id)}`);
+          if (authority.current?.project.id === projectId) setStatus("已复制卡片引用");
+        } catch {
+          if (authority.current?.project.id === projectId) setStatus("复制卡片引用失败，请重试");
+        }
+      },
       onAI: () => {
         const current = authority.current;
         const source = current?.cards.find(item => item.id === card.id);
@@ -3127,6 +3188,7 @@ function Workspace() {
           onAdded={async () => { await refresh(organizing.projectId); }} />}
       <header className="topbar">
         {state && <ProjectSearch key={state.project.id} projectId={state.project.id} revision={state.project.revision} tags={state.tags ?? []} cards={state.cards} onOpen={openSearch} disabled={busy || historyBlocked} />}
+        <CardReference onOpen={openCardReference} disabled={!launchReady || busy || historyBlocked} />
         <button
           disabled={!state || busy || historyBlocked || imageGeometry.hasPending(state.project.id) || imageInput.hasPending(state.project.id)}
           onMouseDown={(e) => e.preventDefault()}
