@@ -125,11 +125,11 @@ export function ImportPackage({ disabled, onImported }: {
     const last = nodes[nodes.length - 1]!;
     if (!event.shiftKey && document.activeElement === last) {
       event.preventDefault();
-      first.focus({ preventScroll: true });
+      first.focus();
     } else if (event.shiftKey && (document.activeElement === first ||
       ((previewFailed || readError) && document.activeElement === failureRef.current))) {
       event.preventDefault();
-      last.focus({ preventScroll: true });
+      last.focus();
     }
   }
 

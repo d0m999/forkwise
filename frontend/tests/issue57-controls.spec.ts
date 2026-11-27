@@ -84,19 +84,26 @@ for (const width of [1360, 760]) test(`${width}px 四卡样例的浮栏衔接标
   await page.keyboard.press('Tab');
   await expect(resize).toBeFocused();
 
-  // Follow the rest of the document through the old portal location once.
+  // Chromium can wrap directly to the first page control without focusing body.
+  // The selected title marks a new traversal before the next intentional toolbar visit.
   const laterStops: string[] = [];
+  let completedTraversal = false;
   for (let index = 0; index < 80; index++) {
     await page.keyboard.press('Tab');
-    const next = await page.evaluate(() => {
+    const next = await page.evaluate(selectedTitle => {
       const active = document.activeElement!;
-      if (active === document.body) return 'end';
+      if (active === document.body ||
+        (active.matches('.title-button') && active.textContent === selectedTitle)) return 'end';
       if (active.closest('.card-actions')) return 'toolbar';
       return active.closest('.thought-card')?.querySelector('.title-button')?.textContent ?? '';
-    });
-    if (next === 'end') break;
+    }, cards[2]!.title);
+    if (next === 'end') {
+      completedTraversal = true;
+      break;
+    }
     laterStops.push(next);
   }
+  expect(completedTraversal).toBe(true);
   expect(laterStops).not.toContain('toolbar');
   expect(laterStops).toContain(cards[3]!.title);
 

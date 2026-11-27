@@ -83,6 +83,43 @@ for (const width of [1360, 760]) test(`${width}px 坏 ZIP 先读到校验错误�
   }
 });
 
+test('矮窗口的坏包错误可反向聚焦并看见取消按钮', async ({ page, workspace: _workspace }) => {
+  await page.setViewportSize({ width: 760, height: 200 });
+  const directory = mkdtempSync(join(tmpdir(), 'forkwise-short-import-'));
+  try {
+    const path = join(directory, 'broken.zip');
+    writeFileSync(path, Buffer.from('这不是 ZIP'));
+    const { dialog, trigger } = await openPackage(page, path);
+    const error = dialog.getByRole('alert');
+    const cancel = dialog.getByRole('button', { name: '取消', exact: true });
+    await expect(error).toBeFocused();
+    await page.keyboard.press('Shift+Tab');
+    await expect(cancel).toBeFocused();
+    await expect(cancel).toBeInViewport({ ratio: 1, timeout: 3000 });
+    await page.keyboard.press('Enter');
+    await expect(trigger).toBeFocused();
+  } finally {
+    rmSync(directory, { recursive: true });
+  }
+});
+
+test('矮窗口的有效包预览在名称与导入按钮间循环时始终看见焦点', async ({ page, workspace: _workspace }) => {
+  const path = await exportPackage(page);
+  await page.setViewportSize({ width: 760, height: 200 });
+  const { dialog, trigger } = await openPackage(page, path);
+  const name = dialog.getByLabel('新研究名称');
+  const confirm = dialog.getByRole('button', { name: '导入为新研究', exact: true });
+  await expect(name).toBeFocused();
+  await page.keyboard.press('Shift+Tab');
+  await expect(confirm).toBeFocused();
+  await expect(confirm).toBeInViewport({ ratio: 1, timeout: 3000 });
+  await page.keyboard.press('Tab');
+  await expect(name).toBeFocused();
+  await expect(name).toBeInViewport({ ratio: 1, timeout: 3000 });
+  await page.keyboard.press('Escape');
+  await expect(trigger).toBeFocused();
+});
+
 test('项目包预览请求中断时说明未能完成校验，并显示请求失败原因', async ({ page, workspace: _workspace }) => {
   const path = await exportPackage(page);
   await page.route('**/api/mapping/import.preview', route => route.abort('failed'));
