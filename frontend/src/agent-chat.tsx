@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import "./agent-chat.css";
 
-type LoginStatus = { loggedIn: boolean; message?: string };
+type ChatStatus = { loggedIn: boolean; modelAvailable: boolean; message?: string };
 type Conversation = { id: string; threadId: string | null; model: string | null };
 type Message = { id: string; role: "user" | "assistant"; text: string };
 type ConversationDetail = Conversation & { busy: boolean; messages: Message[]; error?: string; resumeCommand?: string };
@@ -27,7 +27,7 @@ async function chatRequest<T>(path: string, fallback: string, options: { body?: 
 }
 
 export function AgentChat({ open }: { open: boolean }) {
-  const [loginStatus, setLoginStatus] = useState<LoginStatus>();
+  const [chatStatus, setChatStatus] = useState<ChatStatus>();
   const [conversations, setConversations] = useState<Conversation[]>();
   const [selectedId, setSelectedId] = useState<string>();
   const [detail, setDetail] = useState<ConversationDetail>();
@@ -44,6 +44,7 @@ export function AgentChat({ open }: { open: boolean }) {
   const draft = selectedId ? drafts[selectedId] ?? "" : "";
   const lastMessage = current?.messages.at(-1);
   const resumeCommand = current?.resumeCommand;
+  const modelAvailable = chatStatus?.modelAvailable === true;
 
   useEffect(() => {
     if (!open) return;
@@ -63,9 +64,9 @@ export function AgentChat({ open }: { open: boolean }) {
     const controller = new AbortController();
     void (async () => {
       try {
-        const status = await chatRequest<LoginStatus>("/status", "暂时无法检查 Codex 登录状态。", { signal: controller.signal });
+        const status = await chatRequest<ChatStatus>("/status", "暂时无法检查 Codex 登录状态。", { signal: controller.signal });
         if (controller.signal.aborted) return;
-        setLoginStatus(status);
+        setChatStatus(status);
         if (status.loggedIn) {
           const list = await chatRequest<{ conversations: Conversation[] }>("/conversations", "暂时无法读取对话列表。", { signal: controller.signal });
           if (controller.signal.aborted) return;
@@ -80,7 +81,7 @@ export function AgentChat({ open }: { open: boolean }) {
     return () => controller.abort();
   }, [open, pending, refresh]);
 
-  const loggedIn = loginStatus?.loggedIn === true;
+  const loggedIn = chatStatus?.loggedIn === true;
   useEffect(() => {
     if (!open || !loggedIn || !selectedId || pending) return;
     const controller = new AbortController();
@@ -132,7 +133,7 @@ export function AgentChat({ open }: { open: boolean }) {
 
   async function send(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!current || !draft.trim() || pending || current.busy) return;
+    if (!modelAvailable || !current || !draft.trim() || pending || current.busy) return;
     setPending(true);
     setActionError("");
     setResumeCommandCopied(false);
@@ -174,6 +175,7 @@ export function AgentChat({ open }: { open: boolean }) {
       {actionError && <p className="agent-chat-error" role="alert">{actionError}</p>}
       {loggedIn ? (
         <>
+          {!modelAvailable && <p className="agent-chat-error" role="alert">{chatStatus.message ?? "当前 Codex 账户无法使用 gpt-6-luna。"}</p>}
           <div className="agent-chat-conversations">
             {!!conversations?.length && <select aria-label="对话列表" value={selectedId ?? ""} disabled={pending} onChange={event => {
               setSelectedId(event.target.value);
@@ -206,19 +208,19 @@ export function AgentChat({ open }: { open: boolean }) {
             <label htmlFor="agent-chat-message">消息</label>
             <textarea id="agent-chat-message" rows={3} placeholder="输入合成测试问题" value={draft} readOnly={pending || current.busy}
               onChange={event => { const value = event.target.value; setDrafts(values => ({ ...values, [current.id]: value })); }} />
-            <button type="submit" className="agent-chat-primary" disabled={pending || current.busy || !draft.trim()}>发送</button>
+            <button type="submit" className="agent-chat-primary" disabled={!modelAvailable || pending || current.busy || !draft.trim()}>发送</button>
           </form>}
-          {current && resumeCommand && !current.busy && <details className="agent-chat-resume" key={current.id}>
+          {modelAvailable && current && resumeCommand && !current.busy && <details className="agent-chat-resume" key={current.id}>
             <summary>终端续聊</summary>
             <code>{resumeCommand}</code>
             <button type="button" disabled={pending} onClick={() => void copyResumeCommand(resumeCommand)}>复制终端命令</button>
           </details>}
-          {resumeCommandCopied && <p className="agent-chat-muted" role="status">已复制终端命令。</p>}
+          {modelAvailable && resumeCommandCopied && <p className="agent-chat-muted" role="status">已复制终端命令。</p>}
         </>
       ) : (
         <div className="agent-chat-sign-in">
-          {loginStatus ? (
-            <p role="status">{loginStatus.message ?? <>请在终端运行 <code>codex login</code>，登录后点击刷新。</>}</p>
+          {chatStatus ? (
+            <p role="status">{chatStatus.message ?? <>请在终端运行 <code>codex login</code>，登录后点击刷新。</>}</p>
           ) : !listError && <p role="status">正在检查 Codex 登录状态…</p>}
         </div>
       )}

@@ -3,13 +3,14 @@ import { closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readFi
 import { join } from 'node:path';
 import { z } from 'zod';
 import { DomainError, requireThat } from '../domain/errors.js';
-import { CodexConnection, codexStorageEnvironment } from './codex.js';
+import { CodexConnection, codexChatModel, codexModelArgs, codexStorageEnvironment } from './codex.js';
 
 const savedChat = z.object({
   id: z.uuid(),
   threadId: z.uuid().nullable(),
   model: z.string().nullable(),
   checkpoint: z.string().nullable(),
+  rejectedModelTurnId: z.string().optional(),
 });
 type SavedChat = z.infer<typeof savedChat>;
 type Message = { id: string; role: 'user' | 'assistant'; text: string };
@@ -23,18 +24,23 @@ const openResult = threadResult.extend({ model: z.string() });
 type NativeThread = z.infer<typeof nativeThread>;
 
 type Turn = { id: string; status: string };
-type RunningChat = { messages: Message[] };
+type RunningChat = { messages: Message[]; rejectedModelTurnId?: string };
 const blockedHistory = () => new DomainError(
   'CODEX_HISTORY_UNVERIFIED',
   '原生会话中有见岔无法核实来源的历史。可在此查看，材料外传资格核验前请在终端继续。',
   403,
 );
 const loginMessage = '请在终端运行 codex login，完成后回到见岔刷新。';
+const modelUnavailableMessage = `当前 Codex 需要提供 ${codexChatModel} 才能发送。请检查原生模型列表后刷新。`;
+const modelMismatchMessage = `见岔只允许 ${codexChatModel}，本轮已停止。`;
+const modelMismatch = () => new DomainError('CODEX_MODEL_MISMATCH', modelMismatchMessage, 503);
+const modelRerouted = z.object({ threadId: z.string(), turnId: z.string(), toModel: z.string() });
 const readError = () => new DomainError('CODEX_HISTORY_UNAVAILABLE', '无法读取这段原生会话，请检查本机 Codex 会话位置。', 503);
 
-function nativeMessages(thread: NativeThread): Message[] {
+function nativeMessages(thread: NativeThread, rejectedModelTurnId?: string): Message[] {
   const result: Message[] = [];
   for (const turn of thread.turns) {
+    if (turn.id === rejectedModelTurnId) continue;
     for (const item of turn.items) {
       if (item.type === 'userMessage') {
         const text = item.content?.map(part => part.type === 'text' ? part.text ?? '' : '').filter(Boolean).join('\n');
@@ -119,9 +125,11 @@ export class AgentChat {
         const value = process.env[name];
         return value ? [`${name}=${terminalQuote(value)}`] : [];
       });
-      resumeCommand = [...environment, 'codex --no-daemon resume -C', terminalQuote(this.cwd), terminalQuote(chat.threadId)].join(' ');
+      resumeCommand = [...environment, 'codex', '--no-daemon', ...codexModelArgs, 'resume', '--model', codexChatModel, '-C',
+        terminalQuote(this.cwd), terminalQuote(chat.threadId)].join(' ');
     }
-    return { ...this.summary(chat), model, messages, busy, resumeCommand, error: this.errors.get(chat.id) };
+    const error = this.errors.get(chat.id) ?? (chat.rejectedModelTurnId ? modelMismatchMessage : undefined);
+    return { ...this.summary(chat), model, messages, busy, resumeCommand, error };
   }
 
   list() { return this.chats.map(chat => this.summary(chat)); }
@@ -149,11 +157,18 @@ export class AgentChat {
     return result.data.thread;
   }
 
-  async status(): Promise<{ loggedIn: boolean; message?: string }> {
+  async status(): Promise<{ loggedIn: boolean; modelAvailable: boolean; message?: string }> {
     const connection = this.connect();
     try {
       await connection.initialize(this.version);
-      return await connection.loggedIn() ? { loggedIn: true } : { loggedIn: false, message: loginMessage };
+      if (!(await connection.loggedIn())) return { loggedIn: false, modelAvailable: false, message: loginMessage };
+      try {
+        const modelAvailable = await connection.hasChatModel();
+        return { loggedIn: true, modelAvailable, ...(modelAvailable ? {} : { message: modelUnavailableMessage }) };
+      } catch (error) {
+        if (!(error instanceof DomainError)) throw error;
+        return { loggedIn: true, modelAvailable: false, message: '暂时无法检查 Codex 模型列表。请刷新后再试。' };
+      }
     } finally { await connection.close(); }
   }
 
@@ -166,7 +181,7 @@ export class AgentChat {
     try {
       await connection.initialize(this.version);
       const thread = await this.read(connection, chat.threadId);
-      return this.detail(chat, nativeMessages(thread), thread.status.type === 'active', thread.model ?? chat.model);
+      return this.detail(chat, nativeMessages(thread, chat.rejectedModelTurnId), thread.status.type === 'active', thread.model ?? chat.model);
     } finally { await connection.close(); }
   }
 
@@ -178,10 +193,25 @@ export class AgentChat {
     this.errors.delete(id);
     let connection: CodexConnection | undefined;
     let turn: Turn | undefined;
+    let previousMessages = 0;
     let resolveTerminal: (value: Turn | undefined) => void = () => {};
     const terminal = new Promise<Turn | undefined>(resolve => { resolveTerminal = resolve; });
     try {
       connection = this.connect((method, params) => {
+        if (method === 'model/rerouted') {
+          const reroute = modelRerouted.safeParse(params);
+          if (reroute.success && reroute.data.threadId === chat.threadId &&
+              (!turn || turn.id === reroute.data.turnId) && reroute.data.toModel !== codexChatModel &&
+              !active.rejectedModelTurnId) {
+            const { threadId, turnId } = reroute.data;
+            active.rejectedModelTurnId = turnId;
+            active.messages.length = previousMessages;
+            void connection?.call('turn/interrupt', { threadId, turnId }).catch(() => {});
+            resolveTerminal(undefined);
+          }
+          return;
+        }
+        if (active.rejectedModelTurnId) return;
         if (method === 'turn/completed') {
           const result = z.object({ threadId: z.string(), turn: z.object({ id: z.string(), status: z.string() }) }).safeParse(params);
           if (result.success && result.data.threadId === chat.threadId && (!turn || turn.id === result.data.turn.id)) {
@@ -199,6 +229,7 @@ export class AgentChat {
       }, () => resolveTerminal(undefined));
       await connection.initialize(this.version);
       requireThat(await connection.loggedIn(), 'CODEX_LOGIN_REQUIRED', loginMessage, 401);
+      requireThat(await connection.hasChatModel(), 'CODEX_MODEL_UNAVAILABLE', modelUnavailableMessage, 503);
       const previous = chat.threadId;
       if (previous) {
         const history = await this.read(connection, previous);
@@ -208,24 +239,26 @@ export class AgentChat {
         // model context. Only a recording already verified by Forkwise can
         // resume for inference before G4. Changed recordings remain readable.
         if (!chat.checkpoint || fingerprint(history) !== chat.checkpoint) throw blockedHistory();
-        active.messages = nativeMessages(history);
+        active.messages = nativeMessages(history, chat.rejectedModelTurnId);
+        previousMessages = active.messages.length;
       }
       const opened = openResult.safeParse(await connection.call(previous ? 'thread/resume' : 'thread/start', {
         ...(previous ? { threadId: previous, excludeTurns: true } : {}),
-        cwd: this.cwd,
+        cwd: this.cwd, model: codexChatModel,
       }));
       requireThat(opened.success && (!previous || opened.data.thread.id === previous),
         'CODEX_THREAD_UNAVAILABLE', '无法启动或恢复这段原生 Codex 会话。', 503);
+      if (opened.data.model !== codexChatModel) throw modelMismatch();
       chat.threadId = opened.data.thread.id;
       chat.model = opened.data.model;
       this.save();
       active.messages.push({ id: randomUUID(), role: 'user', text });
       const started = z.object({ turn: z.object({ id: z.string(), status: z.string() }) }).safeParse(
-        await connection.call('turn/start', { threadId: chat.threadId, input: [{ type: 'text', text, text_elements: [] }] }),
+        await connection.call('turn/start', { threadId: chat.threadId, model: codexChatModel, input: [{ type: 'text', text, text_elements: [] }] }),
       );
       requireThat(started.success, 'CODEX_TURN_UNKNOWN', '无法确认发送结果，请重新读取会话后再试。', 503);
       turn = started.data.turn;
-      void this.finish(chat, connection, terminal, turn);
+      void this.finish(chat, active, connection, terminal, turn);
       return this.detail(chat, active.messages, true);
     } catch (error) {
       if (connection) await connection.close();
@@ -234,14 +267,24 @@ export class AgentChat {
     }
   }
 
-  private async finish(chat: SavedChat, connection: CodexConnection, terminal: Promise<Turn | undefined>, started: Turn) {
+  private async finish(chat: SavedChat, active: RunningChat, connection: CodexConnection, terminal: Promise<Turn | undefined>, started: Turn) {
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       const result = await Promise.race([terminal, new Promise<undefined>(resolve => {
         timer = setTimeout(() => resolve(undefined), 10 * 60 * 1000);
       })]);
+      if (active.rejectedModelTurnId) {
+        chat.rejectedModelTurnId = active.rejectedModelTurnId;
+        this.save();
+        throw modelMismatch();
+      }
       requireThat(result?.id === started.id, 'CODEX_TURN_UNKNOWN', 'Codex 连接已结束。请读取原生会话确认回合结果。', 503);
       const thread = await this.read(connection, chat.threadId!);
+      if (active.rejectedModelTurnId || (thread.model != null && thread.model !== codexChatModel)) {
+        chat.rejectedModelTurnId = started.id;
+        this.save();
+        throw modelMismatch();
+      }
       // Let Codex release its native writer before publishing completion.
       await connection.close();
       chat.model = thread.model ?? chat.model;

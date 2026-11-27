@@ -8,8 +8,15 @@ import { DomainError } from '../domain/errors.js';
 import { codexProxyEnvironment } from './mac-proxy.js';
 
 const codexName = '见岔（Forkwise）';
+export const codexChatModel = 'gpt-6-luna';
+// Native delegation can select a different model for a child agent.
+export const codexModelArgs = ['-c', 'agents.enabled=false', '-c', 'features.multi_agent_v2=false'] as const;
 export const codexStorageEnvironment = ['CODEX_HOME', 'CODEX_SQLITE_HOME'] as const;
 const accountResult = z.object({ account: z.object({ type: z.string().min(1) }).nullable() });
+const modelListResult = z.object({
+  data: z.array(z.object({ model: z.string(), hidden: z.boolean() })),
+  nextCursor: z.string().nullable(),
+});
 
 const rpcMessage = z.object({
   id: z.union([z.number(), z.string()]).optional(),
@@ -52,7 +59,7 @@ export class CodexConnection {
       'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'NO_PROXY', 'http_proxy', 'https_proxy', 'all_proxy', 'no_proxy']) {
       if (proxy[key] !== undefined) env[key] = proxy[key];
     }
-    this.child = spawn(codexBinary(), ['app-server', '--listen', 'stdio://'], {
+    this.child = spawn(codexBinary(), ['app-server', '--listen', 'stdio://', ...codexModelArgs], {
       cwd, env, stdio: ['pipe', 'pipe', 'pipe'],
     });
     this.child.stderr.resume();
@@ -111,6 +118,17 @@ export class CodexConnection {
     const result = accountResult.safeParse(await this.call('account/read', { refreshToken: false }));
     if (!result.success) throw rpcError();
     return result.data.account !== null;
+  }
+
+  async hasChatModel() {
+    let cursor: string | null = null;
+    do {
+      const result = modelListResult.safeParse(await this.call('model/list', { cursor, limit: 100, includeHidden: false }));
+      if (!result.success) throw rpcError();
+      if (result.data.data.some(model => model.model === codexChatModel && !model.hidden)) return true;
+      cursor = result.data.nextCursor;
+    } while (cursor);
+    return false;
   }
 
   call(method: string, params: object): Promise<unknown> {

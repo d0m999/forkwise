@@ -24,7 +24,7 @@ FORKWISE_DATA_DIR="$HOME/Library/Application Support/Forkwise/Open Workspace" np
 
 ## 开启 Codex 对话
 
-在工作台顶部点「Codex 对话」。没有打开项目时也可新建对话。工作台使用本机安装的 Codex CLI，沿用它的登录、配置和模型。若 Codex 尚未登录或提示登录失效，在终端运行 `codex login`，登录后回到对话侧栏点「刷新」。按需 AI 整理使用独立的 OpenAI API key 设置。
+在工作台顶部点「Codex 对话」。没有打开项目时也可新建对话。工作台沿用本机 Codex CLI 的登录。对话和工作台生成的终端续聊命令固定使用 `gpt-6-luna`。模型不可用时仍可查看对话。若 Codex 尚未登录或提示登录失效，在终端运行 `codex login`，登录后回到对话侧栏点「刷新」。按需 AI 整理使用独立的 OpenAI API key 设置。
 
 Codex 优先沿用启动环境设置的代理，macOS 上也能读取系统配置的手动 HTTP/HTTPS 代理。等待一轮回答结束后，可展开「终端续聊」并复制命令，在终端继续同一段对话。回到工作台可刷新并查看新增的问答。材料外传资格核验前，请用合成问题试用。终端追加的历史如无法确认内容来源，仍可在工作台回看，后续发送可在终端继续。
 
