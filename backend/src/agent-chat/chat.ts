@@ -13,6 +13,7 @@ const savedChat = z.object({
   rejectedModelTurnId: z.string().optional(),
   rejectedModelTurnStatus: z.string().optional(),
   rejectedAfterTurnId: z.string().nullable().optional(),
+  continuedAfterRejection: z.boolean().optional(),
 });
 type SavedChat = z.infer<typeof savedChat>;
 type Message = { id: string; role: 'user' | 'assistant'; text: string };
@@ -26,7 +27,13 @@ const openResult = threadResult.extend({ model: z.string() });
 type NativeThread = z.infer<typeof nativeThread>;
 
 type Turn = { id: string; status: string };
-type RunningChat = { messages: Message[]; previousTurnId: string | null; question?: Message; rejectedModelTurnId?: string };
+type RunningChat = {
+  messages: Message[];
+  previousTurnId: string | null;
+  question?: Message;
+  rejectedModelTurnId?: string;
+  completedTurn?: Turn;
+};
 const blockedHistory = () => new DomainError(
   'CODEX_HISTORY_UNVERIFIED',
   '原生会话中有见岔无法核实来源的历史。可在此查看，材料外传资格核验前请在终端继续。',
@@ -47,7 +54,7 @@ function rejectedModelMessage(status?: string) {
 }
 
 function historyRejectionMessage(chat: SavedChat, thread: NativeThread) {
-  if (!chat.rejectedModelTurnId) return;
+  if (!chat.rejectedModelTurnId || chat.continuedAfterRejection) return;
   // A rejected turn can be absent from the recording. null means the history
   // was empty before sending. Older indexes have no recorded boundary.
   const boundary = thread.turns.some(turn => turn.id === chat.rejectedModelTurnId)
@@ -135,6 +142,7 @@ export class AgentChat {
     chat.rejectedModelTurnId = turnId;
     chat.rejectedModelTurnStatus = status;
     chat.rejectedAfterTurnId = previousTurnId;
+    delete chat.continuedAfterRejection;
     try { this.save(); } catch { this.unsavedRejections.add(chat.id); }
   }
 
@@ -236,8 +244,8 @@ export class AgentChat {
     let connection: CodexConnection | undefined;
     let turn: Turn | undefined;
     let rerouteDeadline: ReturnType<typeof setTimeout> | undefined;
-    let resolveTerminal: (value: Turn | undefined) => void = () => {};
-    const terminal = new Promise<Turn | undefined>(resolve => { resolveTerminal = resolve; });
+    let beginFinish: () => void = () => {};
+    const readyToFinish = new Promise<void>(resolve => { beginFinish = resolve; });
     const savePendingRejection = () => {
       if (!turn || active.rejectedModelTurnId !== turn.id) return;
       this.saveModelRejection(chat, turn.id, active.previousTurnId);
@@ -253,7 +261,7 @@ export class AgentChat {
             active.rejectedModelTurnId = turnId;
             savePendingRejection();
             // Give turn/completed a short window even if the interrupt RPC fails or never replies.
-            rerouteDeadline = setTimeout(() => resolveTerminal(undefined), rerouteGraceMs);
+            rerouteDeadline = setTimeout(beginFinish, rerouteGraceMs);
             void connection?.call('turn/interrupt', { threadId, turnId }).catch(() => {});
           }
           return;
@@ -262,10 +270,11 @@ export class AgentChat {
         if (method === 'turn/completed') {
           const result = z.object({ threadId: z.string(), turn: z.object({ id: z.string(), status: z.string() }) }).safeParse(params);
           if (result.success && result.data.threadId === chat.threadId && (!turn || turn.id === result.data.turn.id)) {
-            resolveTerminal(result.data.turn);
+            active.completedTurn = result.data.turn;
+            beginFinish();
           }
         }
-      }, () => resolveTerminal(undefined));
+      }, beginFinish);
       await connection.initialize(this.version);
       requireThat(await connection.loggedIn(), 'CODEX_LOGIN_REQUIRED', loginMessage, 401);
       requireThat(await connection.hasChatModel(), 'CODEX_MODEL_UNAVAILABLE', modelUnavailableMessage, 503);
@@ -299,7 +308,7 @@ export class AgentChat {
       requireThat(started.success, 'CODEX_TURN_UNKNOWN', '无法确认发送结果，请重新读取会话后再试。', 503);
       turn = started.data.turn;
       savePendingRejection();
-      void this.finish(chat, active, connection, terminal, turn).finally(() => clearTimeout(rerouteDeadline));
+      void this.finish(chat, active, connection, readyToFinish, turn).finally(() => clearTimeout(rerouteDeadline));
       return this.runningDetail(chat, active);
     } catch (error) {
       if (connection) await connection.close();
@@ -309,13 +318,13 @@ export class AgentChat {
     }
   }
 
-  private async finish(chat: SavedChat, active: RunningChat, connection: CodexConnection, terminal: Promise<Turn | undefined>, started: Turn) {
+  private async finish(chat: SavedChat, active: RunningChat, connection: CodexConnection, readyToFinish: Promise<void>, started: Turn) {
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      const result = await Promise.race([terminal, new Promise<undefined>(resolve => {
-        timer = setTimeout(() => resolve(undefined), 10 * 60 * 1000);
+      await Promise.race([readyToFinish, new Promise<void>(resolve => {
+        timer = setTimeout(resolve, 10 * 60 * 1000);
       })]);
-      const confirmed = result?.id === started.id ? result : undefined;
+      const confirmed = active.completedTurn?.id === started.id ? active.completedTurn : undefined;
       let thread: NativeThread | undefined;
       try {
         if (confirmed && !active.rejectedModelTurnId) {
@@ -327,15 +336,23 @@ export class AgentChat {
         }
       } finally {
         await connection.close();
-        if (active.rejectedModelTurnId === started.id &&
-            (chat.rejectedModelTurnStatus !== confirmed?.status || this.unsavedRejections.has(chat.id))) {
-          this.saveModelRejection(chat, started.id, active.previousTurnId, confirmed?.status);
+        if (active.rejectedModelTurnId === started.id) {
+          // A matching notification can arrive while the child drains stdout after stdin EOF.
+          const status = active.completedTurn?.id === started.id ? active.completedTurn.status : undefined;
+          if (chat.rejectedModelTurnStatus !== status || this.unsavedRejections.has(chat.id)) {
+            this.saveModelRejection(chat, started.id, active.previousTurnId, status);
+          }
         }
       }
       if (chat.rejectedModelTurnId === started.id) return;
       requireThat(confirmed && thread, 'CODEX_TURN_UNKNOWN', 'Codex 连接已结束。请读取原生会话确认回合结果。', 503);
       chat.model = thread.model ?? chat.model;
       chat.checkpoint = fingerprint(thread);
+      // A delayed rejected turn can be appended after this verified continuation.
+      if (chat.rejectedModelTurnId && confirmed.status === 'completed' &&
+          thread.turns.some(turn => turn.id === started.id && turn.status === 'completed')) {
+        chat.continuedAfterRejection = true;
+      }
       this.save();
       if (confirmed.status !== 'completed') {
         this.errors.set(chat.id, confirmed.status === 'interrupted' ? '此回合已中断。' : '此回合未完成，请检查 Codex、模型和网络后再试。');

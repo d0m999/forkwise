@@ -33,9 +33,9 @@ function setFixtureModels(models: FixtureModel[], behavior: {
   openedModel?: string;
   reroutedModel?: string;
   completedModel?: string;
-  interruptOutcome?: 'interrupted' | 'completed' | 'unconfirmed' | 'interruptError' | 'noReply';
+  interruptOutcome?: 'interrupted' | 'completed' | 'unconfirmed' | 'interruptError' | 'noReply' | 'interruptedOnClose';
   holdClose?: boolean;
-  omitRejectedTurn?: boolean;
+  omitRecordedTurn?: boolean;
 } = {}) {
   writeFileSync(modelSettings, JSON.stringify({ models, ...behavior }), { mode: 0o600 });
 }
@@ -69,7 +69,7 @@ assert.equal(process.env.ACCESS_TOKEN, undefined);
 assert.equal(process.env.OPENAI_API_KEY, undefined);
 const accountPath = join(process.env.CODEX_HOME, 'native-account.json');
 const model = ${JSON.stringify(model)};
-const { models, nextModelPage, modelListError, openedModel, reroutedModel, completedModel, interruptOutcome, holdClose, omitRejectedTurn } = JSON.parse(readFileSync(${JSON.stringify(modelSettings)}, 'utf8'));
+const { models, nextModelPage, modelListError, openedModel, reroutedModel, completedModel, interruptOutcome, holdClose, omitRecordedTurn } = JSON.parse(readFileSync(${JSON.stringify(modelSettings)}, 'utf8'));
 const nativeDefault = models.find(candidate => candidate.isDefault)?.model;
 const print = event => process.stdout.write(JSON.stringify(event) + '\\n');
 const load = id => JSON.parse(readFileSync(join(process.cwd(), id + '.json'), 'utf8'));
@@ -127,7 +127,7 @@ for await (const line of createInterface({input: process.stdin})) {
     ]};
     const delta = {method: 'item/agentMessage/delta', params: {threadId, itemId, delta: answer}};
     const saveTurn = () => {
-      if (!omitRejectedTurn) turns.push(turn);
+      if (!omitRecordedTurn) turns.push(turn);
       else if (existsSync(path)) return;
       writeFileSync(path, JSON.stringify({id: threadId, path, turns, status: {type: 'idle'}, model: completedModel ?? model}), {mode: 0o600});
     };
@@ -152,7 +152,7 @@ for await (const line of createInterface({input: process.stdin})) {
     assert.ok(reroutedTurn);
     const {threadId, turn} = reroutedTurn;
     assert.deepEqual(params, {threadId, turnId: turn.id});
-    if (interruptOutcome === 'noReply') continue;
+    if (interruptOutcome === 'noReply' || interruptOutcome === 'interruptedOnClose') continue;
     if (interruptOutcome === 'interruptError' || interruptOutcome === 'completed') print({ id, error: { code: -32603, message: 'turn already completed' } });
     else respond({});
     if (interruptOutcome === 'interruptError') continue;
@@ -162,6 +162,7 @@ for await (const line of createInterface({input: process.stdin})) {
   }
 }
 if (verifyingResult || reroutedTurn) {
+  if (interruptOutcome === 'interruptedOnClose') print({method: 'turn/completed', params: reroutedTurn});
   writeFileSync(join(process.env.CODEX_HOME, 'writer-closing'), String(process.pid));
   if (holdClose) await waitForSignal(join(process.env.CODEX_HOME, 'release-writer'));
 }
@@ -528,6 +529,27 @@ it.each(['interruptError', 'noReply'] as const)('中断请求 %s 且没有终态
   expect(await reopened.get(id)).toEqual(result);
 }, 8000);
 
+it('改派超时关闭连接时收到原生中断终态，退出后重开仍显示已中断', async () => {
+  const chat = chats = new AgentChat(directory, 'test');
+  setFixtureModels(availableModels, { reroutedModel: nativeDefaultModel, interruptOutcome: 'interruptedOnClose', holdClose: true });
+  const { id } = chat.create();
+  await chat.send(id, '只在关闭时收到终态的合成问题');
+  writeFileSync(rerouteSignal, '');
+  try {
+    await expect.poll(() => existsSync(join(nativeHome, 'writer-closing')), { timeout: 4500 }).toBe(true);
+    expect(await chat.get(id)).toMatchObject({ busy: true, messages: [] });
+    await expect(chat.send(id, '关闭期间重试')).rejects.toMatchObject({ code: 'CODEX_TURN_ACTIVE' });
+  } finally {
+    writeFileSync(join(nativeHome, 'release-writer'), '');
+  }
+  await expect.poll(async () => (await chat.get(id)).busy).toBe(false);
+  const result = await chat.get(id);
+  expect(result).toMatchObject({ messages: [], error: expect.stringContaining('Codex 已中断本轮') });
+  await chat.close();
+  const reopened = chats = new AgentChat(directory, 'test');
+  expect(await reopened.get(id)).toEqual(result);
+}, 8000);
+
 it.each([
   { withPrevious: false, source: 'terminal' },
   { withPrevious: true, source: 'terminal' },
@@ -541,7 +563,7 @@ it.each([
   }
   const previous = (await chat.get(id)).messages;
   setFixtureModels(availableModels, {
-    reroutedModel: nativeDefaultModel, interruptOutcome: 'unconfirmed', omitRejectedTurn: true,
+    reroutedModel: nativeDefaultModel, interruptOutcome: 'unconfirmed', omitRecordedTurn: true,
   });
   const { threadId } = await chat.send(id, '改派后记录延迟的问题');
   writeFileSync(rerouteSignal, '');
@@ -582,7 +604,7 @@ it.each([
   }
 });
 
-it('旧索引只有拒绝轮 ID 时，未读到该轮则保留提示', async () => {
+it('旧索引只有拒绝轮 ID 时保留提示，工作台成功续聊后重开仍隐藏旧轮且不再提示', async () => {
   const chat = chats = new AgentChat(directory, 'test');
   const { id } = chat.create();
   await chat.send(id, '旧索引中的合成问题');
@@ -593,6 +615,30 @@ it('旧索引只有拒绝轮 ID 时，未读到该轮则保留提示', async () 
   writeFileSync(file, JSON.stringify([{ ...saved, rejectedModelTurnId: 'absent-turn' }]));
   const reopened = chats = new AgentChat(directory, 'test');
   expect((await reopened.get(id)).error).toContain('原生回合结果未确认');
+  setFixtureModels(availableModels, { omitRecordedTurn: true });
+  await reopened.send(id, '原生记录尚缺的续聊');
+  await expect.poll(async () => (await reopened.get(id)).busy).toBe(false);
+  expect((await reopened.get(id)).error).toContain('原生回合结果未确认');
+
+  setFixtureModels(availableModels);
+  const nextQuestion = '旧索引重开后续聊';
+  await reopened.send(id, nextQuestion);
+  await expect.poll(async () => (await reopened.get(id)).busy).toBe(false);
+  const continued = await reopened.get(id);
+  expect(continued.messages.map(message => message.text)).toEqual(['旧索引中的合成问题', '合成回答', nextQuestion, '合成回答']);
+  expect(continued.error).toBeUndefined();
+  await reopened.close();
+  const restored = chats = new AgentChat(directory, 'test');
+  expect(await restored.get(id)).toEqual(continued);
+
+  const path = join(directory, 'no-project', saved.threadId + '.json');
+  const native = JSON.parse(readFileSync(path, 'utf8'));
+  native.turns.push({ id: 'absent-turn', status: 'completed', items: [
+    { id: 'rejected-answer', type: 'agentMessage', text: '延迟写入的异模回答' },
+  ] });
+  writeFileSync(path, JSON.stringify(native));
+  expect(await restored.get(id)).toEqual(continued);
+  await expect(restored.send(id, '历史变化后重试')).rejects.toMatchObject({ code: 'CODEX_HISTORY_UNVERIFIED' });
 });
 
 function blockIndexWrites() {
