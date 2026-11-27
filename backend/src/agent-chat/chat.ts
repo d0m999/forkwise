@@ -61,8 +61,6 @@ function rejectedModelMessage(status?: string) {
 }
 
 function historyRejectionMessage(chat: SavedChat, thread: NativeThread) {
-  if (!chat.rejectedModelTurnId || thread.turns.some(turn =>
-    turn.id === chat.verifiedContinuationTurnId || turn.id === chat.legacyContinuationTurnId)) return;
   // A rejected turn can be absent from the recording. null means the history
   // was empty before sending. Older indexes have no recorded boundary.
   const boundary = thread.turns.some(turn => turn.id === chat.rejectedModelTurnId)
@@ -260,12 +258,15 @@ export class AgentChat {
     try {
       await connection.initialize(this.version);
       const thread = await this.read(connection, chat.threadId);
-      let rejection = historyRejectionMessage(chat, thread);
+      let rejection: string | undefined;
       try {
-        const migrateLegacyTurn = thread.status.type !== 'active';
-        if (chat.legacyContinuationCheckpoint && (rejection || migrateLegacyTurn) &&
-            this.matchLegacyContinuation(chat, thread, fingerprint(thread))) {
-          rejection = undefined;
+        if (chat.rejectedModelTurnId && !thread.turns.some(turn =>
+          turn.id === chat.verifiedContinuationTurnId || turn.id === chat.legacyContinuationTurnId)) {
+          rejection = historyRejectionMessage(chat, thread);
+          if (chat.legacyContinuationCheckpoint && (rejection || thread.status.type !== 'active') &&
+              this.matchLegacyContinuation(chat, thread, fingerprint(thread))) {
+            rejection = undefined;
+          }
         }
         if (chat.verifiedContinuationTurnId && this.unsavedRejectionWarnings.has(id)) this.save();
       } catch {

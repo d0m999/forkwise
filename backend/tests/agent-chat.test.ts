@@ -688,8 +688,19 @@ it('旧 checkpoint 与已核验的第二轮续聊共存时，反复回看和重�
   const [saved] = JSON.parse(readFileSync(index, 'utf8'));
   writeFileSync(index, JSON.stringify([{ ...saved, rejectedModelTurnId: rejected.id,
     legacyContinuationCheckpoint, verifiedContinuationTurnId: secondTurn.id }]));
-  writeFileSync(path, firstRecording);
   const reopened = chats = new AgentChat(directory, 'test');
+  const open = vi.spyOn(fs, 'openSync');
+  syncBuiltinESMExports();
+  try {
+    for (let view = 0; view < 2; view++) {
+      expect(await reopened.get(id)).toMatchObject({ busy: false, error: undefined });
+    }
+    expect(open.mock.calls.filter(([file]) => file === path)).toHaveLength(0);
+  } finally {
+    open.mockRestore();
+    syncBuiltinESMExports();
+  }
+  writeFileSync(path, firstRecording);
   expect(await reopened.get(id)).toEqual(first);
   expect(await reopened.get(id)).toEqual(first);
   writeFileSync(path, JSON.stringify({ ...native, turns: [firstTurn, rejected] }));
