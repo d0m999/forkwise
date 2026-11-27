@@ -548,6 +548,25 @@ for (const [name, popupRole, popupName, precedingName, followingName] of [
   await expect(popup).toHaveCount(0);
 });
 
+test('矮视口中外观弹层随 Tab 和 Shift+Tab 滚动到聚焦的控件', async ({ page, workspace: _workspace }) => {
+  await place(page, '外观键盘导航', 120, 80);
+  await page.setViewportSize({ width: 1000, height: 200 });
+  await page.getByRole('button', { name: '外观', exact: true }).press('Enter');
+  const popup = page.getByRole('dialog', { name: '卡片外观' });
+  const close = popup.getByRole('button', { name: '关闭卡片菜单' });
+  const preview = popup.getByRole('checkbox', { name: '显示正文预览' });
+  await expect(close).toBeFocused();
+  await expect(preview).not.toBeInViewport();
+
+  const steps = await popup.getByRole('button').count();
+  for (let i = 0; i < steps; i++) await page.keyboard.press('Tab');
+  await expect(preview).toBeFocused();
+  await expect(preview).toBeInViewport({ ratio: 1, timeout: 3000 });
+  for (let i = 0; i < steps; i++) await page.keyboard.press('Shift+Tab');
+  await expect(close).toBeFocused();
+  await expect(close).toBeInViewport({ ratio: 1 });
+});
+
 test('层级全部禁用仍能 Tab 离开，随后 Escape 只关闭新打开的外观', async ({ page, workspace: _workspace }) => {
   await place(page, '唯一卡片', 120, 140);
   const toolbar = page.getByRole('toolbar', { name: '卡片操作' });
