@@ -14,6 +14,12 @@ const savedChat = z.object({
   rejectedModelTurnStatus: z.string().optional(),
   rejectedAfterTurnId: z.string().nullable().optional(),
   verifiedContinuationTurnId: z.string().optional(),
+  legacyContinuationCheckpoint: z.string().optional(),
+  continuedAfterRejection: z.boolean().optional(),
+}).transform(({ continuedAfterRejection, ...chat }) => {
+  // The old flag attests only to the recording saved with it. Future sends replace checkpoint.
+  if (continuedAfterRejection && chat.checkpoint) chat.legacyContinuationCheckpoint = chat.checkpoint;
+  return chat;
 });
 type SavedChat = z.infer<typeof savedChat>;
 type Message = { id: string; role: 'user' | 'assistant'; text: string };
@@ -62,7 +68,15 @@ function historyRejectionMessage(chat: SavedChat, thread: NativeThread) {
   const hasLaterTurn = boundary === null
     ? thread.turns.length > 0
     : thread.turns.some((turn, index) => turn.id === boundary && index < thread.turns.length - 1);
-  return hasLaterTurn ? undefined : rejectedModelMessage(chat.rejectedModelTurnStatus);
+  if (hasLaterTurn) return;
+  if (chat.legacyContinuationCheckpoint) {
+    try {
+      if (fingerprint(thread) === chat.legacyContinuationCheckpoint) return;
+    } catch {
+      // History can still be displayed when its recording cannot be verified.
+    }
+  }
+  return rejectedModelMessage(chat.rejectedModelTurnStatus);
 }
 
 function nativeMessages(thread: NativeThread, rejectedModelTurnId?: string): Message[] {
@@ -143,6 +157,7 @@ export class AgentChat {
     chat.rejectedModelTurnStatus = status;
     chat.rejectedAfterTurnId = previousTurnId;
     delete chat.verifiedContinuationTurnId;
+    delete chat.legacyContinuationCheckpoint;
     try { this.save(); } catch { this.unsavedRejections.add(chat.id); }
   }
 

@@ -607,7 +607,38 @@ it.each([
   }
 });
 
-it.each([{}, { continuedAfterRejection: true }])('旧索引 %j 缺少续聊 ID 时，按现有历史显示拒绝原因', async legacyFields => {
+it('旧索引已确认续聊时沿用匹配的 checkpoint，原生回退后重新提示', async () => {
+  const chat = chats = new AgentChat(directory, 'test');
+  const { id } = chat.create();
+  const { threadId } = await chat.send(id, '拒绝前的问题');
+  await expect.poll(async () => (await chat.get(id)).busy).toBe(false);
+  const path = join(directory, 'no-project', threadId + '.json');
+  const beforeContinuation = readFileSync(path);
+  await chat.send(id, '旧版已成功续聊的问题');
+  await expect.poll(async () => (await chat.get(id)).busy).toBe(false);
+  const continued = await chat.get(id);
+  await chat.close();
+
+  const file = join(directory, 'conversations.json');
+  const [saved] = JSON.parse(readFileSync(file, 'utf8'));
+  writeFileSync(file, JSON.stringify([{ ...saved, rejectedModelTurnId: 'absent-turn', continuedAfterRejection: true }]));
+  const reopened = chats = new AgentChat(directory, 'test');
+  expect(await reopened.get(id)).toEqual(continued);
+  const legacyRecording = readFileSync(path);
+  await reopened.send(id, '升级后继续提问');
+  await expect.poll(async () => (await reopened.get(id)).busy).toBe(false);
+  await reopened.close();
+  const restored = chats = new AgentChat(directory, 'test');
+  writeFileSync(path, legacyRecording);
+  expect(await restored.get(id)).toEqual(continued);
+  writeFileSync(path, beforeContinuation);
+  expect(await restored.get(id)).toMatchObject({
+    messages: continued.messages.slice(0, 2), error: expect.stringContaining('原生回合结果未确认'),
+  });
+  await expect(restored.send(id, '回退后重试')).rejects.toMatchObject({ code: 'CODEX_HISTORY_UNVERIFIED' });
+});
+
+it('旧索引缺少续聊标记时，按现有历史显示拒绝原因', async () => {
   const chat = chats = new AgentChat(directory, 'test');
   const { id } = chat.create();
   await chat.send(id, '旧索引中的合成问题');
@@ -615,7 +646,7 @@ it.each([{}, { continuedAfterRejection: true }])('旧索引 %j 缺少续聊 ID �
   await chat.close();
   const file = join(directory, 'conversations.json');
   const [saved] = JSON.parse(readFileSync(file, 'utf8'));
-  writeFileSync(file, JSON.stringify([{ ...saved, rejectedModelTurnId: 'absent-turn', ...legacyFields }]));
+  writeFileSync(file, JSON.stringify([{ ...saved, rejectedModelTurnId: 'absent-turn' }]));
   const reopened = chats = new AgentChat(directory, 'test');
   expect((await reopened.get(id)).error).toContain('原生回合结果未确认');
   setFixtureModels(availableModels, { omitRecordedTurn: true });
