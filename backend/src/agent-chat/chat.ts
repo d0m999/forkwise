@@ -157,6 +157,8 @@ export class AgentChat {
 
   private matchLegacyContinuation(chat: SavedChat, thread: NativeThread, checkpoint: string) {
     if (!chat.rejectedModelTurnId || checkpoint !== chat.legacyContinuationCheckpoint) return false;
+    // A coexisting turn ID can attest to a different recording. Keep both proofs.
+    if (chat.verifiedContinuationTurnId) return true;
     const predecessor = thread.turns.findIndex(turn => turn.id === chat.rejectedAfterTurnId);
     const completed = (turn: Turn) => turn.status === 'completed' && turn.id !== chat.rejectedModelTurnId;
     // Prefer the first continuation after a known boundary. With only the old
@@ -257,7 +259,9 @@ export class AgentChat {
       const thread = await this.read(connection, chat.threadId);
       let rejection = historyRejectionMessage(chat, thread);
       try {
-        if (chat.legacyContinuationCheckpoint && this.matchLegacyContinuation(chat, thread, fingerprint(thread))) {
+        const migrateLegacyTurn = !chat.verifiedContinuationTurnId && thread.status.type !== 'active';
+        if (chat.legacyContinuationCheckpoint && (rejection || migrateLegacyTurn) &&
+            this.matchLegacyContinuation(chat, thread, fingerprint(thread))) {
           rejection = undefined;
         }
         if (chat.verifiedContinuationTurnId && this.unsavedRejectionWarnings.has(id)) this.save();

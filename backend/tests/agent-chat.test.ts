@@ -1,4 +1,5 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmdirSync, rmSync, writeFileSync } from 'node:fs';
+import fs, { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmdirSync, rmSync, writeFileSync } from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
@@ -663,6 +664,83 @@ it.each([
   writeFileSync(path, JSON.stringify(rolledBack));
   expect(await restored.get(id)).toEqual(rejected);
   await expect(restored.send(id, '回退后重试')).rejects.toMatchObject({ code: 'CODEX_HISTORY_UNVERIFIED' });
+});
+
+it('旧 checkpoint 与已核验的第二轮续聊共存时，反复回看和重开都保留两份依据', async () => {
+  const chat = chats = new AgentChat(directory, 'test');
+  const { id } = chat.create();
+  const { threadId } = await chat.send(id, '第一轮续聊');
+  await expect.poll(async () => (await chat.get(id)).busy).toBe(false);
+  const first = await chat.get(id);
+  const path = join(directory, 'no-project', threadId + '.json');
+  const firstRecording = readFileSync(path);
+  const index = join(directory, 'conversations.json');
+  const [{ checkpoint: legacyContinuationCheckpoint }] = JSON.parse(readFileSync(index, 'utf8'));
+  await chat.send(id, '第二轮续聊');
+  await expect.poll(async () => (await chat.get(id)).busy).toBe(false);
+  await chat.close();
+
+  const native = JSON.parse(readFileSync(path, 'utf8'));
+  const second = native.turns[1];
+  const rejected = { id: 'delayed-rejection', status: 'completed', items: [] };
+  const [saved] = JSON.parse(readFileSync(index, 'utf8'));
+  writeFileSync(index, JSON.stringify([{ ...saved, rejectedModelTurnId: rejected.id,
+    legacyContinuationCheckpoint, verifiedContinuationTurnId: second.id }]));
+  writeFileSync(path, firstRecording);
+  const reopened = chats = new AgentChat(directory, 'test');
+  expect(await reopened.get(id)).toEqual(first);
+  expect(await reopened.get(id)).toEqual(first);
+  await reopened.close();
+
+  const restored = chats = new AgentChat(directory, 'test');
+  expect(await restored.get(id)).toEqual(first);
+  writeFileSync(path, JSON.stringify({ ...native, turns: [second, rejected] }));
+  const result = await restored.get(id);
+  expect(result.messages.map(message => message.text)).toEqual(['第二轮续聊', '合成回答']);
+  expect(result.error).toBeUndefined();
+  await expect(restored.send(id, '历史变化后重试')).rejects.toMatchObject({ code: 'CODEX_HISTORY_UNVERIFIED' });
+});
+
+it('终端活跃时仅在拒绝提示依赖旧 checkpoint 时读取原生记录', async () => {
+  const chat = chats = new AgentChat(directory, 'test');
+  const { id } = chat.create();
+  const { threadId } = await chat.send(id, '旧版续聊');
+  await expect.poll(async () => (await chat.get(id)).busy).toBe(false);
+  await chat.close();
+
+  const index = join(directory, 'conversations.json');
+  const [saved] = JSON.parse(readFileSync(index, 'utf8'));
+  writeFileSync(index, JSON.stringify([{ ...saved, rejectedModelTurnId: 'delayed-rejection', continuedAfterRejection: true }]));
+  const path = join(directory, 'no-project', threadId + '.json');
+  const recorded = readFileSync(path);
+  const native = JSON.parse(recorded.toString('utf8'));
+  // The fixture process serves thread/read. The parent opens the raw recording only for a fingerprint.
+  const recording = join(root, 'native-recording');
+  const active = { ...native, path: recording, status: { type: 'active' } };
+  const terminal = { ...active, turns: [...native.turns,
+    { id: 'delayed-rejection', status: 'interrupted', items: [] },
+    { id: 'terminal', status: 'inProgress', items: [] },
+  ] };
+  writeFileSync(recording, JSON.stringify(terminal));
+  writeFileSync(path, JSON.stringify(terminal));
+  const reopened = chats = new AgentChat(directory, 'test');
+  const open = vi.spyOn(fs, 'openSync');
+  syncBuiltinESMExports();
+  try {
+    for (let poll = 0; poll < 2; poll++) {
+      expect(await reopened.get(id)).toMatchObject({ busy: true, error: undefined });
+    }
+    expect(open.mock.calls.filter(([file]) => file === recording)).toHaveLength(0);
+
+    writeFileSync(recording, recorded);
+    writeFileSync(path, JSON.stringify(active));
+    open.mockClear();
+    expect(await reopened.get(id)).toMatchObject({ busy: true, error: undefined });
+    expect(open.mock.calls.some(([file]) => file === recording)).toBe(true);
+  } finally {
+    open.mockRestore();
+    syncBuiltinESMExports();
+  }
 });
 
 it('旧索引续聊依据暂时无法保存时提示重启风险，再次查看可完成保存', async () => {
