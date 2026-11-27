@@ -681,24 +681,30 @@ it('旧 checkpoint 与已核验的第二轮续聊共存时，反复回看和重�
   await chat.close();
 
   const native = JSON.parse(readFileSync(path, 'utf8'));
-  const second = native.turns[1];
-  const rejected = { id: 'delayed-rejection', status: 'completed', items: [] };
+  const [firstTurn, secondTurn] = native.turns;
+  const rejected = { id: 'delayed-rejection', status: 'completed', items: [
+    { id: 'rejected-answer', type: 'agentMessage', text: '延迟写入的异模回答' },
+  ] };
   const [saved] = JSON.parse(readFileSync(index, 'utf8'));
   writeFileSync(index, JSON.stringify([{ ...saved, rejectedModelTurnId: rejected.id,
-    legacyContinuationCheckpoint, verifiedContinuationTurnId: second.id }]));
+    legacyContinuationCheckpoint, verifiedContinuationTurnId: secondTurn.id }]));
   writeFileSync(path, firstRecording);
   const reopened = chats = new AgentChat(directory, 'test');
   expect(await reopened.get(id)).toEqual(first);
+  expect(await reopened.get(id)).toEqual(first);
+  writeFileSync(path, JSON.stringify({ ...native, turns: [firstTurn, rejected] }));
   expect(await reopened.get(id)).toEqual(first);
   await reopened.close();
 
   const restored = chats = new AgentChat(directory, 'test');
   expect(await restored.get(id)).toEqual(first);
-  writeFileSync(path, JSON.stringify({ ...native, turns: [second, rejected] }));
+  writeFileSync(path, JSON.stringify({ ...native, turns: [secondTurn, rejected] }));
   const result = await restored.get(id);
   expect(result.messages.map(message => message.text)).toEqual(['第二轮续聊', '合成回答']);
   expect(result.error).toBeUndefined();
   await expect(restored.send(id, '历史变化后重试')).rejects.toMatchObject({ code: 'CODEX_HISTORY_UNVERIFIED' });
+  writeFileSync(path, JSON.stringify({ ...native, turns: [rejected] }));
+  expect(await restored.get(id)).toMatchObject({ messages: [], error: expect.stringContaining('已隐藏本轮内容') });
 });
 
 it('终端活跃时仅在拒绝提示依赖旧 checkpoint 时读取原生记录', async () => {

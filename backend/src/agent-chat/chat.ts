@@ -15,6 +15,7 @@ const savedChat = z.object({
   rejectedAfterTurnId: z.string().nullable().optional(),
   verifiedContinuationTurnId: z.string().optional(),
   legacyContinuationCheckpoint: z.string().optional(),
+  legacyContinuationTurnId: z.string().optional(),
   continuedAfterRejection: z.boolean().optional(),
 }).transform(({ continuedAfterRejection, ...chat }) => {
   // The old flag attests only to the recording saved with it. Future sends replace checkpoint.
@@ -60,7 +61,8 @@ function rejectedModelMessage(status?: string) {
 }
 
 function historyRejectionMessage(chat: SavedChat, thread: NativeThread) {
-  if (!chat.rejectedModelTurnId || thread.turns.some(turn => turn.id === chat.verifiedContinuationTurnId)) return;
+  if (!chat.rejectedModelTurnId || thread.turns.some(turn =>
+    turn.id === chat.verifiedContinuationTurnId || turn.id === chat.legacyContinuationTurnId)) return;
   // A rejected turn can be absent from the recording. null means the history
   // was empty before sending. Older indexes have no recorded boundary.
   const boundary = thread.turns.some(turn => turn.id === chat.rejectedModelTurnId)
@@ -150,6 +152,7 @@ export class AgentChat {
     chat.rejectedAfterTurnId = previousTurnId;
     delete chat.verifiedContinuationTurnId;
     delete chat.legacyContinuationCheckpoint;
+    delete chat.legacyContinuationTurnId;
     try { this.save(); } catch {
       this.unsavedRejectionWarnings.set(chat.id, '拒绝回合的记录未保存。重启后可能重新显示本轮内容或丢失最新状态。');
     }
@@ -157,8 +160,6 @@ export class AgentChat {
 
   private matchLegacyContinuation(chat: SavedChat, thread: NativeThread, checkpoint: string) {
     if (!chat.rejectedModelTurnId || checkpoint !== chat.legacyContinuationCheckpoint) return false;
-    // A coexisting turn ID can attest to a different recording. Keep both proofs.
-    if (chat.verifiedContinuationTurnId) return true;
     const predecessor = thread.turns.findIndex(turn => turn.id === chat.rejectedAfterTurnId);
     const completed = (turn: Turn) => turn.status === 'completed' && turn.id !== chat.rejectedModelTurnId;
     // Prefer the first continuation after a known boundary. With only the old
@@ -167,7 +168,9 @@ export class AgentChat {
       ? thread.turns.slice(predecessor + 1).find(completed)
       : thread.turns.findLast(completed);
     if (continuation) {
-      chat.verifiedContinuationTurnId = continuation.id;
+      // A coexisting turn ID can attest to a different recording.
+      if (chat.verifiedContinuationTurnId) chat.legacyContinuationTurnId = continuation.id;
+      else chat.verifiedContinuationTurnId = continuation.id;
       delete chat.legacyContinuationCheckpoint;
       this.unsavedRejectionWarnings.set(chat.id, '续聊状态未保存。重启后可能重新显示拒绝提示。');
     }
@@ -259,7 +262,7 @@ export class AgentChat {
       const thread = await this.read(connection, chat.threadId);
       let rejection = historyRejectionMessage(chat, thread);
       try {
-        const migrateLegacyTurn = !chat.verifiedContinuationTurnId && thread.status.type !== 'active';
+        const migrateLegacyTurn = thread.status.type !== 'active';
         if (chat.legacyContinuationCheckpoint && (rejection || migrateLegacyTurn) &&
             this.matchLegacyContinuation(chat, thread, fingerprint(thread))) {
           rejection = undefined;
