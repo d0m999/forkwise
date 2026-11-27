@@ -39,6 +39,8 @@ export function captureCardDeletion(state: ProjectState, cardId: string, derived
     projectId, cardId, itemId,
     acknowledge(command: Command, receipt: Receipt) {
       if (sealed || acknowledged.has(command.commandId) || command.projectId !== projectId) return;
+      if (command.type === 'card.layout' && receipt.projectId === projectId &&
+        receipt.commandId === command.commandId && receipt.revision <= state.project.revision) return;
       if (command.type === 'canvas.move' || command.type === 'group.move' || command.type === 'canvas.move-selection') {
         const poses = command.type === 'canvas.move' ? command.expected : command.expected.poses;
         if (!Object.hasOwn(poses, itemId)) return;

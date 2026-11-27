@@ -1210,10 +1210,11 @@ function Workspace() {
       setShapeTextRecoveryError(shapeText.journal.damaged ? "部分形状文字恢复记录损坏，原件已保留" : "");
     } catch { setShapeTextRecoveryError("形状文字恢复区无法读取，原始草稿已保留"); }
   }, [state?.project.id, shapeText.session?.value.id]);
-  const refresh = async (id: string, selectionIntent?: SelectionIntent) => {
+  const refresh = async (id: string, selectionIntent?: SelectionIntent, beforePublish?: () => void) => {
     const capturedProject = authority.current?.project.id;
     const value = await api.project(id);
     const timeline = await api.history(id);
+    beforePublish?.();
     if (capturedProject === id && authority.current?.project.id === id) {
       const ownsSelection = selectionIntent?.projectId === id && selectionIntent.generation === canvasSelection.generation();
       updateState(value, timeline);
@@ -1314,7 +1315,7 @@ function Workspace() {
   const pose = usePoseSave(refresh,
     (command, receipt) => { cardDeletion.current?.acknowledge(command, receipt); selectionDeletion.current?.acknowledge(command, receipt); },
     () => authority.current, previewPoseAcks);
-  const cardLayout = useCardLayoutSave(refresh, () => authority.current,
+  const cardLayout = useCardLayoutSave((id, beforePublish) => refresh(id, undefined, beforePublish), () => authority.current,
     (command, receipt) => { cardDeletion.current?.acknowledge(command, receipt); selectionDeletion.current?.acknowledge(command, receipt); });
   const appearance = useAppearanceSave(
     () => authority.current,
@@ -2439,6 +2440,7 @@ function Workspace() {
     const intent = captureCardDeletion(snapshot, id, previewPoseAcks);
     if (!intent) { fail(new Error('请等待完整连线投影后重试删除')); return; }
     cardDeletion.current = intent;
+    cardLayout.acknowledgePending(intent.acknowledge);
     try {
       breakBodyGroup();
       if (!(await connectorLabel.finish()) || authority.current?.project.id !== intent.projectId ||
@@ -3234,6 +3236,7 @@ function Workspace() {
     const intent = captureSelectionDeletion(snapshot, selected, previewPoseAcks), generation = canvasSelection.generation();
     if (!intent) { fail(new Error('请等待完整对象与归属投影，再明确删除选区')); return; }
     selectionDeletion.current = intent;
+    cardLayout.acknowledgePending(intent.acknowledge);
     const command: Command = groupId ? { commandId: intent.command.commandId, projectId: intent.command.projectId, type: 'group.delete', payload: { id: groupId },
       expected: { group: intent.command.expected.groups[groupId]!, parentContainment: intent.command.expected.containment[snapshot.groups!.find(group => group.id === groupId)!.itemId],
         containment: Object.fromEntries(Object.entries(intent.command.expected.containment).filter(([id]) => snapshot.groups!.find(group => group.id === groupId)!.memberItemIds.includes(id)).map(([id, version]) => [id, version!])),
