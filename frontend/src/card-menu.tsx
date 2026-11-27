@@ -21,6 +21,8 @@ type Appearance = Pick<
 >;
 export function CardMenu({
   anchor,
+  toolbar,
+  tabIndex,
   card,
   value,
   attachmentWriteBlocked,
@@ -36,6 +38,8 @@ export function CardMenu({
   layer,
 }: {
   anchor: RefObject<HTMLElement | null>;
+  toolbar: RefObject<HTMLDivElement | null>;
+  tabIndex?: number | undefined;
   card: Card;
   attachmentWriteBlocked: boolean;
   blocked: boolean;
@@ -52,8 +56,7 @@ export function CardMenu({
 }) {
   const [open, setOpen] = useState<"外观" | "更多" | null>(null);
   const [hint, setHint] = useState<string | null>(null);
-  const toolbar = useRef<HTMLDivElement>(null),
-    popup = useRef<HTMLDivElement>(null);
+  const popup = useRef<HTMLDivElement>(null);
   const trigger = useRef<HTMLButtonElement | null>(null);
   const { positions, placePopup } = useNearbyCanvasControls(anchor, toolbar, open ? popup : undefined);
   const popupVisible = !!positions?.popup;
@@ -67,12 +70,27 @@ export function CardMenu({
     if (!next || popup.current?.contains(next) || next === trigger.current) return;
     close(false);
   }
-  function onEscape(event: KeyboardEvent<HTMLDivElement>) {
-    if (!open || event.key !== "Escape" || event.nativeEvent.isComposing || event.keyCode === 229 ||
+  function onKeyDown(event: KeyboardEvent<HTMLDivElement>) {
+    if (!open || event.nativeEvent.isComposing || event.keyCode === 229 ||
       !event.currentTarget.contains(event.target as Node)) return;
-    event.preventDefault();
-    event.stopPropagation();
-    close();
+    if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      close();
+      return;
+    }
+    if (event.key !== "Tab" || tabIndex !== -1 || !popupVisible ||
+      event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey) return;
+    // The toolbar uses the card's Tab order, so the popup supplies its own
+    // forward and reverse steps beside the trigger.
+    const first = popup.current?.querySelector<HTMLButtonElement>("button:not(:disabled)");
+    const current = event.target;
+    const next = event.shiftKey && current === first ? trigger.current
+      : !event.shiftKey && current === trigger.current ? first
+      : null;
+    if (!next || next.disabled) return;
+    next.focus({ preventScroll: true });
+    if (document.activeElement === next) event.preventDefault();
   }
   useEffect(() => {
     if (!open) return;
@@ -106,19 +124,20 @@ export function CardMenu({
         aria-label="卡片操作"
         style={{ ...positions?.toolbar, visibility: positions ? undefined : "hidden" }}
         onBlur={onBlur}
-        onKeyDown={onEscape}
+        onKeyDown={onKeyDown}
         onClick={event => event.stopPropagation()}
       >
-        <button disabled={blocked} onClick={event => {
+        <button tabIndex={tabIndex} disabled={blocked} onClick={event => {
           close(false);
           if (!event.shiftKey) onEdit(document.activeElement === event.currentTarget ? event.currentTarget : undefined);
         }}>
           编辑标题
         </button>
-        {layer && <LayerMenu {...layer} placePopup={placePopup} />}
+        {layer && <LayerMenu {...layer} placePopup={placePopup} tabIndex={tabIndex} />}
         {(["写字板", "外观", "AI", "更多"] as const).map((name) => (
           <span className="card-icon-wrap" key={name}>
             <button
+              tabIndex={tabIndex}
               aria-label={name}
               aria-haspopup={name === "AI" ? "dialog" : undefined}
               aria-expanded={name === "写字板" || name === "AI" ? undefined : open === name}
@@ -169,7 +188,7 @@ export function CardMenu({
           style={{ ...positions?.popup, maxWidth: positions?.maxWidth, maxHeight: positions?.maxHeight,
             visibility: popupVisible ? undefined : "hidden" }}
           onBlur={onBlur}
-          onKeyDown={onEscape}
+          onKeyDown={onKeyDown}
           onClick={event => event.stopPropagation()}
         >
           <div className="card-popup-heading">

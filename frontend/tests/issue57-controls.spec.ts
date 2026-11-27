@@ -1,5 +1,120 @@
 import { test, expect, place } from './writing-board-fixture';
 import { connectorSvgEnds, connectorWorldPoint } from './connector-ui-fixture';
+import { createFrameCommand } from '../src/canvas-frame-commands';
+
+for (const width of [1360, 760]) test(`${width}px 四卡样例的浮栏衔接标题、移动和本卡后续控件`, async ({ page, workspace }) => {
+  await page.setViewportSize({ width, height: 900 });
+  const { project } = await workspace.state();
+  const run = (type: string, payload: object, expected: unknown = null) => workspace.execute(page, {
+    commandId: crypto.randomUUID(), projectId: project.id, type, payload, expected,
+  });
+  const cards = [
+    { id: 'title', title: '待补材料', text: '', x: 78, y: 137, width: 245, height: 146 },
+    { id: 'short', title: '订单线索', text: '本周只有订单口径更新，尚未见到交付凭证。', x: 400, y: 124, width: 248, height: 146 },
+    { id: 'long', title: '交付节奏与现金回收', text: '先核对本季已确认的交付，再把口头计划另列为待观察。订单、交付与现金到账是三个不同的时点，比较前先统一口径。不要把缺少披露当作数值为零。\n\n下一次阅读从现金流量表开始，分别记下交易期间、发布日期和证据缺口。若后续出现匹配的收款原件，再补上可以复核的位置。\n\n最后一段：保留原判断，等下一份材料再修订。', x: 80, y: 337, width: 286, height: 174 },
+    { id: 'overlap', title: '现金回收待核', text: '另一条线索；保留疑问和未对齐的口径。', x: 254, y: 410, width: 245, height: 122 },
+  ];
+  for (const { width: _width, height: _height, ...content } of cards) await run('thought.create', content);
+  let state = await workspace.state();
+  await run('pose.batch', { poses: cards.map(({ title: _title, text: _text, ...pose }) => pose) },
+    Object.fromEntries(state.cards.map(card => [card.id, card.item.versionId])));
+  const itemId = (id: string) => state.cards.find(card => card.id === id)!.item.id;
+  const frame = createFrameCommand(await workspace.state(), cards.map(card => itemId(card.id)), { x: 38, y: 78, width: 670, height: 490 });
+  await workspace.execute(page, frame);
+  state = await workspace.state();
+  await run('frame.edit', { id: frame.payload.id, name: '研究样例 · 交付判断', background: null }, state.frames![0]!.versionId);
+  for (const [id, from, a, to, b, path, text] of [
+    ['sample-line-1', 'title', 'right', 'short', 'left', 'straight', '等交付凭证'],
+    ['sample-line-2', 'short', 'bottom', 'overlap', 'top', 'curve', '核对到账'],
+  ]) {
+    await run('connector.create', { id, path, start: { kind: 'bound', itemId: itemId(from), side: a },
+      end: { kind: 'bound', itemId: itemId(to), side: b } });
+    const connector = (await workspace.state()).connectors!.find(line => line.id === id)!;
+    await run('connector.label', { id, label: { text, position: 0.5, fontSize: 16, color: '#626e81', bold: false } }, connector.versionId);
+  }
+  await page.reload();
+  await expect(page.getByRole('status')).toHaveText('已保存到本机');
+  await expect(page.locator('.thought-card')).toHaveCount(4);
+  await expect(page.getByRole('button', { name: '普通连线', exact: true })).toHaveCount(2);
+  const frameName = page.getByRole('button', { name: '研究样例 · 交付判断', exact: true });
+  await expect(frameName).toBeVisible();
+  const title = page.getByRole('button', { name: cards[2]!.title, exact: true });
+  const card = page.locator('.thought-card').filter({ has: title });
+  const toolbar = page.getByRole('toolbar', { name: '卡片操作' });
+  const first = toolbar.getByRole('button', { name: '编辑标题', exact: true });
+  const move = card.getByRole('button', { name: '移动卡片：方向键调整位置' });
+  const body = card.getByRole('button', { name: '编辑正文', exact: true });
+  const resize = card.getByRole('button', { name: '调整卡片尺寸：左上', exact: true });
+
+  await title.click();
+  await expect(title).toBeFocused();
+  await expect(toolbar).toBeVisible();
+  await page.keyboard.press('Tab');
+  await expect(move).toBeFocused();
+  let presses = 1;
+  while (presses <= 60 && !await first.evaluate(button => button === document.activeElement)) {
+    await page.keyboard.press('Tab');
+    presses++;
+  }
+  console.log(JSON.stringify({ width, titleToEditTitleTabs: presses }));
+  expect(presses).toBe(2);
+  await expect(first).toBeFocused();
+  await page.keyboard.press('Shift+Tab');
+  await expect(move).toBeFocused();
+  await page.keyboard.press('Shift+Tab');
+  await expect(title).toBeFocused();
+
+  await move.focus();
+  const composingTabNotCanceled = await move.evaluate(button => button.dispatchEvent(new KeyboardEvent('keydown', {
+    key: 'Tab', isComposing: true, bubbles: true, cancelable: true,
+  })));
+  expect(composingTabNotCanceled).toBe(true);
+  await expect(move).toBeFocused();
+
+  for (const name of ['编辑标题', '层级', '写字板', '外观', 'AI', '更多']) {
+    await page.keyboard.press('Tab');
+    await expect(toolbar.getByRole('button', { name, exact: true })).toBeFocused();
+  }
+  await page.keyboard.press('Tab');
+  await expect(body).toBeFocused();
+  await page.keyboard.press('Shift+Tab');
+  await expect(toolbar.getByRole('button', { name: '更多', exact: true })).toBeFocused();
+  await page.keyboard.press('Tab');
+  await expect(body).toBeFocused();
+  await page.keyboard.press('Tab');
+  await expect(resize).toBeFocused();
+
+  // Follow the rest of the document through the old portal location once.
+  const laterStops: string[] = [];
+  for (let index = 0; index < 80; index++) {
+    await page.keyboard.press('Tab');
+    const next = await page.evaluate(() => {
+      const active = document.activeElement!;
+      if (active === document.body) return 'end';
+      if (active.closest('.card-actions')) return 'toolbar';
+      return active.closest('.thought-card')?.querySelector('.title-button')?.textContent ?? '';
+    });
+    if (next === 'end') break;
+    laterStops.push(next);
+  }
+  expect(laterStops).not.toContain('toolbar');
+  expect(laterStops).toContain(cards[3]!.title);
+
+  // Add a real attachment after measuring the original four-card case.
+  await run('asset.save', { id: 'focus-pdf', name: '样例原件.pdf', mime: 'application/pdf', base64: Buffer.from('%PDF-1.4\n').toString('base64'), kind: 'file' });
+  await run('card.attachment.add', { id: 'long', assetId: 'focus-pdf', name: '样例原件.pdf' }, { attachments: null });
+  await page.reload();
+  await title.click();
+  await body.focus();
+  await page.keyboard.press('Tab');
+  await expect(card.getByRole('button', { name: '打开 样例原件.pdf', exact: true })).toBeFocused();
+
+  await frameName.press('Shift+Enter');
+  await expect(toolbar).toHaveCount(0);
+  await move.focus();
+  await page.keyboard.press('Tab');
+  await expect(body).toBeFocused();
+});
 
 test('卡片标题与移动按画面顺序进入 Tab，键盘编辑与移动绑定当前卡片', async ({ page, workspace }) => {
   await place(page, '卡片甲', 100, 160);
@@ -392,6 +507,38 @@ test('超大卡片标题滚出视口时就近栏避开可见标签，+N 仍能�
   await expect(board.locator('.board-tags .project-tag')).toHaveCount(tagIds.length);
 });
 
+for (const [name, popupRole, popupName, precedingName] of [
+  ['更多', 'dialog', '更多', 'AI'],
+  ['外观', 'dialog', '卡片外观', '写字板'],
+  ['层级', 'menu', '层级操作', '编辑标题'],
+] as const) test(`卡片「${name}」弹层首项可反向返回触发器，再接回本卡 Tab 顺序`, async ({ page, workspace: _workspace }) => {
+  await place(page, '下层对照卡', 95, 150);
+  await place(page, '浮栏弹层卡', 130, 180);
+  const toolbar = page.getByRole('toolbar', { name: '卡片操作' });
+  const trigger = toolbar.getByRole('button', { name, exact: true });
+  const preceding = toolbar.getByRole('button', { name: precedingName, exact: true });
+  const popup = page.getByRole(popupRole, { name: popupName, exact: true });
+  await trigger.press('Enter');
+  await expect(popup).toBeVisible();
+  const items = popup.getByRole(popupRole === 'menu' ? 'menuitem' : 'button', { disabled: false });
+  const first = items.first();
+  await expect(first).toBeFocused();
+  await page.keyboard.press('Tab');
+  await expect(items.nth(1)).toBeFocused();
+  await page.keyboard.press('Shift+Tab');
+  await expect(first).toBeFocused();
+  await page.keyboard.press('Shift+Tab');
+  await expect(trigger).toBeFocused({ timeout: 3000 });
+  await expect(popup).toBeVisible();
+  await page.keyboard.press('Tab');
+  await expect(first).toBeFocused();
+  await page.keyboard.press('Shift+Tab');
+  await expect(trigger).toBeFocused();
+  await page.keyboard.press('Shift+Tab');
+  await expect(preceding).toBeFocused();
+  await expect(popup).toHaveCount(0);
+});
+
 test('层级全部禁用仍能 Tab 离开，随后 Escape 只关闭新打开的外观', async ({ page, workspace: _workspace }) => {
   await place(page, '唯一卡片', 120, 140);
   const toolbar = page.getByRole('toolbar', { name: '卡片操作' });
@@ -399,6 +546,11 @@ test('层级全部禁用仍能 Tab 离开，随后 Escape 只关闭新打开的�
   await layers.click();
   const menu = page.getByRole('menu', { name: '层级操作' });
   await expect(menu.getByRole('menuitem', { disabled: true })).toHaveCount(4);
+  await expect(menu).toBeFocused();
+  await page.keyboard.press('Shift+Tab');
+  await expect(layers).toBeFocused({ timeout: 3000 });
+  await expect(menu).toBeVisible();
+  await page.keyboard.press('Tab');
   await expect(menu).toBeFocused();
   await page.keyboard.press('Tab');
   await expect(menu).toHaveCount(0);

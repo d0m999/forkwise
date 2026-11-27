@@ -277,6 +277,23 @@ for (const width of [1360, 760]) test(`${width}px：正式工作台加密下载�
     expect(dataDirectories()).toEqual([]);
     await capture(page, 'validate-only');
 
+    // Chromium reports an unchanged selection through the file input's own
+    // bubbling cancel event. Reserve the macOS sheet dismissal for native QA.
+    await chooser.evaluate(input => input.addEventListener('cancel', event => {
+      document.body.dataset.backupFileCancel = JSON.stringify([event.isTrusted, event.bubbles]);
+    }, { once: true }));
+    await chooser.focus();
+    const reselect = page.waitForEvent('filechooser');
+    await page.keyboard.press('Enter');
+    await (await reselect).setFiles(downloaded);
+    await expect(page.locator('body')).toHaveAttribute('data-backup-file-cancel', '[true,true]', { timeout: 3000 });
+    await expect(dialog).toBeVisible();
+    await expect(status).toHaveText('校验通过。可以建立隔离恢复副本。');
+    await expect(restore).toBeEnabled();
+    expect(await chooser.evaluate(input => (input as HTMLInputElement).files?.[0]?.name)).toBe('valid.tar.age');
+    expect(dataDirectories()).toEqual([]);
+    await capture(page, 'after-file-cancel');
+
     await choose(truncated);
     await expect(restore).toBeDisabled();
     await expect(status).toBeEmpty();

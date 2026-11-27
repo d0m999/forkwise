@@ -44,6 +44,42 @@ async function exportPackage(page: import('@playwright/test').Page): Promise<str
   return path!;
 }
 
+for (const width of [1360, 760]) test(`${width}px 坏 ZIP 先读到校验错误，取消后可重选`, async ({ page, workspace }, info) => {
+  await page.setViewportSize({ width, height: 900 });
+  const before = await projectsOf(page, workspace.origin);
+  const isolated = mkdtempSync(join(tmpdir(), 'forkwise-import-bad-zip-'));
+  try {
+    const path = join(isolated, '坏项目包.zip');
+    writeFileSync(path, Buffer.from('这不是 ZIP'));
+    const { dialog, trigger } = await openPackage(page, path);
+    const error = dialog.getByRole('alert');
+    const reason = error.getByText('ZIP 缺少目录', { exact: false });
+    await expect(reason).toBeVisible();
+    await expect(reason).toBeInViewport({ ratio: 1 });
+    await expect(error).toBeFocused({ timeout: 3000 });
+    expect(await dialog.evaluate(element => element.scrollTop)).toBe(0);
+    await expect(dialog.getByLabel('新研究名称')).toHaveCount(0);
+    await expect(dialog.getByRole('region', { name: '导入范围' })).toHaveCount(0);
+    await expect(dialog.getByRole('region', { name: '导入缺口' })).toHaveCount(0);
+    await expect(dialog.getByRole('button', { name: '导入为新研究' })).toBeDisabled();
+    await page.screenshot({ path: info.outputPath('bad-zip-first-view.png') });
+    await page.keyboard.press('Tab');
+    const cancel = dialog.getByRole('button', { name: '取消', exact: true });
+    await expect(cancel).toBeFocused();
+    await page.keyboard.press('Enter');
+    await expect(dialog).toHaveCount(0);
+    await expect(trigger).toBeFocused();
+    await openPackage(page, path);
+    await expect(error).toBeFocused();
+    await page.keyboard.press('Escape');
+    await expect(dialog).toHaveCount(0);
+    await expect(trigger).toBeFocused();
+    expect(await projectsOf(page, workspace.origin)).toEqual(before);
+  } finally {
+    rmSync(isolated, { recursive: true, force: true });
+  }
+});
+
 test('预览校验后导入隔离研究：取消无副作用、确认后逐项对上包内原文、停服重开仍在', async ({ page, workspace }) => {
   test.setTimeout(180000);
   await seedCanvasExportSample(page, workspace);
@@ -213,11 +249,15 @@ test('预览校验后导入隔离研究：取消无副作用、确认后逐项�
     const files = readZip(packageBytes);
     const brokenManifest = JSON.parse(files.get('forkwise-project.json')!.toString('utf8')) as Record<string, any>;
     brokenManifest.resources[0].sha256 = '0'.repeat(64);
+    expect(files.delete(brokenManifest.resources[1].path)).toBe(true);
     files.set('forkwise-project.json', Buffer.from(JSON.stringify(brokenManifest)));
     const brokenPath = join(isolated, 'broken.zip');
     writeFileSync(brokenPath, writeZip([...files].map(([name, data]) => ({ name, data }))));
     const broken = await openPackage(page, brokenPath);
-    await expect(broken.dialog.getByText('RESOURCE_HASH', { exact: false })).toBeVisible();
+    const error = broken.dialog.getByRole('alert');
+    await expect(error.getByText('RESOURCE_HASH', { exact: false })).toBeVisible();
+    await expect(error.getByText('RESOURCE_MISSING', { exact: false })).toBeVisible();
+    await expect(error).toBeFocused();
     await expect(broken.dialog.getByRole('button', { name: '导入为新研究', exact: true })).toBeDisabled();
     await broken.dialog.getByRole('button', { name: '取消', exact: true }).click();
     expect((await projectsOf(page, workspace.origin)).length).toBe(tabsBefore + 1);
@@ -451,10 +491,13 @@ test('会话存储拒写时不发送导入，已导入但清理失败时仍能�
     };
   });
   await reopened.dialog.getByRole('button', { name: '导入为新研究', exact: true }).click();
-  await expect(reopened.dialog).toContainText('项目已导入。浏览器未能清除导入重试记录');
+  await expect(reopened.dialog.getByRole('status')).toContainText('项目已导入。浏览器未能清除导入重试记录', { timeout: 3000 });
+  await expect(reopened.dialog.getByRole('heading', { name: '校验未通过' })).toHaveCount(0);
+  await expect(reopened.dialog.getByRole('alert')).toHaveCount(0);
   await expect(page.getByRole('tab', { selected: true })).toContainText('会话存储测试');
   expect(requests).toBe(1);
   const firstProjects = await projectsOf(page, workspace.origin);
+  expect(firstProjects.filter(project => project.name === '会话存储测试')).toHaveLength(1);
   expect(firstProjects).toHaveLength(tabsBefore + 1);
 
   // 刷新恢复正常存储；上次导入已确认，此次明确提交应再建一份同名研究。
@@ -474,8 +517,11 @@ test('会话存储拒写时不发送导入，已导入但清理失败时仍能�
     await route.fulfill({ response });
   });
   await next.dialog.getByRole('button', { name: '导入为新研究', exact: true }).click();
-  await expect(next.dialog).toContainText('浏览器无法清除或更新重试记录');
-  await expect(next.dialog).toContainText('关闭此标签页并从工作台入口重新打开');
+  const status = next.dialog.getByRole('status');
+  await expect(status).toContainText('项目已导入。浏览器无法清除或更新重试记录');
+  await expect(status).toContainText('关闭此标签页并从工作台入口重新打开');
+  await expect(next.dialog.getByRole('heading', { name: '校验未通过' })).toHaveCount(0);
+  await expect(next.dialog.getByRole('alert')).toHaveCount(0);
   expect(requests).toBe(2);
   const projects = await projectsOf(page, workspace.origin);
   expect(projects.filter((project) => project.name === '会话存储测试')).toHaveLength(2);

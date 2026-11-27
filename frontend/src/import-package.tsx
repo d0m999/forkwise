@@ -72,10 +72,12 @@ export function ImportPackage({ disabled, onImported }: {
   const [name, setName] = useState('');
   const [phase, setPhase] = useState<Phase>('idle');
   const [message, setMessage] = useState('');
+  const [readError, setReadError] = useState('');
   const [failures, setFailures] = useState<string[]>([]);
   const verifying = phase === 'verifying';
   const submitting = phase === 'submitting';
-  const canSubmit = source !== null && !source.retryReadFailed && !source.preview.failures.length &&
+  const previewFailed = !!source?.preview.failures.length;
+  const canSubmit = source !== null && !source.retryReadFailed && !previewFailed &&
     !submitting && !disabled && !!name.trim();
 
   useEffect(() => {
@@ -84,10 +86,11 @@ export function ImportPackage({ disabled, onImported }: {
 
   useEffect(() => {
     if (!open) return;
-    if (source) nameInput.current?.focus({ preventScroll: true });
+    if (previewFailed || readError) failureRef.current?.focus();
+    else if (source) nameInput.current?.focus({ preventScroll: true });
     else if (verifying) form.current?.focus({ preventScroll: true });
     else closeButton.current?.focus({ preventScroll: true });
-  }, [open, source, verifying]);
+  }, [open, source, verifying, previewFailed, readError]);
 
   useEffect(() => {
     if (!restoreTriggerFocus || disabled) return;
@@ -103,6 +106,7 @@ export function ImportPackage({ disabled, onImported }: {
     setSource(null);
     setName('');
     setMessage('');
+    setReadError('');
     setFailures([]);
     setPhase('idle');
     requestAnimationFrame(() => trigger.current?.focus({ preventScroll: true }));
@@ -134,6 +138,7 @@ export function ImportPackage({ disabled, onImported }: {
     setPhase('verifying');
     setSource(null);
     setMessage('正在校验完整项目包…');
+    setReadError('');
     setFailures([]);
     try {
       const base64 = await readBase64(file);
@@ -154,7 +159,8 @@ export function ImportPackage({ disabled, onImported }: {
       setMessage(retryReadFailed ? '浏览器无法读取导入重试记录。请检查浏览器的会话存储，关闭预览后重新选择项目包。' : '');
     } catch (error) {
       if (ticket !== selection.current) return;
-      setMessage(error instanceof Error ? error.message : '所选文件无法读取');
+      setMessage('');
+      setReadError(error instanceof Error ? error.message : '所选文件无法读取');
     } finally {
       if (ticket === selection.current) setPhase('idle');
     }
@@ -254,6 +260,7 @@ export function ImportPackage({ disabled, onImported }: {
         setOpen(true);
         setSource(null);
         setMessage('');
+        setReadError('');
         setFailures([]);
         setPhase('idle');
         picker.current?.click();
@@ -264,16 +271,33 @@ export function ImportPackage({ disabled, onImported }: {
         <WorkspaceProjectDialog dialog={dialog} label="导入项目包" dismiss={close}>
           <form ref={form} className="import-dialog" tabIndex={-1} onSubmit={(event) => void submit(event)} onKeyDown={trapTab}>
             <h2>导入项目包</h2>
+            {(previewFailed || readError) && (
+              <section ref={failureRef} tabIndex={-1} className="import-block import-failed" role="alert">
+                <h3>校验未通过</h3>
+                {source ? (
+                  <>
+                    <p>修正「{source.fileName}」后重新选择文件。</p>
+                    <ul className="import-failures">
+                      {source.preview.failures.map((failure, index) => (
+                        <li key={`${failure.code}-${failure.path}-${index}`}>
+                          {failure.code} {failure.path} expected={failure.expected} actual={failure.actual}
+                        </li>
+                      ))}
+                    </ul>
+                  </>
+                ) : <p>{readError}</p>}
+              </section>
+            )}
             {!source && (
               <>
-                <p role="status" className="import-note">{message || '请选择一份完整项目包（ZIP）。'}</p>
+                {!readError && <p role="status" className="import-note">{message || '请选择一份完整项目包（ZIP）。'}</p>}
                 {verifying && <p className="import-hint">这一步只读文件；可以随时关闭，校验结果不会写入库。</p>}
                 <div className="import-actions">
                   <button ref={closeButton} type="button" onClick={close}>关闭</button>
                 </div>
               </>
             )}
-            {source && (
+            {source && !previewFailed && (
               <>
                 <p className="import-note">
                   来自《{source.preview.suggestedName}》的完整项目包（{source.fileName}），源项目修订 r{source.preview.sourceRevision}。
@@ -313,9 +337,7 @@ export function ImportPackage({ disabled, onImported }: {
                     </>}
                   </dl>
                   <p className="import-hint">
-                    {source.preview.failures.length === 0
-                      ? `叠放与归属已按包内原文重算通过；旧研究归档${source.preview.hasResearch ? '随包导入，按原结构保留' : '见下方缺口'}。`
-                      : '校验未通过，以下问题不会写入库；提交按钮不可用。'}
+                    叠放与归属已按包内原文重算通过；旧研究归档{source.preview.hasResearch ? '随包导入，按原结构保留' : '见下方缺口'}。
                   </p>
                 </section>
 
@@ -341,31 +363,15 @@ export function ImportPackage({ disabled, onImported }: {
                     {failures.length > 0 && <ul className="import-failures">{failures.map((line) => <li key={line}>{line}</li>)}</ul>}
                   </section>
                 )}
-
-                {source.preview.failures.length > 0 && (
-                  <section className="import-block import-failed" role="alert">
-                    <h3>校验未通过</h3>
-                    <p>修正包内容后重新选择文件；以下问题不会写入库。</p>
-                    <ul className="import-failures">
-                      {source.preview.failures.map((failure, index) => (
-                        <li key={`${failure.code}-${failure.path}-${index}`}>
-                          {failure.code} {failure.path} expected={failure.expected} actual={failure.actual}
-                        </li>
-                      ))}
-                    </ul>
-                  </section>
-                )}
-
-                <div className="import-actions">
-                  <button type="button" disabled={submitting} onClick={close}>取消</button>
-                  <button
-                    type="submit"
-                    disabled={!canSubmit}
-                  >
-                    {submitting ? '正在导入…' : '导入为新研究'}
-                  </button>
-                </div>
               </>
+            )}
+            {source && (
+              <div className="import-actions">
+                <button type="button" disabled={submitting} onClick={close}>取消</button>
+                <button type="submit" disabled={!canSubmit}>
+                  {submitting ? '正在导入…' : '导入为新研究'}
+                </button>
+              </div>
             )}
           </form>
         </WorkspaceProjectDialog>

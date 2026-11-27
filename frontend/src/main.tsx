@@ -176,6 +176,11 @@ type CardData = {
 function ThoughtCard({ data, selected }: NodeProps<Node<CardData>>) {
   const anchor = useRef<HTMLElement>(null);
   const titleButton = useRef<HTMLButtonElement>(null);
+  const moveButton = useRef<HTMLButtonElement>(null);
+  const bodyButton = useRef<HTMLButtonElement>(null);
+  const toolbar = useRef<HTMLDivElement>(null);
+  const bridgeToolbarFocus = selected && data.showMenu && !data.editing &&
+    !data.historyBlocked && !data.strokeSelected && !data.movingDisabled;
   const restoreTitleFocus = useRef(false);
   useLayoutEffect(() => {
     if (!data.editing && restoreTitleFocus.current) {
@@ -196,6 +201,21 @@ function ThoughtCard({ data, selected }: NodeProps<Node<CardData>>) {
       tabIndex={-1}
       className="thought-card"
       onClickCapture={data.onCanvasChoice}
+      onKeyDown={event => {
+        if (!bridgeToolbarFocus || event.key !== "Tab" || event.defaultPrevented ||
+          event.nativeEvent.isComposing || event.keyCode === 229 || event.altKey || event.ctrlKey || event.metaKey ||
+          !toolbar.current?.checkVisibility({ visibilityProperty: true })) return;
+        // The portal keeps its screen position. Its buttons join this card's
+        // keyboard order between Move and Edit body, exactly once.
+        const actions = [...toolbar.current.querySelectorAll<HTMLButtonElement>('button:not(:disabled):not([aria-disabled="true"])')];
+        const order = [moveButton.current, ...actions, bodyButton.current];
+        const index = order.indexOf(event.target as HTMLButtonElement);
+        if (index === -1) return;
+        const next = order[index + (event.shiftKey ? -1 : 1)];
+        if (!next) return;
+        next.focus({ preventScroll: true });
+        if (document.activeElement === next) event.preventDefault();
+      }}
       style={
         {
           "--card-title-color": data.appearanceValue.titleColor,
@@ -205,6 +225,8 @@ function ThoughtCard({ data, selected }: NodeProps<Node<CardData>>) {
       {selected && data.showMenu && (
         <CardMenu
           anchor={anchor}
+          toolbar={toolbar}
+          tabIndex={bridgeToolbarFocus ? -1 : undefined}
           card={data.card}
           value={data.appearanceValue}
           blocked={data.historyBlocked}
@@ -246,6 +268,7 @@ function ThoughtCard({ data, selected }: NodeProps<Node<CardData>>) {
           </button>
         )}
         <button
+          ref={moveButton}
           className="move-handle nodrag"
           aria-label="移动卡片：方向键调整位置"
           disabled={data.strokeSelected}
@@ -267,6 +290,7 @@ function ThoughtCard({ data, selected }: NodeProps<Node<CardData>>) {
           移动
         </button>
         <button
+          ref={bodyButton}
           className="body-button nodrag"
           disabled={data.historyBlocked}
           onClick={data.onBody}

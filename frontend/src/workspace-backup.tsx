@@ -119,6 +119,8 @@ function BackupDialog({ dialog, close }: { dialog: BackupDialogRef; close: () =>
 
   return <dialog ref={dialog} className="workspace-backup" aria-labelledby="workspace-backup-title"
     onCancel={event => {
+      // The file chooser reports cancellation through the input.
+      if (event.target !== event.currentTarget) return;
       event.preventDefault();
       requestClose();
     }}>
