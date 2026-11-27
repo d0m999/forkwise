@@ -126,7 +126,8 @@ export function ImportPackage({ disabled, onImported }: {
     if (!event.shiftKey && document.activeElement === last) {
       event.preventDefault();
       first.focus({ preventScroll: true });
-    } else if (event.shiftKey && document.activeElement === first) {
+    } else if (event.shiftKey && (document.activeElement === first ||
+      ((previewFailed || readError) && document.activeElement === failureRef.current))) {
       event.preventDefault();
       last.focus({ preventScroll: true });
     }
@@ -273,7 +274,7 @@ export function ImportPackage({ disabled, onImported }: {
             <h2>导入项目包</h2>
             {(previewFailed || readError) && (
               <section ref={failureRef} tabIndex={-1} className="import-block import-failed" role="alert">
-                <h3>校验未通过</h3>
+                <h3>{previewFailed ? '校验未通过' : '未能完成校验'}</h3>
                 {source ? (
                   <>
                     <p>修正「{source.fileName}」后重新选择文件。</p>

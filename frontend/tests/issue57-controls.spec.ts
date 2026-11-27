@@ -507,11 +507,11 @@ test('超大卡片标题滚出视口时就近栏避开可见标签，+N 仍能�
   await expect(board.locator('.board-tags .project-tag')).toHaveCount(tagIds.length);
 });
 
-for (const [name, popupRole, popupName, precedingName] of [
-  ['更多', 'dialog', '更多', 'AI'],
-  ['外观', 'dialog', '卡片外观', '写字板'],
-  ['层级', 'menu', '层级操作', '编辑标题'],
-] as const) test(`卡片「${name}」弹层首项可反向返回触发器，再接回本卡 Tab 顺序`, async ({ page, workspace: _workspace }) => {
+for (const [name, popupRole, popupName, precedingName, followingName] of [
+  ['更多', 'dialog', '更多', 'AI', '编辑正文'],
+  ['外观', 'dialog', '卡片外观', '写字板', 'AI'],
+  ['层级', 'menu', '层级操作', '编辑标题', '写字板'],
+] as const) test(`卡片「${name}」弹层首末项衔接本卡 Tab 顺序`, async ({ page, workspace: _workspace }) => {
   await place(page, '下层对照卡', 95, 150);
   await place(page, '浮栏弹层卡', 130, 180);
   const toolbar = page.getByRole('toolbar', { name: '卡片操作' });
@@ -537,6 +537,15 @@ for (const [name, popupRole, popupName, precedingName] of [
   await page.keyboard.press('Shift+Tab');
   await expect(preceding).toBeFocused();
   await expect(popup).toHaveCount(0);
+
+  await trigger.press('Enter');
+  await expect(first).toBeFocused();
+  const last = name === '外观' ? popup.getByRole('checkbox', { name: '显示正文预览' }) : items.last();
+  await last.press('Tab');
+  const card = page.locator('.thought-card').filter({ has: page.getByRole('button', { name: '浮栏弹层卡', exact: true }) });
+  const following = (name === '更多' ? card : toolbar).getByRole('button', { name: followingName, exact: true });
+  await expect(following).toBeFocused({ timeout: 3000 });
+  await expect(popup).toHaveCount(0);
 });
 
 test('层级全部禁用仍能 Tab 离开，随后 Escape 只关闭新打开的外观', async ({ page, workspace: _workspace }) => {
@@ -553,6 +562,7 @@ test('层级全部禁用仍能 Tab 离开，随后 Escape 只关闭新打开的�
   await page.keyboard.press('Tab');
   await expect(menu).toBeFocused();
   await page.keyboard.press('Tab');
+  await expect(toolbar.getByRole('button', { name: '写字板' })).toBeFocused({ timeout: 3000 });
   await expect(menu).toHaveCount(0);
   const appearance = toolbar.getByRole('button', { name: '外观' });
   await appearance.press('Enter');
@@ -562,4 +572,11 @@ test('层级全部禁用仍能 Tab 离开，随后 Escape 只关闭新打开的�
   await expect(popup).toHaveCount(0);
   await expect(appearance).toBeFocused();
   await expect(page.locator('.react-flow__node.selected')).toHaveCount(1);
+});
+
+test('浏览器缺少 checkVisibility 时仍可从移动按 Tab 进入卡片浮栏', async ({ page, workspace: _workspace }) => {
+  await place(page, '兼容性测试卡', 120, 140);
+  await page.evaluate(() => Reflect.deleteProperty(Element.prototype, 'checkVisibility'));
+  await page.getByRole('button', { name: '移动卡片：方向键调整位置' }).press('Tab');
+  await expect(page.getByRole('toolbar', { name: '卡片操作' }).getByRole('button', { name: '编辑标题' })).toBeFocused({ timeout: 3000 });
 });

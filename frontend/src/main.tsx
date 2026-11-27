@@ -204,12 +204,21 @@ function ThoughtCard({ data, selected }: NodeProps<Node<CardData>>) {
       onKeyDown={event => {
         if (!bridgeToolbarFocus || event.key !== "Tab" || event.defaultPrevented ||
           event.nativeEvent.isComposing || event.keyCode === 229 || event.altKey || event.ctrlKey || event.metaKey ||
-          !toolbar.current?.checkVisibility({ visibilityProperty: true })) return;
-        // The portal keeps its screen position. Its buttons join this card's
-        // keyboard order between Move and Edit body, exactly once.
-        const actions = [...toolbar.current.querySelectorAll<HTMLButtonElement>('button:not(:disabled):not([aria-disabled="true"])')];
-        const order = [moveButton.current, ...actions, bodyButton.current];
-        const index = order.indexOf(event.target as HTMLButtonElement);
+          !toolbar.current?.getClientRects().length || getComputedStyle(toolbar.current).visibility !== "visible") return;
+        // 浮栏和弹层都挂在 body 下，按触发按钮的位置接入本卡的键盘顺序。
+        const order: (HTMLElement | null)[] = [moveButton.current];
+        for (const action of toolbar.current.querySelectorAll<HTMLButtonElement>('button:not(:disabled):not([aria-disabled="true"])')) {
+          order.push(action);
+          const popupId = action.getAttribute("aria-controls");
+          const popup = popupId && document.getElementById(popupId);
+          if (!popup || getComputedStyle(popup).visibility !== "visible") continue;
+          const items = popup.querySelectorAll<HTMLElement>("button:enabled, input:enabled:not([hidden])");
+          // 层级操作全禁用时，菜单本身接收初始焦点。
+          if (items.length) order.push(...items);
+          else order.push(popup);
+        }
+        order.push(bodyButton.current);
+        const index = order.indexOf(event.target as HTMLElement);
         if (index === -1) return;
         const next = order[index + (event.shiftKey ? -1 : 1)];
         if (!next) return;

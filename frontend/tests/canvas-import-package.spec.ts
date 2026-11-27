@@ -53,6 +53,7 @@ for (const width of [1360, 760]) test(`${width}px 坏 ZIP 先读到校验错误�
     writeFileSync(path, Buffer.from('这不是 ZIP'));
     const { dialog, trigger } = await openPackage(page, path);
     const error = dialog.getByRole('alert');
+    await expect(error.getByRole('heading', { name: '校验未通过' })).toBeVisible();
     const reason = error.getByText('ZIP 缺少目录', { exact: false });
     await expect(reason).toBeVisible();
     await expect(reason).toBeInViewport({ ratio: 1 });
@@ -71,6 +72,8 @@ for (const width of [1360, 760]) test(`${width}px 坏 ZIP 先读到校验错误�
     await expect(trigger).toBeFocused();
     await openPackage(page, path);
     await expect(error).toBeFocused();
+    await page.keyboard.press('Shift+Tab');
+    await expect(cancel).toBeFocused({ timeout: 3000 });
     await page.keyboard.press('Escape');
     await expect(dialog).toHaveCount(0);
     await expect(trigger).toBeFocused();
@@ -78,6 +81,31 @@ for (const width of [1360, 760]) test(`${width}px 坏 ZIP 先读到校验错误�
   } finally {
     rmSync(isolated, { recursive: true, force: true });
   }
+});
+
+test('项目包预览请求中断时说明未能完成校验，并显示请求失败原因', async ({ page, workspace: _workspace }) => {
+  const path = await exportPackage(page);
+  await page.route('**/api/mapping/import.preview', route => route.abort('failed'));
+  const { trigger, dialog } = await openPackage(page, path);
+  const error = dialog.getByRole('alert');
+  await expect(error.locator('p')).toHaveText(/\S/);
+  await expect(error.getByRole('heading', { name: '未能完成校验' })).toBeVisible({ timeout: 3000 });
+  await expect(error).toBeFocused();
+  await page.keyboard.press('Shift+Tab');
+  await expect(dialog.getByRole('button', { name: '关闭', exact: true })).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect(trigger).toBeFocused();
+});
+
+test('文件无法读取时显示未能完成校验，并保留读取失败原因', async ({ page, workspace: _workspace }) => {
+  const path = await exportPackage(page);
+  await page.evaluate(() => {
+    FileReader.prototype.readAsDataURL = () => { throw new DOMException('所选文件已移动', 'NotReadableError'); };
+  });
+  const { dialog } = await openPackage(page, path);
+  const error = dialog.getByRole('alert');
+  await expect(error.getByRole('heading', { name: '未能完成校验' })).toBeVisible();
+  await expect(error).toContainText('所选文件已移动');
 });
 
 test('预览校验后导入隔离研究：取消无副作用、确认后逐项对上包内原文、停服重开仍在', async ({ page, workspace }) => {

@@ -1,5 +1,6 @@
 import {
   useEffect,
+  useId,
   useRef,
   useState,
   type FocusEvent,
@@ -57,6 +58,7 @@ export function CardMenu({
   const [open, setOpen] = useState<"外观" | "更多" | null>(null);
   const [hint, setHint] = useState<string | null>(null);
   const popup = useRef<HTMLDivElement>(null);
+  const popupId = useId();
   const trigger = useRef<HTMLButtonElement | null>(null);
   const { positions, placePopup } = useNearbyCanvasControls(anchor, toolbar, open ? popup : undefined);
   const popupVisible = !!positions?.popup;
@@ -77,20 +79,7 @@ export function CardMenu({
       event.preventDefault();
       event.stopPropagation();
       close();
-      return;
     }
-    if (event.key !== "Tab" || tabIndex !== -1 || !popupVisible ||
-      event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey) return;
-    // The toolbar uses the card's Tab order, so the popup supplies its own
-    // forward and reverse steps beside the trigger.
-    const first = popup.current?.querySelector<HTMLButtonElement>("button:not(:disabled)");
-    const current = event.target;
-    const next = event.shiftKey && current === first ? trigger.current
-      : !event.shiftKey && current === trigger.current ? first
-      : null;
-    if (!next || next.disabled) return;
-    next.focus({ preventScroll: true });
-    if (document.activeElement === next) event.preventDefault();
   }
   useEffect(() => {
     if (!open) return;
@@ -141,6 +130,7 @@ export function CardMenu({
               aria-label={name}
               aria-haspopup={name === "AI" ? "dialog" : undefined}
               aria-expanded={name === "写字板" || name === "AI" ? undefined : open === name}
+              aria-controls={open === name ? popupId : undefined}
               aria-pressed={name === "写字板" || name === "AI" ? undefined : open === name}
               aria-describedby={
                 hint === name ? `hint-${card.id}-${name}` : undefined
@@ -182,6 +172,7 @@ export function CardMenu({
       {open && (
         <div
           ref={popup}
+          id={popupId}
           className="card-popup card-floating nodrag nopan"
           role="dialog"
           aria-label={open === "外观" ? "卡片外观" : open}

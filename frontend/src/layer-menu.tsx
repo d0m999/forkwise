@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useViewport } from "@xyflow/react";
 import type { LayerAvailability, LayerOperation } from "./layer-order";
@@ -19,6 +19,7 @@ const operations: [LayerOperation, string][] = [
 
 export function LayerMenu({ availability, blocked, apply, placePopup, tabIndex }: LayerMenuProps & { tabIndex?: number | undefined }) {
   const [open, setOpen] = useState(false);
+  const menuId = useId();
   const trigger = useRef<HTMLButtonElement>(null),
     menu = useRef<HTMLDivElement>(null);
   const focused = useRef(false);
@@ -44,19 +45,6 @@ export function LayerMenu({ availability, blocked, apply, placePopup, tabIndex }
   function close(restore = true) {
     setOpen(false);
     if (restore && trigger.current?.isConnected) trigger.current.focus();
-  }
-  function onPopupTab(event: ReactKeyboardEvent<HTMLElement>) {
-    if (event.key !== "Tab" || tabIndex !== -1 || !open || !point ||
-      event.defaultPrevented || event.nativeEvent.isComposing || event.keyCode === 229 ||
-      event.altKey || event.ctrlKey || event.metaKey) return;
-    const first = menu.current?.querySelector<HTMLButtonElement>("button:not(:disabled)") ?? menu.current;
-    const current = event.target;
-    const next = event.shiftKey && current === first ? trigger.current
-      : !event.shiftKey && current === trigger.current ? first
-      : null;
-    if (!next) return;
-    next.focus({ preventScroll: true });
-    if (document.activeElement === next) event.preventDefault();
   }
   useEffect(() => {
     if (!open) return;
@@ -111,8 +99,8 @@ export function LayerMenu({ availability, blocked, apply, placePopup, tabIndex }
         tabIndex={tabIndex}
         aria-haspopup="menu"
         aria-expanded={open}
+        aria-controls={open ? menuId : undefined}
         aria-disabled={blocked}
-        onKeyDown={onPopupTab}
         onBlur={event => {
           if (tabIndex === -1 && open && !menu.current?.contains(event.relatedTarget)) close(false);
         }}
@@ -128,6 +116,7 @@ export function LayerMenu({ availability, blocked, apply, placePopup, tabIndex }
         createPortal(
           <div
             ref={menu}
+            id={menuId}
             role="menu"
             tabIndex={placePopup ? -1 : undefined}
             aria-label="层级操作"
@@ -146,7 +135,6 @@ export function LayerMenu({ availability, blocked, apply, placePopup, tabIndex }
               close(false);
             }}
             onKeyDown={event => {
-              if (event.key === "Tab") return onPopupTab(event);
               const items = [...(menu.current?.querySelectorAll<HTMLButtonElement>("button:not(:disabled)") ?? [])];
               const current = items.indexOf(document.activeElement as HTMLButtonElement);
               if (event.key === "ArrowDown" || event.key === "ArrowUp") {
