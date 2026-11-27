@@ -13,6 +13,8 @@ import {
 } from 'node:fs';
 import { extname, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { DomainError, requireThat } from './domain/errors.js';
+import type { CommitOptions } from './mapping/mapping.js';
 import type { VerificationSource } from './mapping/verification.js';
 
 export async function startWorkspace(options: { verificationSource?: VerificationSource } = {}) {
@@ -30,6 +32,60 @@ export async function startWorkspace(options: { verificationSource?: Verificatio
   // 环境校验先于工作台模块加载：缺目录时立即失败，不因新增映射模块拖慢启动。
   const { openMapping } = await import('./mapping/storage.js');
   const { createWorkspaceApp } = await import('./mapping/http.js');
+  const {
+    FORKWISE_OPENAI_ORGANIZE_QUALIFICATION: qualification,
+    OPENAI_API_KEY: apiKey,
+  } = process.env;
+  let organizeConfig: Pick<CommitOptions, 'organizeModel' | 'organizeBlockedReason'>;
+  try {
+    requireThat(qualification, 'ORGANIZE_MODEL_UNCONFIGURED', '尚未登记目标 OpenAI API 项目的核验记录。');
+    let raw: unknown;
+    try {
+      raw = JSON.parse(qualification);
+    } catch {
+      throw new DomainError('INVALID_QUALIFICATION', 'OpenAI API 项目资格记录的 JSON 格式无效。');
+    }
+    const { z } = await import('zod');
+    const reference = z.string().trim().min(1);
+    const verified = z.object({ passed: z.literal(true), reference }).strict();
+    const record = z.object({
+      projectId: z.string().min(1),
+      model: z.object({ id: z.string().min(1), responsesStructuredOutput: verified }).strict(),
+      retentionPolicy: z.object({
+        reference,
+        disclosure: z.string().trim().min(1).max(500),
+      }).strict(),
+      noTraining: verified,
+      dataSharingOff: verified,
+      // Older records may include an effective date. Only the reference is required.
+      agreement: z.object({ reference, effectiveDate: z.unknown().optional() }).strict(),
+    }).strict().safeParse(raw);
+    if (!record.success) {
+      const fields: Record<string, string> = {
+        projectId: 'OpenAI API 项目标识',
+        model: '模型 ID 或 Responses API 结构化输出核验依据',
+        retentionPolicy: '留存政策核验依据或发送前告知',
+        noTraining: '不用于训练的核验依据',
+        dataSharingOff: '关闭数据共享的核验依据',
+        agreement: '适用协议引用',
+      };
+      const field = String(record.error.issues[0]?.path[0] ?? '');
+      const reason = Object.hasOwn(fields, field)
+        ? `OpenAI API 项目资格记录中的${fields[field]}缺失或无效。`
+        : 'OpenAI API 项目资格记录的字段格式无效。';
+      throw new DomainError('INVALID_QUALIFICATION', reason);
+    }
+    const { projectId, model: { id: model }, retentionPolicy } = record.data;
+    const { OPENAI_ORGANIZE_MODEL, openAIOrganizeModel } = await import('./mapping/organize-openai.js');
+    requireThat(model === OPENAI_ORGANIZE_MODEL, 'INVALID_MODEL', '请配置目标项目已核验的 gpt-6-luna。');
+    requireThat(apiKey, 'ORGANIZE_MODEL_UNCONFIGURED', '缺少 OpenAI API 凭据。');
+    organizeConfig = { organizeModel: openAIOrganizeModel({
+      apiKey, projectId, retentionDisclosure: retentionPolicy.disclosure,
+    }) };
+  } catch (cause) {
+    if (!(cause instanceof DomainError)) throw cause;
+    organizeConfig = { organizeBlockedReason: cause.message };
+  }
   let verificationSource = options.verificationSource;
   if (!verificationSource && process.env.SEC_USER_AGENT) {
     const { SecClient, SourceError } = await import('@forkwise/public-data-core');
@@ -44,6 +100,7 @@ export async function startWorkspace(options: { verificationSource?: Verificatio
     }
   }
   const mapping = openMapping(directory, {
+    ...organizeConfig,
     ...(verificationSource ? { verificationSource } : {}),
     workspaceBackup: {
       version,

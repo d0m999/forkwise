@@ -38,7 +38,24 @@ FORKWISE_DATA_DIR="$HOME/Library/Application Support/Forkwise/Open Workspace" np
 
 选中卡片，打开「AI」，勾选本次使用的标题和正文块。可选内容包括段落、正文标题、结构可识别的列表、引用、代码和表格的文字。模拟整理只在工作台生成示例。读完候选和资料缺口后，选择「添加为新卡」才会写入画布。新卡保留内容起点，并进入该项目的撤销历史。撤销后可以重做恢复原卡。历史已无法恢复时，可重新审阅并明确添加为新卡。若之前添加的卡片仍有首次粘贴资格，可选择「另建候选卡」。它会按整理结果生成独立的新卡，之前剪切的卡片仍可按原身份首次粘贴。
 
-工作台无需安装本地模型。目前可试用模拟整理，已有整理结果仍可审阅和添加。真实整理改用 OpenAI API，待目标项目通过数据处理条款核验并接通后启用。所选范围、处理用途和留存政策须在发送前告知。详见 [ADR 0033](adr/0033-openai-organize-responses-candidate.md)。
+工作台默认关闭真实整理。模拟整理仅用于演示或测试，已有结果仍可审阅和添加。启用前按 D30 和 D493 核验目标 OpenAI API 项目的适用企业/API 数据处理条款、不用于训练、数据共享关闭、实际数据留存政策，以及 `gpt-6-luna` 在该项目的 Responses API 结构化输出能力。协议生效日可省略，零数据留存（ZDR）为可选措施。详见 [ADR 0033](adr/0033-openai-organize-responses-candidate.md)。
+
+| 环境变量 | 值 |
+| --- | --- |
+| `FORKWISE_OPENAI_ORGANIZE_QUALIFICATION` | 人工核验完成后填写的 JSON 记录。工作台从中读取目标项目、核对固定请求模型 `gpt-6-luna`，并展示该项目的留存告知。 |
+| `OPENAI_API_KEY` | 属于该项目并拥有所需模型及 Responses API 权限的凭据。 |
+
+资格记录可写入仓库根目录的本机 `.env`。将占位内容换成该项目的实际核验记录，`reference` 填条款链接或本机非敏感核验记录的引用。`retentionPolicy.disclosure` 填实际适用政策的简短说明，最多 500 字符。下例采用 OpenAI 标准留存政策的文案。经核验采用其他留存设置时，填写对应的告知。资格记录由本人核验，工作台检查格式和必填项。设置或条款变化后须重新核验并重启。
+
+```dotenv
+FORKWISE_OPENAI_ORGANIZE_QUALIFICATION='{"projectId":"proj_…","model":{"id":"gpt-6-luna","responsesStructuredOutput":{"passed":true,"reference":"该项目的能力核验记录"}},"retentionPolicy":{"reference":"实际留存政策及项目设置核验记录","disclosure":"选定文字与回复可能为滥用监测通常保留最多 30 天，法律等例外依适用政策。"},"noTraining":{"passed":true,"reference":"适用条款"},"dataSharingOff":{"passed":true,"reference":"核验记录"},"agreement":{"reference":"适用协议及链接"}}'
+```
+
+若使用被 Git 忽略、仅本人可读的 `.env`，在仓库根目录显式运行 `node --env-file=.env backend/dist/src/workspace-server.js`，并提供同一个 `FORKWISE_DATA_DIR`。也可将配置导出到进程环境，再运行 `npm --prefix backend run start:workspace`。带凭据的配置须排除在 Git 与备份之外。资格或配置缺失时，工作台会说明原因，仍可使用模拟整理。更正启动配置后重启服务。
+
+如果本机通过代理访问 OpenAI API，请在启动进程设置为此请求授权的 `HTTPS_PROXY` 与 `NODE_USE_ENV_PROXY=1`。使用支持环境代理的 Node.js，将 `127.0.0.1,localhost` 加入 `NO_PROXY`。
+
+真正发送前，卡片入口和历史重试都会说明 OpenAI API、处理用途、选定范围与留存政策。请求使用 `store: false` 且无工具，只发送选定的标题和正文文字。研究项目、卡片、正文块和任务标识留在本机。整理记录可核对每次调用的请求模型 ID、响应返回的模型 ID、供应商请求编号和实际用量。响应只给出别名或缺少模型信息时，具体日期版本记为未知。
 
 模型预检期间可以选择「取消任务」或按 Esc。通过项目导航的「AI 整理记录」可以回看输入版本、选中范围、结果和用量。原卡改动或删除后，旧结果仍可阅读。如果添加回执暂时未确认，在同一对话框可以选择「确认添加结果」，沿用原请求编号核对。完整项目包保留整理记录作为归档，导入后通过导出的归档读取。
 

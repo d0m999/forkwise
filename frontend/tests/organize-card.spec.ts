@@ -1,5 +1,10 @@
 import { expect, place, test } from './writing-board-fixture';
-import type { OrganizeTask } from '../../backend/src/mapping/organize-contracts';
+import type { OrganizeTaskView } from '../../backend/src/mapping/organize-contracts';
+
+const standardDisclosure = {
+  id: 'a'.repeat(64),
+  retention: '选定文字与回复可能为滥用监测通常保留最多 30 天，例外依适用政策。',
+};
 
 test('AI 整理从卡片菜单选择范围，审阅后添加并在重开保留归属', async ({ page, workspace }, info) => {
   await place(page, '供应链观察');
@@ -18,7 +23,8 @@ test('AI 整理从卡片菜单选择范围，审阅后添加并在重开保留�
   await page.keyboard.press('Tab');
   await expect(dialog.getByRole('checkbox', { name: /卡片标题/ })).toBeFocused();
   await page.keyboard.press('Space');
-  await expect(dialog.getByText(/OpenAI 尚未启用，可试用模拟整理/)).toBeVisible();
+  await expect(dialog.getByText('尚未登记目标 OpenAI API 项目的核验记录。')).toBeVisible();
+  await expect(dialog.getByText('模拟整理仅用于演示或测试。')).toBeVisible();
   await expect(dialog.getByRole('button', { name: '用模型整理' })).toBeDisabled();
   await expect(dialog.getByRole('button', { name: '试用模拟整理' })).toBeEnabled();
   await dialog.getByRole('button', { name: '试用模拟整理' }).click();
@@ -54,6 +60,84 @@ test('AI 整理从卡片菜单选择范围，审阅后添加并在重开保留�
   await expect(records.getByRole('button', { name: '添加为新卡' })).toHaveCount(0);
 });
 
+test('真实整理和历史重试在发送前说明各自的文字范围与处理条款', async ({ page, workspace }) => {
+  await place(page, '历史冻结的标题', 500, 240);
+  const { project, cards: [source] } = await workspace.state();
+  const model = 'openai/gpt-6-luna';
+  const timestamp = '2026-11-21T00:00:00Z';
+  const denied = 'OpenAI 拒绝了 API 凭据，请检查凭据是否有效。';
+  const task = {
+    id: 'denied-task', cardId: source!.id, mode: 'real', model, state: 'failed', attempt: 1,
+    createdAt: timestamp, updatedAt: timestamp, error: denied, output: null, outputAttempt: null, usage: null,
+    input: { cardId: source!.id, thoughtVersionId: source!.versionId, bodyVersionId: source!.body.versionId,
+      title: source!.title, blocks: [], omittedBlockCount: 0 },
+    attempts: [], freshness: 'current', applied: false, candidateOnCanvas: false, addAvailable: false, cutCopyAvailable: false,
+    retryBlockedReason: null,
+  } satisfies OrganizeTaskView;
+  const oldProjectTask = { ...task, id: 'old-openai-project', retryBlockedReason: '整理任务的模型配置不匹配，请用当前配置开始新任务。' };
+  let currentTask: OrganizeTaskView = task;
+  let releaseRead!: () => void;
+  const heldRead = new Promise<void>(resolve => { releaseRead = resolve; });
+  const path = `**/api/mapping/projects/${project.id}/organize`;
+  await page.route(`${path}/status`, route =>
+    route.fulfill({ json: { model, blockedReason: null, sendDisclosure: standardDisclosure } }));
+  await page.route(`${path}/tasks/${task.id}`, async route => {
+    await heldRead;
+    await route.fulfill({ json: currentTask });
+  });
+  await page.route(`${path}/tasks/${oldProjectTask.id}`, route => route.fulfill({ json: oldProjectTask }));
+  const retries: { attempt: number; requestId: string; disclosureId: string }[] = [];
+  await page.route(`${path}/tasks/${task.id}/retry`, route => {
+    retries.push(route.request().postDataJSON());
+    currentTask = { ...task, attempt: 2 };
+    return route.fulfill({ json: { ...currentTask, retryBlockedReason: undefined } });
+  });
+  const requests: { mode: string; includeTitle: boolean; blockIds: string[] }[] = [];
+  await page.route(`${path}/tasks`, route => {
+    if (route.request().method() === 'GET') {
+      return route.fulfill({ json: [task, oldProjectTask].map(({ id, cardId, mode, createdAt }) => ({ id, cardId, mode, createdAt })) });
+    }
+    requests.push(route.request().postDataJSON());
+    return route.fulfill({ json: { ...task, retryBlockedReason: undefined } });
+  });
+  await page.getByRole('button', { name: 'AI', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: 'AI 整理' });
+  const send = dialog.getByRole('button', { name: '用模型整理' });
+  const terms = /OpenAI API 的内容仅限本次勾选的标题和正文文字，用于生成整理候选。.*滥用监测通常保留最多 30 天/;
+  await expect(dialog.getByText(terms)).toBeVisible();
+  await expect(send).toHaveAccessibleDescription(terms);
+  expect(requests).toHaveLength(0);
+  await expect(send).toBeDisabled();
+  await dialog.getByRole('checkbox', { name: /卡片标题/ }).check();
+  await send.click();
+  const cardRetry = dialog.getByRole('button', { name: '重试整理' });
+  try {
+    await expect(dialog.getByRole('alert')).toHaveText(denied);
+    await expect(cardRetry).toBeDisabled();
+  } finally {
+    releaseRead();
+  }
+  await expect(cardRetry).toBeEnabled();
+  expect(requests).toMatchObject([{ mode: 'real', includeTitle: true, blockIds: [], disclosureId: standardDisclosure.id }]);
+  await dialog.getByRole('button', { name: '关闭 AI 整理' }).click();
+
+  await page.getByRole('button', { name: '项目导航' }).click();
+  await page.getByRole('button', { name: 'AI 整理记录', exact: true }).click();
+  const history = page.getByRole('dialog', { name: 'AI 整理记录' });
+  const retry = history.getByRole('button', { name: '重试整理' });
+  const retryTerms = /OpenAI API 的内容仅限此任务原先选定并保存的标题和正文文字，用于生成整理候选。.*滥用监测通常保留最多 30 天/;
+  await expect(history.getByText(retryTerms)).toBeVisible();
+  await expect(retry).toBeEnabled();
+  await expect(retry).toHaveAccessibleDescription(retryTerms);
+  expect(retries).toHaveLength(0);
+  await retry.click();
+  await expect.poll(() => retries).toEqual([{ attempt: 1, requestId: expect.any(String), disclosureId: standardDisclosure.id }]);
+  await history.getByRole('combobox', { name: '整理记录' }).selectOption(oldProjectTask.id);
+  await expect(retry).toBeDisabled();
+  await expect(history.getByText(oldProjectTask.retryBlockedReason)).toBeVisible();
+  await expect(history.getByText(retryTerms)).toHaveCount(0);
+});
+
 test('旧模型停用后仍可审阅原候选和选择添加，原模型重试显示停用原因', async ({ page, workspace }) => {
   await place(page, '历史来源');
   const { project, cards: [source] } = await workspace.state();
@@ -65,7 +149,8 @@ test('旧模型停用后仍可审阅原候选和选择添加，原模型重试�
     output: { candidate: { title: '旧候选', text: '历史整理结果' }, gaps: ['待补材料'] }, outputAttempt: 1,
     error: null, usage: null, attempts: [], freshness: 'current',
     applied: false, candidateOnCanvas: false, addAvailable: true, cutCopyAvailable: false,
-  } satisfies OrganizeTask;
+    retryBlockedReason: '这条记录使用的模型当前不可用，无法重试。',
+  } satisfies OrganizeTaskView;
   const projectPath = `**/api/mapping/projects/${project.id}`;
   await page.route(`${projectPath}/cards/${source!.id}/organize/tasks`, route => route.fulfill({ json: [
     { id: saved.id, cardId: saved.cardId, mode: saved.mode, createdAt: saved.createdAt },
@@ -84,16 +169,18 @@ test('旧模型停用后仍可审阅原候选和选择添加，原模型重试�
   await expect(dialog.getByText('模型 qwen2.5:7b。费用未知。')).toBeVisible();
 });
 
-test('审阅 OpenAI 回执时逐次显示缓存命中与供应商请求号', async ({ page, workspace }) => {
+test('审阅 OpenAI 回执时逐次显示请求与返回模型、缓存命中和供应商请求号', async ({ page, workspace }) => {
   await place(page, '回执样例');
   const { project, cards: [source] } = await workspace.state();
-  const model = 'openai/gpt-4.1-mini-2025-04-14';
+  const requestedModel = 'gpt-6-luna';
+  const model = 'openai/' + requestedModel;
   const createdAt = '2026-11-21T00:00:00Z';
   const history = { id: 'openai-receipt', mode: 'real', createdAt, cardId: source!.id } as const;
   const counts = { model, inputTokens: 2048, outputTokens: 18, responseReceived: true };
   const usage = { cost: null, attempts: [
-    { ...counts, phase: 'generate', cachedInputTokens: 1024, providerRequestId: 'req_first' },
-    { ...counts, phase: 'repair', cachedInputTokens: 0, providerRequestId: 'req_second' },
+    { ...counts, requestedModel, returnedModel: null, phase: 'generate', providerRequestId: 'req_unknown' },
+    { ...counts, requestedModel, returnedModel: 'gpt-6-luna-2026-01-01', phase: 'generate', cachedInputTokens: 1024, providerRequestId: 'req_first' },
+    { ...counts, requestedModel, returnedModel: requestedModel, phase: 'repair', cachedInputTokens: 0, providerRequestId: 'req_second' },
   ] } as const;
   const path = `**/api/mapping/projects/${project.id}`;
   await page.route(`${path}/cards/${source!.id}/organize/tasks`, route => route.fulfill({ json: [history] }));
@@ -102,6 +189,7 @@ test('审阅 OpenAI 回执时逐次显示缓存命中与供应商请求号', asy
     input: { cardId: source!.id, thoughtVersionId: source!.versionId, bodyVersionId: source!.body.versionId,
       title: source!.title, blocks: [], omittedBlockCount: 0 },
     output: null, outputAttempt: null, error: null, usage, freshness: 'current',
+    retryBlockedReason: '尚未登记目标 OpenAI API 项目的核验记录。',
     attempts: [
       { number: 1, state: 'failed', requestedAt: createdAt, finishedAt: createdAt, error: null, output: null,
         usage: { cost: null, attempts: [{ ...counts, phase: 'generate' }] } },
@@ -112,9 +200,10 @@ test('审阅 OpenAI 回执时逐次显示缓存命中与供应商请求号', asy
   await page.getByRole('button', { name: 'AI', exact: true }).click();
   const details = page.getByRole('dialog', { name: 'AI 整理' }).locator('details').filter({ hasText: '输入范围与用量' });
   await details.locator('summary').first().click();
-  await expect(details.getByText(/缓存命中 1024 token.*req_first/)).toBeVisible({ timeout: 3000 });
-  await expect(details.getByText(/缓存命中 0 token.*req_second/)).toBeVisible();
-  await expect(details.getByText(/缓存命中未知/)).toBeVisible();
+  await expect(details.getByText(/请求模型 gpt-6-luna，返回模型 未知.*req_unknown/)).toBeVisible();
+  await expect(details.getByText(/请求模型 gpt-6-luna，返回模型 gpt-6-luna-2026-01-01.*缓存命中 1024 token.*req_first/)).toBeVisible({ timeout: 3000 });
+  await expect(details.getByText(/请求模型 gpt-6-luna，返回模型 gpt-6-luna（具体日期版本未知）.*缓存命中 0 token.*req_second/)).toBeVisible();
+  await expect(details.getByText(/openai\/gpt-6-luna，返回模型 未知.*缓存命中未知/)).toBeVisible();
 });
 
 test('无标题卡可整理所选列表和引用，保留未选正文', async ({ page, workspace }) => {
@@ -272,6 +361,7 @@ for (const sourceChanged of [false, true]) test(sourceChanged
   await page.route(`**${apiPath}/tasks/cancel-start`, route => route.fulfill(sourceChanged
     ? { status: 409, json: { code: 'ORGANIZE_SOURCE_STALE', message: '原卡已更改或删除，请重新选择要整理的内容' } }
     : { json: { ...task, state: 'cancelled' } }));
+  await page.route(`**${apiPath}/tasks/${task.id}`, route => route.fulfill({ json: { ...task, state: 'cancelled', retryBlockedReason: null } }));
 
   await page.getByRole('button', { name: 'AI', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: 'AI 整理' });
@@ -375,6 +465,7 @@ for (const reopenFrom of ['卡片', '刷新后从卡片', '旧记录损坏后刷
   const startHeld = new Promise<void>(resolve => { releaseStart = resolve; });
   const task = { ...prior, id: 'cancel-receipt', mode: 'real', model: 'test-model', state: 'cancelled',
     output: null, outputAttempt: null, addAvailable: false, attempts: [] };
+  await page.route(`**${apiPath}/tasks/${task.id}`, route => route.fulfill({ json: { ...task, retryBlockedReason: null } }));
   await page.route(`**${apiPath}/tasks`, async route => {
     if (route.request().method() !== 'POST' || route.request().postDataJSON().mode !== 'real') return route.continue();
     await startHeld;
@@ -443,7 +534,6 @@ for (const reopenFrom of ['卡片', '刷新后从卡片', '旧记录损坏后刷
   expect(cancellations).toEqual([startInput, startInput]);
   if (reopenFrom === '刷新后从卡片') {
     await page.route(`**/cards/${task.cardId}/organize/tasks`, route => route.fulfill({ json: [task, prior] }));
-    await page.route(`**${apiPath}/tasks/${task.id}`, route => route.fulfill({ json: task }));
     await reopened.getByRole('button', { name: '关闭 AI 整理' }).click();
     await page.reload();
     await expect(page.getByRole('status')).toHaveText('已保存到本机');
@@ -574,7 +664,7 @@ for (const reloadWithReadFailure of [false, true]) test(reloadWithReadFailure
   }
 });
 
-test('模型整理提交前说明发送范围和留存政策', async ({ page, workspace }) => {
+test('缺留存告知时只能模拟，已核验 ZDR 时展示当前项目的告知', async ({ page, workspace }) => {
   await place(page, '发送范围示例');
   expect((await workspace.state()).cards).toHaveLength(1);
   // 仅提供页面读取的模型配置夹具。测试在发送前结束。
@@ -582,13 +672,24 @@ test('模型整理提交前说明发送范围和留存政策', async ({ page, wo
   page.on('request', request => {
     if (request.method() === 'POST' && request.url().endsWith('/organize/tasks')) submissions.push(request.url());
   });
+  const retention = '此测试项目已启用零数据留存（ZDR）。';
+  let sendDisclosure: { id: string; retention: string } | undefined;
   await page.route('**/organize/status', route =>
-    route.fulfill({ json: { model: 'openai/gpt-6-luna', blockedReason: null } }));
-  await page.getByRole('button', { name: 'AI', exact: true }).click();
+    route.fulfill({ json: { model: 'openai/gpt-6-luna', blockedReason: null, sendDisclosure } }));
+  const trigger = page.getByRole('button', { name: 'AI', exact: true });
+  await trigger.click();
   const dialog = page.getByRole('dialog', { name: 'AI 整理', exact: true });
+  const send = dialog.getByRole('button', { name: '用模型整理' });
   await dialog.getByRole('checkbox', { name: /卡片标题/ }).check();
-  await expect(dialog.getByRole('button', { name: '用模型整理' })).toHaveAccessibleDescription(
-    '发送给 OpenAI API 的内容仅限本次勾选的标题和正文文字，用于生成整理候选。请求关闭 OpenAI 的响应存储。数据留存按 API 项目的数据控制设置执行，启用前须核验零数据留存（ZDR）和不用于训练条款。',
+  await expect(dialog.getByRole('button', { name: '试用模拟整理' })).toBeEnabled();
+  await expect(send).toBeDisabled();
+  await dialog.getByRole('button', { name: '关闭 AI 整理' }).click();
+  sendDisclosure = { id: 'b'.repeat(64), retention };
+  await trigger.click();
+  await dialog.getByRole('checkbox', { name: /卡片标题/ }).check();
+  await expect(send).toBeEnabled();
+  await expect(send).toHaveAccessibleDescription(
+    '发送给 OpenAI API 的内容仅限本次勾选的标题和正文文字，用于生成整理候选。请求关闭 OpenAI 用于后续取回的响应存储。' + retention,
   );
   expect(submissions).toEqual([]);
 });

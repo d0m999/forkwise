@@ -546,7 +546,9 @@ it('用实际本机模型摘要去重，保留相同请求编号的原回执', a
     const disabled = await request(`${tasks}/${first.id}/retry`, { attempt: 3, requestId: 'retry-retired-model' });
     expect(disabled.status).toBe(503);
     expect(await disabled.json()).toMatchObject({ code: 'ORGANIZE_MODEL_UNCONFIGURED' });
-    expect(await (await request(`${tasks}/${first.id}`)).json()).toEqual(saved);
+    expect(await (await request(`${tasks}/${first.id}`)).json()).toEqual({
+      ...saved, retryBlockedReason: '这条记录使用的模型当前不可用，无法重试。',
+    });
     const add = await request('/api/mapping/execute', { commandId: 'add-legacy', projectId: 'p',
       type: 'organize.add', expected: null, payload: { taskId: first.id, attempt: 3, x: 300, y: 20 } });
     expect(add.status).toBe(200);

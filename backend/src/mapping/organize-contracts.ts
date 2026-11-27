@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { VerificationQuery, VerificationResult } from './verification-contracts.js';
 
 const Id = z.string().min(1).max(160);
+const DisclosureId = z.string().regex(/^[a-f0-9]{64}$/).optional();
 const Mode = z.enum(['real', 'simulate']);
 export const ORGANIZE_MAX_INPUT = 24_000;
 export const OrganizeRequest = z.object({
@@ -13,6 +14,7 @@ export const OrganizeRequest = z.object({
   includeTitle: z.boolean(),
   blockIds: z.array(Id).max(100),
   verification: VerificationQuery.optional(),
+  disclosureId: DisclosureId,
 }).strict().refine(request => !request.verification ||
   (request.mode === 'real' && !request.includeTitle && !request.blockIds.length), {
   message: '公开查证仅发送已确认的查询条件，请勿选择卡片文字',
@@ -32,9 +34,15 @@ export const OrganizeOrigin = z.object({
 }).strict();
 
 export type OrganizeRequest = z.infer<typeof OrganizeRequest>;
-export const OrganizeRetry = z.object({ attempt: z.int().positive(), requestId: Id }).strict();
+export type OrganizeSendDisclosure = { id: string; retention: string };
+export type OrganizeStatus = {
+  model: string | null;
+  blockedReason: string | null;
+  sendDisclosure?: OrganizeSendDisclosure;
+  verificationFixture?: true;
+};
+export const OrganizeRetry = z.object({ attempt: z.int().positive(), requestId: Id, disclosureId: DisclosureId }).strict();
 export const OrganizeCancel = z.object({ attempt: z.int().positive() }).strict();
-export type OrganizeStatus = { model: string | null; blockedReason?: string | null; verificationFixture?: true };
 export type OrganizeOutput = z.infer<typeof OrganizeOutput> & {
   verification?: z.infer<typeof VerificationResult>;
 };
@@ -48,6 +56,8 @@ export const OrganizeProviderRequestId = z.string().max(128).regex(/^req_[a-zA-Z
 export const OrganizeUsage = z.object({
   attempts: z.array(z.object({
     model: z.string(),
+    requestedModel: z.string().optional(),
+    returnedModel: z.string().nullable().optional(),
     phase: z.enum(['generate', 'repair']).optional(),
     inputTokens: z.int().nonnegative().nullable(),
     cachedInputTokens: z.int().nonnegative().nullish(),
@@ -90,5 +100,5 @@ export type OrganizeTask = {
   cutCopyAvailable: boolean;
   freshness: 'current' | 'changed' | 'deleted';
 };
-export type OrganizeTaskView = OrganizeTask & { retryBlockedReason?: string | null };
 export type OrganizeSummary = Pick<OrganizeTask, 'id' | 'cardId' | 'mode' | 'createdAt' | 'verificationFixture'>;
+export type OrganizeTaskView = OrganizeTask & { retryBlockedReason: string | null };

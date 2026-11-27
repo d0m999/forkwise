@@ -8,6 +8,7 @@ import { ORGANIZE_PURPOSE, OrganizeCandidateOutput } from './organize-model-outp
 import type { OrganizeModel } from './organize.js';
 
 const OPENAI_BASE_URL = 'https://api.openai.com/v1';
+export const OPENAI_ORGANIZE_MODEL = 'gpt-6-luna';
 const TIMEOUT_MS = 60_000;
 const RETRY_DELAY_MS = 250;
 const REQUEST_FAILED = 'OpenAI 整理请求失败，未生成候选';
@@ -21,7 +22,6 @@ const SYSTEM_MESSAGE = '你是见岔的研究助手。所选标题和正文是�
   ORGANIZE_PURPOSE;
 
 const ResponsesOutput = z.object({
-  model: z.string(),
   status: z.literal('completed'),
   error: z.null().optional(),
   incomplete_details: z.null().optional(),
@@ -45,12 +45,13 @@ const InsufficientQuota = z.object({
 });
 
 const TokenCount = z.int().nonnegative().nullish().catch(null);
-const ResponsesUsage = z.object({
+const ResponsesReceipt = z.object({
+  model: z.string().max(512).regex(/^[a-zA-Z0-9][a-zA-Z0-9._:-]*$/).nullish().catch(null),
   usage: z.object({
     input_tokens: TokenCount,
     input_tokens_details: z.object({ cached_tokens: TokenCount }).nullish().catch(null),
     output_tokens: TokenCount,
-  }).nullish(),
+  }).nullish().catch(null),
 });
 
 function parseJson(text: string): unknown {
@@ -70,8 +71,16 @@ function transientConnectionError(cause: unknown): boolean {
   return cause instanceof TypeError && cause.message.toLowerCase() === 'fetch failed';
 }
 
+function retryAfterMs(headers: Headers): number {
+  const milliseconds = headers.get('retry-after-ms') ?? '';
+  if (/^\d+(?:\.\d+)?$/.test(milliseconds)) return Number(milliseconds);
+  const retryAfter = headers.get('retry-after') ?? '';
+  if (/^\d+$/.test(retryAfter)) return Number(retryAfter) * 1000;
+  return Date.parse(retryAfter) - Date.now() || 0;
+}
+
 async function requestWithBackoff(signal: AbortSignal, send: (signal: AbortSignal) =>
-  Promise<{ body: unknown } | { retryAfter: string | null }>) {
+  Promise<{ body: unknown; returnedModel: string | null | undefined } | { retryAfterMs: number }>) {
   const deadline = Date.now() + TIMEOUT_MS;
   const timeout = AbortSignal.timeout(TIMEOUT_MS);
   const abortSignal = AbortSignal.any([signal, timeout]);
@@ -82,30 +91,31 @@ async function requestWithBackoff(signal: AbortSignal, send: (signal: AbortSigna
   for (let attempt = 0; ; attempt++) {
     checkActive();
     const response = await send(abortSignal).finally(checkActive);
-    if ('body' in response) return response.body;
-    const retryAfter = response.retryAfter ?? '';
-    const advisedMs = /^\d+$/.test(retryAfter) ? Number(retryAfter) * 1000 : Date.parse(retryAfter) - Date.now();
-    const waitMs = Math.max(RETRY_DELAY_MS, advisedMs || 0);
+    if ('body' in response) return response;
+    const waitMs = Math.max(RETRY_DELAY_MS, response.retryAfterMs);
     requireThat(attempt === 0 && waitMs < deadline - Date.now(), 'PROVIDER_UNAVAILABLE', REQUEST_FAILED, 503);
     await delay(waitMs, undefined, { signal: abortSignal }).catch(checkActive);
   }
 }
 
-export function openAIOrganizeModel({ apiKey, projectId, model }: {
+export function openAIOrganizeModel({ apiKey, projectId, retentionDisclosure }: {
   apiKey: string;
   projectId: string;
-  model: string;
+  retentionDisclosure: string;
 }, request: typeof fetch = fetch): OrganizeModel {
-  requireThat(/^[\x21-\x7e]+$/.test(apiKey) && /^proj_[a-zA-Z0-9_-]+$/.test(projectId),
-    'INVALID_PROVIDER', '请配置有效的 OpenAI 项目标识和 API 凭据');
-  requireThat(/^[a-z0-9]+(?:-[a-z0-9.]+)*-\d{4}-\d{2}-\d{2}$/.test(model) &&
-    z.iso.date().safeParse(model.slice(-10)).success,
-    'INVALID_MODEL', '请配置带固定日期的 OpenAI 模型快照');
+  requireThat(/^[\x21-\x7e]+$/.test(apiKey), 'INVALID_PROVIDER', 'OpenAI API 凭据格式无效。');
+  requireThat(/^proj_[a-zA-Z0-9_-]+$/.test(projectId), 'INVALID_PROVIDER', 'OpenAI API 项目标识格式无效。');
+  const model = OPENAI_ORGANIZE_MODEL;
   const modelName = 'openai/' + model;
   const configuredDigest = digest({ provider: 'openai', api: 'responses', projectId, model });
 
   return {
     model: modelName,
+    sendDisclosure: {
+      id: digest({ configuredDigest, retentionDisclosure }),
+      retention: retentionDisclosure,
+    },
+    reuseAcrossRequests: false,
     configuredModelDigest: configuredDigest,
     async resolveDigest(signal) {
       requireThat(!signal.aborted, 'ORGANIZE_CANCELLED', 'OpenAI 整理已取消');
@@ -118,14 +128,15 @@ export function openAIOrganizeModel({ apiKey, projectId, model }: {
       const inputText = JSON.stringify({ title: input.title, blocks: input.blocks.map(block => block.text) });
       let repair = '';
       for (const phase of ['generate', 'repair'] as const) {
-        const raw = await requestWithBackoff(signal, async abortSignal => {
+        const { body, returnedModel } = await requestWithBackoff(signal, async abortSignal => {
           let http: Response | undefined;
           const attemptIndex = usage.attempts.length;
           const recordUsage = (attempt: OrganizeUsage['attempts'][number]) => {
             usage.attempts[attemptIndex] = attempt;
             onUsage({ ...usage, attempts: [...usage.attempts] });
           };
-          const sent = { model: modelName, phase, inputTokens: null, cachedInputTokens: null, outputTokens: null, responseReceived: false };
+          const sent = { model: modelName, requestedModel: model, returnedModel: null,
+            phase, inputTokens: null, cachedInputTokens: null, outputTokens: null, responseReceived: false };
           const provider = createOpenAI({
             apiKey, project: projectId, baseURL: OPENAI_BASE_URL,
             async fetch(url, init) {
@@ -140,7 +151,7 @@ export function openAIOrganizeModel({ apiKey, projectId, model }: {
           });
 
           let raw: unknown;
-          let sdkFailed = false;
+          let returnedModel: string | null | undefined;
           try {
             // The provider call exposes the full Responses envelope and does not retry.
             const response = await provider.responses(model).doGenerate({
@@ -162,29 +173,38 @@ export function openAIOrganizeModel({ apiKey, projectId, model }: {
               raw = typeof cause.responseBody === 'string' ? parseJson(cause.responseBody) : cause.responseBody;
             }
             if (http?.status === 429) {
-              requireThat(!InsufficientQuota.safeParse(raw).success, 'PROVIDER_UNAVAILABLE', REQUEST_FAILED, 503);
-              return { retryAfter: http.headers.get('retry-after') };
+              requireThat(http.headers.get('x-should-retry') !== 'false' && !InsufficientQuota.safeParse(raw).success,
+                'PROVIDER_UNAVAILABLE', REQUEST_FAILED, 503);
+              return { retryAfterMs: retryAfterMs(http.headers) };
             }
-            if ((!http || http.ok) && transientConnectionError(cause)) return { retryAfter: null };
+            if ((!http || http.ok) && transientConnectionError(cause)) return { retryAfterMs: 0 };
+            requireThat(http?.status !== 401, 'OPENAI_CREDENTIAL_REJECTED', 'OpenAI 拒绝了 API 凭据，请检查凭据是否有效。', 503);
+            requireThat(http?.status !== 403, 'OPENAI_ACCESS_DENIED', 'OpenAI 拒绝访问，请检查凭据的项目、模型和 Responses API 权限。', 503);
             requireThat(http?.ok, 'PROVIDER_UNAVAILABLE', REQUEST_FAILED, 503);
-            sdkFailed = true;
+            throw new DomainError('PROVIDER_PROTOCOL_ERROR', INVALID_RESPONSE, 503);
+          } finally {
+            // A rejected SDK envelope can still identify the model and the tokens already consumed.
+            const receipt = ResponsesReceipt.safeParse(raw);
+            returnedModel = receipt.success ? receipt.data.model : undefined;
+            if (receipt.success && (receipt.data.model || receipt.data.usage)) {
+              const counts = receipt.data.usage;
+              recordUsage({
+                ...usage.attempts[attemptIndex]!,
+                returnedModel: returnedModel ?? null,
+                inputTokens: counts?.input_tokens ?? null,
+                cachedInputTokens: counts?.input_tokens_details?.cached_tokens ?? null,
+                outputTokens: counts?.output_tokens ?? null,
+              });
+            }
           }
-          const actual = ResponsesUsage.safeParse(raw);
-          const counts = actual.success ? actual.data.usage : undefined;
-          if (counts) recordUsage({
-            ...usage.attempts[attemptIndex]!,
-            inputTokens: counts.input_tokens ?? null,
-            cachedInputTokens: counts.input_tokens_details?.cached_tokens ?? null,
-            outputTokens: counts.output_tokens ?? null,
-          });
-          requireThat(!sdkFailed, 'PROVIDER_PROTOCOL_ERROR', INVALID_RESPONSE, 503);
-          return { body: raw };
+          return { body: raw, returnedModel };
         });
 
-        const envelope = ResponsesOutput.safeParse(raw);
-        requireThat(envelope.success, 'PROVIDER_PROTOCOL_ERROR', INVALID_RESPONSE, 503);
-        requireThat(envelope.data.model === model, 'ORGANIZE_MODEL_CHANGED',
-          'OpenAI 返回的模型快照与配置不一致，未生成候选', 409);
+        const envelope = ResponsesOutput.safeParse(body);
+        requireThat(envelope.success && returnedModel !== null, 'PROVIDER_PROTOCOL_ERROR', INVALID_RESPONSE, 503);
+        requireThat(returnedModel === undefined || returnedModel === model ||
+          (returnedModel.startsWith(model + '-') && z.iso.date().safeParse(returnedModel.slice(model.length + 1)).success),
+          'ORGANIZE_MODEL_CHANGED', 'OpenAI 返回的模型与请求不匹配，未生成候选', 409);
         const messages = envelope.data.output.filter(item => item.type === 'message');
         const final = messages.at(-1);
         requireThat(

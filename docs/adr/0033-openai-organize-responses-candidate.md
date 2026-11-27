@@ -6,15 +6,19 @@ Issue #39 的按需卡片整理改用 OpenAI Responses API。供应商方向已�
 
 ## 开发范围
 
-OpenAI 适配器复用现有 `OrganizeModel` 和 Mapping 整理任务。采用 Vercel AI SDK 的 `@ai-sdk/openai` provider，通过 OpenAI 官方 Responses API 请求结构化候选。对外请求限本次勾选的标题与正文文字。研究项目、卡片、正文块和任务的内部标识留在本机。请求使用 `store: false` 和无工具的前台调用。任务记录各次实际用量及返回的供应商请求编号，费用缺失时留空。OpenAI 缓存和重试按具体 API 项目和固定日期快照区分，使用原请求号可重读旧回执。测试中的快照只用于合成夹具。
+OpenAI 适配器复用现有 `OrganizeModel` 和 Mapping 整理任务。采用 Vercel AI SDK 的 `@ai-sdk/openai` provider，通过 OpenAI 官方 Responses API 请求结构化候选。对外请求限本次勾选的标题与正文文字。研究项目、卡片、正文块和任务的内部标识留在本机。请求使用 `store: false` 和无工具的前台调用。任务记录各次实际用量及返回的供应商请求编号，费用缺失时留空。使用原请求号可重读旧回执。
 
-适配器和 Mapping 调用已通过受控传输验证。开放工作台当前支持模拟整理和历史记录审阅；真实整理在项目核验并完成工作台接入后启用。旧 Ollama 环境变量已退出两个服务的启动配置。
+按本人最新决定，出站模型固定为 `gpt-6-luna`。逐次记录请求模型 ID 和响应实际返回的 `model`。有效完成的响应可返回别名或同族日期快照，也可省略模型字段。响应只给出别名或省略模型字段时，具体日期版本未知。显式返回其他模型家族时保留回执并拒绝该候选。每个新请求独立整理，同一请求可重读原回执。
+
+工作台正式入口已接入适配器，Mapping 整理流程已通过受控传输验证。默认可用模拟整理和历史记录审阅。完成目标项目核验并配置凭据后可启用真实整理。旧 Ollama 环境变量已退出两个服务的启动配置。
 
 ## 启用依据
 
 | 依据 | 已查到的公开条件 | 此项目待核实 |
 | --- | --- | --- |
-| [OpenAI Services Agreement](https://openai.com/policies/services-agreement/) 第 4.2 节 | 客户未明确同意时，OpenAI 不使用客户内容开发或改进服务。协议的生效日以实际接受或签署为准。 | 适用协议、生效日及项目数据共享设置。 |
-| [OpenAI API 数据控制](https://developers.openai.com/api/docs/guides/your-data) | 零数据留存（ZDR）需获批准。项目可以继承组织设置或显式配置。出站请求使用 `store: false`，项目资格仍需单独核验。 | 目标项目的有效 ZDR 状态，以及所选模型快照、Responses API 和结构化输出的适用性。 |
+| [OpenAI Services Agreement](https://openai.com/policies/services-agreement/) 第 4.2 节 | 客户未明确同意时，OpenAI 不使用客户内容开发或改进服务。 | 核对目标项目适用的协议，并确认数据共享已关闭。 |
+| [OpenAI API 数据控制](https://developers.openai.com/api/docs/guides/your-data) | 零数据留存（ZDR）需获批准，自 D493 起为可选。普通 API 项目的选定内容及回复可能为滥用监测保留，按当前标准政策通常最多 30 天，法律等例外依政策。出站请求仍使用 `store: false`。 | 目标项目适用的留存政策、数据共享关闭状态，以及所选模型 ID、Responses API 和结构化输出的适用性。 |
 
-启用前，按 [D30 与 ADR 0014](0014-model-provider-and-extraction-strategy.md) 记录上表的项目核验结论和具体快照，再以该项目凭据接通工作台。发送前由工作台告知处理方、选中范围、用途及留存政策。真实验收从卡片的 AI 入口使用隔离样例，核对候选、用量及明确添加的结果。
+启用前按 D30、D493 和 ADR 0014 核验目标项目，记录上表的结论，并提供该项目的凭据。工作台在首次发送及历史重试前说明处理方、选中范围、用途及项目实际留存政策。项目或留存告知变更后，旧对话框须重新打开确认。真实验收从卡片的 AI 入口使用隔离样例，核对候选、用量及明确添加结果。[启用配置](../open-workspace.md#按需-ai-整理issue-39) · [ADR 0014](0014-model-provider-and-extraction-strategy.md)
+
+按本人最新决定，OpenAI 整理的资格记录可以省略协议生效日。工作台读取适用条款的引用，现有记录中的生效日可保留。

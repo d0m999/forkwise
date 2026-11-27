@@ -44,7 +44,7 @@ export function OrganizeDialog({ projectId, source, verification, cards, pending
   const [selected, setSelected] = useState<string[]>([]);
   const [modelStatus, setModelStatus] = useState<OrganizeStatus>();
   const [history, setHistory] = useState<OrganizeSummary[]>([]);
-  const [task, setTask] = useState<OrganizeTaskView | null>(null);
+  const [task, setTask] = useState<OrganizeTask | OrganizeTaskView | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [startingInput, setStartingInput] = useState(pendingCancellations[0]);
@@ -70,12 +70,15 @@ export function OrganizeDialog({ projectId, source, verification, cards, pending
   const cancelStartBlocked = busy && cancellationRequested;
   const canRetry = !!task && canRetryOrganize(task);
   const model = modelStatus?.model;
-  const retryBlockedReason = task?.retryBlockedReason ?? (!verification && task?.mode === 'real' &&
-    model !== undefined && task.model !== model ? '这条记录使用的模型当前不可用，无法重试。' : undefined);
-  const checkingRetry = verification && canRetry && !stale && task?.retryBlockedReason === undefined;
-  const showDisclosure = !verification && (task
-    ? task.mode === 'real' && task.model?.startsWith('openai/') && canRetry && !retryBlockedReason && model === task.model && !stale
-    : model?.startsWith('openai/') && source && !starting);
+  const retryBlockedReason = task && 'retryBlockedReason' in task ? task.retryBlockedReason : undefined;
+  const checkingRetry = task?.mode === 'real' && canRetry && !stale && retryBlockedReason === undefined;
+  const openAIStart = !verification && !!model?.startsWith('openai/');
+  const openAIRetry = !verification && task?.mode === 'real' && !!task.model?.startsWith('openai/');
+  const disclosure = openAIStart ? modelStatus?.sendDisclosure : undefined;
+  const retryDisclosure = openAIRetry && model === task.model ? disclosure : undefined;
+  const visibleDisclosure = task
+    ? canRetry && retryBlockedReason === null && !stale && retryDisclosure
+    : source && !starting && disclosure;
   const query = verification ? VerificationQuery.safeParse({
     ...queryDraft, periodStart: queryDraft.periodStart || null,
   }) : null;
@@ -137,6 +140,7 @@ export function OrganizeDialog({ projectId, source, verification, cards, pending
 
   async function start(mode: OrganizeRequest['mode']) {
     if (!source || composing.current || (verification && (!query?.success || modelStatus?.blockedReason))) return;
+    if (mode === 'real' && !verification && (!model || (openAIStart && !disclosure))) return;
     const input = {
       mode, cardId: source.id, thoughtVersionId: source.versionId, bodyVersionId: source.body.versionId,
       includeTitle: title, blockIds: chosen.map(block => block.id),
@@ -152,11 +156,16 @@ export function OrganizeDialog({ projectId, source, verification, cards, pending
     setBusy(true);
     setError('');
     try {
-      const next = await api.organizeStart(projectId, flight.input);
+      const next = await api.organizeStart(projectId, {
+        ...flight.input,
+        ...(mode === 'real' && disclosure && { disclosureId: disclosure.id }),
+      });
       if (!flight.cancelRequested) acceptStart(next);
     } catch (cause) {
-      if (!flight.cancelRequested)
+      if (!flight.cancelRequested) {
         setError(cause instanceof MappingError ? cause.message : '任务回执未确认，可以按相同范围重试');
+        if (cause instanceof MappingError && cause.code === 'ORGANIZE_DISCLOSURE_CHANGED') setModelStatus(undefined);
+      }
     } finally {
       if (!flight.cancelRequested) {
         startingRequest.current = null;
@@ -228,14 +237,14 @@ export function OrganizeDialog({ projectId, source, verification, cards, pending
   }
 
   async function change(action: 'retry' | 'cancel') {
-    if (!task) return;
+    if (!task || (action === 'retry' && openAIRetry && !retryDisclosure)) return;
     setBusy(true);
     setError('');
     try {
       if (action === 'retry') {
         const key = `${task.id}/${task.attempt}`;
         if (retryRequest.current?.key !== key) retryRequest.current = { key, id: crypto.randomUUID() };
-        setTask(await api.organizeRetry(projectId, task.id, task.attempt, retryRequest.current.id));
+        setTask(await api.organizeRetry(projectId, task.id, task.attempt, retryRequest.current.id, retryDisclosure?.id));
       } else {
         setTask(await api.organizeCancel(projectId, task.id, task.attempt));
       }
@@ -243,6 +252,7 @@ export function OrganizeDialog({ projectId, source, verification, cards, pending
       setError(cause instanceof MappingError ? cause.message : '未确认操作结果，请重试');
       if (cause instanceof MappingError && cause.code === 'ORGANIZE_ATTEMPT_CHANGED')
         void api.organizeTask(projectId, task.id).then(setTask, () => {});
+      if (cause instanceof MappingError && cause.code === 'ORGANIZE_DISCLOSURE_CHANGED') setModelStatus(undefined);
     } finally {
       setBusy(false);
     }
@@ -343,7 +353,7 @@ export function OrganizeDialog({ projectId, source, verification, cards, pending
           {!source.title.trim() && blocks.length === 0 && <p>请先给这张卡添加标题或正文文字。</p>}
         </fieldset>
         <p className="organize-muted">本次处理勾选的标题与正文文字。{model ? `当前模型为 ${model}。` : model === null ? modelStatus?.blockedReason ?? 'OpenAI 尚未启用，可试用模拟整理。' : '正在读取模型设置。'}</p>
-        <p className="organize-muted">模拟整理使用本机示例规则，不调用模型。</p>
+        <p className="organize-muted">模拟整理仅用于演示或测试。示例在本机生成。</p>
         {length > 24_000 && <p role="alert">选中的文字超过 24,000 字符，请减少范围。</p>}
       </> : task ? <>
         <p role="status" className="organize-status"><strong>{verification ? (task.verificationFixture ? '模拟查证' : actionName) : modeName(task.mode)}</strong> {stateName(task.state)}{task.applied
@@ -397,10 +407,12 @@ export function OrganizeDialog({ projectId, source, verification, cards, pending
                 {attempt.output.candidate && <p className="organize-trace">{attempt.output.candidate.title}<br />{attempt.output.candidate.text}</p>}
                 {!!attempt.output.gaps.length && <ul>{attempt.output.gaps.map((gap, index) => <li key={index}>{gap}</li>)}</ul>}
               </details>}
-              {attempt.usage?.modelDigest && <p className="organize-trace">模型摘要 {attempt.usage.modelDigest}</p>}
+              {attempt.usage?.modelDigest && <p className="organize-trace">{task.model?.startsWith('openai/') ? '模型配置摘要' : '模型摘要'} {attempt.usage.modelDigest}</p>}
               {attempt.usage?.attempts.length ? <ul>{attempt.usage.attempts.map((call, index) => {
                 const phase = call.phase ?? (index === 0 ? 'generate' : 'repair');
-                return <li key={index}>{phase === 'repair' ? '格式修复' : '生成候选'} · {call.model}，
+                return <li key={index}>{phase === 'repair' ? '格式修复' : '生成候选'} · {call.requestedModel ? `请求模型 ${call.requestedModel}` : call.model}
+                  {call.model.startsWith('openai/') && `，返回模型 ${call.returnedModel ?? '未知'}`}
+                  {call.returnedModel === 'gpt-6-luna' && '（具体日期版本未知）'}，
                   {call.responseReceived === false ? '已发起，用量未返回'
                     : `输入 ${call.inputTokens ?? '未知'}、输出 ${call.outputTokens ?? '未知'} token`}
                   {call.responseReceived !== false && call.model.startsWith('openai/') &&
@@ -417,13 +429,14 @@ export function OrganizeDialog({ projectId, source, verification, cards, pending
         : cancellationRequested ? '取消结果未确认' : verification ? '正在发起查证' : '正在检查整理模型'}</p>}
     </div>
     <footer>
-      {showDisclosure && <p id="organize-send-disclosure" className="organize-muted organize-send-disclosure">
-        发送给 OpenAI API 的内容仅限{task ? '此任务原先选定并保存的' : '本次勾选的'}标题和正文文字，用于生成整理候选。请求关闭 OpenAI 的响应存储。数据留存按 API 项目的数据控制设置执行，启用前须核验零数据留存（ZDR）和不用于训练条款。
+      {visibleDisclosure && <p id="organize-send-disclosure" className="organize-muted organize-send-disclosure">
+        发送给 OpenAI API 的内容仅限{task ? '此任务原先选定并保存的' : '本次勾选的'}标题和正文文字，用于生成整理候选。请求关闭 OpenAI 用于后续取回的响应存储。{visibleDisclosure.retention}
       </p>}
       {task ? <>
         {task.state === 'running' && <button type="button" disabled={busy} onClick={() => void change('cancel')}>取消任务</button>}
         {canRetry &&
-          <button type="button" disabled={busy || stale || checkingRetry || !!retryBlockedReason} aria-describedby={showDisclosure ? 'organize-send-disclosure' : undefined}
+          <button type="button" disabled={busy || stale || checkingRetry || !!retryBlockedReason || (openAIRetry && !visibleDisclosure)}
+            aria-describedby={visibleDisclosure ? 'organize-send-disclosure' : undefined}
             onClick={() => void change('retry')}>{verification ? '重试查证' : '重试整理'}</button>}
         {pendingAdd
           ? <button type="button" className="primary" disabled={busy} onClick={() => void add()}>确认添加结果</button>
@@ -439,8 +452,8 @@ export function OrganizeDialog({ projectId, source, verification, cards, pending
         disabled={busy || stale || !query?.success || model === undefined || !!modelStatus?.blockedReason} onClick={() => void start('real')}>开始查证</button> : <>
         <button type="button" disabled={busy || stale || !length || length > 24_000 || selected.length > 100 || model === undefined}
           onClick={() => void start('simulate')}>试用模拟整理</button>
-        <button type="button" className="primary" disabled={busy || stale || !model || !length || length > 24_000 || selected.length > 100}
-          aria-describedby={showDisclosure ? 'organize-send-disclosure' : undefined}
+        <button type="button" className="primary" disabled={busy || stale || !model || (openAIStart && !visibleDisclosure) || !length || length > 24_000 || selected.length > 100}
+          aria-describedby={visibleDisclosure ? 'organize-send-disclosure' : undefined}
           onClick={() => void start('real')}>用模型整理</button>
       </>)}
     </footer>

@@ -13,7 +13,8 @@ import type { Card, MediaAsset } from './contracts.js';
 import { OrganizeStore, type StoredTask } from './organize-store.js';
 import {
   ORGANIZE_MAX_INPUT, OrganizeCancel, OrganizeRequest, OrganizeRetry,
-  type OrganizeInput, type OrganizeOutput, type OrganizeStatus, type OrganizeSummary, type OrganizeTask, type OrganizeUsage,
+  type OrganizeInput, type OrganizeOutput, type OrganizeSendDisclosure, type OrganizeStatus, type OrganizeSummary,
+  type OrganizeTask, type OrganizeTaskView, type OrganizeUsage,
 } from './organize-contracts.js';
 
 // Two model calls at 60s each and up to three local preflights at 12s each.
@@ -22,6 +23,8 @@ const ATTEMPT_TIMEOUT_MS = 160_000;
 export interface OrganizeModel {
   readonly model: string;
   readonly configuredModelDigest?: string;
+  readonly reuseAcrossRequests?: boolean;
+  readonly sendDisclosure?: OrganizeSendDisclosure;
   resolveDigest(signal: AbortSignal): Promise<string>;
   generate(job: { taskId: string; attempt: number; input: OrganizeInput; modelDigest: string }, signal: AbortSignal,
     onUsage: (usage: OrganizeUsage) => void):
@@ -97,7 +100,11 @@ export class OrganizeTasks {
     if (verification) return { model: null, blockedReason: this.verificationSource?.client
       ? null : this.verificationSource?.blockedReason ?? SEC_UNCONFIGURED,
       ...(this.verificationSource?.fixture ? { verificationFixture: true } : {}) };
-    return { model: this.model?.model ?? null };
+    return this.model ? {
+      model: this.model.model,
+      blockedReason: null,
+      ...(this.model.sendDisclosure && { sendDisclosure: this.model.sendDisclosure }),
+    } : { model: null, blockedReason: this.blockedReason };
   }
 
   list(projectId: string, cardId: string | undefined, actor: Principal, verification = false): OrganizeSummary[] {
@@ -109,11 +116,10 @@ export class OrganizeTasks {
     return this.store.all(projectId).map(task => this.view(projectId, task));
   }
 
-  get(projectId: string, id: string, actor: Principal) {
+  get(projectId: string, id: string, actor: Principal): OrganizeTaskView {
     this.authorize(projectId, actor);
     const task = this.store.get(projectId, id);
-    const view = this.view(projectId, task);
-    return task.verification ? { ...view, retryBlockedReason: this.retryBlock(task)?.message ?? null } : view;
+    return { ...this.view(projectId, task), retryBlockedReason: this.retryBlock(task)?.message ?? null };
   }
 
   private reusableModelTask(projectId: string, request: string, model: string, digest: string) {
@@ -134,7 +140,7 @@ export class OrganizeTasks {
 
   private async handleStartRequest(projectId: string, raw: unknown, actor: Principal, action: 'start' | 'cancel'): Promise<StartResult> {
     const input = OrganizeRequest.parse(raw);
-    const { requestId, ...scope } = input;
+    const { requestId, disclosureId, ...scope } = input;
     const selection = selectionKey(scope);
     this.authorize(projectId, actor);
     const cancelling = action === 'cancel';
@@ -164,6 +170,7 @@ export class OrganizeTasks {
     }
     const model = input.mode === 'real' && !input.verification ? this.model : undefined;
     requireThat(input.mode === 'simulate' || input.verification || model, 'ORGANIZE_MODEL_UNCONFIGURED', this.blockedReason, 503);
+    if (!cancelling && model) this.requireSendDisclosure(disclosureId);
     const plan = pending?.plan ?? {
       projectId, requestId, selection, mode: input.mode, model: model?.model ?? null,
       verification: input.verification,
@@ -183,6 +190,12 @@ export class OrganizeTasks {
     const result = this.checkModelAndStart(plan, actor, model, signal).finally(() => this.starting.delete(key));
     this.starting.set(key, { plan, abort, result });
     return result;
+  }
+
+  private requireSendDisclosure(id?: string) {
+    const current = this.model?.sendDisclosure;
+    requireThat(!current || id === current.id, 'ORGANIZE_DISCLOSURE_CHANGED',
+      '请重新打开 AI 整理，确认当前的发送和留存说明后再试。', 409);
   }
 
   private replayStart(projectId: string, requestId: string, selection: string) {
@@ -240,12 +253,12 @@ export class OrganizeTasks {
         requireThat(this.freshness(projectId, input) === 'current',
           'ORGANIZE_SOURCE_STALE', verification ? '原卡已更改或删除，请重新打开查证' : '原卡已更改或删除，请重新选择要整理的内容', 409);
       }
-      // A newly requested lookup acquires a fresh public snapshot. Replays
-      // with the same request ID still read the original receipt.
-      const scope = verification ? canonical({ request: selection, requestId }) : model
+      // A new public lookup or rolling model request needs a fresh receipt.
+      const requestOnly = !!verification || (model !== null && this.model?.reuseAcrossRequests === false);
+      const scope = requestOnly ? canonical({ request: selection, requestId }) : model
         ? canonical({ request: selection, model, digest, ...(digest === null ? { requestId } : {}) })
         : canonical({ request: selection, model: null });
-      const cached = model && digest
+      const cached = !requestOnly && model && digest
         ? this.reusableModelTask(projectId, selection, model, digest)
         : this.store.forScope(projectId, scope);
       if (cached) {
@@ -311,6 +324,7 @@ export class OrganizeTasks {
         'ORGANIZE_NOT_RETRYABLE', '当前任务不能重试', 409);
       const block = this.retryBlock(task);
       if (block) throw new DomainError(block.code, block.message, block.status);
+      if (task.mode === 'real' && !task.verification) this.requireSendDisclosure(request.disclosureId);
       task.attempt += 1;
       task.state = 'running';
       task.error = null;
@@ -428,20 +442,21 @@ export class OrganizeTasks {
         requireThat(pinned ? pinned === modelDigest : !hasOrganizeOutput(source.output), 'ORGANIZE_MODEL_CHANGED',
           '整理模型已更新，请用当前配置开始新任务', 409);
         if (!source.modelDigest) {
-          const { cardId, thoughtVersionId, bodyVersionId, title, blocks } = source.input;
-          const request = selectionKey({
-            mode: source.mode, cardId, thoughtVersionId, bodyVersionId,
-            includeTitle: title !== null, blockIds: blocks.map(block => block.id),
-          });
-          const scope = canonical({ request, model: model.model, digest: modelDigest });
           this.db.transaction(() => {
             const task = this.store.get(projectId, source.id);
-            const existing = this.reusableModelTask(projectId, request, model.model, modelDigest);
-            requireThat(!existing || existing.id === task.id, 'ORGANIZE_SCOPE_EXISTS',
-              '当前模型和选中范围已有整理记录，请在记录中查看', 409);
+            if (model.reuseAcrossRequests !== false) {
+              const { cardId, thoughtVersionId, bodyVersionId, title, blocks } = source.input;
+              const request = selectionKey({
+                mode: source.mode, cardId, thoughtVersionId, bodyVersionId,
+                includeTitle: title !== null, blockIds: blocks.map(block => block.id),
+              });
+              const existing = this.reusableModelTask(projectId, request, model.model, modelDigest);
+              requireThat(!existing || existing.id === task.id, 'ORGANIZE_SCOPE_EXISTS',
+                '当前模型和选中范围已有整理记录，请在记录中查看', 409);
+              this.store.setScope(projectId, task.id, canonical({ request, model: model.model, digest: modelDigest }));
+            }
             task.modelDigest = modelDigest;
             delete task.configuredModelDigest;
-            this.store.setScope(projectId, task.id, scope);
             this.store.save(projectId, task);
           }).immediate();
         }
@@ -542,7 +557,7 @@ function hasOrganizeOutput(output: OrganizeOutput | null): boolean {
   return Boolean(output?.candidate || output?.gaps.length || output?.verification);
 }
 
-function selectionKey(selection: Omit<OrganizeRequest, 'requestId'>): string {
+function selectionKey(selection: Omit<OrganizeRequest, 'requestId' | 'disclosureId'>): string {
   return canonical({ ...selection, blockIds: [...selection.blockIds].sort() });
 }
 

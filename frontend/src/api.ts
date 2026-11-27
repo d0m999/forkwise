@@ -76,8 +76,8 @@ export const api = {
     request<OrganizeTask>(`${organizePath(projectId)}/tasks/cancel-start`, input),
   organizeTask: (projectId: string, taskId: string) =>
     request<OrganizeTaskView>(`${organizePath(projectId)}/tasks/${encodeURIComponent(taskId)}`),
-  organizeRetry: (projectId: string, taskId: string, attempt: number, requestId: string) =>
-    request<OrganizeTask>(`${organizePath(projectId)}/tasks/${encodeURIComponent(taskId)}/retry`, { attempt, requestId }),
+  organizeRetry: (projectId: string, taskId: string, attempt: number, requestId: string, disclosureId?: string) =>
+    request<OrganizeTask>(`${organizePath(projectId)}/tasks/${encodeURIComponent(taskId)}/retry`, { attempt, requestId, disclosureId }),
   organizeCancel: (projectId: string, taskId: string, attempt: number) =>
     request<OrganizeTask>(`${organizePath(projectId)}/tasks/${encodeURIComponent(taskId)}/cancel`, { attempt }),
   searchState: (projectId: string) => request<SearchStateView>(`/projects/${encodeURIComponent(projectId)}/search-state`),
