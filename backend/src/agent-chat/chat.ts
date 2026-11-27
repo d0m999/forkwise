@@ -5,7 +5,7 @@ import { z } from 'zod';
 import { DomainError, requireThat } from '../domain/errors.js';
 import { CodexConnection, codexChatModel, codexModelArgs, codexStorageEnvironment } from './codex.js';
 import { openTerminalSocket } from './terminal-socket.js';
-import { terminalProtocol } from './terminal-protocol.js';
+import { nativePermissions, requireTerminalPermissions, terminalProtocol, type TerminalTurnSettings } from './terminal-protocol.js';
 
 const savedChat = z.object({
   id: z.uuid(),
@@ -32,18 +32,22 @@ const nativeTurn = z.object({ id: z.string(), status: z.string(), items: z.array
 const nativeThread = z.object({ id: z.uuid(), path: z.string().nullable(), turns: z.array(nativeTurn),
   status: z.object({ type: z.string() }), model: z.string().nullable().optional() });
 const threadResult = z.object({ thread: nativeThread });
-const openResult = threadResult.extend({ model: z.string() });
+const openResult = threadResult.extend({ model: z.string(), ...nativePermissions.shape });
 type NativeThread = z.infer<typeof nativeThread>;
 
 type Turn = { id: string; status: string };
 type TerminalNotify = (method: string, params: unknown) => void;
+type PreparedTerminal = { connection: CodexConnection; permissions: z.infer<typeof nativePermissions> };
 type TerminalTurn = {
   owner: symbol;
-  prepared: CodexConnection | undefined;
+  prepared: PreparedTerminal | undefined;
   clientUserMessageId: string | undefined;
-  started: (connection: CodexConnection, turn: Turn, response: unknown) => void;
+  settings: TerminalTurnSettings;
+  signal: AbortSignal;
+  started: (connection: CodexConnection, turn: Turn) => void;
   notify: TerminalNotify;
 };
+type TerminalLease = { owner: symbol; state: 'offered' | 'resuming' | 'idle'; close: () => Promise<void> };
 type RunningChat = {
   messages: Message[];
   previousTurnId: string | null;
@@ -179,7 +183,7 @@ export class AgentChat {
   private readonly errors = new Map<string, string>();
   private readonly unsavedRejectionWarnings = new Map<string, string>();
   private readonly processes = new Set<CodexConnection>();
-  private readonly terminals = new Map<string, { owner: symbol; connected: boolean; close: () => Promise<void> }>();
+  private readonly terminals = new Map<string, TerminalLease>();
   private readonly file: string;
   private readonly cwd: string;
   private closing = false;
@@ -302,6 +306,13 @@ export class AgentChat {
     this.save();
   }
 
+  private settleResume(chat: SavedChat, history: NativeThread, checkpoint: string | null) {
+    if (chat.checkpoint !== checkpoint) return;
+    try { this.verifyRecording(chat, history, true); } catch {
+      // Unknown changes keep the previous checkpoint and block the next send.
+    }
+  }
+
   private async verifiedHistory(connection: CodexConnection, chat: SavedChat, threadId: string, ownResume = false) {
     const history = await this.read(connection, threadId);
     requireThat(history.status.type !== 'active' && !history.turns.some(item => item.status === 'inProgress'),
@@ -359,33 +370,30 @@ export class AgentChat {
     const threadId = chat.threadId;
     requireThat(threadId && chat.checkpoint, 'CODEX_HISTORY_UNVERIFIED', '请先在见岔完成可核验的首轮对话。', 403);
     const old = this.terminals.get(id);
-    requireThat(!this.running.has(id) && !old?.connected, 'CODEX_TURN_ACTIVE', '请先结束当前回合或终端接续。', 409);
+    requireThat(!this.running.has(id) && (!old || old.state === 'offered'),
+      'CODEX_TURN_ACTIVE', '请先结束当前回合或终端接续。', 409);
     const owner = Symbol(id);
     let closed = false;
     let reader: CodexConnection | undefined;
-    let prepared: CodexConnection | undefined;
+    let preparing: CodexConnection | undefined;
+    let prepared: PreparedTerminal | undefined;
     let driving: { connection: CodexConnection; turnId: string } | undefined;
     let resumedHistory: NativeThread | undefined;
     let beforeResume: string | null = null;
-    const settleResume = () => {
-      if (!resumedHistory || chat.checkpoint !== beforeResume) return;
-      try { this.verifyRecording(chat, resumedHistory, true); } catch {
-        // Unknown changes keep the previous checkpoint and block the next send.
-      }
-    };
     const release = async () => {
       closed = true;
       try {
-        if (prepared) {
-          await prepared.close();
-          settleResume();
+        const connection = prepared?.connection ?? preparing;
+        if (connection) {
+          await connection.close();
+          if (resumedHistory) this.settleResume(chat, resumedHistory, beforeResume);
         }
       } finally {
         if (this.terminals.get(id)?.owner === owner) this.terminals.delete(id);
         await reader?.close();
       }
     };
-    const lease = { owner, connected: false, close: release };
+    const lease: TerminalLease = { owner, state: 'offered', close: release };
     this.terminals.set(id, lease);
     try {
       if (old) await old.close();
@@ -404,47 +412,52 @@ export class AgentChat {
           return terminalHistory(response, method, chat.rejectedModelTurnId);
         },
         resume: async () => {
-          requireThat(!closed && !lease.connected && !this.running.has(id) && this.terminals.get(id) === lease,
+          requireThat(!closed && lease.state === 'offered' && !this.running.has(id) && this.terminals.get(id) === lease,
             'CODEX_TURN_ACTIVE', '当前会话已被占用。', 409);
-          lease.connected = true;
+          lease.state = 'resuming';
           try {
-            prepared = this.connect();
-            await prepared.initialize(this.version);
-            requireThat(await prepared.loggedIn(), 'CODEX_LOGIN_REQUIRED', loginMessage, 401);
-            requireThat(await prepared.hasChatModel(), 'CODEX_MODEL_UNAVAILABLE', modelUnavailableMessage, 503);
-            await this.verifiedHistory(prepared, chat, threadId);
+            const connection = preparing = this.connect();
+            await connection.initialize(this.version);
+            requireThat(await connection.loggedIn(), 'CODEX_LOGIN_REQUIRED', loginMessage, 401);
+            requireThat(await connection.hasChatModel(), 'CODEX_MODEL_UNAVAILABLE', modelUnavailableMessage, 503);
+            await this.verifiedHistory(connection, chat, threadId);
             beforeResume = chat.checkpoint;
-            const result = await prepared.call('thread/resume', { threadId, cwd: this.cwd, model: codexChatModel });
+            const result = await connection.call('thread/resume', { threadId, cwd: this.cwd, model: codexChatModel });
             const opened = openResult.safeParse(result);
             requireThat(opened.success && opened.data.thread.id === threadId && opened.data.model === codexChatModel,
               'CODEX_THREAD_UNAVAILABLE', '无法核验终端接续的原生会话和模型。', 503);
             resumedHistory = opened.data.thread;
+            prepared = { connection, permissions: opened.data };
+            lease.state = 'idle';
             return terminalHistory(result, 'thread/resume', chat.rejectedModelTurnId);
           } catch (error) {
-            await prepared?.close();
+            await preparing?.close();
             prepared = undefined;
-            lease.connected = false;
+            lease.state = 'offered';
             throw error;
+          } finally {
+            preparing = undefined;
           }
         },
-        turn: async (text, clientUserMessageId, notify) => {
-          requireThat(!closed && lease.connected && this.terminals.get(id) === lease,
+        turn: async (text, clientUserMessageId, settings, notify, signal) => {
+          requireThat(!closed && lease.state === 'idle' && this.terminals.get(id) === lease,
             'CODEX_TERMINAL_EXPIRED', '终端接续已结束。', 409);
-          let response: unknown;
+          let startedTurn: Turn | undefined;
           const native = prepared;
+          if (native) requireTerminalPermissions(settings, native.permissions);
           prepared = undefined;
           try {
-            await this.send(id, text, { owner, prepared: native, clientUserMessageId, notify,
-              started(connection, turn, raw) {
+            await this.send(id, text, { owner, prepared: native, clientUserMessageId, settings, notify, signal,
+              started(connection, turn) {
                 driving = { connection, turnId: turn.id };
-                response = raw;
+                startedTurn = turn;
               },
             });
           } catch (error) {
-            if (native) settleResume();
+            if (native && resumedHistory) this.settleResume(chat, resumedHistory, beforeResume);
             throw error;
           }
-          return response;
+          return { turn: startedTurn };
         },
         interrupt: async turnId => {
           requireThat(driving?.turnId === turnId && this.running.has(id),
@@ -459,7 +472,7 @@ export class AgentChat {
         throw new DomainError('CODEX_TERMINAL_EXPIRED', '终端接续已结束。', 409);
       }
       return { command: ['codex', '--remote', terminalQuote(socket.url), 'resume', '--model', codexChatModel,
-        terminalQuote(threadId)].join(' ') };
+        terminalQuote(threadId)].join(' '), expiresAt: socket.expiresAt };
     } catch (error) {
       await release();
       throw error;
@@ -469,65 +482,83 @@ export class AgentChat {
   async send(id: string, text: string, terminal?: TerminalTurn) {
     const chat = this.find(id);
     const lease = this.terminals.get(id);
-    requireThat(!lease?.connected || lease.owner === terminal?.owner, 'CODEX_TERMINAL_CONNECTED', '请先结束见岔发起的终端接续。', 409);
     requireThat(!this.running.has(id), 'CODEX_TURN_ACTIVE', '请等待当前回合结束。', 409);
+    requireThat(lease?.state !== 'resuming', 'CODEX_TURN_ACTIVE', '请等待终端恢复当前会话。', 409);
     const active: RunningChat = { messages: [], previousTurnId: null };
     this.running.set(id, active);
     this.errors.delete(id);
     let connection: CodexConnection | undefined;
-    let turn: Turn | undefined;
+    let turn: (Turn & { items: [] }) | undefined;
+    let reopenedTerminal: { history: NativeThread; checkpoint: string | null } | undefined;
     let rerouteDeadline: ReturnType<typeof setTimeout> | undefined;
     let beginFinish: () => void = () => {};
-    const terminalEvents: { method: string; params: unknown; turnId: string }[] = [];
+    const terminalEvents: { method: string; params: unknown }[] = [];
+    let earlyEvents: { method: string; params: unknown }[] | undefined;
+    let earlyRerouteId: string | undefined;
     const readyToFinish = new Promise<void>(resolve => { beginFinish = resolve; });
-    const savePendingRejection = () => {
-      if (!turn || active.rejectedModelTurnId !== turn.id) return;
-      this.saveModelRejection(chat, turn.id, active.previousTurnId);
+    const rejectModelTurn = (turnId: string) => {
+      active.rejectedModelTurnId = turnId;
+      this.saveModelRejection(chat, turnId, active.previousTurnId);
+      // Give turn/completed a short window even if the interrupt RPC fails or never replies.
+      rerouteDeadline = setTimeout(beginFinish, rerouteGraceMs);
     };
     try {
+      if (!terminal && lease?.state === 'idle') await lease.close();
       const onEvent = (method: string, params: unknown) => {
-        if (terminal && (method === 'turn/started' || method === 'turn/completed' ||
-            method === 'item/started' || method === 'item/completed')) {
+        if (method === 'model/rerouted') {
+          const reroute = modelRerouted.safeParse(params);
+          if (!reroute.success || reroute.data.threadId !== chat.threadId || reroute.data.toModel === codexChatModel) return;
+          const { threadId, turnId } = reroute.data;
+          if (turn) {
+            if (turn.id !== turnId || active.rejectedModelTurnId) return;
+            rejectModelTurn(turnId);
+          } else {
+            if (!earlyEvents || earlyRerouteId || active.previousTurnId === turnId) return;
+            // A missing start reply must not delay an interrupt requested after dispatch.
+            earlyRerouteId = turnId;
+          }
+          void connection?.call('turn/interrupt', { threadId, turnId }).catch(() => {});
+          return;
+        }
+        const terminalContent = terminal && (method === 'turn/completed' ||
+          method === 'item/started' || method === 'item/completed');
+        if (!turn) {
+          if (terminalContent || method === 'turn/completed')
+            earlyEvents?.push({ method, params });
+          return;
+        }
+        if (terminalContent) {
           const event = z.object({ threadId: z.string(), turnId: z.string().optional(),
             turn: z.object({id: z.string()}).optional(), item: z.object({type: z.string()}).optional() }).safeParse(params);
           if (event.success && event.data.threadId === chat.threadId) {
             const eventTurn = event.data.turn?.id ?? event.data.turnId;
-            if (eventTurn && (!event.data.item || ['userMessage', 'agentMessage'].includes(event.data.item.type)))
-              terminalEvents.push({ method, params, turnId: eventTurn });
+            if (eventTurn === turn.id && (!event.data.item || ['userMessage', 'agentMessage'].includes(event.data.item.type)))
+              terminalEvents.push({ method, params });
           }
         }
-        if (method === 'model/rerouted') {
-          const reroute = modelRerouted.safeParse(params);
-          if (reroute.success && reroute.data.threadId === chat.threadId &&
-              (!turn || turn.id === reroute.data.turnId) && reroute.data.toModel !== codexChatModel &&
-              !active.rejectedModelTurnId) {
-            const { threadId, turnId } = reroute.data;
-            active.rejectedModelTurnId = turnId;
-            savePendingRejection();
-            // Give turn/completed a short window even if the interrupt RPC fails or never replies.
-            rerouteDeadline = setTimeout(beginFinish, rerouteGraceMs);
-            void connection?.call('turn/interrupt', { threadId, turnId }).catch(() => {});
-          }
-          return;
-        }
-        // Assistant text is published from verified native history after the turn ends.
+        // Keep terminal content buffered until native history confirms the turn's final status.
         if (method === 'turn/completed') {
           const result = z.object({ threadId: z.string(), turn: z.object({ id: z.string(), status: z.string() }) }).safeParse(params);
-          if (result.success && result.data.threadId === chat.threadId && (!turn || turn.id === result.data.turn.id)) {
+          if (result.success && result.data.threadId === chat.threadId && turn.id === result.data.turn.id) {
             active.completedTurn = result.data.turn;
             beginFinish();
           }
         }
       };
       if (terminal?.prepared) {
-        connection = terminal.prepared;
+        connection = terminal.prepared.connection;
         connection.observe(onEvent, beginFinish);
       } else {
         connection = this.connect(onEvent, beginFinish);
         await connection.initialize(this.version);
       }
       requireThat(await connection.loggedIn(), 'CODEX_LOGIN_REQUIRED', loginMessage, 401);
-      requireThat(await connection.hasChatModel(), 'CODEX_MODEL_UNAVAILABLE', modelUnavailableMessage, 503);
+      const model = await connection.chatModel();
+      requireThat(model, 'CODEX_MODEL_UNAVAILABLE', modelUnavailableMessage, 503);
+      const effort = terminal?.settings.effort;
+      requireThat(!effort || effort === model.defaultReasoningEffort ||
+        model.supportedReasoningEfforts.some(option => option.reasoningEffort === effort),
+      'CODEX_TERMINAL_PARAMS', '当前 Luna 模型不支持所选推理强度。', 400);
       const previous = chat.threadId;
       if (previous) {
         const history = await this.verifiedHistory(connection, chat, previous, Boolean(terminal?.prepared));
@@ -535,6 +566,7 @@ export class AgentChat {
         active.previousTurnId = history.turns.at(-1)?.id ?? null;
       }
       if (!terminal?.prepared) {
+        const checkpoint = chat.checkpoint;
         const opened = openResult.safeParse(await connection.call(previous ? 'thread/resume' : 'thread/start', {
           ...(previous ? { threadId: previous, excludeTurns: true } : {}),
           cwd: this.cwd, model: codexChatModel,
@@ -543,32 +575,42 @@ export class AgentChat {
           'CODEX_THREAD_UNAVAILABLE', '无法启动或恢复这段原生 Codex 会话。', 503);
         requireThat(opened.data.model === codexChatModel, 'CODEX_MODEL_MISMATCH',
           `见岔只允许 ${codexChatModel}，本轮未发送。`, 503);
+        if (terminal) {
+          reopenedTerminal = { history: opened.data.thread, checkpoint };
+          requireTerminalPermissions(terminal.settings, opened.data);
+        }
         chat.threadId = opened.data.thread.id;
         chat.model = opened.data.model;
         this.save();
       }
       active.question = { id: randomUUID(), role: 'user', text };
+      terminal?.signal.throwIfAborted();
+      earlyEvents = [];
       const response = await connection.call('turn/start', { threadId: chat.threadId, model: codexChatModel,
         ...(terminal?.clientUserMessageId ? { clientUserMessageId: terminal.clientUserMessageId } : {}),
+        ...(effort ? { effort } : {}),
         input: [{ type: 'text', text, text_elements: [] }] });
       const started = z.object({ turn: z.object({ id: z.string(), status: z.string() }) }).safeParse(response);
       requireThat(started.success, 'CODEX_TURN_UNKNOWN', '无法确认发送结果，请重新读取会话后再试。', 503);
-      turn = started.data.turn;
-      terminal?.started(connection, turn, response);
-      savePendingRejection();
+      turn = { id: started.data.turn.id, status: 'inProgress', items: [] };
+      if (earlyRerouteId === turn.id) rejectModelTurn(turn.id);
+      terminal?.started(connection, turn);
+      terminal?.notify('turn/started', { threadId: chat.threadId, turn });
+      for (const event of earlyEvents) onEvent(event.method, event.params);
+      earlyEvents = undefined;
       void this.finish(chat, active, connection, readyToFinish, turn).then(verified => {
         if (terminal && verified) {
-          for (const event of terminalEvents)
-            if (event.turnId === started.data.turn.id) terminal.notify(event.method, event.params);
+          for (const event of terminalEvents) terminal.notify(event.method, event.params);
         } else if (terminal) {
           terminal.notify('error', { threadId: chat.threadId, turnId: started.data.turn.id, willRetry: false,
             error: { message: '见岔未能核验本轮结果。请回到右栏查看。', codexErrorInfo: null, additionalDetails: null } });
-          void this.terminals.get(id)?.close();
+          if (lease?.owner === terminal.owner) void lease.close().catch(() => {});
         }
       }).finally(() => clearTimeout(rerouteDeadline));
       return this.runningDetail(chat, active);
     } catch (error) {
       if (connection) await connection.close();
+      if (reopenedTerminal) this.settleResume(chat, reopenedTerminal.history, reopenedTerminal.checkpoint);
       clearTimeout(rerouteDeadline);
       this.running.delete(id);
       throw error;
@@ -603,13 +645,15 @@ export class AgentChat {
       }
       if (chat.rejectedModelTurnId === started.id) return;
       requireThat(confirmed && thread, 'CODEX_TURN_UNKNOWN', 'Codex 连接已结束。请读取原生会话确认回合结果。', 503);
+      requireThat(['completed', 'interrupted', 'failed'].includes(confirmed.status) &&
+          thread.turns.some(turn => turn.id === started.id && turn.status === confirmed.status),
+        'CODEX_TURN_UNKNOWN', '原生历史尚未确认本轮结果，请重新读取会话。', 503);
       chat.model = thread.model ?? chat.model;
       chat.checkpoint = fingerprint(thread);
       // Keep the first verified continuation still in history across later sends and native rollbacks.
       // A delayed rejected turn can appear after it in the recording.
       if (chat.rejectedModelTurnId && confirmed.status === 'completed' &&
-          !thread.turns.some(turn => turn.id === chat.verifiedContinuationTurnId) &&
-          thread.turns.some(turn => turn.id === started.id && turn.status === 'completed')) {
+          !thread.turns.some(turn => turn.id === chat.verifiedContinuationTurnId)) {
         chat.verifiedContinuationTurnId = started.id;
       }
       this.save();

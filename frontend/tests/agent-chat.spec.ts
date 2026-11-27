@@ -15,6 +15,7 @@ test('无项目右栏复用 Codex 登录，保留失败草稿并按原生身份�
   let modelAvailable = true;
   let popupOpened = false;
   let turnRequests = 0;
+  let clockOffset = 0;
   let busy = true;
   const firstDetail = () => ({ ...first, busy, messages, resumeCommand: busy ? undefined : resumeCommand });
 
@@ -45,13 +46,14 @@ test('无项目右栏复用 Codex 登录，保留失败草稿并按原生身份�
     }
     if (path === '/conversations/chat-1/terminal' && method === 'POST') {
       expect(route.request().postDataJSON()).toEqual({});
-      return route.fulfill({ json: { command: verifiedCommand } });
+      return route.fulfill({ json: { command: verifiedCommand, expiresAt: Date.now() + clockOffset + 180_000 } });
     }
     if (path === '/conversations/chat-1') return route.fulfill({ json: first.threadId ? firstDetail() : { ...first, busy: false, messages: [] } });
     if (path === '/conversations/chat-2') return route.fulfill({ json: { ...second, busy: false, messages: [] } });
     throw new Error(`意外的对话请求 ${path}`);
   });
 
+  await page.clock.install();
   await page.reload();
   await expect(page.locator('.save-state')).toContainText('已保存到本机');
   await expect(page.getByRole('tab')).toHaveCount(0);
@@ -115,6 +117,7 @@ test('无项目右栏复用 Codex 登录，保留失败草稿并按原生身份�
   await copy.click();
   await expect(chat.getByRole('status')).toHaveText('已复制终端命令。');
   expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(verifiedCommand);
+  await expect(chat.getByText('命令只能连接一次。', { exact: false })).toBeVisible();
   await chat.getByText('独立终端续聊', { exact: true }).click();
   await expect(chat.getByText('见岔仅回读独立终端新增的历史。', { exact: true })).toBeVisible();
   await expect(chat.getByText(resumeCommand, { exact: true })).toBeVisible();
@@ -122,6 +125,13 @@ test('无项目右栏复用 Codex 登录，保留失败草稿并按原生身份�
   await refresh.click();
   await expect(transcript.getByText('生成命令后仍可刷新历史', { exact: true })).toBeVisible();
   await expect(chat.getByText(verifiedCommand, { exact: true })).toBeVisible();
+  clockOffset = 181_000;
+  await page.clock.fastForward(clockOffset);
+  await expect(chat.getByText('终端命令已过期，请重新生成。')).toBeVisible();
+  await expect(chat.getByText(verifiedCommand, { exact: true })).toBeHidden();
+  await expect(copy).toHaveCount(0);
+  await generate.click();
+  await expect(copy).toBeEnabled();
 
   await create.click();
   await expect(conversationsList).toHaveValue(second.id);
@@ -130,7 +140,7 @@ test('无项目右栏复用 Codex 登录，保留失败草稿并按原生身份�
   await terminal.click();
   await expect(generate).toBeVisible();
   await expect(copy).toHaveCount(0);
-  expect(requests.filter(request => request.endsWith('/terminal'))).toEqual(['POST /conversations/chat-1/terminal']);
+  expect(requests.filter(request => request.endsWith('/terminal'))).toHaveLength(2);
 
   modelAvailable = false;
   await refresh.click();

@@ -27,19 +27,28 @@ async function chatRequest<T>(path: string, fallback: string, options: { body?: 
 }
 
 function TerminalResume({ conversationId, resumeCommand, disabled }: { conversationId: string; resumeCommand: string | undefined; disabled: boolean }) {
-  const [command, setCommand] = useState("");
+  const [issued, setIssued] = useState<{ command: string; expiresAt: number }>();
+  const [expired, setExpired] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState("");
 
+  useEffect(() => {
+    if (!issued) return;
+    const timeout = window.setTimeout(() => setExpired(true), Math.max(0, issued.expiresAt - Date.now()));
+    return () => window.clearTimeout(timeout);
+  }, [issued]);
+
   async function generateCommand() {
     setGenerating(true);
-    setCommand("");
+    setIssued(undefined);
+    setExpired(false);
     setCopied(false);
     setError("");
     try {
-      const result = await chatRequest<{ command: string }>(`/conversations/${encodeURIComponent(conversationId)}/terminal`, "暂时无法生成终端命令。", { body: {} });
-      setCommand(result.command);
+      const result = await chatRequest<{ command: string; expiresAt: number }>(`/conversations/${encodeURIComponent(conversationId)}/terminal`, "暂时无法生成终端命令。", { body: {} });
+      setIssued(result);
+      setExpired(Date.now() >= result.expiresAt);
     } catch (error) {
       setError((error as Error).message);
     } finally {
@@ -48,10 +57,14 @@ function TerminalResume({ conversationId, resumeCommand, disabled }: { conversat
   }
 
   async function copyCommand() {
+    if (!issued || Date.now() >= issued.expiresAt) {
+      setExpired(true);
+      return;
+    }
     setCopied(false);
     setError("");
     try {
-      await navigator.clipboard.writeText(command);
+      await navigator.clipboard.writeText(issued.command);
       setCopied(true);
     } catch {
       setError("无法访问剪贴板。请选中终端命令手动复制。");
@@ -60,14 +73,15 @@ function TerminalResume({ conversationId, resumeCommand, disabled }: { conversat
 
   return <details className="agent-chat-resume">
     <summary>终端续聊</summary>
-    <p>通过见岔生成命令，核验终端回合使用的模型。</p>
+    <p>通过见岔生成命令，核验终端回合使用的模型。命令只能连接一次。</p>
     <button type="button" className="agent-chat-primary" disabled={disabled || generating} onClick={() => void generateCommand()}>生成可核验命令</button>
     {generating && <p role="status">正在生成终端命令…</p>}
-    {command && <>
-      <code>{command}</code>
+    {issued && !expired && <>
+      <code>{issued.command}</code>
       <button type="button" disabled={disabled} onClick={() => void copyCommand()}>复制终端命令</button>
     </>}
-    {copied && <p role="status">已复制终端命令。</p>}
+    {expired && <p role="status">终端命令已过期，请重新生成。</p>}
+    {copied && !expired && <p role="status">已复制终端命令。</p>}
     {error && <p className="agent-chat-error" role="alert">{error}</p>}
     {resumeCommand && <details>
       <summary>独立终端续聊</summary>

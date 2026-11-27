@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import type { Socket } from 'node:net';
 import WebSocket, { WebSocketServer } from 'ws';
 import { z } from 'zod';
+import { DomainError } from '../domain/errors.js';
 
 const connectTimeout = 3 * 60_000;
 const requestTimeout = 60_000;
@@ -18,9 +19,9 @@ const incoming = z.object({
 type Notify = (method: string, params: unknown) => void;
 
 export async function openTerminalSocket(
-  handle: (method: string, params: unknown, notify: Notify) => Promise<unknown>,
+  handle: (method: string, params: unknown, notify: Notify, signal: AbortSignal) => Promise<unknown>,
   onClose: () => void | Promise<void>,
-): Promise<{ url: string; close: () => Promise<void> }> {
+): Promise<{ url: string; expiresAt: number; close: () => Promise<void> }> {
   // macOS limits the filesystem address of a Unix socket to about 100 bytes.
   const directory = await mkdtemp('/tmp/forkwise-');
   const path = join(directory, 'codex.sock');
@@ -73,9 +74,6 @@ export async function openTerminalSocket(
         }
         peer.send(JSON.stringify({ jsonrpc: version, ...message }), error => { if (error) stop(); });
       };
-      const notify: Notify = (method, params) => {
-        try { send({ method, params }); } catch { stop(); }
-      };
       const fail = (id: string | number | null, code: number, message: string) => send({ id, error: { code, message } });
 
       peer.on('message', (raw, binary) => {
@@ -99,21 +97,43 @@ export async function openTerminalSocket(
           const { jsonrpc, id, method, params } = request.data;
           version = jsonrpc;
 
-          let deadline: ReturnType<typeof setTimeout> | undefined;
+          const controller = new AbortController();
           let timedOut = false;
+          const cancelled = new Promise<never>((_resolve, reject) => {
+            cancelRequest = () => {
+              controller.abort();
+              reject(controller.signal.reason);
+            };
+          });
+          const deadline = setTimeout(() => {
+            timedOut = true;
+            cancelRequest?.();
+          }, requestTimeout);
+          const notifications: { method: string; params: unknown }[] = [];
+          let deliver: Notify = (method, params) => notifications.push({ method, params });
           try {
-            const result = await Promise.race([handle(method, params, notify), new Promise<never>((_resolve, reject) => {
-              cancelRequest = () => reject(new Error('Terminal connection closed'));
-              deadline = setTimeout(() => {
-                timedOut = true;
-                reject(new Error('Terminal RPC timed out'));
-              }, requestTimeout);
-            })]);
+            const result = await Promise.race([handle(method, params, (method, params) => deliver(method, params), controller.signal), cancelled]);
             if (id !== undefined) send({ id, result: result ?? null });
-          } catch {
-            if (id !== undefined) fail(id, -32000, '见岔无法处理此终端请求。');
+            deliver = (method, params) => {
+              try { send({ method, params }); } catch { stop(); }
+            };
+            for (const event of notifications) deliver(event.method, event.params);
+          } catch (error) {
+            deliver = () => {};
+            if (id !== undefined) {
+              if (error instanceof DomainError && error.code === 'CODEX_TERMINAL_METHOD') {
+                fail(id, -32601, '此终端请求不受支持。');
+              } else if (error instanceof DomainError && (error.code === 'CODEX_TERMINAL_PARAMS' ||
+                  error.code === 'CODEX_TERMINAL_THREAD' || error.code === 'CODEX_TERMINAL_RESUME_REQUIRED' ||
+                  (error.code === 'CODEX_MODEL_MISMATCH' && error.status === 400))) {
+                fail(id, -32602, error.message);
+              } else {
+                fail(id, -32000, '见岔无法处理此终端请求。');
+              }
+            }
             if (timedOut) peer.close(1011);
           } finally {
+            notifications.length = 0;
             clearTimeout(deadline);
             cancelRequest = undefined;
           }
@@ -137,7 +157,8 @@ export async function openTerminalSocket(
     await close().catch(() => {});
     throw error;
   }
+  const expiresAt = Date.now() + connectTimeout;
   expires = setTimeout(stop, connectTimeout);
   ready = true;
-  return { url: `unix://${path}`, close };
+  return { url: `unix://${path}`, expiresAt, close };
 }

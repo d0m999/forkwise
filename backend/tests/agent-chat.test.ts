@@ -16,7 +16,8 @@ const nativeDefaultModel = 'codex-fixture-model';
 const nativeDefault = { model: nativeDefaultModel, hidden: false, isDefault: true };
 const availableModels = [
   nativeDefault,
-  { model, hidden: false, isDefault: false },
+  { model, hidden: false, isDefault: false, defaultReasoningEffort: 'medium',
+    supportedReasoningEfforts: [{ reasoningEffort: 'medium', description: '' }, { reasoningEffort: 'high', description: '' }] },
 ];
 type FixtureModel = { model: string; hidden: boolean; isDefault?: boolean };
 let root: string;
@@ -40,8 +41,15 @@ function setFixtureModels(models: FixtureModel[], behavior: {
   holdClose?: boolean;
   omitRecordedTurn?: boolean;
   terminalSettings?: 'onResume' | 'onClose' | 'changed' | 'unknown';
+  restrictReopenedTerminal?: boolean;
   failModelAfterResume?: boolean;
   holdTurn?: boolean;
+  holdResume?: boolean;
+  holdStartResponse?: boolean;
+  holdPreflight?: boolean;
+  invalidStartAfterReroute?: boolean;
+  recordedTurnStatus?: string;
+  expectedEffort?: string;
 } = {}) {
   writeFileSync(modelSettings, JSON.stringify({ models, ...behavior }), { mode: 0o600 });
 }
@@ -76,7 +84,8 @@ assert.equal(process.env.OPENAI_API_KEY, undefined);
 const accountPath = join(process.env.CODEX_HOME, 'native-account.json');
 const model = ${JSON.stringify(model)};
 const { models, nextModelPage, modelListError, openedModel, reroutedModel, completedModel, interruptOutcome, holdClose, omitRecordedTurn,
-  terminalSettings, failModelAfterResume, holdTurn } = JSON.parse(readFileSync(${JSON.stringify(modelSettings)}, 'utf8'));
+  terminalSettings, restrictReopenedTerminal, failModelAfterResume, holdTurn, holdResume, holdStartResponse, holdPreflight,
+  invalidStartAfterReroute, recordedTurnStatus, expectedEffort } = JSON.parse(readFileSync(${JSON.stringify(modelSettings)}, 'utf8'));
 const nativeDefault = models.find(candidate => candidate.isDefault)?.model;
 const print = event => process.stdout.write(JSON.stringify(event) + '\\n');
 const load = id => JSON.parse(readFileSync(join(process.cwd(), id + '.json'), 'utf8'));
@@ -93,6 +102,7 @@ let authenticated = false;
 let reroutedTurn;
 let verifyingResult = false;
 let resumedForTerminal;
+let heldTurn;
 for await (const line of createInterface({input: process.stdin})) {
   const {id, method, params} = JSON.parse(line);
   if (method) appendFileSync(${JSON.stringify(nativeRequests)}, method + '\\n', { mode: 0o600 });
@@ -127,13 +137,17 @@ for await (const line of createInterface({input: process.stdin})) {
     assert.deepEqual(openParams, { threadId: params.threadId, cwd: process.cwd() });
     const thread = load(params.threadId);
     if (!excludeTurns) {
-      resumedForTerminal = thread;
+      if (holdResume) await waitForSignal(${JSON.stringify(resultSignal)});
       if (terminalSettings && terminalSettings !== 'onClose') flushSettings(thread, terminalSettings);
     }
+    if (!excludeTurns || restrictReopenedTerminal) resumedForTerminal = thread;
     respond({thread: {...thread, preview: thread.turns.at(-1)?.items[0]?.content?.[0]?.text ?? ''},
-      model: openedModel ?? requested ?? nativeDefault});
+      model: openedModel ?? requested ?? nativeDefault, approvalPolicy: restrictReopenedTerminal ? 'never' : 'on-request',
+      approvalsReviewer: 'user',
+      sandbox: { type: 'workspaceWrite', writableRoots: [], networkAccess: false, excludeTmpdirEnvVar: false, excludeSlashTmp: false },
+      reasoningEffort: 'medium' });
   } else if (method === 'thread/read') {
-    if (verifyingResult) await waitForSignal(${JSON.stringify(resultSignal)});
+    if (verifyingResult || (holdPreflight && resumedForTerminal)) await waitForSignal(${JSON.stringify(resultSignal)});
     respond({thread: load(params.threadId)});
   } else if (method === 'thread/turns/list') {
     respond({ data: load(params.threadId).turns, nextCursor: null });
@@ -142,8 +156,9 @@ for await (const line of createInterface({input: process.stdin})) {
     respond({ data: turns.flatMap(turn => turn.items.map(item => ({ ...item, turnId: turn.id }))), nextCursor: null });
   } else if (method === 'turn/start') {
     assert.equal(params.model, model);
-    const { clientUserMessageId, ...turnParams } = params;
+    const { clientUserMessageId, effort, ...turnParams } = params;
     if (clientUserMessageId !== undefined) assert.equal(typeof clientUserMessageId, 'string');
+    assert.equal(effort, expectedEffort);
     assert.deepEqual(Object.keys(turnParams).sort(), ['input', 'model', 'threadId']);
     assert.equal(turnParams.input.length, 1);
     assert.equal(turnParams.input[0].type, 'text');
@@ -161,7 +176,7 @@ for await (const line of createInterface({input: process.stdin})) {
     ]};
     const delta = {method: 'item/agentMessage/delta', params: {threadId, itemId, delta: answer}};
     const saveTurn = () => {
-      if (!omitRecordedTurn) turns.push(turn);
+      if (!omitRecordedTurn) turns.push({ ...turn, status: recordedTurnStatus ?? turn.status });
       else if (existsSync(path)) return;
       const jsonl = path + 'l';
       const recording = terminalSettings || existsSync(jsonl) ? jsonl : path;
@@ -177,7 +192,15 @@ for await (const line of createInterface({input: process.stdin})) {
       verifyingResult = !!completedModel;
       print({method: 'turn/completed', params: {threadId, turn}});
     };
-    respond({turn: {id: turnId, status: 'inProgress'}});
+    if (invalidStartAfterReroute) {
+      reroutedTurn = {threadId, turn};
+      print({method: 'model/rerouted', params: {threadId, turnId, fromModel: model, toModel: reroutedModel}});
+      respond({turn: null});
+      continue;
+    }
+    if (holdStartResponse) await waitForSignal(${JSON.stringify(resultSignal)});
+    if (holdTurn) print({method: 'turn/started', params: {threadId, turn: {...turn, status: 'inProgress'}}});
+    respond({turn: {id: turnId, status: 'inProgress', items: holdTurn ? turn.items : []}});
     if (reroutedModel) {
       reroutedTurn = {threadId, turn};
       const waitForTest = setInterval(() => {
@@ -195,9 +218,19 @@ for await (const line of createInterface({input: process.stdin})) {
         clearInterval(waitForTest);
         complete();
       }, 10);
+      heldTurn = { threadId, turn, complete, waitForTest };
       waitForTest.unref();
     } else complete();
   } else if (method === 'turn/interrupt') {
+    if (heldTurn) {
+      assert.deepEqual(params, { threadId: heldTurn.threadId, turnId: heldTurn.turn.id });
+      clearInterval(heldTurn.waitForTest);
+      heldTurn.turn.status = 'interrupted';
+      heldTurn.turn.items = heldTurn.turn.items.slice(0, 1);
+      respond({});
+      heldTurn.complete();
+      continue;
+    }
     assert.ok(reroutedTurn);
     const {threadId, turn} = reroutedTurn;
     assert.deepEqual(params, {threadId, turnId: turn.id});
@@ -280,9 +313,13 @@ async function connectTerminal(response: Response, threadId: string) {
     await expect.poll(() => frames.find(predicate), { timeout: 3_000 }).toBeDefined();
     return frames.find(predicate)!;
   }
-  async function request(method: string, params: object) {
+  function send(method: string, params: object) {
     const id = ++sequence;
     socket.send(JSON.stringify({ id, method, params }));
+    return id;
+  }
+  async function request(method: string, params: object) {
+    const id = send(method, params);
     return waitFor(frame => frame.id === id);
   }
   async function close() {
@@ -292,7 +329,7 @@ async function connectTerminal(response: Response, threadId: string) {
   }
   expect(await request('initialize', { clientInfo: { name: 'codex-tui', version: 'test' } })).toHaveProperty('result');
   socket.send(JSON.stringify({ method: 'initialized' }));
-  return { request, waitFor, frames, close, disconnected };
+  return { send, request, waitFor, frames, close, disconnected };
 }
 
 it('从空会话发问，并在原生记录变化后只读回看，禁止未核验的发送', async () => {
@@ -351,7 +388,10 @@ it('可见的合成问答一致时，仍拦截隐藏内容变化后的原生历�
 
 it('从工作台到受控终端再回到工作台，三轮保持同一原生会话和 Luna', async () => {
   const { chat, id, threadId, post } = await startTerminalConversation();
-  const terminal = await connectTerminal(await post(`/${id}/terminal`), threadId);
+  setFixtureModels(availableModels, { holdTurn: true, expectedEffort: 'medium' });
+  const offer = await post(`/${id}/terminal`);
+  expect(await offer.clone().json()).toMatchObject({ expiresAt: expect.any(Number) });
+  const terminal = await connectTerminal(offer, threadId);
   expect(await terminal.request('account/read', { refreshToken: true })).toMatchObject({
     result: { account: { type: 'chatgpt', email: null } },
   });
@@ -361,25 +401,25 @@ it('从工作台到受控终端再回到工作台，三轮保持同一原生会�
   expect(await terminal.request('thread/resume', {
     threadId, model, cwd: '/tmp/fixture-outside-workspace', runtimeWorkspaceRoots: ['/tmp/fixture-root'],
   })).toMatchObject({ result: { thread: { id: threadId, turns: [{ status: 'completed' }] }, model } });
-  const competing = await post(`/${id}/turns`, { text: '终端连接期间的并发问题' });
-  expect(competing.status).toBe(409);
-  expect(await competing.json()).toMatchObject({ code: 'CODEX_TERMINAL_CONNECTED' });
-
   const question = '终端第二轮合成问题';
   const second = await terminal.request('turn/start', {
-    threadId, model, input: [{ type: 'text', text: question, textElements: [] }],
+    threadId, model, approvalPolicy: 'on-request', effort: 'medium', input: [{ type: 'text', text: question, textElements: [] }],
   });
   expect(second).toMatchObject({ result: { turn: { id: expect.any(String) } } });
   const secondTurnId = (second.result as { turn: { id: string } }).turn.id;
+  const competing = await post(`/${id}/turns`, { text: '终端运行期间的并发问题' });
+  expect(competing.status).toBe(409);
+  expect(await competing.json()).toMatchObject({ code: 'CODEX_TURN_ACTIVE' });
+  writeFileSync(resultSignal, '', { mode: 0o600 });
   const completed = await terminal.waitFor(frame => frame.method === 'turn/completed');
   expect(completed).toMatchObject({ params: { threadId, turn: { id: secondTurnId, status: 'completed', items: [
     { type: 'userMessage', content: [{ text: question }] },
     { type: 'agentMessage', text: '合成回答' },
   ] } } });
-  await terminal.close();
-
+  setFixtureModels(availableModels);
   const third = await post(`/${id}/turns`, { text: '见岔第三轮合成问题' });
   expect(third.status).toBe(202);
+  await terminal.disconnected;
   expect(await third.json()).toMatchObject({ threadId, model });
   await expect.poll(async () => (await chat.get(id)).busy).toBe(false);
   const result = await chat.get(id);
@@ -387,6 +427,101 @@ it('从工作台到受控终端再回到工作台，三轮保持同一原生会�
   expect(result.messages.map(message => message.text)).toEqual([
     '见岔首轮合成问题', '合成回答', question, '合成回答', '见岔第三轮合成问题', '合成回答',
   ]);
+}, 15_000);
+
+it('运行中的终端回合收到无正文的启动通知，并能用回合 ID 中断', async () => {
+  const { chat, id, threadId, post } = await startTerminalConversation();
+  setFixtureModels(availableModels, { holdTurn: true });
+  const terminal = await connectTerminal(await post(`/${id}/terminal`), threadId);
+  expect(await terminal.request('thread/resume', { threadId })).toHaveProperty('result');
+  const input = [{ type: 'text', text: '应可中断的合成问题' }];
+  const start = await terminal.request('turn/start', { threadId, input });
+  const started = await terminal.waitFor(frame => frame.method === 'turn/started');
+  expect(started.params).toMatchObject({ threadId, turn: { id: expect.any(String), status: 'inProgress', items: [] } });
+  const turnId = (started.params as { turn: { id: string } }).turn.id;
+  expect(start).toMatchObject({ result: { turn: { id: turnId } } });
+  expect(terminal.frames.indexOf(start)).toBeLessThan(terminal.frames.indexOf(started));
+  expect(JSON.stringify(terminal.frames)).not.toContain(input[0]!.text);
+  expect(await terminal.request('turn/interrupt', { threadId, turnId })).toHaveProperty('result');
+  expect(await terminal.waitFor(frame => frame.method === 'turn/completed')).toMatchObject({
+    params: { threadId, turn: { id: turnId, status: 'interrupted' } },
+  });
+  expect(terminal.frames.filter(frame => frame.method === 'turn/started')).toHaveLength(1);
+  expect(await chat.get(id)).toMatchObject({ busy: false, error: '此回合已中断。' });
+}, 15_000);
+
+it('恢复中的终端占用原生会话，恢复后空闲即可由工作台接管', async () => {
+  setFixtureModels(availableModels, { terminalSettings: 'onClose' });
+  const { chat, id, threadId, post } = await startTerminalConversation();
+  setFixtureModels(availableModels, { terminalSettings: 'onClose', holdResume: true });
+  const terminal = await connectTerminal(await post(`/${id}/terminal`), threadId);
+  const previousRequests = readFileSync(nativeRequests, 'utf8').length;
+  const resume = terminal.send('thread/resume', { threadId });
+  await expect.poll(() => readFileSync(nativeRequests, 'utf8').slice(previousRequests)).toContain('thread/resume\n');
+  try {
+    const competing = await post(`/${id}/turns`, { text: '恢复期间不会发送的合成问题' });
+    expect(competing.status).toBe(409);
+    expect(await competing.json()).toMatchObject({ code: 'CODEX_TURN_ACTIVE' });
+  } finally {
+    writeFileSync(resultSignal, '', { mode: 0o600 });
+  }
+  expect(await terminal.waitFor(frame => frame.id === resume)).toHaveProperty('result');
+  const continued = await post(`/${id}/turns`, { text: '恢复完成后接管的合成问题' });
+  expect(continued.status).toBe(202);
+  await terminal.disconnected;
+  await expect.poll(async () => (await chat.get(id)).busy).toBe(false);
+  expect((await chat.get(id)).messages.map(message => message.text)).toEqual([
+    '见岔首轮合成问题', '合成回答', '恢复完成后接管的合成问题', '合成回答',
+  ]);
+}, 15_000);
+
+it.each([{ omitRecordedTurn: true }, { recordedTurnStatus: 'interrupted' }])(
+  '原生历史缺少匹配终态 %j 时，终端收到未确认且检查点不动', async behavior => {
+    const { chat, id, threadId, post } = await startTerminalConversation();
+    const index = join(directory, 'conversations.json');
+    const checkpoint = JSON.parse(readFileSync(index, 'utf8'))[0].checkpoint;
+    setFixtureModels(availableModels, behavior);
+    const terminal = await connectTerminal(await post(`/${id}/terminal`), threadId);
+    expect(await terminal.request('thread/resume', { threadId })).toHaveProperty('result');
+    const input = [{ type: 'text', text: '原生历史未确认的合成问题' }];
+    const start = await terminal.request('turn/start', { threadId, input });
+    const { id: turnId } = (start.result as { turn: { id: string } }).turn;
+    expect(await terminal.waitFor(frame => ['turn/completed', 'error'].includes(frame.method ?? ''))).toMatchObject({
+      method: 'error', params: { threadId, turnId },
+    });
+    expect(JSON.stringify(terminal.frames)).not.toContain(input[0]!.text);
+    expect(JSON.parse(readFileSync(index, 'utf8'))[0].checkpoint).toBe(checkpoint);
+    expect(await chat.get(id)).toMatchObject({ busy: false, error: expect.stringContaining('未确认') });
+  }, 15_000,
+);
+
+it('终端等待原生发送前的历史校验超时，放行校验后也不会发送', async () => {
+  const { chat, id, threadId, post } = await startTerminalConversation();
+  setFixtureModels(availableModels, { holdPreflight: true });
+  const terminal = await connectTerminal(await post(`/${id}/terminal`), threadId);
+  expect(await terminal.request('thread/resume', { threadId })).toHaveProperty('result');
+  const previousRequests = readFileSync(nativeRequests, 'utf8').length;
+  let expire: (() => void) | undefined;
+  const schedule = globalThis.setTimeout;
+  const timers = vi.spyOn(globalThis, 'setTimeout').mockImplementation((callback, delay, ...args) => {
+    if (delay === 60_000) expire = () => callback(...args);
+    return schedule(callback, delay, ...args);
+  });
+  try {
+    const request = terminal.request('turn/start', { threadId, input: [{ type: 'text', text: '超时后不得发送的问题' }] });
+    await expect.poll(() => readFileSync(nativeRequests, 'utf8').slice(previousRequests)).toContain('thread/read\n');
+    expect(expire).toBeTypeOf('function');
+    expire!();
+    expect(await request).toHaveProperty('error');
+    await terminal.disconnected;
+    writeFileSync(resultSignal, '', { mode: 0o600 });
+    await expect.poll(async () => (await chat.get(id)).busy).toBe(false);
+    expect(readFileSync(nativeRequests, 'utf8').slice(previousRequests)).not.toContain('turn/start\n');
+    expect((await chat.get(id)).messages).toHaveLength(2);
+  } finally {
+    timers.mockRestore();
+    writeFileSync(resultSignal, '', { mode: 0o600 });
+  }
 }, 15_000);
 
 it('从受控入口之外追加重复设置，仍不能恢复或发送', async () => {
@@ -479,20 +614,27 @@ it('模型目录恢复后，可在同一个终端连接上重试 resume', async 
   await terminal.close();
 }, 15_000);
 
-it('终端发出问题后断开，只有原生回合完成才更新工作台记录', async () => {
+it.each([false, true])('原生已收到发送但终端断开（延迟回执 %s），回合仍独立收尾', async holdStartResponse => {
   const { chat, id, threadId, post } = await startTerminalConversation();
-  setFixtureModels(availableModels, { holdTurn: true });
+  setFixtureModels(availableModels, { holdTurn: true, holdStartResponse });
   const indexPath = join(directory, 'conversations.json');
   const initial = JSON.parse(readFileSync(indexPath, 'utf8'))[0];
   const terminal = await connectTerminal(await post(`/${id}/terminal`), threadId);
   expect(await terminal.request('thread/resume', { threadId, model })).toHaveProperty('result');
+  const previousRequests = readFileSync(nativeRequests, 'utf8').length;
   const question = '终端断线前发出的合成问题';
-  expect(await terminal.request('turn/start', {
+  const requestId = terminal.send('turn/start', {
     threadId, model, input: [{ type: 'text', text: question }],
-  })).toHaveProperty('result');
-  await terminal.close();
+  });
+  if (holdStartResponse) {
+    await expect.poll(() => readFileSync(nativeRequests, 'utf8').slice(previousRequests)).toContain('turn/start\n');
+    expect(terminal.frames.some(frame => frame.id === requestId)).toBe(false);
+  } else {
+    expect(await terminal.waitFor(frame => frame.id === requestId)).toHaveProperty('result');
+  }
 
   try {
+    await terminal.close();
     expect((await chat.get(id)).busy).toBe(true);
     const competing = await post(`/${id}/turns`, { text: '原生回合完成前的合成问题' });
     expect(competing.status).toBe(409);
@@ -505,6 +647,7 @@ it('终端发出问题后断开，只有原生回合完成才更新工作台记�
   expect(JSON.parse(readFileSync(indexPath, 'utf8'))[0]?.checkpoint).not.toBe(initial.checkpoint);
   const result = await chat.get(id);
   expect(result).toMatchObject({ threadId, model });
+  expect(readFileSync(nativeRequests, 'utf8').slice(previousRequests).split('\n').filter(method => method === 'turn/start')).toHaveLength(1);
   expect(result.messages.map(message => message.text)).toEqual(['见岔首轮合成问题', '合成回答', question, '合成回答']);
 }, 15_000);
 
@@ -576,11 +719,59 @@ it('受控终端把路径和配置留在本地边界，拒绝其他会话、模�
     { threadId, config: { model: nativeDefaultModel }, input: [text] },
     { threadId, input: [text, { type: 'localImage', path: '/tmp/fixture-private.png' }] },
     { threadId, input: [{ ...text, textElements: [{ byteRange: { start: 0, end: 1 } }] }] },
-  ]) expect(await terminal.request('turn/start', params)).toHaveProperty('error');
+    { threadId, input: [text], sandboxPolicy: { type: 'readOnly' } },
+    { threadId, input: [text], permissions: 'fixture-read-only' },
+    { threadId, input: [text], approvalPolicy: 'untrusted' },
+    { threadId, input: [text], approvalsReviewer: 'guardian_subagent' },
+    { threadId, input: [text], runtimeWorkspaceRoots: ['/tmp/fixture-narrow-root'] },
+  ]) expect(await terminal.request('turn/start', params)).toMatchObject({ error: { code: -32602 } });
+  expect(await terminal.request('config/value/write', { value: '不得出现在回执的合成值' }))
+    .toMatchObject({ error: { code: -32601 } });
   expect(readFileSync(nativeRequests, 'utf8')).toBe(afterResume);
+  expect(await terminal.request('turn/start', { threadId, input: [text], effort: 'xhigh' }))
+    .toMatchObject({ error: { code: -32602 } });
+  expect(readFileSync(nativeRequests, 'utf8').slice(afterResume.length)).not.toContain('turn/start\n');
   expect(JSON.parse(readFileSync(join(directory, 'no-project', threadId + '.json'), 'utf8')).turns).toHaveLength(1);
   await terminal.close();
 }, 15_000);
+
+it('后续终端回合按新恢复的权限拒绝旧选择，重试时仍可核验重复设置', async () => {
+  setFixtureModels(availableModels, { terminalSettings: 'onClose' });
+  const { chat, id, threadId, post } = await startTerminalConversation();
+  const terminal = await connectTerminal(await post(`/${id}/terminal`), threadId);
+  expect(await terminal.request('thread/resume', { threadId })).toHaveProperty('result');
+  const send = (text: string, approvalPolicy: string) =>
+    terminal.request('turn/start', { threadId, approvalPolicy, input: [{ type: 'text', text }] });
+  expect(await send('权限变化前的合成问题', 'on-request')).toHaveProperty('result');
+  await terminal.waitFor(frame => frame.method === 'turn/completed');
+
+  setFixtureModels(availableModels, { terminalSettings: 'onClose', restrictReopenedTerminal: true });
+  expect(await send('使用旧权限的合成问题', 'on-request')).toMatchObject({ error: { code: -32602 } });
+  expect(await send('使用现有权限的合成问题', 'never')).toHaveProperty('result');
+  await expect.poll(async () => (await chat.get(id)).busy).toBe(false);
+  const result = await chat.get(id);
+  expect(result.error).toBeUndefined();
+  expect(result.messages.map(message => message.text)).toEqual([
+    '见岔首轮合成问题', '合成回答', '权限变化前的合成问题', '合成回答', '使用现有权限的合成问题', '合成回答',
+  ]);
+}, 15_000);
+
+it.each([{ effort: 'high' }, { collaborationMode: { mode: 'default', settings: { model, reasoning_effort: 'high' } } }])(
+  '终端选择 Luna 支持的推理强度 %j 时原生回合实际收到该选择', async settings => {
+    const { id, threadId, post } = await startTerminalConversation();
+    setFixtureModels(availableModels, { expectedEffort: 'high' });
+    const terminal = await connectTerminal(await post(`/${id}/terminal`), threadId);
+    expect(await terminal.request('account/read', {})).toHaveProperty('result');
+    expect(await terminal.request('model/list', {})).toMatchObject({
+      result: { data: [{ model, supportedReasoningEfforts: expect.arrayContaining([{ reasoningEffort: 'high', description: '' }]) }] },
+    });
+    expect(await terminal.request('thread/resume', { threadId })).toHaveProperty('result');
+    expect(await terminal.request('turn/start', {
+      threadId, ...settings, input: [{ type: 'text', text: '使用较高推理强度的合成问题' }],
+    })).toHaveProperty('result');
+    await terminal.waitFor(frame => frame.method === 'turn/completed');
+  }, 15_000,
+);
 
 it('终端回合被原生改派后，WebSocket 收不到异模文本且工作台保留上一轮', async () => {
   const { chat, id, threadId, post } = await startTerminalConversation();
@@ -600,6 +791,19 @@ it('终端回合被原生改派后，WebSocket 收不到异模文本且工作台
   const result = await chat.get(id);
   expect(result).toMatchObject({ threadId, model, busy: false, error: expect.stringContaining('已隐藏本轮内容') });
   expect(result.messages.map(message => message.text)).toEqual(['见岔首轮合成问题', '合成回答']);
+}, 15_000);
+
+it('启动回执无效时，先到达的原生异模改派仍会触发中断', async () => {
+  const { chat, id, threadId, post } = await startTerminalConversation();
+  setFixtureModels(availableModels, { reroutedModel: nativeDefaultModel, invalidStartAfterReroute: true });
+  const terminal = await connectTerminal(await post(`/${id}/terminal`), threadId);
+  expect(await terminal.request('thread/resume', { threadId })).toHaveProperty('result');
+  expect(await terminal.request('turn/start', {
+    threadId, input: [{ type: 'text', text: '启动回执无效的合成问题' }],
+  })).toMatchObject({ error: { code: -32000 } });
+  expect(readFileSync(nativeRequests, 'utf8')).toContain('turn/interrupt\n');
+  expect(terminal.frames.some(frame => frame.method === 'turn/started' || frame.method === 'turn/completed')).toBe(false);
+  expect((await chat.get(id)).messages).toHaveLength(2);
 }, 15_000);
 
 it('正式路由拒绝非本人和跨站请求，且不提供独立授权入口', async () => {

@@ -13,9 +13,14 @@ export const codexChatModel = 'gpt-6-luna';
 export const codexModelArgs = ['-c', 'agents.enabled=false', '-c', 'features.multi_agent_v2=false'] as const;
 export const codexStorageEnvironment = ['CODEX_HOME', 'CODEX_SQLITE_HOME'] as const;
 const accountResult = z.object({ account: z.object({ type: z.string().min(1) }).nullable() });
+export const reasoningEffort = z.string().min(1);
 const modelListResult = z.object({
-  data: z.array(z.object({ model: z.string(), hidden: z.boolean() })),
-  nextCursor: z.string().nullable(),
+  data: z.array(z.object({
+    model: z.string(), hidden: z.boolean(), displayName: z.string().optional(), description: z.string().optional(),
+    supportedReasoningEfforts: z.array(z.object({ reasoningEffort, description: z.string() })).default([]),
+    defaultReasoningEffort: reasoningEffort.default('medium'),
+  })),
+  nextCursor: z.string().nullish(),
 });
 
 const rpcMessage = z.object({
@@ -28,6 +33,17 @@ const rpcMessage = z.object({
 
 const rpcError = () => new DomainError('CODEX_UNAVAILABLE', '无法连接本机 Codex，请检查安装及网络后重试。', 503);
 const rpcTimeout = () => new DomainError('CODEX_TIMEOUT', '本机 Codex 等待超时。请先重新读取原生会话，再决定是否重发。', 503);
+
+export async function findChatModel(list: (params: object) => Promise<unknown>) {
+  let cursor: string | null = null;
+  do {
+    const result = modelListResult.safeParse(await list({ cursor, limit: 100, includeHidden: false }));
+    if (!result.success) throw rpcError();
+    const model = result.data.data.find(model => model.model === codexChatModel && !model.hidden);
+    if (model) return model;
+    cursor = result.data.nextCursor ?? null;
+  } while (cursor);
+}
 
 export function codexBinary(): string {
   if (process.env.FORKWISE_CODEX_BINARY) return process.env.FORKWISE_CODEX_BINARY;
@@ -127,14 +143,11 @@ export class CodexConnection {
   }
 
   async hasChatModel() {
-    let cursor: string | null = null;
-    do {
-      const result = modelListResult.safeParse(await this.call('model/list', { cursor, limit: 100, includeHidden: false }));
-      if (!result.success) throw rpcError();
-      if (result.data.data.some(model => model.model === codexChatModel && !model.hidden)) return true;
-      cursor = result.data.nextCursor;
-    } while (cursor);
-    return false;
+    return Boolean(await this.chatModel());
+  }
+
+  chatModel() {
+    return findChatModel(params => this.call('model/list', params));
   }
 
   call(method: string, params: object): Promise<unknown> {

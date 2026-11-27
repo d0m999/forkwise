@@ -91,10 +91,11 @@ it('按接收顺序处理原生请求和通知，并使用固定错误响应畸�
 });
 
 it('开放三分钟且无人连接后清理临时 socket', async () => {
-  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+  vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
   let release = () => {};
   const closed = new Promise<void>(resolve => { release = resolve; });
   const terminal = await start(async () => null, release);
+  expect(terminal.expiresAt).toBe(Date.now() + 3 * 60_000);
   const path = terminal.url.slice('unix://'.length);
   await vi.advanceTimersByTimeAsync(3 * 60_000 - 1);
   expect(existsSync(path)).toBe(true);

@@ -14,7 +14,8 @@ function session() {
   };
   const dispatch = terminalProtocol(threadId, api);
   const notify = vi.fn();
-  return { api, notify, call: (method: string, params?: unknown) => dispatch(method, params, notify) };
+  const signal = new AbortController().signal;
+  return { api, notify, signal, call: (method: string, params?: unknown) => dispatch(method, params, notify, signal) };
 }
 
 it('为终端引导提供 Luna 和最少账户信息，忽略刷新令牌和配置路径请求', async () => {
@@ -56,8 +57,8 @@ it('保留未登录状态，只有隐藏或其他模型时返回空列表', asyn
   await expect(call('model/list')).resolves.toEqual({ data: [], nextCursor: null });
 });
 
-it('通过会话绑定读取分页记录，恢复后仅传递纯文本、消息 ID 和中断 ID', async () => {
-  const { api, call, notify } = session();
+it('通过会话绑定读取分页记录，解析纯文本、回合设置和中断 ID', async () => {
+  const { api, call, notify, signal } = session();
   await expect(call('turn/start', { threadId, input: [{ type: 'text', text: '合成问题' }] })).rejects.toMatchObject({ code: 'CODEX_TERMINAL_RESUME_REQUIRED' });
 
   await call('thread/read', { threadId, includeTurns: false, path: '/another-thread' });
@@ -77,7 +78,8 @@ it('通过会话绑定读取分页记录，恢复后仅传递纯文本、消息 
     model: 'gpt-6-luna', cwd: '/terminal', sandboxPolicy: { type: 'dangerFullAccess' },
     collaborationMode: { mode: 'default', settings: { model: 'gpt-6-luna', reasoning_effort: 'medium', developer_instructions: null } },
   })).resolves.toEqual({ turn: { id: 'turn-1' } });
-  expect(api.turn).toHaveBeenCalledExactlyOnceWith(' 合成问题 ', 'msg-7', notify);
+  expect(api.turn).toHaveBeenCalledExactlyOnceWith(' 合成问题 ', 'msg-7',
+    { sandboxPolicy: { type: 'dangerFullAccess' }, effort: 'medium' }, notify, signal);
   await call('turn/interrupt', { threadId, turnId: 'turn-1' });
   expect(api.interrupt).toHaveBeenCalledExactlyOnceWith('turn-1');
 });
@@ -88,7 +90,8 @@ it('拒绝越域、历史注入、备用模型和带内容的工具请求', asyn
     await expect(call(method, { threadId: 'other-thread' })).rejects.toMatchObject({ code: 'CODEX_TERMINAL_THREAD' });
   }
   for (const injection of [{ path: '/private' }, { history: [{ type: 'message' }] }, { developerInstructions: 'private' },
-    { baseInstructions: 'private' }, { config: { model: 'private' } }]) {
+    { baseInstructions: 'private' }, { config: { model: 'private' } }, { sandbox: 'read-only' },
+    { permissions: 'read-only' }, { approvalPolicy: 'untrusted' }, { approvalsReviewer: 'auto_review' }]) {
     await expect(call('thread/resume', { threadId, ...injection })).rejects.toMatchObject({ code: 'CODEX_TERMINAL_PARAMS' });
   }
   expect(api.resume).not.toHaveBeenCalled();
@@ -113,6 +116,8 @@ it('拒绝越域、历史注入、备用模型和带内容的工具请求', asyn
   await expect(call('config/value/write', { private: 'private' })).rejects.toMatchObject({
     code: 'CODEX_TERMINAL_METHOD', message: '此终端请求不受支持。', details: null,
   });
+  await expect(call('config/value/write', [])).rejects.toMatchObject({ code: 'CODEX_TERMINAL_METHOD' });
+  await expect(call('turn/start', [])).rejects.toMatchObject({ code: 'CODEX_TERMINAL_PARAMS' });
   expect(api.query).not.toHaveBeenCalled();
   expect(api.turn).not.toHaveBeenCalled();
   expect(api.interrupt).not.toHaveBeenCalled();
