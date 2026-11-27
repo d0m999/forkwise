@@ -130,6 +130,10 @@ export function createWorkspaceApp(
     });
     app.get('/api/agent-chat/conversations/:id', async (c) =>
       c.json(await chat.get(z.uuid().parse(c.req.param('id')))));
+    app.post('/api/agent-chat/conversations/:id/terminal', async (c) => {
+      z.object({}).strict().parse(await c.req.json());
+      return c.json(await chat.terminal(z.uuid().parse(c.req.param('id'))), 201);
+    });
     app.post('/api/agent-chat/conversations/:id/turns', async (c) => {
       const { text } = z.object({ text: z.string().trim().min(1).max(32_000) }).strict().parse(await c.req.json());
       return c.json(await chat.send(z.uuid().parse(c.req.param('id')), text), 202);

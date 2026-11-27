@@ -48,7 +48,7 @@ export class CodexConnection {
 
   constructor(
     cwd: string,
-    onEvent: (method: string, params: unknown) => void,
+    private onEvent: (method: string, params: unknown) => void,
     onClose: () => void,
   ) {
     const proxy = codexProxyEnvironment();
@@ -84,7 +84,7 @@ export class CodexConnection {
         return;
       }
       if (method) {
-        onEvent(method, params);
+        this.onEvent(method, params);
         return;
       }
       if (typeof id !== 'number') return;
@@ -109,9 +109,15 @@ export class CodexConnection {
     if (!this.stopped && this.child.stdin.writable) this.child.stdin.write(JSON.stringify(message) + '\n');
   }
 
+  observe(onEvent: (method: string, params: unknown) => void, onClose: () => void) {
+    this.onEvent = onEvent;
+    void this.exited.then(onClose);
+  }
+
   async initialize(version: string) {
-    await this.call('initialize', { clientInfo: { name: 'forkwise', title: codexName, version } });
+    const result = await this.call('initialize', { clientInfo: { name: 'forkwise', title: codexName, version } });
     this.write({ method: 'initialized' });
+    return result;
   }
 
   async loggedIn() {

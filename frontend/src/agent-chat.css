@@ -97,6 +97,8 @@
   font-size: 12px;
 }
 .agent-chat-resume summary { cursor: pointer; }
+.agent-chat-resume details { margin-top: 12px; }
+.agent-chat-resume p { margin: 6px 0; padding: 0; }
 .agent-chat-resume code {
   display: block;
   margin-top: 8px;

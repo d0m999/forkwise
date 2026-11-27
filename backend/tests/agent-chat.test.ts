@@ -1,8 +1,10 @@
-import fs, { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmdirSync, rmSync, writeFileSync } from 'node:fs';
+import { once } from 'node:events';
+import fs, { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmdirSync, rmSync, writeFileSync } from 'node:fs';
 import { syncBuiltinESMExports } from 'node:module';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import WebSocket from 'ws';
 import { AgentChat, openAgentChatDirectory } from '../src/agent-chat/chat.js';
 import { createWorkspaceApp } from '../src/mapping/http.js';
 import { openMapping } from '../src/mapping/storage.js';
@@ -37,6 +39,9 @@ function setFixtureModels(models: FixtureModel[], behavior: {
   interruptOutcome?: 'interrupted' | 'completed' | 'unconfirmed' | 'interruptError' | 'noReply' | 'interruptedOnClose';
   holdClose?: boolean;
   omitRecordedTurn?: boolean;
+  terminalSettings?: 'onResume' | 'onClose' | 'changed' | 'unknown';
+  failModelAfterResume?: boolean;
+  holdTurn?: boolean;
 } = {}) {
   writeFileSync(modelSettings, JSON.stringify({ models, ...behavior }), { mode: 0o600 });
 }
@@ -70,16 +75,24 @@ assert.equal(process.env.ACCESS_TOKEN, undefined);
 assert.equal(process.env.OPENAI_API_KEY, undefined);
 const accountPath = join(process.env.CODEX_HOME, 'native-account.json');
 const model = ${JSON.stringify(model)};
-const { models, nextModelPage, modelListError, openedModel, reroutedModel, completedModel, interruptOutcome, holdClose, omitRecordedTurn } = JSON.parse(readFileSync(${JSON.stringify(modelSettings)}, 'utf8'));
+const { models, nextModelPage, modelListError, openedModel, reroutedModel, completedModel, interruptOutcome, holdClose, omitRecordedTurn,
+  terminalSettings, failModelAfterResume, holdTurn } = JSON.parse(readFileSync(${JSON.stringify(modelSettings)}, 'utf8'));
 const nativeDefault = models.find(candidate => candidate.isDefault)?.model;
 const print = event => process.stdout.write(JSON.stringify(event) + '\\n');
 const load = id => JSON.parse(readFileSync(join(process.cwd(), id + '.json'), 'utf8'));
+const eventLine = (timestamp, payload) => JSON.stringify({timestamp, type: 'event_msg', payload}) + '\\n';
+const settings = (threadId, approvalPolicy = 'never') => ({ type: 'thread_settings_applied', thread_id: threadId,
+  thread_settings: { model, approval_policy: approvalPolicy } });
+const flushSettings = (thread, change) => appendFileSync(thread.path, eventLine('2026-11-27T08:01:00.111222333Z',
+  change === 'unknown' ? { type: 'fixture_unknown_context', text: '未核验材料占位' }
+    : settings(thread.id, change === 'changed' ? 'on-request' : 'never')));
 async function waitForSignal(path) {
   while (!existsSync(path)) await new Promise(resolve => setTimeout(resolve, 10));
 }
 let authenticated = false;
 let reroutedTurn;
 let verifyingResult = false;
+let resumedForTerminal;
 for await (const line of createInterface({input: process.stdin})) {
   const {id, method, params} = JSON.parse(line);
   if (method) appendFileSync(${JSON.stringify(nativeRequests)}, method + '\\n', { mode: 0o600 });
@@ -94,26 +107,46 @@ for await (const line of createInterface({input: process.stdin})) {
     respond({ account: authenticated ? { type: 'chatgpt', email: 'fixture@example.com', planType: 'plus' } : null });
   } else if (method === 'model/list') {
     assert.equal(authenticated, true);
-    if (modelListError) print({ id, error: { code: -32603, message: 'model list unavailable' } });
+    if (modelListError || (failModelAfterResume && resumedForTerminal))
+      print({ id, error: { code: -32603, message: 'model list unavailable' } });
     else respond(params.cursor === 'next-models'
       ? { data: nextModelPage, nextCursor: null }
       : { data: models, nextCursor: nextModelPage ? 'next-models' : null });
   } else if (method === 'thread/start') {
     assert.equal(authenticated, true);
     const { model: requested, ...openParams } = params;
+    assert.equal(requested, model);
     assert.deepEqual(openParams, { cwd: process.cwd() });
     const id = randomUUID();
     respond({thread: {id, path: null, turns: [], status: {type: 'idle'}}, model: openedModel ?? requested ?? nativeDefault});
   } else if (method === 'thread/resume') {
     assert.equal(authenticated, true);
-    const { model: requested, ...openParams } = params;
-    assert.deepEqual(openParams, { threadId: params.threadId, excludeTurns: true, cwd: process.cwd() });
-    respond({thread: load(params.threadId), model: openedModel ?? requested ?? nativeDefault});
+    const { model: requested, excludeTurns, ...openParams } = params;
+    assert.equal(requested, model);
+    assert.ok(excludeTurns === undefined || excludeTurns === true);
+    assert.deepEqual(openParams, { threadId: params.threadId, cwd: process.cwd() });
+    const thread = load(params.threadId);
+    if (!excludeTurns) {
+      resumedForTerminal = thread;
+      if (terminalSettings && terminalSettings !== 'onClose') flushSettings(thread, terminalSettings);
+    }
+    respond({thread: {...thread, preview: thread.turns.at(-1)?.items[0]?.content?.[0]?.text ?? ''},
+      model: openedModel ?? requested ?? nativeDefault});
   } else if (method === 'thread/read') {
     if (verifyingResult) await waitForSignal(${JSON.stringify(resultSignal)});
     respond({thread: load(params.threadId)});
+  } else if (method === 'thread/turns/list') {
+    respond({ data: load(params.threadId).turns, nextCursor: null });
+  } else if (method === 'thread/items/list') {
+    const turns = load(params.threadId).turns.filter(turn => !params.turnId || turn.id === params.turnId);
+    respond({ data: turns.flatMap(turn => turn.items.map(item => ({ ...item, turnId: turn.id }))), nextCursor: null });
   } else if (method === 'turn/start') {
     assert.equal(params.model, model);
+    const { clientUserMessageId, ...turnParams } = params;
+    if (clientUserMessageId !== undefined) assert.equal(typeof clientUserMessageId, 'string');
+    assert.deepEqual(Object.keys(turnParams).sort(), ['input', 'model', 'threadId']);
+    assert.equal(turnParams.input.length, 1);
+    assert.equal(turnParams.input[0].type, 'text');
     const threadId = params.threadId;
     const path = join(process.cwd(), threadId + '.json');
     let turns = [];
@@ -130,7 +163,19 @@ for await (const line of createInterface({input: process.stdin})) {
     const saveTurn = () => {
       if (!omitRecordedTurn) turns.push(turn);
       else if (existsSync(path)) return;
-      writeFileSync(path, JSON.stringify({id: threadId, path, turns, status: {type: 'idle'}, model: completedModel ?? model}), {mode: 0o600});
+      const jsonl = path + 'l';
+      const recording = terminalSettings || existsSync(jsonl) ? jsonl : path;
+      if (recording === jsonl) {
+        if (!existsSync(recording)) writeFileSync(recording, eventLine('2026-11-27T08:00:00.111222333Z', settings(threadId)), {mode: 0o600});
+        appendFileSync(recording, eventLine('2026-11-27T08:00:01.111222333Z', { type: 'task_complete', turn_id: turn.id }));
+      }
+      writeFileSync(path, JSON.stringify({id: threadId, path: recording, turns, status: {type: 'idle'}, model: completedModel ?? model}), {mode: 0o600});
+    };
+    const complete = () => {
+      print(delta);
+      saveTurn();
+      verifyingResult = !!completedModel;
+      print({method: 'turn/completed', params: {threadId, turn}});
     };
     respond({turn: {id: turnId, status: 'inProgress'}});
     if (reroutedModel) {
@@ -141,14 +186,17 @@ for await (const line of createInterface({input: process.stdin})) {
         saveTurn();
         print({method: 'model/rerouted', params: {threadId, turnId, fromModel: model, toModel: reroutedModel, reason: 'highRiskCyberActivity'}});
         print(delta);
+        print({method: 'item/completed', params: {threadId, turnId, item: turn.items[1]}});
       }, 10);
       waitForTest.unref();
-    } else {
-      print(delta);
-      saveTurn();
-      verifyingResult = !!completedModel;
-      print({method: 'turn/completed', params: {threadId, turn}});
-    }
+    } else if (holdTurn) {
+      const waitForTest = setInterval(() => {
+        if (!existsSync(${JSON.stringify(resultSignal)})) return;
+        clearInterval(waitForTest);
+        complete();
+      }, 10);
+      waitForTest.unref();
+    } else complete();
   } else if (method === 'turn/interrupt') {
     assert.ok(reroutedTurn);
     const {threadId, turn} = reroutedTurn;
@@ -162,6 +210,7 @@ for await (const line of createInterface({input: process.stdin})) {
     print({method: 'turn/completed', params: {threadId, turn}});
   }
 }
+if (resumedForTerminal && terminalSettings === 'onClose') flushSettings(resumedForTerminal, terminalSettings);
 if (verifyingResult || reroutedTurn) {
   if (interruptOutcome === 'interruptedOnClose') print({method: 'turn/completed', params: reroutedTurn});
   writeFileSync(join(process.env.CODEX_HOME, 'writer-closing'), String(process.pid));
@@ -182,6 +231,69 @@ afterEach(async () => {
   vi.unstubAllEnvs();
   rmSync(root, { recursive: true, force: true });
 });
+
+function terminalWorkspacePost(chat: AgentChat) {
+  const app = createWorkspaceApp(mapping!, origin, () => new Response(''), chat);
+  const human = mapping!.access.issue('human', ['*']);
+  const headers = { Origin: origin, Authorization: 'Bearer ' + human, 'Content-Type': 'application/json' };
+  return (path: string, body: object = {}) => app.request(endpoint + '/conversations' + path, {
+    method: 'POST', headers, body: JSON.stringify(body),
+  });
+}
+
+async function startTerminalConversation() {
+  const chat = chats = new AgentChat(directory, 'test');
+  const post = terminalWorkspacePost(chat);
+  const created = await post('');
+  expect(created.status).toBe(201);
+  const { id } = await created.json() as { id: string };
+  const first = await post(`/${id}/turns`, { text: '见岔首轮合成问题' });
+  expect(first.status).toBe(202);
+  const initial = await first.json() as { threadId: string; model: string };
+  expect(initial).toMatchObject({ threadId: expect.any(String), model });
+  await expect.poll(async () => (await chat.get(id)).busy).toBe(false);
+  return { chat, id, threadId: initial.threadId, post };
+}
+
+type TerminalFrame = { id?: number; result?: unknown; error?: unknown; method?: string; params?: unknown };
+
+async function connectTerminal(response: Response, threadId: string) {
+  expect(response.status).toBe(201);
+  const { command } = await response.json() as { command: string };
+  const socketPath = /^codex --remote 'unix:\/\/([^']+)' resume --model gpt-6-luna '[^']+'$/.exec(command)?.[1];
+  expect(command).toContain(`'${threadId}'`);
+  expect(socketPath).toBeDefined();
+  expect(Buffer.byteLength(socketPath!)).toBeLessThan(104);
+  const socketInfo = lstatSync(socketPath!);
+  expect(socketInfo.isSocket()).toBe(true);
+  expect(socketInfo.mode & 0o777).toBe(0o600);
+  const socketDirectory = dirname(socketPath!);
+  expect(lstatSync(socketDirectory).mode & 0o777).toBe(0o700);
+
+  const socket = new WebSocket(`ws+unix:${socketPath}:/`, { handshakeTimeout: 3_000 });
+  const frames: TerminalFrame[] = [];
+  socket.on('message', raw => frames.push(JSON.parse(raw.toString()) as TerminalFrame));
+  const disconnected = new Promise<void>(resolve => socket.once('close', () => resolve()));
+  await once(socket, 'open');
+  let sequence = 0;
+  async function waitFor(predicate: (frame: TerminalFrame) => boolean) {
+    await expect.poll(() => frames.find(predicate), { timeout: 3_000 }).toBeDefined();
+    return frames.find(predicate)!;
+  }
+  async function request(method: string, params: object) {
+    const id = ++sequence;
+    socket.send(JSON.stringify({ id, method, params }));
+    return waitFor(frame => frame.id === id);
+  }
+  async function close() {
+    socket.close();
+    await disconnected;
+    await expect.poll(() => existsSync(socketDirectory)).toBe(false);
+  }
+  expect(await request('initialize', { clientInfo: { name: 'codex-tui', version: 'test' } })).toHaveProperty('result');
+  socket.send(JSON.stringify({ method: 'initialized' }));
+  return { request, waitFor, frames, close, disconnected };
+}
 
 it('从空会话发问，并在原生记录变化后只读回看，禁止未核验的发送', async () => {
   chats = new AgentChat(directory, 'test');
@@ -236,6 +348,259 @@ it('可见的合成问答一致时，仍拦截隐藏内容变化后的原生历�
   await expect(chat.send(id, third)).rejects.toMatchObject({ code: 'CODEX_HISTORY_UNVERIFIED' });
   expect(JSON.parse(readFileSync(path, 'utf8')).turns).toHaveLength(2);
 });
+
+it('从工作台到受控终端再回到工作台，三轮保持同一原生会话和 Luna', async () => {
+  const { chat, id, threadId, post } = await startTerminalConversation();
+  const terminal = await connectTerminal(await post(`/${id}/terminal`), threadId);
+  expect(await terminal.request('account/read', { refreshToken: true })).toMatchObject({
+    result: { account: { type: 'chatgpt', email: null } },
+  });
+  expect(await terminal.request('model/list', { includeHidden: true })).toMatchObject({
+    result: { data: [{ model, isDefault: true }], nextCursor: null },
+  });
+  expect(await terminal.request('thread/resume', {
+    threadId, model, cwd: '/tmp/fixture-outside-workspace', runtimeWorkspaceRoots: ['/tmp/fixture-root'],
+  })).toMatchObject({ result: { thread: { id: threadId, turns: [{ status: 'completed' }] }, model } });
+  const competing = await post(`/${id}/turns`, { text: '终端连接期间的并发问题' });
+  expect(competing.status).toBe(409);
+  expect(await competing.json()).toMatchObject({ code: 'CODEX_TERMINAL_CONNECTED' });
+
+  const question = '终端第二轮合成问题';
+  const second = await terminal.request('turn/start', {
+    threadId, model, input: [{ type: 'text', text: question, textElements: [] }],
+  });
+  expect(second).toMatchObject({ result: { turn: { id: expect.any(String) } } });
+  const secondTurnId = (second.result as { turn: { id: string } }).turn.id;
+  const completed = await terminal.waitFor(frame => frame.method === 'turn/completed');
+  expect(completed).toMatchObject({ params: { threadId, turn: { id: secondTurnId, status: 'completed', items: [
+    { type: 'userMessage', content: [{ text: question }] },
+    { type: 'agentMessage', text: '合成回答' },
+  ] } } });
+  await terminal.close();
+
+  const third = await post(`/${id}/turns`, { text: '见岔第三轮合成问题' });
+  expect(third.status).toBe(202);
+  expect(await third.json()).toMatchObject({ threadId, model });
+  await expect.poll(async () => (await chat.get(id)).busy).toBe(false);
+  const result = await chat.get(id);
+  expect(result).toMatchObject({ threadId, model });
+  expect(result.messages.map(message => message.text)).toEqual([
+    '见岔首轮合成问题', '合成回答', question, '合成回答', '见岔第三轮合成问题', '合成回答',
+  ]);
+}, 15_000);
+
+it('从受控入口之外追加重复设置，仍不能恢复或发送', async () => {
+  setFixtureModels(availableModels, { terminalSettings: 'onClose' });
+  const { id, threadId, post } = await startTerminalConversation();
+  const nativeThreadPath = join(directory, 'no-project', threadId + '.json');
+  const recording = nativeThreadPath + 'l';
+  const verifiedRecording = readFileSync(recording, 'utf8');
+  const repeatedSettings = verifiedRecording.split('\n')[0]!.replace('08:00:00', '08:01:00');
+  writeFileSync(recording, verifiedRecording + repeatedSettings + '\n');
+
+  const terminal = await connectTerminal(await post(`/${id}/terminal`), threadId);
+  expect(await terminal.request('thread/resume', { threadId, model })).toHaveProperty('error');
+  expect(await terminal.request('turn/start', {
+    threadId, model, input: [{ type: 'text', text: '修改记录后的合成问题' }],
+  })).toHaveProperty('error');
+  const calls = readFileSync(nativeRequests, 'utf8').split('\n');
+  expect(calls).not.toContain('thread/resume');
+  expect(calls.filter(method => method === 'turn/start')).toHaveLength(1);
+  expect(JSON.parse(readFileSync(nativeThreadPath, 'utf8')).turns).toHaveLength(1);
+  await terminal.close();
+}, 15_000);
+
+it.each([
+  { name: '退出前未发送', failModelAfterResume: false },
+  { name: '发送时模型目录临时不可用', failModelAfterResume: true },
+])('终端$name，退出只追加重复设置时，回工作台仍可继续', async ({ failModelAfterResume }) => {
+  setFixtureModels(availableModels, { terminalSettings: 'onClose', failModelAfterResume });
+  const { chat, id, threadId, post } = await startTerminalConversation();
+  const recording = join(directory, 'no-project', threadId + '.jsonl');
+  const verifiedRecording = readFileSync(recording, 'utf8');
+  const terminal = await connectTerminal(await post(`/${id}/terminal`), threadId);
+  expect(await terminal.request('thread/resume', { threadId, model })).toHaveProperty('result');
+  expect(readFileSync(recording, 'utf8')).toBe(verifiedRecording);
+  if (failModelAfterResume) {
+    expect(await terminal.request('turn/start', {
+      threadId, model, input: [{ type: 'text', text: '目录暂时不可用的合成问题' }],
+    })).toHaveProperty('error');
+  }
+  await terminal.close();
+  const initialSettings = verifiedRecording.split('\n')[0]!;
+  expect(readFileSync(recording, 'utf8')).toBe(verifiedRecording +
+    initialSettings.replace('08:00:00', '08:01:00') + '\n');
+  expect(readFileSync(nativeRequests, 'utf8').match(/^turn\/start$/gm)).toHaveLength(1);
+
+  setFixtureModels(availableModels);
+  const next = await post(`/${id}/turns`, { text: '恢复后的见岔合成问题' });
+  expect(next.status).toBe(202);
+  expect(await next.json()).toMatchObject({ threadId, model });
+  await expect.poll(async () => (await chat.get(id)).busy).toBe(false);
+}, 15_000);
+
+it.each(['onResume', 'changed', 'unknown'] as const)(
+  '恢复后写入原生设置记录 %s，只有重复设置可继续发送', async terminalSettings => {
+    setFixtureModels(availableModels, { terminalSettings });
+    const { chat, id, threadId, post } = await startTerminalConversation();
+    const terminal = await connectTerminal(await post(`/${id}/terminal`), threadId);
+    expect(await terminal.request('thread/resume', { threadId, model })).toHaveProperty('result');
+    const start = await terminal.request('turn/start', {
+      threadId, model, input: [{ type: 'text', text: '恢复记录变动后的合成问题' }],
+    });
+    if (terminalSettings === 'onResume') {
+      expect(start).toHaveProperty('result');
+      await terminal.waitFor(frame => frame.method === 'turn/completed');
+    } else {
+      expect(start).toHaveProperty('error');
+    }
+    await terminal.close();
+    if (terminalSettings === 'onResume') {
+      expect((await chat.get(id)).messages).toHaveLength(4);
+    } else {
+      const rejected = await post(`/${id}/turns`, { text: '改动记录后的见岔合成问题' });
+      expect(rejected.status).toBe(403);
+      expect(await rejected.json()).toMatchObject({ code: 'CODEX_HISTORY_UNVERIFIED' });
+      expect(readFileSync(nativeRequests, 'utf8').match(/^turn\/start$/gm)).toHaveLength(1);
+    }
+  }, 15_000,
+);
+
+it('模型目录恢复后，可在同一个终端连接上重试 resume', async () => {
+  const { id, threadId, post } = await startTerminalConversation();
+  setFixtureModels(availableModels, { modelListError: true });
+  const terminal = await connectTerminal(await post(`/${id}/terminal`), threadId);
+  expect(await terminal.request('thread/resume', { threadId, model })).toHaveProperty('error');
+  expect(readFileSync(nativeRequests, 'utf8')).not.toContain('thread/resume\n');
+  setFixtureModels(availableModels);
+  expect(await terminal.request('thread/resume', { threadId, model })).toMatchObject({
+    result: { thread: { id: threadId, turns: [{ status: 'completed' }] }, model },
+  });
+  await terminal.close();
+}, 15_000);
+
+it('终端发出问题后断开，只有原生回合完成才更新工作台记录', async () => {
+  const { chat, id, threadId, post } = await startTerminalConversation();
+  setFixtureModels(availableModels, { holdTurn: true });
+  const indexPath = join(directory, 'conversations.json');
+  const initial = JSON.parse(readFileSync(indexPath, 'utf8'))[0];
+  const terminal = await connectTerminal(await post(`/${id}/terminal`), threadId);
+  expect(await terminal.request('thread/resume', { threadId, model })).toHaveProperty('result');
+  const question = '终端断线前发出的合成问题';
+  expect(await terminal.request('turn/start', {
+    threadId, model, input: [{ type: 'text', text: question }],
+  })).toHaveProperty('result');
+  await terminal.close();
+
+  try {
+    expect((await chat.get(id)).busy).toBe(true);
+    const competing = await post(`/${id}/turns`, { text: '原生回合完成前的合成问题' });
+    expect(competing.status).toBe(409);
+    expect(await competing.json()).toMatchObject({ code: 'CODEX_TURN_ACTIVE' });
+    expect(JSON.parse(readFileSync(indexPath, 'utf8'))[0]?.checkpoint).toBe(initial.checkpoint);
+  } finally {
+    writeFileSync(resultSignal, '', { mode: 0o600 });
+  }
+  await expect.poll(async () => (await chat.get(id)).busy).toBe(false);
+  expect(JSON.parse(readFileSync(indexPath, 'utf8'))[0]?.checkpoint).not.toBe(initial.checkpoint);
+  const result = await chat.get(id);
+  expect(result).toMatchObject({ threadId, model });
+  expect(result.messages.map(message => message.text)).toEqual(['见岔首轮合成问题', '合成回答', question, '合成回答']);
+}, 15_000);
+
+it('重开带拒绝标记的已核验旧会话，终端只返回可见记录且仍可续聊', async () => {
+  const { chat, id, threadId, post } = await startTerminalConversation();
+  const rejectedQuestion = '旧回合被拒绝的合成问题';
+  expect((await post(`/${id}/turns`, { text: rejectedQuestion })).status).toBe(202);
+  await expect.poll(async () => (await chat.get(id)).busy).toBe(false);
+  await chat.close();
+  const recording = join(directory, 'no-project', threadId + '.json');
+  const native = JSON.parse(readFileSync(recording, 'utf8'));
+  const [visible, rejected] = native.turns as { id: string }[];
+  const indexPath = join(directory, 'conversations.json');
+  const [initial] = JSON.parse(readFileSync(indexPath, 'utf8'));
+  writeFileSync(indexPath, JSON.stringify([{ ...initial, rejectedModelTurnId: rejected!.id, rejectedModelTurnStatus: 'completed' }]));
+
+  const reopened = chats = new AgentChat(directory, 'test');
+  const reopenedPost = terminalWorkspacePost(reopened);
+  const terminal = await connectTerminal(await reopenedPost(`/${id}/terminal`), threadId);
+  for (const method of ['thread/resume', 'thread/read']) {
+    expect(await terminal.request(method, method === 'thread/resume' ? { threadId, model } : { threadId, includeTurns: true }))
+      .toMatchObject({ result: { thread: { id: threadId, preview: '', turns: [{ id: visible!.id }] } } });
+  }
+  expect(await terminal.request('thread/turns/list', { threadId })).toMatchObject({
+    result: { data: [{ id: visible!.id }] },
+  });
+  expect(await terminal.request('thread/items/list', { threadId })).toMatchObject({
+    result: { data: [{ turnId: visible!.id }, { turnId: visible!.id }] },
+  });
+  expect(await terminal.request('thread/items/list', { threadId, turnId: rejected!.id })).toMatchObject({
+    result: { data: [] },
+  });
+  expect(JSON.stringify(terminal.frames)).not.toContain(rejectedQuestion);
+
+  const question = '重开旧会话后的合成问题';
+  expect(await terminal.request('turn/start', {
+    threadId, model, input: [{ type: 'text', text: question }],
+  })).toHaveProperty('result');
+  await terminal.waitFor(frame => frame.method === 'turn/completed');
+  await terminal.close();
+  const result = await reopened.get(id);
+  expect(result).toMatchObject({ threadId, model });
+  expect(result.messages.map(message => message.text)).toEqual(['见岔首轮合成问题', '合成回答', question, '合成回答']);
+}, 15_000);
+
+it('受控终端把路径和配置留在本地边界，拒绝其他会话、模型及额外附件', async () => {
+  const { id, threadId, post } = await startTerminalConversation();
+  const terminal = await connectTerminal(await post(`/${id}/terminal`), threadId);
+  const otherThread = '00000000-0000-4000-8000-000000000000';
+  const text = { type: 'text', text: '受控终端合成问题', textElements: [] };
+  const beforeResume = readFileSync(nativeRequests, 'utf8');
+  expect(await terminal.request('config/read', { cwd: '/tmp/fixture-project', includeLayers: true })).toMatchObject({
+    result: { config: { model }, origins: {} },
+  });
+  for (const params of [
+    { threadId: otherThread },
+    { threadId, path: '/tmp/fixture-foreign-session' },
+    { threadId, config: { model: nativeDefaultModel } },
+    { threadId, model: nativeDefaultModel },
+  ]) expect(await terminal.request('thread/resume', params)).toHaveProperty('error');
+  expect(await terminal.request('thread/read', { threadId: otherThread, includeTurns: true })).toHaveProperty('error');
+  expect(readFileSync(nativeRequests, 'utf8')).toBe(beforeResume);
+
+  expect(await terminal.request('thread/resume', { threadId, model })).toHaveProperty('result');
+  const afterResume = readFileSync(nativeRequests, 'utf8');
+  for (const params of [
+    { threadId: otherThread, input: [text] },
+    { threadId, model: nativeDefaultModel, input: [text] },
+    { threadId, config: { model: nativeDefaultModel }, input: [text] },
+    { threadId, input: [text, { type: 'localImage', path: '/tmp/fixture-private.png' }] },
+    { threadId, input: [{ ...text, textElements: [{ byteRange: { start: 0, end: 1 } }] }] },
+  ]) expect(await terminal.request('turn/start', params)).toHaveProperty('error');
+  expect(readFileSync(nativeRequests, 'utf8')).toBe(afterResume);
+  expect(JSON.parse(readFileSync(join(directory, 'no-project', threadId + '.json'), 'utf8')).turns).toHaveLength(1);
+  await terminal.close();
+}, 15_000);
+
+it('终端回合被原生改派后，WebSocket 收不到异模文本且工作台保留上一轮', async () => {
+  const { chat, id, threadId, post } = await startTerminalConversation();
+  setFixtureModels(availableModels, { reroutedModel: nativeDefaultModel });
+  const terminal = await connectTerminal(await post(`/${id}/terminal`), threadId);
+  expect(await terminal.request('thread/resume', { threadId, model })).toHaveProperty('result');
+  expect(await terminal.request('turn/start', {
+    threadId, model, input: [{ type: 'text', text: '终端将被改派的合成问题' }],
+  })).toHaveProperty('result');
+  expect(await terminal.request('thread/read', { threadId, includeTurns: true })).toHaveProperty('error');
+  writeFileSync(rerouteSignal, '', { mode: 0o600 });
+  expect(await terminal.waitFor(frame => frame.method === 'error')).toMatchObject({ params: { threadId } });
+  await terminal.disconnected;
+  expect(JSON.stringify(terminal.frames)).not.toContain('错误模型的合成回答');
+  expect(terminal.frames.some(frame => frame.method === 'item/completed' || frame.method === 'turn/completed')).toBe(false);
+  expect(readFileSync(nativeRequests, 'utf8')).toContain('turn/interrupt\n');
+  const result = await chat.get(id);
+  expect(result).toMatchObject({ threadId, model, busy: false, error: expect.stringContaining('已隐藏本轮内容') });
+  expect(result.messages.map(message => message.text)).toEqual(['见岔首轮合成问题', '合成回答']);
+}, 15_000);
 
 it('正式路由拒绝非本人和跨站请求，且不提供独立授权入口', async () => {
   chats = new AgentChat(directory, 'test');

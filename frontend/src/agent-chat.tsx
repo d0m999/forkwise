@@ -26,6 +26,57 @@ async function chatRequest<T>(path: string, fallback: string, options: { body?: 
   return result as T;
 }
 
+function TerminalResume({ conversationId, resumeCommand, disabled }: { conversationId: string; resumeCommand: string | undefined; disabled: boolean }) {
+  const [command, setCommand] = useState("");
+  const [generating, setGenerating] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const [error, setError] = useState("");
+
+  async function generateCommand() {
+    setGenerating(true);
+    setCommand("");
+    setCopied(false);
+    setError("");
+    try {
+      const result = await chatRequest<{ command: string }>(`/conversations/${encodeURIComponent(conversationId)}/terminal`, "暂时无法生成终端命令。", { body: {} });
+      setCommand(result.command);
+    } catch (error) {
+      setError((error as Error).message);
+    } finally {
+      setGenerating(false);
+    }
+  }
+
+  async function copyCommand() {
+    setCopied(false);
+    setError("");
+    try {
+      await navigator.clipboard.writeText(command);
+      setCopied(true);
+    } catch {
+      setError("无法访问剪贴板。请选中终端命令手动复制。");
+    }
+  }
+
+  return <details className="agent-chat-resume">
+    <summary>终端续聊</summary>
+    <p>通过见岔生成命令，核验终端回合使用的模型。</p>
+    <button type="button" className="agent-chat-primary" disabled={disabled || generating} onClick={() => void generateCommand()}>生成可核验命令</button>
+    {generating && <p role="status">正在生成终端命令…</p>}
+    {command && <>
+      <code>{command}</code>
+      <button type="button" disabled={disabled} onClick={() => void copyCommand()}>复制终端命令</button>
+    </>}
+    {copied && <p role="status">已复制终端命令。</p>}
+    {error && <p className="agent-chat-error" role="alert">{error}</p>}
+    {resumeCommand && <details>
+      <summary>独立终端续聊</summary>
+      <p>见岔仅回读独立终端新增的历史。</p>
+      <code>{resumeCommand}</code>
+    </details>}
+  </details>;
+}
+
 export function AgentChat({ open }: { open: boolean }) {
   const [chatStatus, setChatStatus] = useState<ChatStatus>();
   const [conversations, setConversations] = useState<Conversation[]>();
@@ -37,13 +88,11 @@ export function AgentChat({ open }: { open: boolean }) {
   const [listError, setListError] = useState("");
   const [detailError, setDetailError] = useState("");
   const [actionError, setActionError] = useState("");
-  const [resumeCommandCopied, setResumeCommandCopied] = useState(false);
   const acceptedDrafts = useRef(new Map<string, string>());
   const transcript = useRef<HTMLDivElement>(null);
   const current = detail?.id === selectedId ? detail : undefined;
   const draft = selectedId ? drafts[selectedId] ?? "" : "";
   const lastMessage = current?.messages.at(-1);
-  const resumeCommand = current?.resumeCommand;
   const modelAvailable = chatStatus?.modelAvailable === true;
 
   useEffect(() => {
@@ -118,7 +167,6 @@ export function AgentChat({ open }: { open: boolean }) {
   async function createConversation() {
     setPending(true);
     setActionError("");
-    setResumeCommandCopied(false);
     try {
       const created = await chatRequest<Conversation>("/conversations", "暂时无法新建对话。", { body: {} });
       setConversations(list => [created, ...(list ?? [])]);
@@ -136,7 +184,6 @@ export function AgentChat({ open }: { open: boolean }) {
     if (!modelAvailable || !current || !draft.trim() || pending || current.busy) return;
     setPending(true);
     setActionError("");
-    setResumeCommandCopied(false);
     try {
       const result = await chatRequest<ConversationDetail>(`/conversations/${encodeURIComponent(current.id)}/turns`, "暂时无法发送消息。", { body: { text: draft } });
       setDetail(result);
@@ -147,17 +194,6 @@ export function AgentChat({ open }: { open: boolean }) {
       setActionError((error as Error).message);
     } finally {
       setPending(false);
-    }
-  }
-
-  async function copyResumeCommand(command: string) {
-    setResumeCommandCopied(false);
-    setActionError("");
-    try {
-      await navigator.clipboard.writeText(command);
-      setResumeCommandCopied(true);
-    } catch {
-      setActionError("无法访问剪贴板。请选中终端命令手动复制。");
     }
   }
 
@@ -181,7 +217,6 @@ export function AgentChat({ open }: { open: boolean }) {
               setSelectedId(event.target.value);
               setActionError("");
               setDetailError("");
-              setResumeCommandCopied(false);
             }}>
               {conversations.map(conversation => <option key={conversation.id} value={conversation.id}>
                 {`对话 ${conversation.threadId?.slice(0, 8) ?? conversation.id.slice(0, 8)}`}
@@ -210,12 +245,8 @@ export function AgentChat({ open }: { open: boolean }) {
               onChange={event => { const value = event.target.value; setDrafts(values => ({ ...values, [current.id]: value })); }} />
             <button type="submit" className="agent-chat-primary" disabled={!modelAvailable || pending || current.busy || !draft.trim()}>发送</button>
           </form>}
-          {modelAvailable && current && resumeCommand && !current.busy && <details className="agent-chat-resume" key={current.id}>
-            <summary>终端续聊</summary>
-            <code>{resumeCommand}</code>
-            <button type="button" disabled={pending} onClick={() => void copyResumeCommand(resumeCommand)}>复制终端命令</button>
-          </details>}
-          {modelAvailable && resumeCommandCopied && <p className="agent-chat-muted" role="status">已复制终端命令。</p>}
+          {modelAvailable && current?.threadId && !current.busy && <TerminalResume key={`${current.id}:${current.threadId}`}
+            conversationId={current.id} resumeCommand={current.resumeCommand} disabled={pending} />}
         </>
       ) : (
         <div className="agent-chat-sign-in">

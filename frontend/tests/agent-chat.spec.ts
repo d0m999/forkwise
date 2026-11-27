@@ -2,6 +2,7 @@ import { expect, place, test } from './writing-board-fixture';
 
 const threadId = 'bba243c1-12ba-4ed1-98c5-856d14629c3e';
 const resumeCommand = `codex --no-daemon resume -C '/tmp/agent-chat-fixture' --model gpt-6-luna '${threadId}'`;
+const verifiedCommand = `'/tmp/agent-chat-fixture/forkwise-codex-resume' '${threadId}'`;
 
 test('无项目右栏复用 Codex 登录，保留失败草稿并按原生身份刷新终端续聊', async ({ page, context, workspace }) => {
   const first = { id: 'chat-1', threadId: null as string | null, model: null as string | null };
@@ -42,6 +43,10 @@ test('无项目右栏复用 Codex 登录，保留失败草稿并按原生身份�
       first.model = 'gpt-6-luna';
       return route.fulfill({ status: 202, json: firstDetail() });
     }
+    if (path === '/conversations/chat-1/terminal' && method === 'POST') {
+      expect(route.request().postDataJSON()).toEqual({});
+      return route.fulfill({ json: { command: verifiedCommand } });
+    }
     if (path === '/conversations/chat-1') return route.fulfill({ json: first.threadId ? firstDetail() : { ...first, busy: false, messages: [] } });
     if (path === '/conversations/chat-2') return route.fulfill({ json: { ...second, busy: false, messages: [] } });
     throw new Error(`意外的对话请求 ${path}`);
@@ -64,12 +69,13 @@ test('无项目右栏复用 Codex 登录，保留失败草稿并按原生身份�
   const send = chat.getByRole('button', { name: '发送', exact: true });
   const refresh = chat.getByRole('button', { name: '刷新', exact: true });
   const create = chat.getByRole('button', { name: '新建对话', exact: true });
+  const conversationsList = chat.getByRole('combobox', { name: '对话列表' });
   const transcript = chat.getByRole('log', { name: '对话消息' });
   loggedIn = true;
   await refresh.click();
   await expect(transcript).toHaveText('新建一段对话开始聊天。');
   await create.click();
-  await expect(chat.getByRole('combobox', { name: '对话列表' })).toHaveValue(first.id);
+  await expect(conversationsList).toHaveValue(first.id);
   await draft.fill('合成问题一');
   await send.click();
   await expect(chat.getByRole('alert')).toHaveText('发送暂时失败');
@@ -98,18 +104,41 @@ test('无项目右栏复用 Codex 登录，保留失败草稿并按原生身份�
   await expect(transcript.getByText('手动刷新结果', { exact: true })).toBeVisible();
   await expect(chat.getByText(threadId, { exact: true })).toBeVisible();
   await context.grantPermissions(['clipboard-read', 'clipboard-write'], { origin: workspace.origin });
-  await chat.getByText('终端续聊', { exact: true }).click();
-  await chat.getByRole('button', { name: '复制终端命令', exact: true }).click();
+  const terminal = chat.getByText('终端续聊', { exact: true });
+  const generate = chat.getByRole('button', { name: '生成可核验命令', exact: true });
+  const copy = chat.getByRole('button', { name: '复制终端命令', exact: true });
+  await terminal.click();
+  expect(requests).not.toContain('POST /conversations/chat-1/terminal');
+  await expect(chat.getByText(resumeCommand, { exact: true })).toBeHidden();
+  await generate.click();
+  await expect(chat.getByText(verifiedCommand, { exact: true })).toBeVisible();
+  await copy.click();
   await expect(chat.getByRole('status')).toHaveText('已复制终端命令。');
-  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(resumeCommand);
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(verifiedCommand);
+  await chat.getByText('独立终端续聊', { exact: true }).click();
+  await expect(chat.getByText('见岔仅回读独立终端新增的历史。', { exact: true })).toBeVisible();
+  await expect(chat.getByText(resumeCommand, { exact: true })).toBeVisible();
+  messages.push({ id: 'after-issue', role: 'assistant', text: '生成命令后仍可刷新历史' });
+  await refresh.click();
+  await expect(transcript.getByText('生成命令后仍可刷新历史', { exact: true })).toBeVisible();
+  await expect(chat.getByText(verifiedCommand, { exact: true })).toBeVisible();
+
+  await create.click();
+  await expect(conversationsList).toHaveValue(second.id);
+  await expect(copy).toHaveCount(0);
+  await conversationsList.selectOption(first.id);
+  await terminal.click();
+  await expect(generate).toBeVisible();
+  await expect(copy).toHaveCount(0);
+  expect(requests.filter(request => request.endsWith('/terminal'))).toEqual(['POST /conversations/chat-1/terminal']);
 
   modelAvailable = false;
   await refresh.click();
   await expect(chat.getByRole('alert')).toHaveText(modelUnavailableMessage);
   await expect(transcript.getByText('手动刷新结果', { exact: true })).toBeVisible();
   await expect(chat.getByText('终端续聊', { exact: true })).toHaveCount(0);
-  await create.click();
-  await expect(chat.getByRole('combobox', { name: '对话列表' })).toHaveValue(second.id);
+  await conversationsList.selectOption(second.id);
+  await expect(conversationsList).toHaveValue(second.id);
   await expect(draft).toBeVisible();
   await expect(draft).toHaveValue('');
   await expect(transcript.locator('article')).toHaveCount(0);

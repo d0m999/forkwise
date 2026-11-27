@@ -32,11 +32,13 @@
     "hono": "4.13.13",
     "linkedom": "0.18.13",
     "pdfjs-dist": "6.3.289",
+    "ws": "8.23.0",
     "zod": "4.6.5"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^22.19.0",
+    "@types/ws": "8.18.2",
     "drizzle-kit": "0.31.11",
     "prettier": "3.6.2",
     "tsx": "4.23.15",

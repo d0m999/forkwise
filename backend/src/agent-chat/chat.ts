@@ -4,6 +4,8 @@ import { join } from 'node:path';
 import { z } from 'zod';
 import { DomainError, requireThat } from '../domain/errors.js';
 import { CodexConnection, codexChatModel, codexModelArgs, codexStorageEnvironment } from './codex.js';
+import { openTerminalSocket } from './terminal-socket.js';
+import { terminalProtocol } from './terminal-protocol.js';
 
 const savedChat = z.object({
   id: z.uuid(),
@@ -34,6 +36,14 @@ const openResult = threadResult.extend({ model: z.string() });
 type NativeThread = z.infer<typeof nativeThread>;
 
 type Turn = { id: string; status: string };
+type TerminalNotify = (method: string, params: unknown) => void;
+type TerminalTurn = {
+  owner: symbol;
+  prepared: CodexConnection | undefined;
+  clientUserMessageId: string | undefined;
+  started: (connection: CodexConnection, turn: Turn, response: unknown) => void;
+  notify: TerminalNotify;
+};
 type RunningChat = {
   messages: Message[];
   previousTurnId: string | null;
@@ -106,9 +116,57 @@ function readPrivateFile(path: string, accept: (size: number) => boolean): Buffe
   } finally { closeSync(fd); }
 }
 
-function fingerprint(thread: NativeThread) {
+function recording(thread: NativeThread) {
   if (!thread.path) throw readError();
-  return createHash('sha256').update(readPrivateFile(thread.path, size => size <= 64 * 1024 * 1024)).digest('hex');
+  return readPrivateFile(thread.path, size => size <= 64 * 1024 * 1024);
+}
+
+function digest(bytes: Buffer) {
+  return createHash('sha256').update(bytes).digest('hex');
+}
+
+function fingerprint(thread: NativeThread) {
+  return digest(recording(thread));
+}
+
+// Codex 0.172 can flush an unchanged settings event when a resumed TUI is
+// merely closed. Permit one byte-identical repeat apart from its timestamp,
+// only on our own resume, and only after proving the full preceding file.
+function repeatsVerifiedSettings(bytes: Buffer, checkpoint: string, threadId: string) {
+  if (bytes.at(-1) !== 10) return false;
+  const start = bytes.lastIndexOf(10, bytes.length - 2) + 1;
+  const prefix = bytes.subarray(0, start);
+  if (!start || digest(prefix) !== checkpoint) return false;
+  const header = /^\{"timestamp":"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,9})?Z",/;
+  const setting = '"type":"event_msg","payload":{"type":"thread_settings_applied",';
+  const added = bytes.toString('utf8', start, bytes.length - 1);
+  const body = added.replace(header, '');
+  if (body === added || !body.startsWith(setting)) return false;
+  const previous = prefix.toString('utf8').split('\n').findLast(line =>
+    header.test(line) && line.replace(header, '').startsWith(setting));
+  if (previous?.replace(header, '') !== body || !bytes.subarray(start, -1).equals(Buffer.from(added))) return false;
+  try {
+    const event = JSON.parse(added);
+    return event.payload.thread_id === threadId && event.payload.thread_settings?.model === codexChatModel;
+  } catch { return false; }
+}
+
+// Native clients can hydrate history through the resume response or later pages.
+function terminalHistory(result: unknown, method: string, rejectedId?: string) {
+  if (!rejectedId) return result;
+  if (method === 'thread/turns/list' || method === 'thread/items/list') {
+    const page = z.object({ data: z.array(z.object({
+      id: z.string().optional(), turnId: z.string().optional(),
+    }).passthrough()) }).passthrough().parse(result);
+    return { ...page, data: page.data.filter(entry =>
+      method === 'thread/turns/list' ? entry.id && entry.id !== rejectedId : entry.turnId && entry.turnId !== rejectedId) };
+  }
+  const response = z.object({ thread: z.object({
+    turns: z.array(z.object({ id: z.string() }).passthrough()),
+  }).passthrough() }).passthrough().parse(result);
+  // Our resume request always requests inline turns, without an initial page.
+  return { ...response, initialTurnsPage: null, thread: { ...response.thread, preview: '',
+    turns: response.thread.turns.filter(turn => turn.id !== rejectedId) } };
 }
 
 function terminalQuote(value: string) {
@@ -121,6 +179,7 @@ export class AgentChat {
   private readonly errors = new Map<string, string>();
   private readonly unsavedRejectionWarnings = new Map<string, string>();
   private readonly processes = new Set<CodexConnection>();
+  private readonly terminals = new Map<string, { owner: symbol; connected: boolean; close: () => Promise<void> }>();
   private readonly file: string;
   private readonly cwd: string;
   private closing = false;
@@ -234,6 +293,25 @@ export class AgentChat {
     return result.data.thread;
   }
 
+  private verifyRecording(chat: SavedChat, history: NativeThread, ownResume: boolean) {
+    const bytes = recording(history);
+    const current = digest(bytes);
+    if (current === chat.checkpoint) return;
+    if (!ownResume || !chat.checkpoint || !repeatsVerifiedSettings(bytes, chat.checkpoint, history.id)) throw blockedHistory();
+    chat.checkpoint = current;
+    this.save();
+  }
+
+  private async verifiedHistory(connection: CodexConnection, chat: SavedChat, threadId: string, ownResume = false) {
+    const history = await this.read(connection, threadId);
+    requireThat(history.status.type !== 'active' && !history.turns.some(item => item.status === 'inProgress'),
+      'CODEX_TURN_ACTIVE', '请结束终端中的当前 Codex 回合，再回见岔继续。', 409);
+    // The native file also contains context absent from the display projection.
+    this.verifyRecording(chat, history, ownResume);
+    this.matchLegacyContinuation(chat, history, chat.checkpoint!);
+    return history;
+  }
+
   async status(): Promise<{ loggedIn: boolean; modelAvailable: boolean; message?: string }> {
     const connection = this.connect();
     try {
@@ -276,8 +354,122 @@ export class AgentChat {
     } finally { await connection.close(); }
   }
 
-  async send(id: string, text: string) {
+  async terminal(id: string) {
     const chat = this.find(id);
+    const threadId = chat.threadId;
+    requireThat(threadId && chat.checkpoint, 'CODEX_HISTORY_UNVERIFIED', '请先在见岔完成可核验的首轮对话。', 403);
+    const old = this.terminals.get(id);
+    requireThat(!this.running.has(id) && !old?.connected, 'CODEX_TURN_ACTIVE', '请先结束当前回合或终端接续。', 409);
+    const owner = Symbol(id);
+    let closed = false;
+    let reader: CodexConnection | undefined;
+    let prepared: CodexConnection | undefined;
+    let driving: { connection: CodexConnection; turnId: string } | undefined;
+    let resumedHistory: NativeThread | undefined;
+    let beforeResume: string | null = null;
+    const settleResume = () => {
+      if (!resumedHistory || chat.checkpoint !== beforeResume) return;
+      try { this.verifyRecording(chat, resumedHistory, true); } catch {
+        // Unknown changes keep the previous checkpoint and block the next send.
+      }
+    };
+    const release = async () => {
+      closed = true;
+      try {
+        if (prepared) {
+          await prepared.close();
+          settleResume();
+        }
+      } finally {
+        if (this.terminals.get(id)?.owner === owner) this.terminals.delete(id);
+        await reader?.close();
+      }
+    };
+    const lease = { owner, connected: false, close: release };
+    this.terminals.set(id, lease);
+    try {
+      if (old) await old.close();
+      const handle = terminalProtocol(threadId, {
+        initialize: async () => {
+          requireThat(!reader && !closed, 'CODEX_TERMINAL_EXPIRED', '终端接续已结束。', 409);
+          reader = this.connect();
+          return reader.initialize(this.version);
+        },
+        query: async (method, params) => {
+          requireThat(reader && !closed, 'CODEX_TERMINAL_EXPIRED', '终端接续已结束。', 409);
+          if (!method.startsWith('thread/')) return reader.call(method, params);
+          requireThat(!this.running.has(id), 'CODEX_HISTORY_UNAVAILABLE', '请在本轮结束后读取会话。', 409);
+          const response = await reader.call(method, params);
+          requireThat(!this.running.has(id), 'CODEX_HISTORY_UNAVAILABLE', '请在本轮结束后读取会话。', 409);
+          return terminalHistory(response, method, chat.rejectedModelTurnId);
+        },
+        resume: async () => {
+          requireThat(!closed && !lease.connected && !this.running.has(id) && this.terminals.get(id) === lease,
+            'CODEX_TURN_ACTIVE', '当前会话已被占用。', 409);
+          lease.connected = true;
+          try {
+            prepared = this.connect();
+            await prepared.initialize(this.version);
+            requireThat(await prepared.loggedIn(), 'CODEX_LOGIN_REQUIRED', loginMessage, 401);
+            requireThat(await prepared.hasChatModel(), 'CODEX_MODEL_UNAVAILABLE', modelUnavailableMessage, 503);
+            await this.verifiedHistory(prepared, chat, threadId);
+            beforeResume = chat.checkpoint;
+            const result = await prepared.call('thread/resume', { threadId, cwd: this.cwd, model: codexChatModel });
+            const opened = openResult.safeParse(result);
+            requireThat(opened.success && opened.data.thread.id === threadId && opened.data.model === codexChatModel,
+              'CODEX_THREAD_UNAVAILABLE', '无法核验终端接续的原生会话和模型。', 503);
+            resumedHistory = opened.data.thread;
+            return terminalHistory(result, 'thread/resume', chat.rejectedModelTurnId);
+          } catch (error) {
+            await prepared?.close();
+            prepared = undefined;
+            lease.connected = false;
+            throw error;
+          }
+        },
+        turn: async (text, clientUserMessageId, notify) => {
+          requireThat(!closed && lease.connected && this.terminals.get(id) === lease,
+            'CODEX_TERMINAL_EXPIRED', '终端接续已结束。', 409);
+          let response: unknown;
+          const native = prepared;
+          prepared = undefined;
+          try {
+            await this.send(id, text, { owner, prepared: native, clientUserMessageId, notify,
+              started(connection, turn, raw) {
+                driving = { connection, turnId: turn.id };
+                response = raw;
+              },
+            });
+          } catch (error) {
+            if (native) settleResume();
+            throw error;
+          }
+          return response;
+        },
+        interrupt: async turnId => {
+          requireThat(driving?.turnId === turnId && this.running.has(id),
+            'CODEX_TURN_UNKNOWN', '找不到此终端发起的活动回合。', 409);
+          return driving.connection.call('turn/interrupt', { threadId, turnId });
+        },
+      });
+      const socket = await openTerminalSocket(handle, release);
+      lease.close = socket.close;
+      if (closed || this.closing || this.terminals.get(id) !== lease) {
+        await socket.close();
+        throw new DomainError('CODEX_TERMINAL_EXPIRED', '终端接续已结束。', 409);
+      }
+      return { command: ['codex', '--remote', terminalQuote(socket.url), 'resume', '--model', codexChatModel,
+        terminalQuote(threadId)].join(' ') };
+    } catch (error) {
+      await release();
+      throw error;
+    }
+  }
+
+  async send(id: string, text: string, terminal?: TerminalTurn) {
+    const chat = this.find(id);
+    const lease = this.terminals.get(id);
+    requireThat(!lease?.connected || lease.owner === terminal?.owner, 'CODEX_TERMINAL_CONNECTED', '请先结束见岔发起的终端接续。', 409);
     requireThat(!this.running.has(id), 'CODEX_TURN_ACTIVE', '请等待当前回合结束。', 409);
     const active: RunningChat = { messages: [], previousTurnId: null };
     this.running.set(id, active);
@@ -286,13 +478,24 @@ export class AgentChat {
     let turn: Turn | undefined;
     let rerouteDeadline: ReturnType<typeof setTimeout> | undefined;
     let beginFinish: () => void = () => {};
+    const terminalEvents: { method: string; params: unknown; turnId: string }[] = [];
     const readyToFinish = new Promise<void>(resolve => { beginFinish = resolve; });
     const savePendingRejection = () => {
       if (!turn || active.rejectedModelTurnId !== turn.id) return;
       this.saveModelRejection(chat, turn.id, active.previousTurnId);
     };
     try {
-      connection = this.connect((method, params) => {
+      const onEvent = (method: string, params: unknown) => {
+        if (terminal && (method === 'turn/started' || method === 'turn/completed' ||
+            method === 'item/started' || method === 'item/completed')) {
+          const event = z.object({ threadId: z.string(), turnId: z.string().optional(),
+            turn: z.object({id: z.string()}).optional(), item: z.object({type: z.string()}).optional() }).safeParse(params);
+          if (event.success && event.data.threadId === chat.threadId) {
+            const eventTurn = event.data.turn?.id ?? event.data.turnId;
+            if (eventTurn && (!event.data.item || ['userMessage', 'agentMessage'].includes(event.data.item.type)))
+              terminalEvents.push({ method, params, turnId: eventTurn });
+          }
+        }
         if (method === 'model/rerouted') {
           const reroute = modelRerouted.safeParse(params);
           if (reroute.success && reroute.data.threadId === chat.threadId &&
@@ -315,42 +518,54 @@ export class AgentChat {
             beginFinish();
           }
         }
-      }, beginFinish);
-      await connection.initialize(this.version);
+      };
+      if (terminal?.prepared) {
+        connection = terminal.prepared;
+        connection.observe(onEvent, beginFinish);
+      } else {
+        connection = this.connect(onEvent, beginFinish);
+        await connection.initialize(this.version);
+      }
       requireThat(await connection.loggedIn(), 'CODEX_LOGIN_REQUIRED', loginMessage, 401);
       requireThat(await connection.hasChatModel(), 'CODEX_MODEL_UNAVAILABLE', modelUnavailableMessage, 503);
       const previous = chat.threadId;
       if (previous) {
-        const history = await this.read(connection, previous);
-        requireThat(history.status.type !== 'active' && !history.turns.some(item => item.status === 'inProgress'),
-          'CODEX_TURN_ACTIVE', '请结束终端中的当前 Codex 回合，再回见岔继续。', 409);
-        // The display projection omits entries used when Codex reconstructs
-        // model context. Only a recording already verified by Forkwise can
-        // resume for inference before G4. Changed recordings remain readable.
-        if (!chat.checkpoint || fingerprint(history) !== chat.checkpoint) throw blockedHistory();
-        this.matchLegacyContinuation(chat, history, chat.checkpoint);
+        const history = await this.verifiedHistory(connection, chat, previous, Boolean(terminal?.prepared));
         active.messages = nativeMessages(history, chat.rejectedModelTurnId);
         active.previousTurnId = history.turns.at(-1)?.id ?? null;
       }
-      const opened = openResult.safeParse(await connection.call(previous ? 'thread/resume' : 'thread/start', {
-        ...(previous ? { threadId: previous, excludeTurns: true } : {}),
-        cwd: this.cwd, model: codexChatModel,
-      }));
-      requireThat(opened.success && (!previous || opened.data.thread.id === previous),
-        'CODEX_THREAD_UNAVAILABLE', '无法启动或恢复这段原生 Codex 会话。', 503);
-      requireThat(opened.data.model === codexChatModel, 'CODEX_MODEL_MISMATCH',
-        `见岔只允许 ${codexChatModel}，本轮未发送。`, 503);
-      chat.threadId = opened.data.thread.id;
-      chat.model = opened.data.model;
-      this.save();
+      if (!terminal?.prepared) {
+        const opened = openResult.safeParse(await connection.call(previous ? 'thread/resume' : 'thread/start', {
+          ...(previous ? { threadId: previous, excludeTurns: true } : {}),
+          cwd: this.cwd, model: codexChatModel,
+        }));
+        requireThat(opened.success && (!previous || opened.data.thread.id === previous),
+          'CODEX_THREAD_UNAVAILABLE', '无法启动或恢复这段原生 Codex 会话。', 503);
+        requireThat(opened.data.model === codexChatModel, 'CODEX_MODEL_MISMATCH',
+          `见岔只允许 ${codexChatModel}，本轮未发送。`, 503);
+        chat.threadId = opened.data.thread.id;
+        chat.model = opened.data.model;
+        this.save();
+      }
       active.question = { id: randomUUID(), role: 'user', text };
-      const started = z.object({ turn: z.object({ id: z.string(), status: z.string() }) }).safeParse(
-        await connection.call('turn/start', { threadId: chat.threadId, model: codexChatModel, input: [{ type: 'text', text, text_elements: [] }] }),
-      );
+      const response = await connection.call('turn/start', { threadId: chat.threadId, model: codexChatModel,
+        ...(terminal?.clientUserMessageId ? { clientUserMessageId: terminal.clientUserMessageId } : {}),
+        input: [{ type: 'text', text, text_elements: [] }] });
+      const started = z.object({ turn: z.object({ id: z.string(), status: z.string() }) }).safeParse(response);
       requireThat(started.success, 'CODEX_TURN_UNKNOWN', '无法确认发送结果，请重新读取会话后再试。', 503);
       turn = started.data.turn;
+      terminal?.started(connection, turn, response);
       savePendingRejection();
-      void this.finish(chat, active, connection, readyToFinish, turn).finally(() => clearTimeout(rerouteDeadline));
+      void this.finish(chat, active, connection, readyToFinish, turn).then(verified => {
+        if (terminal && verified) {
+          for (const event of terminalEvents)
+            if (event.turnId === started.data.turn.id) terminal.notify(event.method, event.params);
+        } else if (terminal) {
+          terminal.notify('error', { threadId: chat.threadId, turnId: started.data.turn.id, willRetry: false,
+            error: { message: '见岔未能核验本轮结果。请回到右栏查看。', codexErrorInfo: null, additionalDetails: null } });
+          void this.terminals.get(id)?.close();
+        }
+      }).finally(() => clearTimeout(rerouteDeadline));
       return this.runningDetail(chat, active);
     } catch (error) {
       if (connection) await connection.close();
@@ -401,6 +616,7 @@ export class AgentChat {
       if (confirmed.status !== 'completed') {
         this.errors.set(chat.id, confirmed.status === 'interrupted' ? '此回合已中断。' : '此回合未完成，请检查 Codex、模型和网络后再试。');
       }
+      return true;
     } catch (error) {
       this.errors.set(chat.id, error instanceof DomainError ? error.message : '无法确认原生会话结果，请重新读取。');
     } finally {
@@ -411,6 +627,7 @@ export class AgentChat {
 
   async close() {
     this.closing = true;
+    await Promise.all([...this.terminals.values()].map(terminal => terminal.close()));
     await Promise.all([...this.processes].map(connection => connection.close()));
   }
 }
