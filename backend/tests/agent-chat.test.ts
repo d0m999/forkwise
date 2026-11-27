@@ -577,13 +577,13 @@ it.each([
   expect(await reopened.get(id)).toEqual(result);
 
   const nextQuestion = '改派后续聊的合成问题';
+  const path = join(directory, 'no-project', threadId + '.json');
+  const native = JSON.parse(readFileSync(path, 'utf8'));
   if (source === 'workbench') {
     setFixtureModels(availableModels);
     await reopened.send(id, nextQuestion);
     await expect.poll(async () => (await reopened.get(id)).busy).toBe(false);
   } else {
-    const path = join(directory, 'no-project', threadId + '.json');
-    const native = JSON.parse(readFileSync(path, 'utf8'));
     const laterTurn = { id: 'terminal-turn', status: 'completed', items: [
       { id: 'terminal-user', type: 'userMessage', content: [{ type: 'text', text: nextQuestion }] },
       { id: 'terminal-agent', type: 'agentMessage', text: '合成回答' },
@@ -601,10 +601,13 @@ it.each([
   expect(continued.error).toBeUndefined();
   if (source === 'terminal') {
     await expect(reopened.send(id, '终端续聊后重试')).rejects.toMatchObject({ code: 'CODEX_HISTORY_UNVERIFIED' });
+  } else {
+    writeFileSync(path, JSON.stringify(native)); // Native rollback removes the continuation.
+    expect(await reopened.get(id)).toEqual(result);
   }
 });
 
-it('旧索引只有拒绝轮 ID 时保留提示，工作台成功续聊后重开仍隐藏旧轮且不再提示', async () => {
+it.each([{}, { continuedAfterRejection: true }])('旧索引 %j 缺少续聊 ID 时，按现有历史显示拒绝原因', async legacyFields => {
   const chat = chats = new AgentChat(directory, 'test');
   const { id } = chat.create();
   await chat.send(id, '旧索引中的合成问题');
@@ -612,7 +615,7 @@ it('旧索引只有拒绝轮 ID 时保留提示，工作台成功续聊后重开
   await chat.close();
   const file = join(directory, 'conversations.json');
   const [saved] = JSON.parse(readFileSync(file, 'utf8'));
-  writeFileSync(file, JSON.stringify([{ ...saved, rejectedModelTurnId: 'absent-turn' }]));
+  writeFileSync(file, JSON.stringify([{ ...saved, rejectedModelTurnId: 'absent-turn', ...legacyFields }]));
   const reopened = chats = new AgentChat(directory, 'test');
   expect((await reopened.get(id)).error).toContain('原生回合结果未确认');
   setFixtureModels(availableModels, { omitRecordedTurn: true });
@@ -627,18 +630,27 @@ it('旧索引只有拒绝轮 ID 时保留提示，工作台成功续聊后重开
   const continued = await reopened.get(id);
   expect(continued.messages.map(message => message.text)).toEqual(['旧索引中的合成问题', '合成回答', nextQuestion, '合成回答']);
   expect(continued.error).toBeUndefined();
+  const path = join(directory, 'no-project', saved.threadId + '.json');
+  const firstContinuation = JSON.parse(readFileSync(path, 'utf8'));
+  await reopened.send(id, '第二次续聊');
+  await expect.poll(async () => (await reopened.get(id)).busy).toBe(false);
+  const bothContinuations = await reopened.get(id);
+  expect(bothContinuations.messages.at(-2)?.text).toBe('第二次续聊');
   await reopened.close();
   const restored = chats = new AgentChat(directory, 'test');
-  expect(await restored.get(id)).toEqual(continued);
+  expect(await restored.get(id)).toEqual(bothContinuations);
 
-  const path = join(directory, 'no-project', saved.threadId + '.json');
-  const native = JSON.parse(readFileSync(path, 'utf8'));
-  native.turns.push({ id: 'absent-turn', status: 'completed', items: [
+  const delayedRejection = { id: 'absent-turn', status: 'completed', items: [
     { id: 'rejected-answer', type: 'agentMessage', text: '延迟写入的异模回答' },
-  ] });
-  writeFileSync(path, JSON.stringify(native));
+  ] };
+  firstContinuation.turns.push(delayedRejection);
+  writeFileSync(path, JSON.stringify(firstContinuation));
   expect(await restored.get(id)).toEqual(continued);
   await expect(restored.send(id, '历史变化后重试')).rejects.toMatchObject({ code: 'CODEX_HISTORY_UNVERIFIED' });
+  writeFileSync(path, JSON.stringify({ ...firstContinuation, turns: [firstContinuation.turns[0], delayedRejection] }));
+  expect(await restored.get(id)).toMatchObject({
+    messages: continued.messages.slice(0, 2), error: expect.stringContaining('原生回合结果未确认'),
+  });
 });
 
 function blockIndexWrites() {

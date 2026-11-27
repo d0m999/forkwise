@@ -13,7 +13,7 @@ const savedChat = z.object({
   rejectedModelTurnId: z.string().optional(),
   rejectedModelTurnStatus: z.string().optional(),
   rejectedAfterTurnId: z.string().nullable().optional(),
-  continuedAfterRejection: z.boolean().optional(),
+  verifiedContinuationTurnId: z.string().optional(),
 });
 type SavedChat = z.infer<typeof savedChat>;
 type Message = { id: string; role: 'user' | 'assistant'; text: string };
@@ -54,7 +54,7 @@ function rejectedModelMessage(status?: string) {
 }
 
 function historyRejectionMessage(chat: SavedChat, thread: NativeThread) {
-  if (!chat.rejectedModelTurnId || chat.continuedAfterRejection) return;
+  if (!chat.rejectedModelTurnId || thread.turns.some(turn => turn.id === chat.verifiedContinuationTurnId)) return;
   // A rejected turn can be absent from the recording. null means the history
   // was empty before sending. Older indexes have no recorded boundary.
   const boundary = thread.turns.some(turn => turn.id === chat.rejectedModelTurnId)
@@ -142,7 +142,7 @@ export class AgentChat {
     chat.rejectedModelTurnId = turnId;
     chat.rejectedModelTurnStatus = status;
     chat.rejectedAfterTurnId = previousTurnId;
-    delete chat.continuedAfterRejection;
+    delete chat.verifiedContinuationTurnId;
     try { this.save(); } catch { this.unsavedRejections.add(chat.id); }
   }
 
@@ -348,10 +348,12 @@ export class AgentChat {
       requireThat(confirmed && thread, 'CODEX_TURN_UNKNOWN', 'Codex 连接已结束。请读取原生会话确认回合结果。', 503);
       chat.model = thread.model ?? chat.model;
       chat.checkpoint = fingerprint(thread);
-      // A delayed rejected turn can be appended after this verified continuation.
+      // Keep the first verified continuation still in history across later sends and native rollbacks.
+      // A delayed rejected turn can appear after it in the recording.
       if (chat.rejectedModelTurnId && confirmed.status === 'completed' &&
+          !thread.turns.some(turn => turn.id === chat.verifiedContinuationTurnId) &&
           thread.turns.some(turn => turn.id === started.id && turn.status === 'completed')) {
-        chat.continuedAfterRejection = true;
+        chat.verifiedContinuationTurnId = started.id;
       }
       this.save();
       if (confirmed.status !== 'completed') {
