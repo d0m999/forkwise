@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
+import { isDeepStrictEqual } from 'node:util';
 import { z } from 'zod';
 import { DomainError, requireThat } from '../domain/errors.js';
 import { CodexConnection, codexChatModel, codexModelArgs, codexStorageEnvironment } from './codex.js';
@@ -33,7 +34,11 @@ const nativeTurn = z.object({ id: z.string(), status: z.string(), items: z.array
 const nativeThread = z.object({ id: z.uuid(), path: z.string().nullable(), turns: z.array(nativeTurn),
   status: z.object({ type: z.string() }), model: z.string().nullable().optional() });
 const threadResult = z.object({ thread: nativeThread });
-const openResult = threadResult.extend({ model: z.string(), ...nativePermissions.shape });
+const openResult = threadResult.extend({ thread: nativeThread.extend({
+  source: z.unknown().optional(), originator: z.string().nullish(), cliVersion: z.string().optional(),
+  historyMode: z.string().optional(),
+}), model: z.string(), modelProvider: z.string().optional(), cwd: z.string().optional(),
+  ...nativePermissions.shape });
 type NativeThread = z.infer<typeof nativeThread>;
 
 type Turn = { id: string; status: string };
@@ -49,13 +54,20 @@ type TerminalTurn = {
   notify: TerminalNotify;
 };
 type TerminalLease = { owner: symbol; state: 'offered' | 'resuming' | 'idle'; close: () => Promise<void> };
+type RecordingStart = { size: number; checkpoint: string };
+type CreatedRecording = { path: string; cwd: string; source: string; modelProvider: string;
+  originator: string; cliVersion: string; historyMode: string };
+type AgentMessage = { id: string; text: string; phase?: z.infer<typeof phase> };
 type RunningChat = {
   messages: Message[];
   previousTurnIds: string[];
   question?: Message;
   rejectedModelTurnId?: string;
   completedTurn?: z.infer<typeof completedEvent>['turn'];
-  lastAgentMessage?: string;
+  recordingStart?: RecordingStart;
+  createdRecording?: CreatedRecording;
+  userMessageId?: string;
+  agentMessages: Map<string, AgentMessage>;
 };
 const blockedHistory = () => new DomainError(
   'CODEX_HISTORY_UNVERIFIED',
@@ -70,7 +82,7 @@ const turnHistoryRetryMs = 250;
 const modelRerouted = z.object({ threadId: z.string(), turnId: z.string(), toModel: z.string() });
 const readError = () => new DomainError('CODEX_HISTORY_UNAVAILABLE', '无法读取这段原生会话，请检查本机 Codex 会话位置。', 503);
 const completedEvent = z.object({ threadId: z.string(), turn: z.object({
-  id: z.string(), status: z.string(), error: z.object({ message: z.string() }).nullish(),
+  id: z.string(), status: z.string(), error: z.object({ message: z.string(), codexErrorInfo: z.unknown().optional() }).nullish(),
 }) });
 
 function matchingCompletion(params: unknown, threadId: string | null, turnId: string) {
@@ -145,8 +157,8 @@ function fingerprint(thread: NativeThread) {
   return digest(recording(thread));
 }
 
-// The display projection omits native context. On retry, prove the prior file
-// prefix and accept only lifecycle records corroborated by this controlled turn.
+// These are the text and lifecycle records of a controlled Codex 0.172 turn.
+// Payloads that can carry additional context stay outside this allowlist.
 const lifecycleTiming = {
   turn_id: z.string(), root_turn_id: z.string().optional(), started_at: z.int().optional(),
 };
@@ -154,49 +166,185 @@ const finishTiming = {
   ...lifecycleTiming, completed_at: z.int().optional(), duration_ms: z.int().optional(),
   time_to_first_token_ms: z.int().optional(),
 };
-const lifecycleRecord = z.strictObject({
-  timestamp: z.iso.datetime(), type: z.literal('event_msg'),
-  payload: z.discriminatedUnion('type', [
-    z.strictObject({ type: z.literal('task_started'), ...lifecycleTiming,
-      model_context_window: z.int().nullable().optional(), collaboration_mode_kind: z.literal('default').optional() }),
-    z.strictObject({ type: z.literal('task_complete'), ...finishTiming,
-      last_agent_message: z.string().nullable(), error: z.strictObject({ message: z.string(), codex_error_info: z.null().optional() }).optional() }),
-    z.strictObject({ type: z.literal('turn_aborted'), ...finishTiming, reason: z.literal('interrupted') }),
-  ]),
-});
+const wireErrorCode = (name: string) => name[0]!.toLowerCase() + name.slice(1);
+const nativeErrorCode = z.union([
+  z.enum(['ContextWindowExceeded', 'SessionBudgetExceeded', 'UsageLimitExceeded', 'ApiKeySpendLimitExceeded',
+    'ProjectSpendLimitExceeded', 'OrganizationSpendLimitExceeded', 'RateLimitExceeded', 'FlexUnavailable',
+    'ServerOverloaded', 'ModelNotFound', 'PolicyCapacityUnavailable', 'InferenceHookDenied', 'CyberPolicy',
+    'BioPolicy', 'MisalignmentPolicyViolation', 'TooManyDenials', 'InternalServerError', 'Unauthorized', 'BadRequest',
+    'InvalidPrompt', 'SandboxError', 'ThreadRollbackFailed', 'Other'])
+    .transform(name => name === 'InvalidPrompt' ? 'other' : wireErrorCode(name)),
+  z.union(['HttpConnectionFailed', 'ResponseStreamConnectionFailed', 'ResponseStreamDisconnected',
+    'ResponseTooManyFailedAttempts'].map(name => z.strictObject({ [name]: z.strictObject({
+    http_status_code: z.int().min(0).max(65535).nullable(),
+  }) }).transform(value => ({ [wireErrorCode(name)]: { httpStatusCode: value[name]!.http_status_code } })))),
+  z.strictObject({ ActiveTurnNotSteerable: z.strictObject({ turn_kind: z.enum(['review', 'compact']) }) })
+    .transform(({ ActiveTurnNotSteerable }) => ({ activeTurnNotSteerable: { turnKind: ActiveTurnNotSteerable.turn_kind } })),
+]);
+const phase = z.enum(['commentary', 'partial_answer', 'final_answer']).nullish();
+const completedTextItem = z.object({ threadId: z.string(), turnId: z.string(),
+  item: z.discriminatedUnion('type', [
+    z.object({ type: z.literal('agentMessage'), id: z.string(), text: z.string(), phase }),
+    z.object({ type: z.literal('userMessage'), id: z.string(),
+      content: z.tuple([z.object({ type: z.literal('text'), text: z.string() })]) }),
+  ]) });
+const emptyArray = z.array(z.never()).length(0).optional();
+const textPart = z.strictObject({ type: z.literal('text'), text: z.string(), text_elements: emptyArray });
+const eventPayload = z.discriminatedUnion('type', [
+  z.strictObject({ type: z.literal('task_started'), ...lifecycleTiming, trace_id: z.string().regex(/^[a-f0-9]{32}$/).optional(),
+    turn_attribution: z.strictObject({ turn_id: z.string(), root_turn_id: z.string().nullish(),
+      turn_trigger: z.null().optional(), parent_turn_id: z.null().optional(), initiating_agent_path: z.null().optional() }).optional(),
+    model_context_window: z.int().nullable().optional(), collaboration_mode_kind: z.literal('default').optional() }),
+  z.strictObject({ type: z.literal('task_complete'), ...finishTiming,
+    last_agent_message: z.string().nullable(), error: z.strictObject({ message: z.string(), codex_error_info: nativeErrorCode.nullish() }).optional() }),
+  z.strictObject({ type: z.literal('turn_aborted'), ...finishTiming, reason: z.literal('interrupted') }),
+  z.strictObject({ type: z.literal('user_message'), client_id: z.string().optional(), message: z.string(),
+    local_images: emptyArray, local_audio: emptyArray, text_elements: emptyArray }),
+  z.strictObject({ type: z.literal('agent_message'), message: z.string(), phase, memory_citation: z.null().optional() }),
+  z.strictObject({ type: z.literal('item_completed'), thread_id: z.string(), turn_id: z.string(),
+    content_token_count: z.int().nonnegative().optional(), started_at_ms: z.int().optional(), completed_at_ms: z.int(),
+    item: z.discriminatedUnion('type', [
+      z.strictObject({ type: z.literal('UserMessage'), id: z.string(), client_id: z.string().optional(), content: z.tuple([textPart]) }),
+      z.strictObject({ type: z.literal('AgentMessage'), id: z.string(), phase,
+        content: z.array(z.strictObject({ type: z.literal('Text'), text: z.string() })).min(1) }),
+    ]) }),
+]);
+const ordinal = z.int().nonnegative().optional();
+const rolloutLine = { timestamp: z.iso.datetime(), ordinal };
+// Codex rust-v0.172.0, models-manager/models.json: bundled Luna instructions,
+// rendered with the default personality and with the Personality section removed.
+const bundledLunaInstructions = new Set([
+  'e52174f354e3970ad8de5935fff8d04ddf2890a35659283d163befb56490198c',
+  '574a0b1edc53d397e0611563645e1f9b2b0ec91a84246d44fc97c124a8cf960a',
+]);
+const sessionHeader = z.strictObject({ ...rolloutLine, type: z.literal('session_meta'), payload: z.strictObject({
+  id: z.uuid(), session_id: z.uuid(), timestamp: z.iso.datetime(), cwd: z.string(), source: z.enum(['vscode', 'cli', 'mcp']),
+  originator: z.string(), cli_version: z.string(), model_provider: z.string(),
+  account_scoped: z.literal(true).optional(), creator_user_id: z.string().optional(), creator_account_id: z.string().optional(),
+  runtime_workspace_roots: z.array(z.string()).optional(), thread_source: z.literal('user').optional(),
+  history_mode: z.enum(['legacy', 'paginated']), memory_mode: z.literal('disabled').optional(),
+  multi_agent_version: z.literal('disabled').optional(), context_window: z.strictObject({ window_id: z.uuid() }).optional(),
+  base_instructions: z.strictObject({ text: z.string(), provenance: z.strictObject({
+    type: z.literal('model'), model: z.literal(codexChatModel),
+  }) }),
+}) });
+const turnRecord = z.discriminatedUnion('type', [
+  z.strictObject({ ...rolloutLine, type: z.literal('event_msg'), payload: eventPayload }),
+  z.strictObject({ ...rolloutLine, type: z.literal('response_item'), payload: z.discriminatedUnion('role', [
+    z.strictObject({ type: z.literal('message'), role: z.literal('user'),
+      content: z.tuple([z.strictObject({ type: z.literal('input_text'), text: z.string() })]) }),
+    z.strictObject({ type: z.literal('message'), role: z.literal('assistant'), id: z.string().optional(), phase,
+      status: z.literal('completed').optional(), content: z.array(z.strictObject({
+        type: z.literal('output_text'), text: z.string(), annotations: emptyArray, logprobs: emptyArray,
+      })).min(1) }),
+  ]) }),
+]);
+
+function parseVerifiedRolloutLine(line: Buffer): unknown {
+  let raw: unknown;
+  try { raw = JSON.parse(line.toString('utf8')); } catch { throw blockedHistory(); }
+  // The compact native encoding also rules out duplicate keys hiding content.
+  if (!line.equals(Buffer.from(JSON.stringify(raw)))) throw blockedHistory();
+  return raw;
+}
+
+function createdRecordingStart(thread: NativeThread, created: CreatedRecording) {
+  if (thread.path !== created.path) throw blockedHistory();
+  const bytes = recording(thread);
+  const end = bytes.indexOf(10);
+  if (end < 0) return;
+  const header = sessionHeader.safeParse(parseVerifiedRolloutLine(bytes.subarray(0, end)));
+  if (!header.success) return;
+  const { payload, ordinal } = header.data;
+  const instructions = payload.base_instructions.text;
+  if (payload.id !== thread.id || payload.session_id !== thread.id || payload.cwd !== created.cwd ||
+      payload.source !== created.source || payload.model_provider !== created.modelProvider ||
+      payload.originator !== created.originator || payload.cli_version !== created.cliVersion || payload.history_mode !== created.historyMode ||
+      (ordinal !== (payload.history_mode === 'paginated' ? 0 : undefined)) ||
+      payload.runtime_workspace_roots?.some(root => root !== created.cwd) ||
+      (instructions && (created.cliVersion !== '0.172.0' || !bundledLunaInstructions.has(digest(Buffer.from(instructions))))))
+    throw blockedHistory();
+  // The controlled thread/start identifies the new root and its file. Read only
+  // that creation record while its native writer is still active.
+  const prefix = bytes.subarray(0, end + 1);
+  return { size: prefix.length, checkpoint: digest(prefix) };
+}
 
 function retriedTurnCheckpoint(thread: NativeThread, turn: NonNullable<RunningChat['completedTurn']>,
-  previous: string | null, lastAgentMessage?: string) {
+  active: RunningChat, clientUserMessageId?: string) {
   const bytes = recording(thread);
-  if (!previous || bytes.at(-1) !== 10) throw blockedHistory();
-  // Walk back at most the completion and its optional start. Never skip an
-  // unrecognised entry to reach an otherwise valid checkpoint.
-  let end = bytes.length - 1;
-  for (const position of ['finish', 'start'] as const) {
-    const start = bytes.lastIndexOf(10, end - 1) + 1;
-    const line = bytes.toString('utf8', start, end);
-    let raw: unknown;
-    try { raw = JSON.parse(line); } catch { throw blockedHistory(); }
-    const event = lifecycleRecord.safeParse(raw);
-    // The compact native encoding also rules out duplicate keys hiding content.
-    if (!event.success || !bytes.subarray(start, end).equals(Buffer.from(JSON.stringify(raw)))) throw blockedHistory();
-    const payload = event.data.payload;
-    if (payload.turn_id !== turn.id || (payload.root_turn_id !== undefined && payload.root_turn_id !== turn.id))
+  const previous = active.recordingStart;
+  if (!previous || bytes.length <= previous.size || bytes.at(-1) !== 10 ||
+      (previous.size > 0 && bytes[previous.size - 1] !== 10) || digest(bytes.subarray(0, previous.size)) !== previous.checkpoint)
+    throw blockedHistory();
+  const answers = [...active.agentMessages.values()];
+  const seenInput = new Set<string>();
+  const answerOffsets = new Map<string, number>();
+  const inputMatches = (format: string, text: string, clientId?: string) => {
+    if (seenInput.has(format) || text !== active.question?.text || (clientId !== undefined && clientId !== clientUserMessageId))
       throw blockedHistory();
-    if (position === 'start') {
-      if (payload.type !== 'task_started') throw blockedHistory();
-    } else if (payload.type === 'turn_aborted') {
-      if (turn.status !== 'interrupted') throw blockedHistory();
-    } else if (payload.type !== 'task_complete' || turn.status !== (payload.error ? 'failed' : 'completed') ||
-        payload.error?.message !== turn.error?.message ||
-        (payload.last_agent_message !== null && payload.last_agent_message !== lastAgentMessage)) {
+    seenInput.add(format);
+  };
+  const answerMatches = (format: string, text: string, phase: AgentMessage['phase'], itemId?: string) => {
+    const offset = answerOffsets.get(format) ?? 0;
+    const expected = answers[offset];
+    if (!expected || expected.text !== text || (expected.phase ?? null) !== (phase ?? null) ||
+        (itemId !== undefined && itemId !== expected.id)) throw blockedHistory();
+    answerOffsets.set(format, offset + 1);
+  };
+  let lastOrdinal: number | undefined;
+  if (previous.size > 0) {
+    const lastLine = bytes.toString('utf8', bytes.lastIndexOf(10, previous.size - 2) + 1, previous.size - 1);
+    try { lastOrdinal = z.object({ ordinal }).parse(JSON.parse(lastLine)).ordinal; } catch { throw blockedHistory(); }
+  }
+  let position = previous.size;
+  while (position < bytes.length) {
+    const first = position === previous.size;
+    const end = bytes.indexOf(10, position);
+    const record = turnRecord.safeParse(parseVerifiedRolloutLine(bytes.subarray(position, end)));
+    if (!record.success) throw blockedHistory();
+    position = end + 1;
+    const currentOrdinal = record.data.ordinal;
+    if (lastOrdinal !== undefined ? currentOrdinal !== lastOrdinal + 1
+      : currentOrdinal !== undefined && (previous.size > 0 || !first || currentOrdinal !== 0)) throw blockedHistory();
+    lastOrdinal = currentOrdinal;
+    const payload = record.data.payload;
+    if (('turn_id' in payload && payload.turn_id !== turn.id) ||
+        ('root_turn_id' in payload && payload.root_turn_id !== undefined && payload.root_turn_id !== turn.id)) throw blockedHistory();
+    if (position === bytes.length) {
+      if (payload.type === 'turn_aborted' && turn.status === 'interrupted') continue;
+      if (payload.type === 'task_complete' && turn.status === (payload.error ? 'failed' : 'completed') &&
+          payload.error?.message === turn.error?.message &&
+          isDeepStrictEqual(payload.error?.codex_error_info ?? null, turn.error?.codexErrorInfo ?? null) &&
+          (payload.last_agent_message === null || payload.last_agent_message === answers.at(-1)?.text)) continue;
       throw blockedHistory();
     }
-    if (digest(bytes.subarray(0, start)) === previous) return digest(bytes);
-    if (!start) break;
-    end = start - 1;
+    switch (payload.type) {
+      case 'task_started': {
+        const attribution = payload.turn_attribution;
+        if (!first || (attribution && (attribution.turn_id !== turn.id ||
+            (attribution.root_turn_id != null && attribution.root_turn_id !== turn.id)))) throw blockedHistory();
+        break;
+      }
+      case 'message':
+        if (payload.role === 'user') inputMatches('response_item', payload.content[0].text);
+        else answerMatches('response_item', payload.content.map(part => part.text).join(''), payload.phase, payload.id);
+        break;
+      case 'user_message': inputMatches('event_msg', payload.message, payload.client_id); break;
+      case 'agent_message': answerMatches('event_msg', payload.message, payload.phase); break;
+      case 'item_completed':
+        if (payload.thread_id !== thread.id) throw blockedHistory();
+        if (payload.item.type === 'UserMessage') {
+          if (payload.item.id !== active.userMessageId) throw blockedHistory();
+          inputMatches('item_completed', payload.item.content[0].text, payload.item.client_id);
+        } else {
+          answerMatches('item_completed', payload.item.content.map(part => part.text).join(''), payload.item.phase, payload.item.id);
+        }
+        break;
+      default: throw blockedHistory();
+    }
   }
-  throw blockedHistory();
+  return digest(bytes);
 }
 
 // Codex 0.172 can flush an unchanged settings event when a resumed TUI is
@@ -366,10 +514,12 @@ export class AgentChat {
   private verifyRecording(chat: SavedChat, history: NativeThread, ownResume: boolean) {
     const bytes = recording(history);
     const current = digest(bytes);
-    if (current === chat.checkpoint) return;
-    if (!ownResume || !chat.checkpoint || !repeatsVerifiedSettings(bytes, chat.checkpoint, history.id)) throw blockedHistory();
-    chat.checkpoint = current;
-    this.save();
+    if (current !== chat.checkpoint) {
+      if (!ownResume || !chat.checkpoint || !repeatsVerifiedSettings(bytes, chat.checkpoint, history.id)) throw blockedHistory();
+      chat.checkpoint = current;
+      this.save();
+    }
+    return { size: bytes.length, checkpoint: current };
   }
 
   private settleResume(chat: SavedChat, history: NativeThread, checkpoint: string | null) {
@@ -384,9 +534,9 @@ export class AgentChat {
     requireThat(history.status.type !== 'active' && !history.turns.some(item => item.status === 'inProgress'),
       'CODEX_TURN_ACTIVE', '请结束终端中的当前 Codex 回合，再回见岔继续。', 409);
     // The native file also contains context absent from the display projection.
-    this.verifyRecording(chat, history, ownResume);
-    this.matchLegacyContinuation(chat, history, chat.checkpoint!);
-    return history;
+    const start = this.verifyRecording(chat, history, ownResume);
+    this.matchLegacyContinuation(chat, history, start.checkpoint);
+    return { history, start };
   }
 
   async status(): Promise<{ loggedIn: boolean; modelAvailable: boolean; message?: string }> {
@@ -552,7 +702,7 @@ export class AgentChat {
     const lease = this.terminals.get(id);
     requireThat(!this.running.has(id), 'CODEX_TURN_ACTIVE', '请等待当前回合结束。', 409);
     requireThat(lease?.state !== 'resuming', 'CODEX_TURN_ACTIVE', '请等待终端恢复当前会话。', 409);
-    const active: RunningChat = { messages: [], previousTurnIds: [] };
+    const active: RunningChat = { messages: [], previousTurnIds: [], agentMessages: new Map() };
     this.running.set(id, active);
     this.errors.delete(id);
     let connection: CodexConnection | undefined;
@@ -605,10 +755,12 @@ export class AgentChat {
           }
         }
         if (method === 'item/completed') {
-          const message = z.object({ threadId: z.string(), turnId: z.string(),
-            item: z.object({ type: z.literal('agentMessage'), text: z.string() }) }).safeParse(params);
-          if (message.success && message.data.threadId === chat.threadId && message.data.turnId === turn.id)
-            active.lastAgentMessage = message.data.item.text;
+          const message = completedTextItem.safeParse(params);
+          if (message.success && message.data.threadId === chat.threadId && message.data.turnId === turn.id) {
+            const { item } = message.data;
+            if (item.type === 'agentMessage') active.agentMessages.set(item.id, item);
+            else if (item.content[0].text === active.question?.text) active.userMessageId = item.id;
+          }
         }
         // Keep terminal content buffered until native history confirms the turn's final status.
         if (method === 'turn/completed') {
@@ -635,7 +787,8 @@ export class AgentChat {
       'CODEX_TERMINAL_PARAMS', '当前 Luna 模型不支持所选推理强度。', 400);
       const previous = chat.threadId;
       if (previous) {
-        const history = await this.verifiedHistory(connection, chat, previous, Boolean(terminal?.prepared));
+        const { history, start } = await this.verifiedHistory(connection, chat, previous, Boolean(terminal?.prepared));
+        active.recordingStart = start;
         active.messages = nativeMessages(history, chat.rejectedModelTurnId);
         active.previousTurnIds = history.turns.map(turn => turn.id);
       }
@@ -652,6 +805,16 @@ export class AgentChat {
         if (terminal) {
           reopenedTerminal = { history: opened.data.thread, checkpoint };
           requireTerminalPermissions(terminal.settings, opened.data);
+        }
+        if (!previous && opened.data.thread.turns.length === 0) {
+          // The native writer may defer creating a new rollout until there is input.
+          active.recordingStart = { size: 0, checkpoint: digest(Buffer.alloc(0)) };
+          const { thread: { path, source, originator, cliVersion, historyMode }, cwd, modelProvider } = opened.data;
+          if (path && typeof source === 'string' && cwd && modelProvider && originator && cliVersion && historyMode &&
+              !lstatSync(path, { throwIfNoEntry: false })) {
+            active.createdRecording = { path, cwd, source: source === 'appServer' ? 'mcp' : source,
+              modelProvider, originator, cliVersion, historyMode };
+          }
         }
         chat.threadId = opened.data.thread.id;
         chat.model = opened.data.model;
@@ -672,7 +835,7 @@ export class AgentChat {
       terminal?.notify('turn/started', { threadId: chat.threadId, turn });
       for (const event of earlyEvents) onEvent(event.method, event.params);
       earlyEvents = undefined;
-      void this.finish(chat, active, connection, readyToFinish, turn).then(verified => {
+      void this.finish(chat, active, connection, readyToFinish, turn, terminal?.clientUserMessageId).then(verified => {
         if (terminal && verified) {
           for (const event of terminalEvents) terminal.notify(event.method, event.params);
         } else if (terminal) {
@@ -701,7 +864,8 @@ export class AgentChat {
     }
   }
 
-  private async finish(chat: SavedChat, active: RunningChat, connection: CodexConnection, readyToFinish: Promise<void>, started: Turn) {
+  private async finish(chat: SavedChat, active: RunningChat, connection: CodexConnection, readyToFinish: Promise<void>, started: Turn,
+    clientUserMessageId?: string) {
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       await Promise.race([readyToFinish, new Promise<void>(resolve => {
@@ -712,6 +876,7 @@ export class AgentChat {
       const previousTurnId = active.previousTurnIds.at(-1) ?? null;
       let thread: NativeThread | undefined;
       let retried = false;
+      let rejectedFromHistory = false;
       try {
         if (confirmed) {
           for (let attempt = 1; attempt <= turnHistoryReadAttempts; attempt++) {
@@ -719,17 +884,23 @@ export class AgentChat {
             if (active.rejectedModelTurnId) break;
             const history = await this.read(connection, chat.threadId!);
             if (!hasTerminalStatus) break;
-            // The model belongs to the thread. Attribute it only after confirming
-            // the previous turns and the sole new turn's identity and status.
+            // Attribute the thread model only to the sole new turn we can identify.
+            // Conflicting statuses still leave that turn's content hidden.
             const count = active.previousTurnIds.length;
             const last = history.turns[count];
             if (active.previousTurnIds.some((id, index) => history.turns[index]?.id !== id) ||
                 history.turns.length > count + 1 || (last && last.id !== started.id)) throw blockedHistory();
-            if (last?.status !== confirmed.status) continue;
+            if (!last) continue;
             if (history.model != null && history.model !== codexChatModel) {
+              rejectedFromHistory = true;
               active.rejectedModelTurnId = started.id;
-              this.saveModelRejection(chat, started.id, previousTurnId, confirmed.status);
+              this.saveModelRejection(chat, started.id, previousTurnId, last.status === confirmed.status ? confirmed.status : undefined);
               break;
+            }
+            if (last.status !== confirmed.status) continue;
+            if (attempt > 1 && active.createdRecording) {
+              const start = createdRecordingStart(history, active.createdRecording);
+              if (start) active.recordingStart = start;
             }
             thread = history;
             retried = attempt > 1;
@@ -740,7 +911,8 @@ export class AgentChat {
         await connection.close();
         if (active.rejectedModelTurnId === started.id) {
           // A matching notification can arrive while the child drains stdout after stdin EOF.
-          const status = active.completedTurn?.id === started.id ? active.completedTurn.status : undefined;
+          const status = rejectedFromHistory ? chat.rejectedModelTurnStatus
+            : active.completedTurn?.id === started.id ? active.completedTurn.status : undefined;
           if (chat.rejectedModelTurnStatus !== status || this.unsavedRejectionWarnings.has(chat.id)) {
             this.saveModelRejection(chat, started.id, previousTurnId, status);
           }
@@ -750,7 +922,7 @@ export class AgentChat {
       requireThat(confirmed, 'CODEX_TURN_UNKNOWN', 'Codex 连接已结束。请读取原生会话确认回合结果。', 503);
       requireThat(thread, 'CODEX_TURN_UNKNOWN', '原生历史尚未确认本轮结果，请重新读取会话。', 503);
       chat.checkpoint = retried
-        ? retriedTurnCheckpoint(thread, confirmed, chat.checkpoint, active.lastAgentMessage)
+        ? retriedTurnCheckpoint(thread, confirmed, active, clientUserMessageId)
         : fingerprint(thread);
       chat.model = thread.model ?? chat.model;
       // Keep the first verified continuation still in history across later sends and native rollbacks.

@@ -54,6 +54,9 @@ function setFixtureModels(models: FixtureModel[], behavior: {
   delayedRecordedTurn?: 'missing' | 'inProgress' | 'projectionOnly' | 'partialFlush' | 'missingThenExtraTurn' | 'hiddenBeforeFlush' | 'hiddenBeforeNotice' | 'hiddenOnClose' | 'foreignCompletionText';
   externalTurnModel?: string;
   failedTurn?: boolean;
+  rolloutMessages?: 'user' | 'both' | 'legacy' | 'pagedItems' | 'foreignUser' | 'foreignAssistant' | 'duplicateUser';
+  lifecycleMetadata?: 'native' | 'foreignAttribution' | 'foreignErrorCode';
+  firstSessionHeader?: 'native' | 'foreignThread' | 'customInstructions' | 'foreignModelInstructions';
   expectedEffort?: string;
 } = {}) {
   writeFileSync(modelSettings, JSON.stringify({ models, ...behavior }), { mode: 0o600 });
@@ -90,11 +93,13 @@ const accountPath = join(process.env.CODEX_HOME, 'native-account.json');
 const model = ${JSON.stringify(model)};
 const { models, nextModelPage, modelListError, openedModel, reroutedModel, completedModel, interruptOutcome, holdClose, omitRecordedTurn,
   terminalSettings, restrictReopenedTerminal, failModelAfterResume, holdTurn, holdResume, holdStartResponse, holdPreflight, holdHistoryRead,
-  startReplyAfterReroute, onlyUnrelatedCompletion, recordedTurnStatus, delayedRecordedTurn, externalTurnModel, failedTurn, expectedEffort } = JSON.parse(readFileSync(${JSON.stringify(modelSettings)}, 'utf8'));
+  startReplyAfterReroute, onlyUnrelatedCompletion, recordedTurnStatus, delayedRecordedTurn, externalTurnModel, failedTurn,
+  rolloutMessages, lifecycleMetadata, firstSessionHeader, expectedEffort } = JSON.parse(readFileSync(${JSON.stringify(modelSettings)}, 'utf8'));
 const nativeDefault = models.find(candidate => candidate.isDefault)?.model;
 const print = event => process.stdout.write(JSON.stringify(event) + '\\n');
 const load = id => JSON.parse(readFileSync(join(process.cwd(), id + '.json'), 'utf8'));
 const eventLine = (timestamp, payload) => JSON.stringify({timestamp, type: 'event_msg', payload}) + '\\n';
+const historyMode = firstSessionHeader && rolloutMessages === 'pagedItems' ? 'paginated' : 'legacy';
 const settings = (threadId, approvalPolicy = 'never') => ({ type: 'thread_settings_applied', thread_id: threadId,
   thread_settings: { model, approval_policy: approvalPolicy } });
 const flushSettings = (thread, change) => appendFileSync(thread.path, eventLine('2026-11-27T08:01:00.111222333Z',
@@ -134,7 +139,13 @@ for await (const line of createInterface({input: process.stdin})) {
     assert.equal(requested, model);
     assert.deepEqual(openParams, { cwd: process.cwd() });
     const id = randomUUID();
-    respond({thread: {id, path: null, turns: [], status: {type: 'idle'}}, model: openedModel ?? requested ?? nativeDefault});
+    if (delayedRecordedTurn) {
+      const path = join(process.cwd(), id + '.json');
+      writeFileSync(path, JSON.stringify({id, path: path + 'l', turns: [], status: {type: 'idle'}, model}), {mode: 0o600});
+    }
+    respond({thread: {id, path: firstSessionHeader ? join(process.cwd(), id + '.jsonl') : null, turns: [],
+      status: {type: 'idle'}, source: 'vscode', originator: 'codex_cli_rs', cliVersion: '0.172.0', historyMode},
+      cwd: process.cwd(), modelProvider: 'openai', model: openedModel ?? requested ?? nativeDefault});
   } else if (method === 'thread/resume') {
     assert.equal(authenticated, true);
     const { model: requested, excludeTurns, ...openParams } = params;
@@ -192,7 +203,8 @@ for await (const line of createInterface({input: process.stdin})) {
     const itemId = randomUUID();
     const answer = reroutedModel || completedModel ? '错误模型的合成回答' : '合成回答';
     const status = failedTurn ? 'failed' : reroutedModel && interruptOutcome !== 'completed' ? 'interrupted' : 'completed';
-    const turn = {id: turnId, status, ...(failedTurn ? {error: {message: '合成失败'}} : {}), items: [
+    const turn = {id: turnId, status, ...(failedTurn ? {error: {message: '合成失败',
+      codexErrorInfo: lifecycleMetadata ? { responseStreamDisconnected: { httpStatusCode: 503 } } : null}} : {}), items: [
       {id: randomUUID(), type: 'userMessage', content: params.input},
       {id: itemId, type: 'agentMessage', text: answer}
     ]};
@@ -201,13 +213,63 @@ for await (const line of createInterface({input: process.stdin})) {
       if (!omitRecordedTurn) turns.push({ ...turn, status: recordedTurnStatus ?? turn.status });
       else if (existsSync(path)) return;
       const jsonl = path + 'l';
-      const recording = terminalSettings || existsSync(jsonl) ? jsonl : path;
+      const firstDelayedTurn = delayedRecordedTurn && turns.length === 1 && !existsSync(jsonl);
+      const recording = terminalSettings || existsSync(jsonl) || firstDelayedTurn ? jsonl : path;
       if (recording === jsonl) {
-        if (!existsSync(recording)) writeFileSync(recording, eventLine('2026-11-27T08:00:00.111222333Z', settings(threadId)), {mode: 0o600});
+        const lastOrdinal = existsSync(recording) ? JSON.parse(readFileSync(recording, 'utf8').trimEnd().split('\\n').at(-1)).ordinal : undefined;
+        let ordinal = lastOrdinal !== undefined ? lastOrdinal + 1 : historyMode === 'paginated' ? 0 : undefined;
+        const appendRecord = (timestamp, type, payload) => appendFileSync(recording, JSON.stringify({ timestamp,
+          ...(ordinal !== undefined ? { ordinal: ordinal++ } : {}), type, payload,
+        }) + '\\n', {mode: 0o600});
+        if (firstDelayedTurn && firstSessionHeader) {
+          const timestamp = '2026-11-27T08:00:00.000Z';
+          appendRecord(timestamp, 'session_meta', {
+            id: firstSessionHeader === 'foreignThread' ? randomUUID() : threadId, session_id: threadId, timestamp,
+            cwd: process.cwd(), originator: 'codex_cli_rs', cli_version: '0.172.0', source: 'vscode', model_provider: 'openai',
+            base_instructions: { text: firstSessionHeader === 'foreignModelInstructions' ? '额外的合成初始指令' : '',
+              provenance: firstSessionHeader === 'customInstructions'
+              ? { type: 'custom' } : { type: 'model', model } }, history_mode: historyMode,
+          });
+        }
+        if (!existsSync(recording) && !firstDelayedTurn)
+          writeFileSync(recording, eventLine('2026-11-27T08:00:00.111222333Z', settings(threadId)), {mode: 0o600});
+        if (firstDelayedTurn || rolloutMessages || lifecycleMetadata) {
+          const started = { type: 'task_started', turn_id: turn.id, root_turn_id: turn.id,
+            model_context_window: null, collaboration_mode_kind: 'default' };
+          if (lifecycleMetadata) Object.assign(started, {
+            trace_id: 'a'.repeat(32), turn_attribution: { turn_id: turn.id, root_turn_id: turn.id, turn_trigger: null,
+              parent_turn_id: lifecycleMetadata === 'foreignAttribution' ? 'other-turn' : null, initiating_agent_path: null },
+          });
+          appendRecord('2026-11-27T08:00:00Z', 'event_msg', started);
+        }
+        if (rolloutMessages === 'legacy') {
+          appendRecord('2026-11-27T08:00:00Z', 'event_msg', { type: 'user_message', message: params.input[0].text,
+            local_images: [], local_audio: [], text_elements: [] });
+          appendRecord('2026-11-27T08:00:01Z', 'event_msg', { type: 'agent_message', message: answer,
+            phase: null, memory_citation: null });
+        } else if (rolloutMessages === 'pagedItems') {
+          appendRecord('2026-11-27T08:00:00Z', 'event_msg', { type: 'item_completed',
+            thread_id: threadId, turn_id: turnId, completed_at_ms: 1795766400000,
+            item: { type: 'UserMessage', id: turn.items[0].id, content: params.input } });
+          appendRecord('2026-11-27T08:00:01Z', 'event_msg', { type: 'item_completed',
+            thread_id: threadId, turn_id: turnId, completed_at_ms: 1795766401000,
+            item: { type: 'AgentMessage', id: itemId, content: [{ type: 'Text', text: answer }] } });
+        } else if (rolloutMessages) {
+          const response = (role, type, text) => JSON.stringify({timestamp: '2026-11-27T08:00:00Z',
+            type: 'response_item', payload: { type: 'message', role, ...(role === 'assistant' ? { id: itemId, status: 'completed' } : {}),
+              content: [{ type, text, ...(role === 'assistant' ? { annotations: [], logprobs: [] } : {}) }] }}) + '\\n';
+          const input = response('user', 'input_text', rolloutMessages === 'foreignUser' ? '来源未知的合成输入' : params.input[0].text);
+          appendFileSync(recording, rolloutMessages === 'duplicateUser' ? input + input : input);
+          if (rolloutMessages === 'both' || rolloutMessages === 'foreignAssistant')
+            appendFileSync(recording, response('assistant', 'output_text', rolloutMessages === 'foreignAssistant' ? '来源未知的合成回答' : answer));
+        }
         const timing = { root_turn_id: turn.id, turn_id: turn.id, started_at: 1795737600, completed_at: 1795737601, duration_ms: 1000 };
+        const codexErrorInfo = !lifecycleMetadata ? null : { ResponseStreamDisconnected: {
+          http_status_code: lifecycleMetadata === 'foreignErrorCode' ? 502 : 503,
+        } };
         const finished = turn.status === 'interrupted' ? { type: 'turn_aborted', ...timing, reason: 'interrupted' }
-          : { type: 'task_complete', ...timing, last_agent_message: delayedRecordedTurn === 'foreignCompletionText' ? '未核验的合成文本' : answer, ...(failedTurn ? { error: { message: turn.error.message, codex_error_info: null } } : {}) };
-        appendFileSync(recording, eventLine('2026-11-27T08:00:01.111222333Z', finished));
+          : { type: 'task_complete', ...timing, last_agent_message: delayedRecordedTurn === 'foreignCompletionText' ? '未核验的合成文本' : answer, ...(failedTurn ? { error: { message: turn.error.message, codex_error_info: codexErrorInfo } } : {}) };
+        appendRecord('2026-11-27T08:00:01.111222333Z', 'event_msg', finished);
       }
       writeFileSync(path, JSON.stringify({id: threadId, path: recording, turns, status: {type: 'idle'}, model: completedModel ?? model}), {mode: 0o600});
     };
@@ -219,6 +281,7 @@ for await (const line of createInterface({input: process.stdin})) {
         appendFileSync(path + 'l', eventLine('2026-11-27T08:00:00Z', { type: 'task_started', turn_id: turn.id,
           model_context_window: null, collaboration_mode_kind: 'default' }));
       if (!delayedRecordedTurn || ['projectionOnly', 'hiddenBeforeNotice'].includes(delayedRecordedTurn)) saveTurn();
+      if (rolloutMessages === 'pagedItems') print({method: 'item/completed', params: {threadId, turnId, item: turn.items[0]}});
       if (turn.items[1]) print({method: 'item/completed', params: {threadId, turnId, item: turn.items[1]}});
       verifyingResult = !!completedModel;
       print({method: 'turn/completed', params: {threadId, turn}});
@@ -514,11 +577,40 @@ it('恢复中的终端占用原生会话，恢复后空闲即可由工作台接�
   ]);
 }, 15_000);
 
-it.each(['missing', 'inProgress', 'projectionOnly', 'partialFlush'] as const)(
-  '原生历史首次读取为 %s 时，终端回合确认后右栏仍可发送', async delayedRecordedTurn => {
+it.each([{}, { firstSessionHeader: 'native' }, { firstSessionHeader: 'native', rolloutMessages: 'pagedItems' }] as const)(
+  '原生首轮历史延迟可见（%j）时，右栏可发送同一会话的第二问', async behavior => {
+    setFixtureModels(availableModels, { delayedRecordedTurn: 'missing', ...behavior });
+    const { chat, id, threadId, post } = await startTerminalConversation();
+    expect((await chat.get(id)).messages.map(message => message.text)).toEqual(['见岔首轮合成问题', '合成回答']);
+    setFixtureModels(availableModels);
+    const response = await post(`/${id}/turns`, { text: '首轮延迟后的第二问' });
+    expect(response.status).toBe(202);
+    expect(await response.json()).toMatchObject({ threadId, model });
+    await expect.poll(async () => (await chat.get(id)).busy).toBe(false);
+  }, 15_000,
+);
+
+it.each(['foreignThread', 'customInstructions', 'foreignModelInstructions'] as const)('首轮延迟出现来源未核验的创建记录（%s）时，右栏拒绝续发', async firstSessionHeader => {
+  setFixtureModels(availableModels, { delayedRecordedTurn: 'missing', firstSessionHeader });
+  const { id, post } = await startTerminalConversation();
+  const refused = await post(`/${id}/turns`, { text: '未核验创建记录后的第二问' });
+  expect(refused.status).toBe(403);
+  expect(await refused.json()).toMatchObject({ code: 'CODEX_HISTORY_UNVERIFIED' });
+}, 15_000);
+
+it.each([
+  { delayedRecordedTurn: 'missing' }, { delayedRecordedTurn: 'inProgress' },
+  { delayedRecordedTurn: 'projectionOnly' }, { delayedRecordedTurn: 'partialFlush' },
+  { delayedRecordedTurn: 'missing', rolloutMessages: 'user' },
+  { delayedRecordedTurn: 'missing', rolloutMessages: 'both' },
+  { delayedRecordedTurn: 'missing', rolloutMessages: 'legacy' },
+  { delayedRecordedTurn: 'missing', rolloutMessages: 'pagedItems' },
+  { delayedRecordedTurn: 'missing', lifecycleMetadata: 'native' },
+] as const)(
+  '原生历史首次读取为 %j 时，终端回合确认后右栏仍可发送', async behavior => {
     setFixtureModels(availableModels, { terminalSettings: 'onClose' });
     const { chat, id, threadId, post } = await startTerminalConversation();
-    setFixtureModels(availableModels, { delayedRecordedTurn });
+    setFixtureModels(availableModels, behavior);
     const terminal = await connectTerminal(await post(`/${id}/terminal`), threadId);
     expect(await terminal.request('thread/resume', { threadId })).toHaveProperty('result');
     const question = '原生历史延迟同步的终端问题';
@@ -542,7 +634,8 @@ it.each(['missing', 'inProgress', 'projectionOnly', 'partialFlush'] as const)(
 it.each(['interrupted', 'failed'] as const)('原生终态 %s 延迟落盘后，终端收到对应终态且右栏仍可续聊', async status => {
   setFixtureModels(availableModels, { terminalSettings: 'onClose' });
   const { id, threadId, post } = await startTerminalConversation();
-  setFixtureModels(availableModels, { delayedRecordedTurn: 'inProgress', holdTurn: status === 'interrupted', failedTurn: status === 'failed' });
+  setFixtureModels(availableModels, { delayedRecordedTurn: 'inProgress', holdTurn: status === 'interrupted', failedTurn: status === 'failed',
+    ...(status === 'failed' ? { lifecycleMetadata: 'native' } : {}) });
   const terminal = await connectTerminal(await post(`/${id}/terminal`), threadId);
   expect(await terminal.request('thread/resume', { threadId })).toHaveProperty('result');
   const start = await terminal.request('turn/start', { threadId, input: [{ type: 'text', text: '延迟落盘的终态' }] });
@@ -556,12 +649,20 @@ it.each(['interrupted', 'failed'] as const)('原生终态 %s 延迟落盘后，�
   await terminal.disconnected;
 }, 15_000);
 
-it.each(['hiddenBeforeFlush', 'hiddenBeforeNotice', 'hiddenOnClose', 'foreignCompletionText'] as const)('延迟同步期间原生记录增加隐藏上下文（%s），回看可用且右栏拒绝续发', async delayedRecordedTurn => {
+it.each([
+  { delayedRecordedTurn: 'hiddenBeforeFlush' }, { delayedRecordedTurn: 'hiddenBeforeNotice' },
+  { delayedRecordedTurn: 'hiddenOnClose' }, { delayedRecordedTurn: 'foreignCompletionText' },
+  { delayedRecordedTurn: 'missing', rolloutMessages: 'foreignUser' },
+  { delayedRecordedTurn: 'missing', rolloutMessages: 'foreignAssistant' },
+  { delayedRecordedTurn: 'missing', rolloutMessages: 'duplicateUser' },
+  { delayedRecordedTurn: 'missing', lifecycleMetadata: 'foreignAttribution' },
+  { delayedRecordedTurn: 'missing', lifecycleMetadata: 'foreignErrorCode', failedTurn: true },
+] as const)('延迟同步期间原生记录增加来源未核验的内容（%j），回看可用且右栏拒绝续发', async behavior => {
   setFixtureModels(availableModels, { terminalSettings: 'onClose' });
   const { chat, id, threadId, post } = await startTerminalConversation();
   const index = join(directory, 'conversations.json');
   const previous = JSON.parse(readFileSync(index, 'utf8'))[0].checkpoint;
-  setFixtureModels(availableModels, { delayedRecordedTurn });
+  setFixtureModels(availableModels, behavior);
   const terminal = await connectTerminal(await post(`/${id}/terminal`), threadId);
   expect(await terminal.request('thread/resume', { threadId })).toHaveProperty('result');
   const question = '回读同步期间有额外上下文的终端问题';
@@ -1246,6 +1347,29 @@ it('原生结果报告其他模型前，右栏轮询拿不到待核验的回答'
   });
   await expect(chat.send(id, '下一条合成问题')).rejects.toMatchObject({ code: 'CODEX_HISTORY_UNVERIFIED' });
 });
+
+it('原生终态与通知冲突时，仍隐藏已经定位的异模回合并拦截续发', async () => {
+  const { chat, id, threadId, post } = await startTerminalConversation();
+  const index = join(directory, 'conversations.json');
+  const previous = JSON.parse(readFileSync(index, 'utf8'))[0].checkpoint;
+  const messages = (await chat.get(id)).messages;
+  setFixtureModels(availableModels, { completedModel: nativeDefaultModel, recordedTurnStatus: 'interrupted' });
+  const terminal = await connectTerminal(await post(`/${id}/terminal`), threadId);
+  expect(await terminal.request('thread/resume', { threadId })).toHaveProperty('result');
+  expect(await terminal.request('turn/start', { threadId, input: [{ type: 'text', text: '终态冲突的合成问题' }] }))
+    .toHaveProperty('result');
+  writeFileSync(resultSignal, '', { mode: 0o600 });
+  expect(await terminal.waitFor(frame => ['turn/completed', 'error'].includes(frame.method ?? ''))).toMatchObject({ method: 'error' });
+  await terminal.disconnected;
+  expect(JSON.stringify(terminal.frames)).not.toContain('错误模型的合成回答');
+  const hidden = { busy: false, messages, error: '见岔只允许 gpt-6-luna，已隐藏本轮内容。原生回合结果未确认。' };
+  expect(await chat.get(id)).toMatchObject(hidden);
+  await chat.close();
+  const reopened = chats = new AgentChat(directory, 'test');
+  expect(await reopened.get(id)).toMatchObject(hidden);
+  expect(JSON.parse(readFileSync(index, 'utf8'))[0].checkpoint).toBe(previous);
+  await expect(reopened.send(id, '终态冲突后尝试续发')).rejects.toMatchObject({ code: 'CODEX_HISTORY_UNVERIFIED' });
+}, 15_000);
 
 it('最终读取发现异模后，等待原生连接退出期间已隐藏本轮且可重开', async () => {
   const chat = chats = new AgentChat(directory, 'test');
