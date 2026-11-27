@@ -523,6 +523,10 @@ for (const [name, popupRole, popupName, precedingName, followingName] of [
   const items = popup.getByRole(popupRole === 'menu' ? 'menuitem' : 'button', { disabled: false });
   const first = items.first();
   await expect(first).toBeFocused();
+  // 模拟浏览器的原生 Tab 顺序跳过普通按钮，按钮仍可被程序聚焦。
+  await items.evaluateAll(buttons => {
+    for (const button of buttons) (button as HTMLButtonElement).tabIndex = -1;
+  });
   await page.keyboard.press('Tab');
   await expect(items.nth(1)).toBeFocused();
   await page.keyboard.press('Shift+Tab');

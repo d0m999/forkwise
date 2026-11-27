@@ -208,15 +208,14 @@ function ThoughtCard({ data, selected }: NodeProps<Node<CardData>>) {
         // 浮栏和弹层都挂在 body 下，按触发按钮的位置接入本卡的键盘顺序。
         const target = event.target as HTMLElement;
         const order: (HTMLElement | null)[] = [moveButton.current];
+        let sourcePopup: HTMLElement | null = null;
         for (const action of toolbar.current.querySelectorAll<HTMLButtonElement>('button:not(:disabled):not([aria-disabled="true"])')) {
           order.push(action);
           const popupId = action.getAttribute("aria-controls");
           const popup = popupId && document.getElementById(popupId);
           if (!popup || getComputedStyle(popup).visibility !== "visible") continue;
           const items = popup.querySelectorAll<HTMLElement>("button:enabled, input:enabled:not([hidden])");
-          // 弹层内由浏览器移动焦点并滚动，只在跨过首末项时接回浮栏。
-          const exitItem = items[event.shiftKey ? 0 : items.length - 1] ?? popup;
-          if (popup.contains(target) && target !== exitItem) return;
+          if (popup.contains(target)) sourcePopup = popup;
           // 层级操作全禁用时，菜单本身接收初始焦点。
           if (items.length) order.push(...items);
           else order.push(popup);
@@ -226,7 +225,8 @@ function ThoughtCard({ data, selected }: NodeProps<Node<CardData>>) {
         if (index === -1) return;
         const next = order[index + (event.shiftKey ? -1 : 1)];
         if (!next) return;
-        next.focus({ preventScroll: true });
+        // 仅在同一弹层内跟随焦点滚动。
+        next.focus({ preventScroll: !sourcePopup?.contains(next) });
         if (document.activeElement === next) event.preventDefault();
       }}
       style={
