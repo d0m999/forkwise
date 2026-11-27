@@ -127,7 +127,7 @@ test('无项目右栏复用 Codex 登录，保留失败草稿并按原生身份�
   await expect(chat.getByText(verifiedCommand, { exact: true })).toBeVisible();
   clockOffset = 181_000;
   await page.clock.fastForward(clockOffset);
-  await expect(chat.getByText('终端命令已过期，请重新生成。')).toBeVisible();
+  await expect(chat.getByRole('status')).toHaveText('未连接的终端命令已过期，请重新生成。已连接的终端可继续使用。');
   await expect(chat.getByText(verifiedCommand, { exact: true })).toBeHidden();
   await expect(copy).toHaveCount(0);
   await generate.click();

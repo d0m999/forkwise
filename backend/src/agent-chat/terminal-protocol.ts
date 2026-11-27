@@ -161,6 +161,8 @@ export function terminalProtocol(threadId: string, api: TerminalApi) {
         requireThread(params.threadId);
         requireThat(resumed, 'CODEX_TERMINAL_RESUME_REQUIRED', '请先恢复绑定的原生会话。', 409);
         requireLuna(params.model);
+        // Even an empty array replaces the native workspace roots.
+        if (params.runtimeWorkspaceRoots != null) invalidParams();
         if (Object.entries(params).some(([key, value]) => !turnMetadata.has(key) && !empty(value))) invalidParams();
         if (params.turnTrigger != null && params.turnTrigger !== 'user') invalidParams();
         let modeEffort: unknown;

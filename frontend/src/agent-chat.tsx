@@ -80,7 +80,7 @@ function TerminalResume({ conversationId, resumeCommand, disabled }: { conversat
       <code>{issued.command}</code>
       <button type="button" disabled={disabled} onClick={() => void copyCommand()}>复制终端命令</button>
     </>}
-    {expired && <p role="status">终端命令已过期，请重新生成。</p>}
+    {expired && <p role="status">未连接的终端命令已过期，请重新生成。已连接的终端可继续使用。</p>}
     {copied && !expired && <p role="status">已复制终端命令。</p>}
     {error && <p className="agent-chat-error" role="alert">{error}</p>}
     {resumeCommand && <details>

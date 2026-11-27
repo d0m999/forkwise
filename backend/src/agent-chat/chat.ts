@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
 import { z } from 'zod';
 import { DomainError, requireThat } from '../domain/errors.js';
 import { CodexConnection, codexChatModel, codexModelArgs, codexStorageEnvironment } from './codex.js';
@@ -50,7 +51,7 @@ type TerminalTurn = {
 type TerminalLease = { owner: symbol; state: 'offered' | 'resuming' | 'idle'; close: () => Promise<void> };
 type RunningChat = {
   messages: Message[];
-  previousTurnId: string | null;
+  previousTurnIds: string[];
   question?: Message;
   rejectedModelTurnId?: string;
   completedTurn?: Turn;
@@ -63,6 +64,8 @@ const blockedHistory = () => new DomainError(
 const loginMessage = '请在终端运行 codex login，完成后回到见岔刷新。';
 const modelUnavailableMessage = `当前 Codex 需要提供 ${codexChatModel} 才能发送。请检查原生模型列表后刷新。`;
 const rerouteGraceMs = 2_000;
+const turnHistoryReadAttempts = 5;
+const turnHistoryRetryMs = 250;
 const modelRerouted = z.object({ threadId: z.string(), turnId: z.string(), toModel: z.string() });
 const readError = () => new DomainError('CODEX_HISTORY_UNAVAILABLE', '无法读取这段原生会话，请检查本机 Codex 会话位置。', 503);
 
@@ -340,13 +343,15 @@ export class AgentChat {
 
   async get(id: string) {
     const chat = this.find(id);
-    const active = this.running.get(id);
+    let active = this.running.get(id);
     if (active) return this.runningDetail(chat, active);
     if (!chat.threadId) return this.detail(chat, [], false);
     const connection = this.connect();
     try {
       await connection.initialize(this.version);
       const thread = await this.read(connection, chat.threadId);
+      active = this.running.get(id);
+      if (active) return this.runningDetail(chat, active);
       let rejection: string | undefined;
       try {
         if (chat.rejectedModelTurnId && !thread.turns.some(turn =>
@@ -484,7 +489,7 @@ export class AgentChat {
     const lease = this.terminals.get(id);
     requireThat(!this.running.has(id), 'CODEX_TURN_ACTIVE', '请等待当前回合结束。', 409);
     requireThat(lease?.state !== 'resuming', 'CODEX_TURN_ACTIVE', '请等待终端恢复当前会话。', 409);
-    const active: RunningChat = { messages: [], previousTurnId: null };
+    const active: RunningChat = { messages: [], previousTurnIds: [] };
     this.running.set(id, active);
     this.errors.delete(id);
     let connection: CodexConnection | undefined;
@@ -498,7 +503,7 @@ export class AgentChat {
     const readyToFinish = new Promise<void>(resolve => { beginFinish = resolve; });
     const rejectModelTurn = (turnId: string) => {
       active.rejectedModelTurnId = turnId;
-      this.saveModelRejection(chat, turnId, active.previousTurnId);
+      this.saveModelRejection(chat, turnId, active.previousTurnIds.at(-1) ?? null);
       // Give turn/completed a short window even if the interrupt RPC fails or never replies.
       rerouteDeadline = setTimeout(beginFinish, rerouteGraceMs);
     };
@@ -513,7 +518,7 @@ export class AgentChat {
             if (turn.id !== turnId || active.rejectedModelTurnId) return;
             rejectModelTurn(turnId);
           } else {
-            if (!earlyEvents || earlyRerouteId || active.previousTurnId === turnId) return;
+            if (!earlyEvents || earlyRerouteId || active.previousTurnIds.at(-1) === turnId) return;
             // A missing start reply must not delay an interrupt requested after dispatch.
             earlyRerouteId = turnId;
           }
@@ -563,7 +568,7 @@ export class AgentChat {
       if (previous) {
         const history = await this.verifiedHistory(connection, chat, previous, Boolean(terminal?.prepared));
         active.messages = nativeMessages(history, chat.rejectedModelTurnId);
-        active.previousTurnId = history.turns.at(-1)?.id ?? null;
+        active.previousTurnIds = history.turns.map(turn => turn.id);
       }
       if (!terminal?.prepared) {
         const checkpoint = chat.checkpoint;
@@ -610,6 +615,8 @@ export class AgentChat {
       return this.runningDetail(chat, active);
     } catch (error) {
       if (connection) await connection.close();
+      // A reroute can arrive while the connection drains after a failed start.
+      if (!turn && earlyRerouteId) this.saveModelRejection(chat, earlyRerouteId, active.previousTurnIds.at(-1) ?? null);
       if (reopenedTerminal) this.settleResume(chat, reopenedTerminal.history, reopenedTerminal.checkpoint);
       clearTimeout(rerouteDeadline);
       this.running.delete(id);
@@ -624,13 +631,28 @@ export class AgentChat {
         timer = setTimeout(resolve, 10 * 60 * 1000);
       })]);
       const confirmed = active.completedTurn?.id === started.id ? active.completedTurn : undefined;
+      const hasTerminalStatus = confirmed && ['completed', 'interrupted', 'failed'].includes(confirmed.status);
+      const previousTurnId = active.previousTurnIds.at(-1) ?? null;
       let thread: NativeThread | undefined;
       try {
-        if (confirmed && !active.rejectedModelTurnId) {
-          thread = await this.read(connection, chat.threadId!);
-          if (thread.model != null && thread.model !== codexChatModel) {
-            active.rejectedModelTurnId = started.id;
-            this.saveModelRejection(chat, started.id, active.previousTurnId, confirmed.status);
+        if (confirmed) {
+          for (let attempt = 1; attempt <= turnHistoryReadAttempts; attempt++) {
+            if (attempt > 1) await delay(turnHistoryRetryMs);
+            if (active.rejectedModelTurnId) break;
+            const history = await this.read(connection, chat.threadId!);
+            if (history.model != null && history.model !== codexChatModel) {
+              active.rejectedModelTurnId = started.id;
+              this.saveModelRejection(chat, started.id, previousTurnId, confirmed.status);
+              break;
+            }
+            if (!hasTerminalStatus) break;
+            if (!history.turns.some(turn => turn.id === started.id && turn.status === confirmed.status)) continue;
+            // A retry can observe a later native write. Only trust the expected addition to the verified history.
+            if (attempt > 1 && (history.turns.length !== active.previousTurnIds.length + 1 ||
+                history.turns.at(-1)?.id !== started.id ||
+                active.previousTurnIds.some((id, index) => history.turns[index]?.id !== id))) break;
+            thread = history;
+            break;
           }
         }
       } finally {
@@ -639,15 +661,13 @@ export class AgentChat {
           // A matching notification can arrive while the child drains stdout after stdin EOF.
           const status = active.completedTurn?.id === started.id ? active.completedTurn.status : undefined;
           if (chat.rejectedModelTurnStatus !== status || this.unsavedRejectionWarnings.has(chat.id)) {
-            this.saveModelRejection(chat, started.id, active.previousTurnId, status);
+            this.saveModelRejection(chat, started.id, previousTurnId, status);
           }
         }
       }
       if (chat.rejectedModelTurnId === started.id) return;
-      requireThat(confirmed && thread, 'CODEX_TURN_UNKNOWN', 'Codex 连接已结束。请读取原生会话确认回合结果。', 503);
-      requireThat(['completed', 'interrupted', 'failed'].includes(confirmed.status) &&
-          thread.turns.some(turn => turn.id === started.id && turn.status === confirmed.status),
-        'CODEX_TURN_UNKNOWN', '原生历史尚未确认本轮结果，请重新读取会话。', 503);
+      requireThat(confirmed, 'CODEX_TURN_UNKNOWN', 'Codex 连接已结束。请读取原生会话确认回合结果。', 503);
+      requireThat(thread, 'CODEX_TURN_UNKNOWN', '原生历史尚未确认本轮结果，请重新读取会话。', 503);
       chat.model = thread.model ?? chat.model;
       chat.checkpoint = fingerprint(thread);
       // Keep the first verified continuation still in history across later sends and native rollbacks.
