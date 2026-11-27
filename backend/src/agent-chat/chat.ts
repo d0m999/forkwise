@@ -54,7 +54,8 @@ type RunningChat = {
   previousTurnIds: string[];
   question?: Message;
   rejectedModelTurnId?: string;
-  completedTurn?: Turn;
+  completedTurn?: z.infer<typeof completedEvent>['turn'];
+  lastAgentMessage?: string;
 };
 const blockedHistory = () => new DomainError(
   'CODEX_HISTORY_UNVERIFIED',
@@ -68,6 +69,14 @@ const turnHistoryReadAttempts = 5;
 const turnHistoryRetryMs = 250;
 const modelRerouted = z.object({ threadId: z.string(), turnId: z.string(), toModel: z.string() });
 const readError = () => new DomainError('CODEX_HISTORY_UNAVAILABLE', '无法读取这段原生会话，请检查本机 Codex 会话位置。', 503);
+const completedEvent = z.object({ threadId: z.string(), turn: z.object({
+  id: z.string(), status: z.string(), error: z.object({ message: z.string() }).nullish(),
+}) });
+
+function matchingCompletion(params: unknown, threadId: string | null, turnId: string) {
+  const result = completedEvent.safeParse(params);
+  if (result.success && result.data.threadId === threadId && result.data.turn.id === turnId) return result.data.turn;
+}
 
 function rejectedModelMessage(status?: string) {
   const message = `见岔只允许 ${codexChatModel}，已隐藏本轮内容。`;
@@ -134,6 +143,60 @@ function digest(bytes: Buffer) {
 
 function fingerprint(thread: NativeThread) {
   return digest(recording(thread));
+}
+
+// The display projection omits native context. On retry, prove the prior file
+// prefix and accept only lifecycle records corroborated by this controlled turn.
+const lifecycleTiming = {
+  turn_id: z.string(), root_turn_id: z.string().optional(), started_at: z.int().optional(),
+};
+const finishTiming = {
+  ...lifecycleTiming, completed_at: z.int().optional(), duration_ms: z.int().optional(),
+  time_to_first_token_ms: z.int().optional(),
+};
+const lifecycleRecord = z.strictObject({
+  timestamp: z.iso.datetime(), type: z.literal('event_msg'),
+  payload: z.discriminatedUnion('type', [
+    z.strictObject({ type: z.literal('task_started'), ...lifecycleTiming,
+      model_context_window: z.int().nullable().optional(), collaboration_mode_kind: z.literal('default').optional() }),
+    z.strictObject({ type: z.literal('task_complete'), ...finishTiming,
+      last_agent_message: z.string().nullable(), error: z.strictObject({ message: z.string(), codex_error_info: z.null().optional() }).optional() }),
+    z.strictObject({ type: z.literal('turn_aborted'), ...finishTiming, reason: z.literal('interrupted') }),
+  ]),
+});
+
+function retriedTurnCheckpoint(thread: NativeThread, turn: NonNullable<RunningChat['completedTurn']>,
+  previous: string | null, lastAgentMessage?: string) {
+  const bytes = recording(thread);
+  if (!previous || bytes.at(-1) !== 10) throw blockedHistory();
+  // Walk back at most the completion and its optional start. Never skip an
+  // unrecognised entry to reach an otherwise valid checkpoint.
+  let end = bytes.length - 1;
+  for (const position of ['finish', 'start'] as const) {
+    const start = bytes.lastIndexOf(10, end - 1) + 1;
+    const line = bytes.toString('utf8', start, end);
+    let raw: unknown;
+    try { raw = JSON.parse(line); } catch { throw blockedHistory(); }
+    const event = lifecycleRecord.safeParse(raw);
+    // The compact native encoding also rules out duplicate keys hiding content.
+    if (!event.success || !bytes.subarray(start, end).equals(Buffer.from(JSON.stringify(raw)))) throw blockedHistory();
+    const payload = event.data.payload;
+    if (payload.turn_id !== turn.id || (payload.root_turn_id !== undefined && payload.root_turn_id !== turn.id))
+      throw blockedHistory();
+    if (position === 'start') {
+      if (payload.type !== 'task_started') throw blockedHistory();
+    } else if (payload.type === 'turn_aborted') {
+      if (turn.status !== 'interrupted') throw blockedHistory();
+    } else if (payload.type !== 'task_complete' || turn.status !== (payload.error ? 'failed' : 'completed') ||
+        payload.error?.message !== turn.error?.message ||
+        (payload.last_agent_message !== null && payload.last_agent_message !== lastAgentMessage)) {
+      throw blockedHistory();
+    }
+    if (digest(bytes.subarray(0, start)) === previous) return digest(bytes);
+    if (!start) break;
+    end = start - 1;
+  }
+  throw blockedHistory();
 }
 
 // Codex 0.172 can flush an unchanged settings event when a resumed TUI is
@@ -528,7 +591,7 @@ export class AgentChat {
         const terminalContent = terminal && (method === 'turn/completed' ||
           method === 'item/started' || method === 'item/completed');
         if (!turn) {
-          if (terminalContent || method === 'turn/completed')
+          if (terminalContent || method === 'turn/completed' || method === 'item/completed')
             earlyEvents?.push({ method, params });
           return;
         }
@@ -541,11 +604,17 @@ export class AgentChat {
               terminalEvents.push({ method, params });
           }
         }
+        if (method === 'item/completed') {
+          const message = z.object({ threadId: z.string(), turnId: z.string(),
+            item: z.object({ type: z.literal('agentMessage'), text: z.string() }) }).safeParse(params);
+          if (message.success && message.data.threadId === chat.threadId && message.data.turnId === turn.id)
+            active.lastAgentMessage = message.data.item.text;
+        }
         // Keep terminal content buffered until native history confirms the turn's final status.
         if (method === 'turn/completed') {
-          const result = z.object({ threadId: z.string(), turn: z.object({ id: z.string(), status: z.string() }) }).safeParse(params);
-          if (result.success && result.data.threadId === chat.threadId && turn.id === result.data.turn.id) {
-            active.completedTurn = result.data.turn;
+          const completed = matchingCompletion(params, chat.threadId, turn.id);
+          if (completed) {
+            active.completedTurn = completed;
             beginFinish();
           }
         }
@@ -616,7 +685,15 @@ export class AgentChat {
     } catch (error) {
       if (connection) await connection.close();
       // A reroute can arrive while the connection drains after a failed start.
-      if (!turn && earlyRerouteId) this.saveModelRejection(chat, earlyRerouteId, active.previousTurnIds.at(-1) ?? null);
+      if (!turn && earlyRerouteId) {
+        let status: string | undefined;
+        for (const event of earlyEvents ?? []) {
+          if (event.method !== 'turn/completed') continue;
+          const completed = matchingCompletion(event.params, chat.threadId, earlyRerouteId);
+          if (completed) status = completed.status;
+        }
+        this.saveModelRejection(chat, earlyRerouteId, active.previousTurnIds.at(-1) ?? null, status);
+      }
       if (reopenedTerminal) this.settleResume(chat, reopenedTerminal.history, reopenedTerminal.checkpoint);
       clearTimeout(rerouteDeadline);
       this.running.delete(id);
@@ -634,24 +711,28 @@ export class AgentChat {
       const hasTerminalStatus = confirmed && ['completed', 'interrupted', 'failed'].includes(confirmed.status);
       const previousTurnId = active.previousTurnIds.at(-1) ?? null;
       let thread: NativeThread | undefined;
+      let retried = false;
       try {
         if (confirmed) {
           for (let attempt = 1; attempt <= turnHistoryReadAttempts; attempt++) {
             if (attempt > 1) await delay(turnHistoryRetryMs);
             if (active.rejectedModelTurnId) break;
             const history = await this.read(connection, chat.threadId!);
+            if (!hasTerminalStatus) break;
+            // The model belongs to the thread. Attribute it only after confirming
+            // the previous turns and the sole new turn's identity and status.
+            const count = active.previousTurnIds.length;
+            const last = history.turns[count];
+            if (active.previousTurnIds.some((id, index) => history.turns[index]?.id !== id) ||
+                history.turns.length > count + 1 || (last && last.id !== started.id)) throw blockedHistory();
+            if (last?.status !== confirmed.status) continue;
             if (history.model != null && history.model !== codexChatModel) {
               active.rejectedModelTurnId = started.id;
               this.saveModelRejection(chat, started.id, previousTurnId, confirmed.status);
               break;
             }
-            if (!hasTerminalStatus) break;
-            if (!history.turns.some(turn => turn.id === started.id && turn.status === confirmed.status)) continue;
-            // A retry can observe a later native write. Only trust the expected addition to the verified history.
-            if (attempt > 1 && (history.turns.length !== active.previousTurnIds.length + 1 ||
-                history.turns.at(-1)?.id !== started.id ||
-                active.previousTurnIds.some((id, index) => history.turns[index]?.id !== id))) break;
             thread = history;
+            retried = attempt > 1;
             break;
           }
         }
@@ -668,8 +749,10 @@ export class AgentChat {
       if (chat.rejectedModelTurnId === started.id) return;
       requireThat(confirmed, 'CODEX_TURN_UNKNOWN', 'Codex 连接已结束。请读取原生会话确认回合结果。', 503);
       requireThat(thread, 'CODEX_TURN_UNKNOWN', '原生历史尚未确认本轮结果，请重新读取会话。', 503);
+      chat.checkpoint = retried
+        ? retriedTurnCheckpoint(thread, confirmed, chat.checkpoint, active.lastAgentMessage)
+        : fingerprint(thread);
       chat.model = thread.model ?? chat.model;
-      chat.checkpoint = fingerprint(thread);
       // Keep the first verified continuation still in history across later sends and native rollbacks.
       // A delayed rejected turn can appear after it in the recording.
       if (chat.rejectedModelTurnId && confirmed.status === 'completed' &&
