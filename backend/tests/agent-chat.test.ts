@@ -23,6 +23,7 @@ let nativeAccount: string;
 let modelSettings: string;
 let nativeRequests: string;
 let rerouteSignal: string;
+let resultSignal: string;
 let chats: AgentChat | undefined;
 let mapping: ReturnType<typeof openMapping> | undefined;
 
@@ -32,6 +33,7 @@ function setFixtureModels(models: FixtureModel[], behavior: {
   openedModel?: string;
   reroutedModel?: string;
   completedModel?: string;
+  interruptOutcome?: 'interrupted' | 'completed' | 'unconfirmed';
 } = {}) {
   writeFileSync(modelSettings, JSON.stringify({ models, ...behavior }), { mode: 0o600 });
 }
@@ -46,6 +48,7 @@ beforeEach(() => {
   modelSettings = join(nativeHome, 'fixture-models.json');
   nativeRequests = join(nativeHome, 'fixture-requests');
   rerouteSignal = join(nativeHome, 'fixture-reroute');
+  resultSignal = join(nativeHome, 'fixture-result');
   mkdirSync(nativeHome, { mode: 0o700 });
   writeFileSync(nativeAccount, JSON.stringify({ expiresAt: Date.now() + 60_000 }), { mode: 0o600 });
   setFixtureModels(availableModels);
@@ -64,12 +67,16 @@ assert.equal(process.env.ACCESS_TOKEN, undefined);
 assert.equal(process.env.OPENAI_API_KEY, undefined);
 const accountPath = join(process.env.CODEX_HOME, 'native-account.json');
 const model = ${JSON.stringify(model)};
-const { models, nextModelPage, modelListError, openedModel, reroutedModel, completedModel } = JSON.parse(readFileSync(${JSON.stringify(modelSettings)}, 'utf8'));
+const { models, nextModelPage, modelListError, openedModel, reroutedModel, completedModel, interruptOutcome } = JSON.parse(readFileSync(${JSON.stringify(modelSettings)}, 'utf8'));
 const nativeDefault = models.find(candidate => candidate.isDefault)?.model;
 const print = event => process.stdout.write(JSON.stringify(event) + '\\n');
 const load = id => JSON.parse(readFileSync(join(process.cwd(), id + '.json'), 'utf8'));
+async function waitForSignal(path) {
+  while (!existsSync(path)) await new Promise(resolve => setTimeout(resolve, 10));
+}
 let authenticated = false;
 let reroutedTurn;
+let verifyingResult = false;
 for await (const line of createInterface({input: process.stdin})) {
   const {id, method, params} = JSON.parse(line);
   if (method) appendFileSync(${JSON.stringify(nativeRequests)}, method + '\\n', { mode: 0o600 });
@@ -100,6 +107,7 @@ for await (const line of createInterface({input: process.stdin})) {
     assert.deepEqual(openParams, { threadId: params.threadId, excludeTurns: true, cwd: process.cwd() });
     respond({thread: load(params.threadId), model: openedModel ?? requested ?? nativeDefault});
   } else if (method === 'thread/read') {
+    if (verifyingResult) await waitForSignal(${JSON.stringify(resultSignal)});
     respond({thread: load(params.threadId)});
   } else if (method === 'turn/start') {
     assert.equal(params.model, model);
@@ -109,8 +117,9 @@ for await (const line of createInterface({input: process.stdin})) {
     try { turns = load(threadId).turns; } catch {}
     const turnId = randomUUID();
     const itemId = randomUUID();
-    const answer = reroutedModel ? '错误模型的合成回答' : '合成回答';
-    const turn = {id: turnId, status: reroutedModel ? 'interrupted' : 'completed', items: [
+    const answer = reroutedModel || completedModel ? '错误模型的合成回答' : '合成回答';
+    const status = reroutedModel && interruptOutcome !== 'completed' ? 'interrupted' : 'completed';
+    const turn = {id: turnId, status, items: [
       {id: randomUUID(), type: 'userMessage', content: params.input},
       {id: itemId, type: 'agentMessage', text: answer}
     ]};
@@ -133,13 +142,17 @@ for await (const line of createInterface({input: process.stdin})) {
     } else {
       print(delta);
       saveTurn();
+      verifyingResult = !!completedModel;
       print({method: 'turn/completed', params: {threadId, turn}});
     }
   } else if (method === 'turn/interrupt') {
     assert.ok(reroutedTurn);
     const {threadId, turn} = reroutedTurn;
     assert.deepEqual(params, {threadId, turnId: turn.id});
-    respond({});
+    if (interruptOutcome === 'completed') print({ id, error: { code: -32603, message: 'turn already completed' } });
+    else respond({});
+    if (interruptOutcome) await waitForSignal(${JSON.stringify(resultSignal)});
+    if (interruptOutcome === 'unconfirmed') process.exit(0);
     print({method: 'turn/completed', params: {threadId, turn}});
   }
 }
@@ -352,7 +365,9 @@ it.each(['thread/start', 'thread/resume'] as const)('原生 %s 回报其他模�
   }
   const before = await chat.get(id);
   setFixtureModels(availableModels, { openedModel: nativeDefaultModel });
-  await expect(chat.send(id, '模型不匹配时的合成问题')).rejects.toMatchObject({ code: 'CODEX_MODEL_MISMATCH' });
+  await expect(chat.send(id, '模型不匹配时的合成问题')).rejects.toMatchObject({
+    code: 'CODEX_MODEL_MISMATCH', message: '见岔只允许 gpt-6-luna，本轮未发送。',
+  });
   const requests = readFileSync(nativeRequests, 'utf8').trim().split('\n');
   expect(requests).toContain(method);
   expect(requests).not.toContain('turn/start');
@@ -371,7 +386,7 @@ it('回合被原生 Codex 改派到其他模型时中断，隐藏该回合并保
   await expect.poll(async () => (await chat.get(id)).busy).toBe(false);
   expect(readFileSync(nativeRequests, 'utf8').split('\n')).toContain('turn/interrupt');
   const result = await chat.get(id);
-  expect(result.error).toBe('见岔只允许 gpt-6-luna，本轮已停止。');
+  expect(result.error).toBe('见岔只允许 gpt-6-luna，已隐藏本轮内容。Codex 已中断本轮。');
   expect(result.messages.map(message => message.text)).toEqual(['第一条合成问题', '合成回答']);
 
   const native = JSON.parse(readFileSync(join(directory, 'no-project', threadId + '.json'), 'utf8'));
@@ -380,19 +395,85 @@ it('回合被原生 Codex 改派到其他模型时中断，隐藏该回合并保
   setFixtureModels(availableModels);
   await chat.close();
   const reopened = chats = new AgentChat(directory, 'test');
-  expect((await reopened.get(id)).messages).toEqual(result.messages);
+  expect(await reopened.get(id)).toMatchObject({ messages: result.messages, error: result.error });
   await expect(reopened.send(id, '改派后继续的合成问题')).rejects.toMatchObject({ code: 'CODEX_HISTORY_UNVERIFIED' });
 });
 
-it('原生结果报告其他模型时隐藏该轮，且不核验这段历史', async () => {
+it.each([
+  { interruptOutcome: 'interrupted', expected: 'Codex 已中断本轮。' },
+  { interruptOutcome: 'completed', expected: 'Codex 已完成本轮。' },
+  { interruptOutcome: 'unconfirmed', expected: '原生回合结果未确认。' },
+] as const)('改派后按原生终态报告 $interruptOutcome', async ({ interruptOutcome, expected }) => {
   const chat = chats = new AgentChat(directory, 'test');
+  setFixtureModels(availableModels, { reroutedModel: nativeDefaultModel, interruptOutcome });
+  const { id } = chat.create();
+  await chat.send(id, '会被改派的合成问题');
+  writeFileSync(rerouteSignal, '', { mode: 0o600 });
+  await expect.poll(() => readFileSync(nativeRequests, 'utf8')).toContain('turn/interrupt\n');
+  const rejection = { messages: [], error: '见岔只允许 gpt-6-luna，已隐藏本轮内容。原生回合结果未确认。' };
+  const reopenedWhileWaiting = new AgentChat(directory, 'test');
+  try {
+    expect(await chat.get(id)).toMatchObject({ ...rejection, busy: true });
+    expect(await reopenedWhileWaiting.get(id)).toMatchObject(rejection);
+  } finally {
+    await reopenedWhileWaiting.close();
+    writeFileSync(resultSignal, '', { mode: 0o600 });
+  }
+  await expect.poll(async () => (await chat.get(id)).busy).toBe(false);
+  const result = await chat.get(id);
+  expect(result).toMatchObject({ messages: [], error: `见岔只允许 gpt-6-luna，已隐藏本轮内容。${expected}` });
+  await chat.close();
+  const reopened = chats = new AgentChat(directory, 'test');
+  expect(await reopened.get(id)).toEqual(result);
+});
+
+it('终端成功续聊后回看新问答，旧的改派回合仍隐藏且不再提示', async () => {
+  const chat = chats = new AgentChat(directory, 'test');
+  setFixtureModels(availableModels, { reroutedModel: nativeDefaultModel });
+  const { id } = chat.create();
+  const { threadId } = await chat.send(id, '被改派的合成问题');
+  writeFileSync(rerouteSignal, '', { mode: 0o600 });
+  await expect.poll(async () => (await chat.get(id)).busy).toBe(false);
+  expect((await chat.get(id)).error).toContain('gpt-6-luna');
+
+  const path = join(directory, 'no-project', threadId + '.json');
+  const native = JSON.parse(readFileSync(path, 'utf8'));
+  native.turns.push({ id: 'terminal-turn', status: 'completed', items: [
+    { id: 'terminal-user', type: 'userMessage', content: [{ type: 'text', text: '终端续聊问题' }] },
+    { id: 'terminal-agent', type: 'agentMessage', text: '终端续聊回答' },
+  ] });
+  writeFileSync(path, JSON.stringify(native));
+  const result = await chat.get(id);
+  expect(result).toMatchObject({ threadId, busy: false });
+  expect(result.messages.map(message => message.text)).toEqual(['终端续聊问题', '终端续聊回答']);
+  expect(result.error).toBeUndefined();
+  await chat.close();
+  const reopened = chats = new AgentChat(directory, 'test');
+  expect(await reopened.get(id)).toEqual(result);
+});
+
+it('原生结果报告其他模型前，右栏轮询拿不到待核验的回答', async () => {
+  const chat = chats = new AgentChat(directory, 'test');
+  const app = createWorkspaceApp(mapping!, origin, () => new Response(''), chat);
+  const human = mapping!.access.issue('human', ['*']);
+  const headers = { Origin: origin, Authorization: 'Bearer ' + human };
   setFixtureModels(availableModels, { completedModel: nativeDefaultModel });
   const { id } = chat.create();
-  await chat.send(id, '结果模型不匹配的合成问题');
+  const question = '结果模型不匹配的合成问题';
+  await chat.send(id, question);
+  // The fixture has already emitted its answer when the final model check begins.
+  await expect.poll(() => readFileSync(nativeRequests, 'utf8')).toContain('thread/read\n');
+  try {
+    const busy = await app.request(endpoint + '/conversations/' + id, { headers });
+    expect(busy.status).toBe(200);
+    expect(await busy.json()).toMatchObject({ busy: true, messages: [{ role: 'user', text: question }] });
+  } finally {
+    writeFileSync(resultSignal, '', { mode: 0o600 });
+  }
   await expect.poll(async () => (await chat.get(id)).busy).toBe(false);
   expect(await chat.get(id)).toMatchObject({
     messages: [],
-    error: '见岔只允许 gpt-6-luna，本轮已停止。',
+    error: '见岔只允许 gpt-6-luna，已隐藏本轮内容。Codex 已完成本轮。',
   });
   await expect(chat.send(id, '下一条合成问题')).rejects.toMatchObject({ code: 'CODEX_HISTORY_UNVERIFIED' });
 });

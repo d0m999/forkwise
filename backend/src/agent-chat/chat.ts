@@ -11,6 +11,7 @@ const savedChat = z.object({
   model: z.string().nullable(),
   checkpoint: z.string().nullable(),
   rejectedModelTurnId: z.string().optional(),
+  rejectedModelTurnStatus: z.string().optional(),
 });
 type SavedChat = z.infer<typeof savedChat>;
 type Message = { id: string; role: 'user' | 'assistant'; text: string };
@@ -32,10 +33,16 @@ const blockedHistory = () => new DomainError(
 );
 const loginMessage = '请在终端运行 codex login，完成后回到见岔刷新。';
 const modelUnavailableMessage = `当前 Codex 需要提供 ${codexChatModel} 才能发送。请检查原生模型列表后刷新。`;
-const modelMismatchMessage = `见岔只允许 ${codexChatModel}，本轮已停止。`;
-const modelMismatch = () => new DomainError('CODEX_MODEL_MISMATCH', modelMismatchMessage, 503);
 const modelRerouted = z.object({ threadId: z.string(), turnId: z.string(), toModel: z.string() });
 const readError = () => new DomainError('CODEX_HISTORY_UNAVAILABLE', '无法读取这段原生会话，请检查本机 Codex 会话位置。', 503);
+
+function rejectedModelMessage(status?: string) {
+  const message = `见岔只允许 ${codexChatModel}，已隐藏本轮内容。`;
+  if (status === 'interrupted') return message + 'Codex 已中断本轮。';
+  if (status === 'completed') return message + 'Codex 已完成本轮。';
+  if (status === 'failed') return message + 'Codex 回合执行失败。';
+  return message + '原生回合结果未确认。';
+}
 
 function nativeMessages(thread: NativeThread, rejectedModelTurnId?: string): Message[] {
   const result: Message[] = [];
@@ -108,6 +115,12 @@ export class AgentChat {
     renameSync(next, this.file);
   }
 
+  private saveModelRejection(chat: SavedChat, turnId: string, status?: string) {
+    chat.rejectedModelTurnId = turnId;
+    chat.rejectedModelTurnStatus = status;
+    this.save();
+  }
+
   private find(id: string) {
     const chat = this.chats.find(candidate => candidate.id === id);
     requireThat(chat, 'CODEX_CONVERSATION_NOT_FOUND', '找不到这段见岔对话。', 404);
@@ -118,7 +131,7 @@ export class AgentChat {
     return { id, threadId, model };
   }
 
-  private detail(chat: SavedChat, messages: Message[], busy: boolean, model = chat.model) {
+  private detail(chat: SavedChat, messages: Message[], busy: boolean, model = chat.model, rejection?: string) {
     let resumeCommand: string | undefined;
     if (chat.threadId && !busy) {
       const environment = codexStorageEnvironment.flatMap(name => {
@@ -128,8 +141,11 @@ export class AgentChat {
       resumeCommand = [...environment, 'codex', '--no-daemon', ...codexModelArgs, 'resume', '--model', codexChatModel, '-C',
         terminalQuote(this.cwd), terminalQuote(chat.threadId)].join(' ');
     }
-    const error = this.errors.get(chat.id) ?? (chat.rejectedModelTurnId ? modelMismatchMessage : undefined);
-    return { ...this.summary(chat), model, messages, busy, resumeCommand, error };
+    return { ...this.summary(chat), model, messages, busy, resumeCommand, error: rejection ?? this.errors.get(chat.id) };
+  }
+
+  private runningDetail(chat: SavedChat, active: RunningChat) {
+    return this.detail(chat, active.messages, true, chat.model, active.rejectedModelTurnId ? rejectedModelMessage() : undefined);
   }
 
   list() { return this.chats.map(chat => this.summary(chat)); }
@@ -175,13 +191,16 @@ export class AgentChat {
   async get(id: string) {
     const chat = this.find(id);
     const active = this.running.get(id);
-    if (active) return this.detail(chat, active.messages, true);
+    if (active) return this.runningDetail(chat, active);
     if (!chat.threadId) return this.detail(chat, [], false);
     const connection = this.connect();
     try {
       await connection.initialize(this.version);
       const thread = await this.read(connection, chat.threadId);
-      return this.detail(chat, nativeMessages(thread, chat.rejectedModelTurnId), thread.status.type === 'active', thread.model ?? chat.model);
+      const latestTurn = thread.turns.at(-1);
+      const rejection = latestTurn && latestTurn.id === chat.rejectedModelTurnId
+        ? rejectedModelMessage(chat.rejectedModelTurnStatus) : undefined;
+      return this.detail(chat, nativeMessages(thread, chat.rejectedModelTurnId), thread.status.type === 'active', thread.model ?? chat.model, rejection);
     } finally { await connection.close(); }
   }
 
@@ -196,6 +215,12 @@ export class AgentChat {
     let previousMessages = 0;
     let resolveTerminal: (value: Turn | undefined) => void = () => {};
     const terminal = new Promise<Turn | undefined>(resolve => { resolveTerminal = resolve; });
+    const savePendingRejection = () => {
+      if (!turn || active.rejectedModelTurnId !== turn.id) return;
+      try { this.saveModelRejection(chat, turn.id); } catch {
+        // Keep hiding this turn in memory. The finish path retries the save.
+      }
+    };
     try {
       connection = this.connect((method, params) => {
         if (method === 'model/rerouted') {
@@ -206,25 +231,18 @@ export class AgentChat {
             const { threadId, turnId } = reroute.data;
             active.rejectedModelTurnId = turnId;
             active.messages.length = previousMessages;
+            savePendingRejection();
+            // The interrupt RPC can race with completion. Only turn/completed confirms the outcome.
             void connection?.call('turn/interrupt', { threadId, turnId }).catch(() => {});
-            resolveTerminal(undefined);
           }
           return;
         }
-        if (active.rejectedModelTurnId) return;
+        // Assistant text is published from verified native history after the turn ends.
         if (method === 'turn/completed') {
           const result = z.object({ threadId: z.string(), turn: z.object({ id: z.string(), status: z.string() }) }).safeParse(params);
           if (result.success && result.data.threadId === chat.threadId && (!turn || turn.id === result.data.turn.id)) {
             resolveTerminal(result.data.turn);
           }
-        }
-        if (method === 'item/agentMessage/delta') {
-          const result = z.object({ threadId: z.string(), itemId: z.string(), delta: z.string() }).safeParse(params);
-          if (!result.success || result.data.threadId !== chat.threadId) return;
-          const { itemId, delta } = result.data;
-          const message = active.messages.find(item => item.role === 'assistant' && item.id === itemId);
-          if (message) message.text += delta;
-          else active.messages.push({ id: itemId, role: 'assistant', text: delta });
         }
       }, () => resolveTerminal(undefined));
       await connection.initialize(this.version);
@@ -248,7 +266,8 @@ export class AgentChat {
       }));
       requireThat(opened.success && (!previous || opened.data.thread.id === previous),
         'CODEX_THREAD_UNAVAILABLE', '无法启动或恢复这段原生 Codex 会话。', 503);
-      if (opened.data.model !== codexChatModel) throw modelMismatch();
+      requireThat(opened.data.model === codexChatModel, 'CODEX_MODEL_MISMATCH',
+        `见岔只允许 ${codexChatModel}，本轮未发送。`, 503);
       chat.threadId = opened.data.thread.id;
       chat.model = opened.data.model;
       this.save();
@@ -258,8 +277,9 @@ export class AgentChat {
       );
       requireThat(started.success, 'CODEX_TURN_UNKNOWN', '无法确认发送结果，请重新读取会话后再试。', 503);
       turn = started.data.turn;
+      savePendingRejection();
       void this.finish(chat, active, connection, terminal, turn);
-      return this.detail(chat, active.messages, true);
+      return this.runningDetail(chat, active);
     } catch (error) {
       if (connection) await connection.close();
       this.running.delete(id);
@@ -273,31 +293,29 @@ export class AgentChat {
       const result = await Promise.race([terminal, new Promise<undefined>(resolve => {
         timer = setTimeout(() => resolve(undefined), 10 * 60 * 1000);
       })]);
-      if (active.rejectedModelTurnId) {
-        chat.rejectedModelTurnId = active.rejectedModelTurnId;
-        this.save();
-        throw modelMismatch();
+      const confirmed = result?.id === started.id ? result : undefined;
+      let thread: NativeThread | undefined;
+      try {
+        if (confirmed && !active.rejectedModelTurnId) thread = await this.read(connection, chat.threadId!);
+      } finally {
+        // Let Codex release its native writer before recording the outcome.
+        await connection.close();
+        if (active.rejectedModelTurnId === started.id || (thread?.model != null && thread.model !== codexChatModel)) {
+          this.saveModelRejection(chat, started.id, confirmed?.status);
+        }
       }
-      requireThat(result?.id === started.id, 'CODEX_TURN_UNKNOWN', 'Codex 连接已结束。请读取原生会话确认回合结果。', 503);
-      const thread = await this.read(connection, chat.threadId!);
-      if (active.rejectedModelTurnId || (thread.model != null && thread.model !== codexChatModel)) {
-        chat.rejectedModelTurnId = started.id;
-        this.save();
-        throw modelMismatch();
-      }
-      // Let Codex release its native writer before publishing completion.
-      await connection.close();
+      if (chat.rejectedModelTurnId === started.id) return;
+      requireThat(confirmed && thread, 'CODEX_TURN_UNKNOWN', 'Codex 连接已结束。请读取原生会话确认回合结果。', 503);
       chat.model = thread.model ?? chat.model;
       chat.checkpoint = fingerprint(thread);
       this.save();
-      if (result.status !== 'completed') {
-        this.errors.set(chat.id, result.status === 'interrupted' ? '此回合已中断。' : '此回合未完成，请检查 Codex、模型和网络后再试。');
+      if (confirmed.status !== 'completed') {
+        this.errors.set(chat.id, confirmed.status === 'interrupted' ? '此回合已中断。' : '此回合未完成，请检查 Codex、模型和网络后再试。');
       }
     } catch (error) {
       this.errors.set(chat.id, error instanceof DomainError ? error.message : '无法确认原生会话结果，请重新读取。');
     } finally {
       clearTimeout(timer);
-      await connection.close();
       this.running.delete(chat.id);
     }
   }
