@@ -607,7 +607,11 @@ it.each([
   }
 });
 
-it('旧索引已确认续聊时沿用匹配的 checkpoint，原生回退后重新提示', async () => {
+it.each([
+  { entry: '查看', withBoundary: false },
+  { entry: '发送', withBoundary: false },
+  { entry: '查看', withBoundary: true },
+])('旧索引首次 $entry 匹配 checkpoint（拒绝前边界 $withBoundary）后，按仍在历史中的续聊显示状态', async ({ entry, withBoundary }) => {
   const chat = chats = new AgentChat(directory, 'test');
   const { id } = chat.create();
   const { threadId } = await chat.send(id, '拒绝前的问题');
@@ -617,25 +621,77 @@ it('旧索引已确认续聊时沿用匹配的 checkpoint，原生回退后重�
   await chat.send(id, '旧版已成功续聊的问题');
   await expect.poll(async () => (await chat.get(id)).busy).toBe(false);
   const continued = await chat.get(id);
+  const firstContinuation = JSON.parse(readFileSync(path, 'utf8'));
+  if (withBoundary) {
+    await chat.send(id, '旧版第二次续聊的问题');
+    await expect.poll(async () => (await chat.get(id)).busy).toBe(false);
+  }
+  const legacyDetail = await chat.get(id);
   await chat.close();
 
   const file = join(directory, 'conversations.json');
   const [saved] = JSON.parse(readFileSync(file, 'utf8'));
-  writeFileSync(file, JSON.stringify([{ ...saved, rejectedModelTurnId: 'absent-turn', continuedAfterRejection: true }]));
+  writeFileSync(file, JSON.stringify([{ ...saved, rejectedModelTurnId: 'absent-turn', continuedAfterRejection: true,
+    ...(withBoundary ? { rejectedAfterTurnId: firstContinuation.turns[0].id } : {}),
+  }]));
   const reopened = chats = new AgentChat(directory, 'test');
-  expect(await reopened.get(id)).toEqual(continued);
   const legacyRecording = readFileSync(path);
-  await reopened.send(id, '升级后继续提问');
-  await expect.poll(async () => (await reopened.get(id)).busy).toBe(false);
+  if (entry === '查看') {
+    expect(await reopened.get(id)).toEqual(legacyDetail);
+  } else {
+    await reopened.send(id, '升级后继续提问');
+    await expect.poll(async () => (await reopened.get(id)).busy).toBe(false);
+  }
   await reopened.close();
+  const delayedRejection = { id: 'absent-turn', status: 'completed', items: [
+    { id: 'rejected-answer', type: 'agentMessage', text: '延迟写入的异模回答' },
+  ] };
+  firstContinuation.turns.push(delayedRejection);
+  writeFileSync(path, JSON.stringify(firstContinuation));
   const restored = chats = new AgentChat(directory, 'test');
-  writeFileSync(path, legacyRecording);
   expect(await restored.get(id)).toEqual(continued);
+  await expect(restored.send(id, '追加后重试')).rejects.toMatchObject({ code: 'CODEX_HISTORY_UNVERIFIED' });
+  writeFileSync(path, legacyRecording);
+  expect(await restored.get(id)).toEqual(legacyDetail);
   writeFileSync(path, beforeContinuation);
-  expect(await restored.get(id)).toMatchObject({
+  const rejected = await restored.get(id);
+  expect(rejected).toMatchObject({
     messages: continued.messages.slice(0, 2), error: expect.stringContaining('原生回合结果未确认'),
   });
+  const rolledBack = JSON.parse(beforeContinuation.toString('utf8'));
+  rolledBack.turns.push(delayedRejection);
+  writeFileSync(path, JSON.stringify(rolledBack));
+  expect(await restored.get(id)).toEqual(rejected);
   await expect(restored.send(id, '回退后重试')).rejects.toMatchObject({ code: 'CODEX_HISTORY_UNVERIFIED' });
+});
+
+it('旧索引续聊依据暂时无法保存时提示重启风险，再次查看可完成保存', async () => {
+  const chat = chats = new AgentChat(directory, 'test');
+  const { id } = chat.create();
+  await chat.send(id, '拒绝后的首次成功续聊');
+  await expect.poll(async () => (await chat.get(id)).busy).toBe(false);
+  const continued = await chat.get(id);
+  await chat.close();
+
+  const index = join(directory, 'conversations.json');
+  const [saved] = JSON.parse(readFileSync(index, 'utf8'));
+  writeFileSync(index, JSON.stringify([{ ...saved, rejectedModelTurnId: 'absent-turn', continuedAfterRejection: true }]));
+  const reopened = chats = new AgentChat(directory, 'test');
+  const restoreIndex = blockIndexWrites();
+  try {
+    expect(await reopened.get(id)).toMatchObject({ messages: continued.messages, error: expect.stringMatching(/未保存.*重启/) });
+  } finally {
+    restoreIndex();
+  }
+  const path = join(directory, 'no-project', saved.threadId + '.json');
+  const native = JSON.parse(readFileSync(path, 'utf8'));
+  native.turns.push({ id: 'absent-turn', status: 'interrupted', items: [] });
+  writeFileSync(path, JSON.stringify(native));
+  expect(await reopened.get(id)).toEqual(continued);
+  await reopened.close();
+  const restored = chats = new AgentChat(directory, 'test');
+  expect(await restored.get(id)).toEqual(continued);
+  await expect(restored.send(id, '索引恢复后重试')).rejects.toMatchObject({ code: 'CODEX_HISTORY_UNVERIFIED' });
 });
 
 it('旧索引缺少续聊标记时，按现有历史显示拒绝原因', async () => {

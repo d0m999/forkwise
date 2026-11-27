@@ -68,15 +68,7 @@ function historyRejectionMessage(chat: SavedChat, thread: NativeThread) {
   const hasLaterTurn = boundary === null
     ? thread.turns.length > 0
     : thread.turns.some((turn, index) => turn.id === boundary && index < thread.turns.length - 1);
-  if (hasLaterTurn) return;
-  if (chat.legacyContinuationCheckpoint) {
-    try {
-      if (fingerprint(thread) === chat.legacyContinuationCheckpoint) return;
-    } catch {
-      // History can still be displayed when its recording cannot be verified.
-    }
-  }
-  return rejectedModelMessage(chat.rejectedModelTurnStatus);
+  return hasLaterTurn ? undefined : rejectedModelMessage(chat.rejectedModelTurnStatus);
 }
 
 function nativeMessages(thread: NativeThread, rejectedModelTurnId?: string): Message[] {
@@ -127,7 +119,7 @@ export class AgentChat {
   private readonly chats: SavedChat[];
   private readonly running = new Map<string, RunningChat>();
   private readonly errors = new Map<string, string>();
-  private readonly unsavedRejections = new Set<string>();
+  private readonly unsavedRejectionWarnings = new Map<string, string>();
   private readonly processes = new Set<CodexConnection>();
   private readonly file: string;
   private readonly cwd: string;
@@ -149,7 +141,7 @@ export class AgentChat {
     const next = join(this.cwd, '..', `conversations-${randomUUID()}.tmp`);
     writeFileSync(next, JSON.stringify(this.chats), { mode: 0o600, flag: 'wx' });
     try { renameSync(next, this.file); } catch (error) { unlinkSync(next); throw error; }
-    this.unsavedRejections.clear(); // The index contains every conversation.
+    this.unsavedRejectionWarnings.clear(); // The index contains every conversation.
   }
 
   private saveModelRejection(chat: SavedChat, turnId: string, previousTurnId: string | null, status?: string) {
@@ -158,7 +150,26 @@ export class AgentChat {
     chat.rejectedAfterTurnId = previousTurnId;
     delete chat.verifiedContinuationTurnId;
     delete chat.legacyContinuationCheckpoint;
-    try { this.save(); } catch { this.unsavedRejections.add(chat.id); }
+    try { this.save(); } catch {
+      this.unsavedRejectionWarnings.set(chat.id, '拒绝回合的记录未保存。重启后可能重新显示本轮内容或丢失最新状态。');
+    }
+  }
+
+  private matchLegacyContinuation(chat: SavedChat, thread: NativeThread, checkpoint: string) {
+    if (!chat.rejectedModelTurnId || checkpoint !== chat.legacyContinuationCheckpoint) return false;
+    const predecessor = thread.turns.findIndex(turn => turn.id === chat.rejectedAfterTurnId);
+    const completed = (turn: Turn) => turn.status === 'completed' && turn.id !== chat.rejectedModelTurnId;
+    // Prefer the first continuation after a known boundary. With only the old
+    // flag, earlier completed turns could predate the rejection.
+    const continuation = chat.rejectedAfterTurnId === null || predecessor >= 0
+      ? thread.turns.slice(predecessor + 1).find(completed)
+      : thread.turns.findLast(completed);
+    if (continuation) {
+      chat.verifiedContinuationTurnId = continuation.id;
+      delete chat.legacyContinuationCheckpoint;
+      this.unsavedRejectionWarnings.set(chat.id, '续聊状态未保存。重启后可能重新显示拒绝提示。');
+    }
+    return true;
   }
 
   private find(id: string) {
@@ -182,9 +193,8 @@ export class AgentChat {
         terminalQuote(this.cwd), terminalQuote(chat.threadId)].join(' ');
     }
     let error = rejection ?? this.errors.get(chat.id);
-    if (this.unsavedRejections.has(chat.id)) {
-      error = (error ?? '') + '拒绝回合的记录未保存。重启后可能重新显示本轮内容或丢失最新状态。';
-    }
+    const warning = this.unsavedRejectionWarnings.get(chat.id);
+    if (warning) error = (error ?? '') + warning;
     return { ...this.summary(chat), model, messages, busy, resumeCommand, error };
   }
 
@@ -245,7 +255,15 @@ export class AgentChat {
     try {
       await connection.initialize(this.version);
       const thread = await this.read(connection, chat.threadId);
-      const rejection = historyRejectionMessage(chat, thread);
+      let rejection = historyRejectionMessage(chat, thread);
+      try {
+        if (chat.legacyContinuationCheckpoint && this.matchLegacyContinuation(chat, thread, fingerprint(thread))) {
+          rejection = undefined;
+        }
+        if (chat.verifiedContinuationTurnId && this.unsavedRejectionWarnings.has(id)) this.save();
+      } catch {
+        // Keep history readable. detail() reports any index change still pending.
+      }
       return this.detail(chat, nativeMessages(thread, chat.rejectedModelTurnId), thread.status.type === 'active', thread.model ?? chat.model, rejection);
     } finally { await connection.close(); }
   }
@@ -302,6 +320,7 @@ export class AgentChat {
         // model context. Only a recording already verified by Forkwise can
         // resume for inference before G4. Changed recordings remain readable.
         if (!chat.checkpoint || fingerprint(history) !== chat.checkpoint) throw blockedHistory();
+        this.matchLegacyContinuation(chat, history, chat.checkpoint);
         active.messages = nativeMessages(history, chat.rejectedModelTurnId);
         active.previousTurnId = history.turns.at(-1)?.id ?? null;
       }
@@ -354,7 +373,7 @@ export class AgentChat {
         if (active.rejectedModelTurnId === started.id) {
           // A matching notification can arrive while the child drains stdout after stdin EOF.
           const status = active.completedTurn?.id === started.id ? active.completedTurn.status : undefined;
-          if (chat.rejectedModelTurnStatus !== status || this.unsavedRejections.has(chat.id)) {
+          if (chat.rejectedModelTurnStatus !== status || this.unsavedRejectionWarnings.has(chat.id)) {
             this.saveModelRejection(chat, started.id, active.previousTurnId, status);
           }
         }
