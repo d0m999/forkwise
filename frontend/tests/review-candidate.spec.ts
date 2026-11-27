@@ -24,7 +24,7 @@ for (const width of [1360, 760]) {
     const dialog = page.getByRole('dialog', { name: 'AI 整理', exact: true });
     await expect(dialog.getByText('当前卡片', { exact: true })).toBeVisible();
     await expect(dialog.getByRole('button', { name: '用模型整理' })).toBeDisabled();
-    await expect(dialog.getByText('模拟整理使用本机示例规则，不调用模型。')).toBeVisible();
+    await expect(dialog.getByText('模拟整理仅用于演示或测试。示例在本机生成。')).toBeVisible();
     await dialog.getByRole('checkbox', { name: /卡片标题/ }).check();
     await dialog.getByRole('checkbox', { name: '段落 1', exact: true }).check();
     await page.screenshot({ path: info.outputPath(`organize-input-${width}.png`) });
