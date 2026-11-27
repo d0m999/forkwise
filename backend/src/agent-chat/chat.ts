@@ -3,7 +3,7 @@ import { closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readFi
 import { join } from 'node:path';
 import { z } from 'zod';
 import { DomainError, requireThat } from '../domain/errors.js';
-import { CodexConnection, codexModel, codexProvider } from './codex.js';
+import { CodexConnection, codexStorageEnvironment } from './codex.js';
 
 const savedChat = z.object({
   id: z.uuid(),
@@ -19,7 +19,7 @@ const nativeTurn = z.object({ id: z.string(), status: z.string(), items: z.array
 const nativeThread = z.object({ id: z.uuid(), path: z.string().nullable(), turns: z.array(nativeTurn),
   status: z.object({ type: z.string() }), model: z.string().nullable().optional() });
 const threadResult = z.object({ thread: nativeThread });
-const openResult = threadResult.extend({ model: z.string(), modelProvider: z.string() });
+const openResult = threadResult.extend({ model: z.string() });
 type NativeThread = z.infer<typeof nativeThread>;
 
 type Turn = { id: string; status: string };
@@ -29,6 +29,7 @@ const blockedHistory = () => new DomainError(
   '原生会话中有见岔无法核实来源的历史。可在此查看，材料外传资格核验前请在终端继续。',
   403,
 );
+const loginMessage = '请在终端运行 codex login，完成后回到见岔刷新。';
 const readError = () => new DomainError('CODEX_HISTORY_UNAVAILABLE', '无法读取这段原生会话，请检查本机 Codex 会话位置。', 503);
 
 function nativeMessages(thread: NativeThread): Message[] {
@@ -83,7 +84,7 @@ export class AgentChat {
   private readonly cwd: string;
   private closing = false;
 
-  constructor(directory: string, private readonly version: string, private readonly token: () => Promise<string>) {
+  constructor(directory: string, private readonly version: string) {
     this.file = join(directory, 'conversations.json');
     this.cwd = privateDirectory(join(directory, 'no-project'));
     try {
@@ -112,10 +113,14 @@ export class AgentChat {
   }
 
   private detail(chat: SavedChat, messages: Message[], busy: boolean, model = chat.model) {
-    const codexHome = process.env.CODEX_HOME;
-    const resumeCommand = chat.threadId && !busy
-      ? `${codexHome ? 'CODEX_HOME=' + terminalQuote(codexHome) + ' ' : ''}codex --no-daemon resume -C ${terminalQuote(this.cwd)} ${terminalQuote(chat.threadId)}`
-      : undefined;
+    let resumeCommand: string | undefined;
+    if (chat.threadId && !busy) {
+      const environment = codexStorageEnvironment.flatMap(name => {
+        const value = process.env[name];
+        return value ? [`${name}=${terminalQuote(value)}`] : [];
+      });
+      resumeCommand = [...environment, 'codex --no-daemon resume -C', terminalQuote(this.cwd), terminalQuote(chat.threadId)].join(' ');
+    }
     return { ...this.summary(chat), model, messages, busy, resumeCommand, error: this.errors.get(chat.id) };
   }
 
@@ -128,9 +133,9 @@ export class AgentChat {
     return this.summary(chat);
   }
 
-  private connect(token: string, onEvent: (method: string, params: unknown) => void = () => {}, onClose = () => {}) {
+  private connect(onEvent: (method: string, params: unknown) => void = () => {}, onClose = () => {}) {
     requireThat(!this.closing, 'CODEX_UNAVAILABLE', '工作台正在关闭。', 503);
-    const connection = new CodexConnection(this.cwd, token, onEvent, () => {
+    const connection = new CodexConnection(this.cwd, onEvent, () => {
       this.processes.delete(connection);
       onClose();
     });
@@ -144,13 +149,20 @@ export class AgentChat {
     return result.data.thread;
   }
 
+  async status(): Promise<{ loggedIn: boolean; message?: string }> {
+    const connection = this.connect();
+    try {
+      await connection.initialize(this.version);
+      return await connection.loggedIn() ? { loggedIn: true } : { loggedIn: false, message: loginMessage };
+    } finally { await connection.close(); }
+  }
+
   async get(id: string) {
     const chat = this.find(id);
     const active = this.running.get(id);
     if (active) return this.detail(chat, active.messages, true);
     if (!chat.threadId) return this.detail(chat, [], false);
-    // Native history is a local read. It does not require or use a plan token.
-    const connection = this.connect('');
+    const connection = this.connect();
     try {
       await connection.initialize(this.version);
       const thread = await this.read(connection, chat.threadId);
@@ -169,7 +181,7 @@ export class AgentChat {
     let resolveTerminal: (value: Turn | undefined) => void = () => {};
     const terminal = new Promise<Turn | undefined>(resolve => { resolveTerminal = resolve; });
     try {
-      connection = this.connect(await this.token(), (method, params) => {
+      connection = this.connect((method, params) => {
         if (method === 'turn/completed') {
           const result = z.object({ threadId: z.string(), turn: z.object({ id: z.string(), status: z.string() }) }).safeParse(params);
           if (result.success && result.data.threadId === chat.threadId && (!turn || turn.id === result.data.turn.id)) {
@@ -186,6 +198,7 @@ export class AgentChat {
         }
       }, () => resolveTerminal(undefined));
       await connection.initialize(this.version);
+      requireThat(await connection.loggedIn(), 'CODEX_LOGIN_REQUIRED', loginMessage, 401);
       const previous = chat.threadId;
       if (previous) {
         const history = await this.read(connection, previous);
@@ -199,11 +212,10 @@ export class AgentChat {
       }
       const opened = openResult.safeParse(await connection.call(previous ? 'thread/resume' : 'thread/start', {
         ...(previous ? { threadId: previous, excludeTurns: true } : {}),
-        cwd: this.cwd, model: codexModel, modelProvider: codexProvider,
+        cwd: this.cwd,
       }));
-      requireThat(opened.success && opened.data.modelProvider === codexProvider &&
-        (!previous || opened.data.thread.id === previous),
-        'CODEX_PROVIDER_MISMATCH', 'Codex 未使用见岔授权的模型服务，未发送问题。', 503);
+      requireThat(opened.success && (!previous || opened.data.thread.id === previous),
+        'CODEX_THREAD_UNAVAILABLE', '无法启动或恢复这段原生 Codex 会话。', 503);
       chat.threadId = opened.data.thread.id;
       chat.model = opened.data.model;
       this.save();

@@ -1,39 +1,36 @@
 import { expect, place, test } from './writing-board-fixture';
 
-const authorizationUrl = 'https://auth.openai.com/api/accounts/authorize?state=agent-chat-fixture';
 const threadId = 'bba243c1-12ba-4ed1-98c5-856d14629c3e';
 const resumeCommand = `codex --no-daemon resume -C '/tmp/agent-chat-fixture' '${threadId}'`;
 
-test('无项目入口仅按点击授权，保留失败草稿并按原生身份刷新终端续聊', async ({ page, context, workspace }) => {
+test('无项目右栏复用 Codex 登录，保留失败草稿并按原生身份刷新终端续聊', async ({ page, context, workspace }) => {
   const first = { id: 'chat-1', threadId: null as string | null, model: null as string | null };
   const second = { id: 'chat-2', threadId: null, model: null };
-  const conversations = [first];
+  const conversations: (typeof first)[] = [];
   const messages = [{ id: 'user-1', role: 'user', text: '合成问题一' }];
-  let authorized = false;
-  let authRequests = 0;
-  let requests = 0;
+  const requests: string[] = [];
+  let loggedIn = false;
+  let popupOpened = false;
   let turnRequests = 0;
   let busy = true;
   const firstDetail = () => ({ ...first, busy, messages, resumeCommand: busy ? undefined : resumeCommand });
 
+  page.on('popup', () => { popupOpened = true; });
   await page.route('**/api/mapping/projects', route => route.fulfill({ json: [] }));
-  await context.route(authorizationUrl, route => route.fulfill({ body: '合成授权页面' }));
   await page.route('**/api/agent-chat/**', route => {
-    requests += 1;
     const path = new URL(route.request().url()).pathname.slice('/api/agent-chat'.length);
-    const post = route.request().method() === 'POST';
-    if (path === '/status') return route.fulfill({ json: { authorized } });
-    if (path === '/authorization' && post) {
-      authRequests += 1;
-      return route.fulfill({ json: { url: authorizationUrl } });
-    }
-    if (path === '/conversations' && post) {
-      expect(conversations).not.toContain(second);
-      conversations.unshift(second);
-      return route.fulfill({ status: 201, json: second });
+    const method = route.request().method();
+    requests.push(`${method} ${path}`);
+    if (path === '/status' && method === 'GET') return route.fulfill({ json: { loggedIn } });
+    if (path === '/conversations' && method === 'POST') {
+      const created = conversations.length === 0 ? first : second;
+      expect(conversations).not.toContain(created);
+      expect(route.request().postDataJSON()).toEqual({});
+      conversations.unshift(created);
+      return route.fulfill({ status: 201, json: created });
     }
     if (path === '/conversations') return route.fulfill({ json: { conversations } });
-    if (path === '/conversations/chat-1/turns' && post) {
+    if (path === '/conversations/chat-1/turns' && method === 'POST') {
       expect(route.request().postDataJSON()).toEqual({ text: '合成问题一' });
       turnRequests += 1;
       if (turnRequests === 1) return route.fulfill({ status: 503, json: { message: '发送暂时失败' } });
@@ -53,30 +50,22 @@ test('无项目入口仅按点击授权，保留失败草稿并按原生身份�
   const chat = page.getByRole('complementary', { name: 'Codex 对话' });
   await expect(toggle).toHaveAttribute('aria-expanded', 'false');
   await expect(chat).toHaveCount(0);
-  expect(requests).toBe(0);
+  expect(requests).toEqual([]);
   await toggle.press('Enter');
   await expect(chat.getByText('无项目', { exact: true })).toBeVisible();
-  const login = chat.getByRole('button', { name: 'Continue with ChatGPT', exact: true });
-  await expect(login).toBeVisible();
-  expect(authRequests).toBe(0);
-  await page.evaluate(() => {
-    const open = window.open;
-    window.open = () => { window.open = open; return null; };
-  });
-  await login.click();
-  await expect(chat.getByRole('alert')).toContainText('浏览器阻止了授权页面');
-  expect(authRequests).toBe(0);
-  const [popup] = await Promise.all([page.waitForEvent('popup'), login.click()]);
-  await expect(popup).toHaveURL(authorizationUrl);
-  expect(authRequests).toBe(1);
-  authorized = true;
-  await popup.close();
-  await page.evaluate(() => window.dispatchEvent(new Event('focus')));
-
+  await expect(chat.getByRole('status')).toHaveText('请在终端运行 codex login，登录后点击刷新。');
+  await expect(chat.getByRole('button')).toHaveText(['刷新']);
+  expect(requests).toEqual(['GET /status']);
   const draft = chat.getByRole('textbox', { name: '消息', exact: true });
   const send = chat.getByRole('button', { name: '发送', exact: true });
   const refresh = chat.getByRole('button', { name: '刷新', exact: true });
+  const create = chat.getByRole('button', { name: '新建对话', exact: true });
   const transcript = chat.getByRole('log', { name: '对话消息' });
+  loggedIn = true;
+  await refresh.click();
+  await expect(transcript).toHaveText('新建一段对话开始聊天。');
+  await create.click();
+  await expect(chat.getByRole('combobox', { name: '对话列表' })).toHaveValue(first.id);
   await draft.fill('合成问题一');
   await send.click();
   await expect(chat.getByRole('alert')).toHaveText('发送暂时失败');
@@ -110,16 +99,19 @@ test('无项目入口仅按点击授权，保留失败草稿并按原生身份�
   await expect(chat.getByRole('status')).toHaveText('已复制终端命令。');
   expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(resumeCommand);
 
-  await chat.getByRole('button', { name: '新建对话', exact: true }).click();
+  await create.click();
   await expect(chat.getByRole('combobox', { name: '对话列表' })).toHaveValue(second.id);
   await expect(draft).toBeVisible();
   await expect(draft).toHaveValue('');
   await expect(transcript.locator('article')).toHaveCount(0);
   await expect(chat.getByText(threadId, { exact: true })).toHaveCount(0);
+  expect(requests).not.toContain('POST /authorization');
+  expect(popupOpened).toBe(false);
 });
 
 test('打开右栏保留画布和写字板的操作区域', async ({ page, workspace }) => {
-  await page.route('**/api/agent-chat/status', route => route.fulfill({ json: { authorized: false } }));
+  const message = '请先在终端运行 codex login，完成登录后回来刷新。';
+  await page.route('**/api/agent-chat/status', route => route.fulfill({ json: { loggedIn: false, message } }));
   await place(page, '并排时保留卡片', 280, 200);
   await page.getByRole('button', { name: '编辑正文', exact: true }).click();
   const board = page.getByRole('complementary', { name: '写字板' });
@@ -128,6 +120,7 @@ test('打开右栏保留画布和写字板的操作区域', async ({ page, works
   await toggle.click();
   const chat = page.getByRole('complementary', { name: 'Codex 对话' });
   await expect(chat).toBeVisible();
+  await expect(chat.getByRole('status')).toHaveText(message);
   await expect(canvas).toBeVisible();
   await expect(board.getByRole('textbox', { name: '卡片正文' })).toBeVisible();
   await expect.poll(async () => {

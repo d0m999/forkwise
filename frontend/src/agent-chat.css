@@ -90,9 +90,7 @@
 .agent-chat-primary { background: #36548a; border-color: #36548a; color: #fff; }
 .agent-chat-primary:hover:not(:disabled) { background: #2d4778; }
 .agent-chat-sign-in { padding: 16px; }
-.agent-chat-sign-in p { margin: 0 0 12px; line-height: 1.55; }
-.agent-chat-sign-in button { max-width: 100%; }
-.agent-chat-sign-in button + p { margin-top: 12px; }
+.agent-chat-sign-in p { margin: 0; line-height: 1.55; }
 .agent-chat-resume {
   border-top: 1px solid #e8ebf0;
   padding: 10px 16px;

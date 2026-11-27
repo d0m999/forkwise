@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import "./agent-chat.css";
 
-type Authorization = { authorized: boolean; message?: string };
+type LoginStatus = { loggedIn: boolean; message?: string };
 type Conversation = { id: string; threadId: string | null; model: string | null };
 type Message = { id: string; role: "user" | "assistant"; text: string };
 type ConversationDetail = Conversation & { busy: boolean; messages: Message[]; error?: string; resumeCommand?: string };
@@ -27,7 +27,7 @@ async function chatRequest<T>(path: string, fallback: string, options: { body?: 
 }
 
 export function AgentChat({ open }: { open: boolean }) {
-  const [authorization, setAuthorization] = useState<Authorization>();
+  const [loginStatus, setLoginStatus] = useState<LoginStatus>();
   const [conversations, setConversations] = useState<Conversation[]>();
   const [selectedId, setSelectedId] = useState<string>();
   const [detail, setDetail] = useState<ConversationDetail>();
@@ -37,7 +37,7 @@ export function AgentChat({ open }: { open: boolean }) {
   const [listError, setListError] = useState("");
   const [detailError, setDetailError] = useState("");
   const [actionError, setActionError] = useState("");
-  const [notice, setNotice] = useState<"authorize" | "copied">();
+  const [resumeCommandCopied, setResumeCommandCopied] = useState(false);
   const acceptedDrafts = useRef(new Map<string, string>());
   const transcript = useRef<HTMLDivElement>(null);
   const current = detail?.id === selectedId ? detail : undefined;
@@ -63,10 +63,10 @@ export function AgentChat({ open }: { open: boolean }) {
     const controller = new AbortController();
     void (async () => {
       try {
-        const status = await chatRequest<Authorization>("/status", "暂时无法检查 ChatGPT 授权。", { signal: controller.signal });
+        const status = await chatRequest<LoginStatus>("/status", "暂时无法检查 Codex 登录状态。", { signal: controller.signal });
         if (controller.signal.aborted) return;
-        setAuthorization(status);
-        if (status.authorized) {
+        setLoginStatus(status);
+        if (status.loggedIn) {
           const list = await chatRequest<{ conversations: Conversation[] }>("/conversations", "暂时无法读取对话列表。", { signal: controller.signal });
           if (controller.signal.aborted) return;
           setConversations(list.conversations);
@@ -80,9 +80,9 @@ export function AgentChat({ open }: { open: boolean }) {
     return () => controller.abort();
   }, [open, pending, refresh]);
 
-  const authorized = authorization?.authorized === true;
+  const loggedIn = loginStatus?.loggedIn === true;
   useEffect(() => {
-    if (!open || !authorized || !selectedId || pending) return;
+    if (!open || !loggedIn || !selectedId || pending) return;
     const controller = new AbortController();
     const path = `/conversations/${encodeURIComponent(selectedId)}`;
     let timeout: number | undefined;
@@ -108,43 +108,16 @@ export function AgentChat({ open }: { open: boolean }) {
       controller.abort();
       window.clearTimeout(timeout);
     };
-  }, [open, authorized, selectedId, pending, refresh]);
+  }, [open, loggedIn, selectedId, pending, refresh]);
 
   useEffect(() => {
     if (transcript.current) transcript.current.scrollTop = transcript.current.scrollHeight;
   }, [open, selectedId, lastMessage?.id, lastMessage?.text]);
 
-  async function authorize() {
-    setActionError("");
-    setNotice(undefined);
-    const popup = window.open("", "_blank");
-    if (!popup) {
-      setActionError("浏览器阻止了授权页面。允许弹出窗口后重试。");
-      return;
-    }
-    setPending(true);
-    try {
-      popup.opener = null;
-      const { url } = await chatRequest<{ url: string }>("/authorization", "暂时无法发起 ChatGPT 授权。", { body: {} });
-      const destination = new URL(url);
-      if (destination.origin !== "https://auth.openai.com" || destination.pathname !== "/api/accounts/authorize") {
-        throw new Error("ChatGPT 授权地址无效。");
-      }
-      if (popup.closed) throw new Error("授权页面已关闭。请重新打开。");
-      popup.location.replace(destination.href);
-      setNotice("authorize");
-    } catch (error) {
-      popup.close();
-      setActionError((error as Error).message);
-    } finally {
-      setPending(false);
-    }
-  }
-
   async function createConversation() {
     setPending(true);
     setActionError("");
-    setNotice(undefined);
+    setResumeCommandCopied(false);
     try {
       const created = await chatRequest<Conversation>("/conversations", "暂时无法新建对话。", { body: {} });
       setConversations(list => [created, ...(list ?? [])]);
@@ -162,7 +135,7 @@ export function AgentChat({ open }: { open: boolean }) {
     if (!current || !draft.trim() || pending || current.busy) return;
     setPending(true);
     setActionError("");
-    setNotice(undefined);
+    setResumeCommandCopied(false);
     try {
       const result = await chatRequest<ConversationDetail>(`/conversations/${encodeURIComponent(current.id)}/turns`, "暂时无法发送消息。", { body: { text: draft } });
       setDetail(result);
@@ -177,11 +150,11 @@ export function AgentChat({ open }: { open: boolean }) {
   }
 
   async function copyResumeCommand(command: string) {
-    setNotice(undefined);
+    setResumeCommandCopied(false);
     setActionError("");
     try {
       await navigator.clipboard.writeText(command);
-      setNotice("copied");
+      setResumeCommandCopied(true);
     } catch {
       setActionError("无法访问剪贴板。请选中终端命令手动复制。");
     }
@@ -199,14 +172,14 @@ export function AgentChat({ open }: { open: boolean }) {
       </header>
       {listError && <p className="agent-chat-error" role="alert">{listError}</p>}
       {actionError && <p className="agent-chat-error" role="alert">{actionError}</p>}
-      {authorized ? (
+      {loggedIn ? (
         <>
           <div className="agent-chat-conversations">
             {!!conversations?.length && <select aria-label="对话列表" value={selectedId ?? ""} disabled={pending} onChange={event => {
               setSelectedId(event.target.value);
               setActionError("");
               setDetailError("");
-              setNotice(undefined);
+              setResumeCommandCopied(false);
             }}>
               {conversations.map(conversation => <option key={conversation.id} value={conversation.id}>
                 {`对话 ${conversation.threadId?.slice(0, 8) ?? conversation.id.slice(0, 8)}`}
@@ -240,15 +213,13 @@ export function AgentChat({ open }: { open: boolean }) {
             <code>{resumeCommand}</code>
             <button type="button" disabled={pending} onClick={() => void copyResumeCommand(resumeCommand)}>复制终端命令</button>
           </details>}
-          {notice === "copied" && <p className="agent-chat-muted" role="status">已复制终端命令。</p>}
+          {resumeCommandCopied && <p className="agent-chat-muted" role="status">已复制终端命令。</p>}
         </>
       ) : (
         <div className="agent-chat-sign-in">
-          {authorization ? <>
-            <p>{authorization.message ?? "授权见岔使用你的 ChatGPT 套餐额度。"}</p>
-            <button type="button" className="agent-chat-primary" disabled={pending} onClick={() => void authorize()}>Continue with ChatGPT</button>
-            {notice === "authorize" && <p role="status">完成授权后回到见岔。也可以手动刷新授权状态。</p>}
-          </> : !listError && <p role="status">正在检查 ChatGPT 授权…</p>}
+          {loginStatus ? (
+            <p role="status">{loginStatus.message ?? <>请在终端运行 <code>codex login</code>，登录后点击刷新。</>}</p>
+          ) : !listError && <p role="status">正在检查 Codex 登录状态…</p>}
         </div>
       )}
     </aside>

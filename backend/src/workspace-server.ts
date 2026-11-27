@@ -27,7 +27,6 @@ const origin = `http://127.0.0.1:${port}`;
 const { openMapping } = await import('./mapping/storage.js');
 const { createWorkspaceApp } = await import('./mapping/http.js');
 const { AgentChat, openAgentChatDirectory } = await import('./agent-chat/chat.js');
-const { ChatGptAuthorization } = await import('./agent-chat/siwc.js');
 const mapping = openMapping(directory, {
   workspaceBackup: {
     version,
@@ -36,8 +35,7 @@ const mapping = openMapping(directory, {
   },
 });
 const chatDirectory = openAgentChatDirectory(directory);
-const authorization = new ChatGptAuthorization(chatDirectory, origin);
-const chat = new AgentChat(chatDirectory, version, () => authorization.token());
+const chat = new AgentChat(chatDirectory, version);
 const types: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
@@ -53,7 +51,7 @@ const app = createWorkspaceApp(mapping, origin, (path) => {
   )
     return new Response('资源不存在', { status: 404 });
   return new Response(readFileSync(file), { headers: { 'Content-Type': types[extname(file)]! } });
-}, { chat, authorization });
+}, chat);
 const server = serve({ fetch: app.fetch, hostname: '127.0.0.1', port }, () => {
   const accessPath = resolve(directory, 'local-access.json');
   let fd: number | undefined;

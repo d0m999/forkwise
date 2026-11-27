@@ -7,20 +7,9 @@ import { z } from 'zod';
 import { DomainError } from '../domain/errors.js';
 import { codexProxyEnvironment } from './mac-proxy.js';
 
-export const codexModel = 'gpt-6.2-sol';
-export const codexProvider = 'openai_chatgpt_plan';
-export const codexName = '见岔（Forkwise）';
-const provider = `model_providers.${codexProvider}`;
-const codexOptions = [
-  `model_provider="${codexProvider}"`,
-  `${provider}.name="ChatGPT plan"`,
-  `${provider}.base_url="https://api.openai.com/v1"`,
-  `${provider}.env_key="ACCESS_TOKEN"`,
-  `${provider}.wire_api="responses"`,
-  `${provider}.requires_openai_auth=false`,
-  `${provider}.supports_websockets=false`,
-  'shell_environment_policy.ignore_default_excludes=false',
-];
+const codexName = '见岔（Forkwise）';
+export const codexStorageEnvironment = ['CODEX_HOME', 'CODEX_SQLITE_HOME'] as const;
+const accountResult = z.object({ account: z.object({ type: z.string().min(1) }).nullable() });
 
 const rpcMessage = z.object({
   id: z.union([z.number(), z.string()]).optional(),
@@ -52,21 +41,20 @@ export class CodexConnection {
 
   constructor(
     cwd: string,
-    accessToken: string,
     onEvent: (method: string, params: unknown) => void,
     onClose: () => void,
   ) {
     const proxy = codexProxyEnvironment();
-    // The child receives its own credentials. Workspace and other provider
-    // secrets are outside this boundary, even when present in the launcher.
-    const env: NodeJS.ProcessEnv = { ACCESS_TOKEN: accessToken };
-    for (const key of ['PATH', 'HOME', 'USER', 'LOGNAME', 'SHELL', 'LANG', 'LC_ALL', 'TMPDIR', 'CODEX_HOME',
+    // Codex loads its own login and configuration. Workbench credentials
+    // and unrelated provider keys stay outside the child environment.
+    const env: NodeJS.ProcessEnv = {};
+    for (const key of ['PATH', 'HOME', 'USER', 'LOGNAME', 'SHELL', 'LANG', 'LC_ALL', 'TMPDIR', ...codexStorageEnvironment,
       'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'NO_PROXY', 'http_proxy', 'https_proxy', 'all_proxy', 'no_proxy']) {
       if (proxy[key] !== undefined) env[key] = proxy[key];
     }
-    this.child = spawn(codexBinary(), [
-      'app-server', '--listen', 'stdio://', ...codexOptions.flatMap(option => ['-c', option]),
-    ], { cwd, env, stdio: ['pipe', 'pipe', 'pipe'] });
+    this.child = spawn(codexBinary(), ['app-server', '--listen', 'stdio://'], {
+      cwd, env, stdio: ['pipe', 'pipe', 'pipe'],
+    });
     this.child.stderr.resume();
     this.child.stdin.on('error', () => this.rejectPending(rpcError()));
     this.child.on('error', () => this.rejectPending(rpcError()));
@@ -115,8 +103,14 @@ export class CodexConnection {
   }
 
   async initialize(version: string) {
-    await this.call('initialize', { clientInfo: { name: codexName, title: codexName, version } });
+    await this.call('initialize', { clientInfo: { name: 'forkwise', title: codexName, version } });
     this.write({ method: 'initialized' });
+  }
+
+  async loggedIn() {
+    const result = accountResult.safeParse(await this.call('account/read', { refreshToken: false }));
+    if (!result.success) throw rpcError();
+    return result.data.account !== null;
   }
 
   call(method: string, params: object): Promise<unknown> {
