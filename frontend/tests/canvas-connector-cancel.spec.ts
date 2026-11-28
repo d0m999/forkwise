@@ -75,7 +75,7 @@ test('切换工具取消未提交连线编辑后可明确新建', async ({ page,
   const line = page.getByRole('button', { name: '普通连线', exact: true }).nth(baseline.connectors!.findIndex(value => value.id === id));
   const tool = page.getByRole('button', { name: '连线', exact: true }), select = page.getByRole('button', { name: '选择', exact: true });
   const preview = page.getByRole('img', { name: '连线预览', exact: true }), free = page.getByRole('button', { name: '连线自由终点', exact: true });
-  const blank = page.getByRole('button', { name: '从空白处开始连线', exact: true }), move = page.getByRole('button', { name: '移动连线', exact: true });
+  const blank = page.getByRole('button', { name: '从画布中央起线', exact: true }), move = page.getByRole('button', { name: '移动连线', exact: true });
   const moveInstructions = page.getByText('方向键移动连线，Enter 确认，Escape 取消', { exact: true });
   const frame = async () => await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
   async function tabTo(target: Locator) {

@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import type { Node, NodeProps } from '@xyflow/react';
 import type { CanvasImage } from '../../backend/src/mapping/image-contracts';
-import { api, missingImageSizeMessage } from './api';
+import { api, MappingError, missingImageSizeMessage } from './api';
 import { imageHandles, useImageResize } from './image-resize';
 import type { ImageGeometry } from './image-geometry';
 import { ImageSurface } from './image-surface';
@@ -26,7 +26,17 @@ export function CanvasImageNode({ data, selected }: NodeProps<Node<ImageData>>) 
   }, [viewer]);
   useEffect(() => {
     let active = true;
-    void api.imageAsset(data.projectId, data.value.content.assetId).then(asset => { if (active) { setName(asset.name); setAsset(asset); setAssetError(null); } }).catch((error: unknown) => { if (active) setAssetError(missingImageSizeMessage(error)); });
+    void api.imageAsset(data.projectId, data.value.content.assetId).then(asset => {
+      if (active) { setName(asset.name); setAsset(asset); setAssetError(null); }
+    }).catch((error: unknown) => {
+      if (!active) return;
+      setAsset(null);
+      setAssetError(error instanceof MappingError && error.code === 'MEDIA_NOT_PERSISTED'
+        ? '图片原件缺失'
+        : error instanceof MappingError && error.code === 'ASSET_CORRUPT'
+          ? '图片原件字节损坏'
+          : missingImageSizeMessage(error));
+    });
     return () => { active = false; };
   }, [data.projectId, data.value.content.assetId]);
   const cropping = data.geometry.cropping?.projectId === data.projectId && data.geometry.cropping.value.id === data.value.id ? data.geometry.cropping : null;

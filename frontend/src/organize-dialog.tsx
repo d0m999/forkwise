@@ -11,10 +11,10 @@ const states: Record<OrganizeTask['state'], string> = {
   cancelled: '已取消', interrupted: '运行已中断',
 };
 const modeName = (mode: OrganizeTask['mode']) => mode === 'real' ? '模型整理' : '模拟整理';
-const taskReadError = '暂时无法读取任务状态，正在重新连接';
 const blockNames: Record<string, string> = {
   text: '段落', heading: '正文标题', listItem: '列表项', quote: '引用', code: '代码块', table: '表格',
 };
+const taskReadError = '暂时无法读取任务状态，正在重新连接';
 
 function ReviewGaps({ gaps, heading = '资料缺口' }: { gaps: readonly string[]; heading?: string }) {
   if (!gaps.length) return null;
@@ -33,7 +33,7 @@ export function OrganizeDialog({ projectId, source, verification, cards, pending
   isCancellationSaved: (requestId: string) => boolean;
   onPendingCancellationChange: (request: OrganizeRequest, status: 'pending' | 'settled') => boolean;
   close: () => void;
-  onAdded: (candidateId: string | undefined) => Promise<void>;
+  onAdded: (cardId: string | undefined) => Promise<void>;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const closeButton = useRef<HTMLButtonElement>(null);

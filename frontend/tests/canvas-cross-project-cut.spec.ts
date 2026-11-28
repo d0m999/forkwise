@@ -1,9 +1,9 @@
-import { execFileSync } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
-import { join, relative } from 'node:path';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Page } from '@playwright/test';
 import { expect, test, type Workspace } from './writing-board-fixture';
+import { type NativeCanvasClipboard, withNativeCanvasClipboard } from './container-copy-clipboard-fixture';
 
 const repo = fileURLToPath(new URL('../..', import.meta.url));
 const artifacts = join(repo, 'backend/artifacts/issue45-20261109');
@@ -70,20 +70,24 @@ async function seed(page: Page, workspace: Workspace) {
   await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
   return { sourceId, seeded: await read(page, workspace, sourceId) };
 }
-async function cutMoved(page: Page, workspace: Workspace, sourceId: string) {
+async function cutMoved(page: Page, workspace: Workspace, sourceId: string, native?: NativeCanvasClipboard) {
   await page.getByRole('button', { name: '待搬动', exact: true }).click();
-  await page.locator('.canvas').press('Meta+x');
+  const cut = () => page.locator('.canvas').press('Meta+x');
+  const nativeRaw = native ? await native.write(await read(page, workspace, sourceId), 'moved', 'cut', cut) : undefined;
+  if (!native) await cut();
   await expect.poll(async () => (await read(page, workspace, sourceId)).cards.some(card => card.id === 'moved')).toBe(false);
-  const envelope = JSON.parse(await readClipboard(page));
+  const envelope = JSON.parse(nativeRaw ?? await readClipboard(page));
   expect(envelope.cut).toMatchObject({ sourceProjectId: sourceId });
   return envelope.cut as { cutId: string; sourceProjectId: string };
 }
-async function pasteInto(page: Page, targetId: string) {
+async function pasteInto(page: Page, targetId: string, native?: NativeCanvasClipboard) {
   await expect(page.locator(`[role="tab"][title="${targetId}"]`)).toHaveAttribute('aria-selected', 'true');
   const pane = (await page.locator('.react-flow__pane').boundingBox())!;
   await page.mouse.move(pane.x + 420, pane.y + 260);
   await page.locator('.react-flow__pane').click({ position: { x: 20, y: 20 } });
-  await page.locator('.canvas').press('Meta+v');
+  const paste = () => page.locator('.canvas').press('Meta+v');
+  if (native) await native.paste(paste);
+  else await paste();
 }
 
 // 让第一次 canvas.paste 在服务端提交后丢掉回执：刷新重放与页面内重试共用同一构造。
@@ -105,44 +109,15 @@ async function dropFirstPasteAck(page: Page) {
 }
 const pasteRecordKey = (projectId: string) => `forkwise.paste-pending.v1:${projectId}`;
 
-const pasteboardReader = `import Cocoa
-let pasteboard = NSPasteboard.general
-print("changeCount \\(pasteboard.changeCount)")
-for item in pasteboard.pasteboardItems ?? [] {
-  for type in item.types where type.rawValue == "public.utf8-plain-text" || type.rawValue.hasPrefix("org.w3.web-custom-format.") {
-    let data = item.data(forType: type)
-    print("TYPE \\(type.rawValue) BYTES \\(data?.count ?? 0)")
-    if let data, type.rawValue == "org.w3.web-custom-format.type-0" {
-      try? data.write(to: URL(fileURLWithPath: CommandLine.arguments[1]))
-    }
-    if let data, let text = String(data: data, encoding: .utf8) { print(text) }
-  }
-}
-`;
-function readSystemPasteboard() {
-  mkdirSync(artifacts, { recursive: true });
-  const swift = artifact('read-pasteboard.swift'), reader = artifact('read-pasteboard'), snapshot = artifact('system-snapshot.json');
-  writeFileSync(swift, pasteboardReader);
-  if (!process.env.FORKWISE_SKIP_SWIFTC) execFileSync('swiftc', ['-o', reader, swift]);
-  return { pasteboard: execFileSync(reader, [snapshot], { encoding: 'utf8' }), plain: execFileSync('pbpaste', { encoding: 'utf8' }), snapshot };
-}
-
-async function runFlow(page: Page, workspace: Workspace, system: boolean) {
+async function runFlow(page: Page, workspace: Workspace, native?: NativeCanvasClipboard) {
+  const system = !!native;
   const { sourceId, seeded } = await seed(page, workspace);
-  const cut = await cutMoved(page, workspace, sourceId);
+  const cut = await cutMoved(page, workspace, sourceId, native);
   const cutAfter = await read(page, workspace, sourceId);
   expect(await cutState(page, workspace, sourceId, cut.cutId)).toMatchObject({ state: 'eligible', revision: 0 });
-  if (system) {
-    // 真实窗口：系统剪贴板必须读到同一 cut 信封，不能只看页面剪贴板。
-    // 剪切已提交，对象已从画布移除，不能再靠重复 Meta+x 重试；只等系统剪贴板落定后读一次。
-    await expect.poll(() => readSystemPasteboard().pasteboard.includes(cut.cutId), { timeout: 30000, intervals: [500] }).toBe(true);
-    const systemRead = readSystemPasteboard();
-    writeFileSync(artifact('nspasteboard.txt'), systemRead.pasteboard);
-    expect(systemRead.pasteboard).toContain(cut.cutId);
-  }
 
   const targetId = await createProject(page, sourceId);
-  await pasteInto(page, targetId);
+  await pasteInto(page, targetId, native);
   await expect(page.getByRole('status')).toHaveText('已保存到本机');
   await expect.poll(async () => (await read(page, workspace, targetId)).cards.length).toBe(1);
   const target = await read(page, workspace, targetId);
@@ -179,7 +154,7 @@ async function runFlow(page: Page, workspace: Workspace, system: boolean) {
   expect((await read(page, workspace, sourceId)).cards.map(card => card.id).sort()).toEqual(['kept']);
 
   // 本轮决定：保持剪贴板回 A 粘贴。资格仍是 eligible，恢复原身份与有效外线。
-  await pasteInto(page, sourceId);
+  await pasteInto(page, sourceId, native);
   await expect(page.getByRole('status')).toHaveText('已保存到本机');
   await expect.poll(async () => (await read(page, workspace, sourceId)).cards.length).toBe(2);
   const backHome = await read(page, workspace, sourceId);
@@ -213,18 +188,22 @@ async function runFlow(page: Page, workspace: Workspace, system: boolean) {
   expect((await read(page, workspace, targetId)).cards.map(card => card.id)).toEqual([pasted.id]);
   expect(await cutState(page, workspace, sourceId, cut.cutId)).toMatchObject({ state: 'consumed' });
 
-  mkdirSync(artifacts, { recursive: true });
-  writeFileSync(artifact(system ? 'headed-flow.json' : 'headless-flow.json'), JSON.stringify({
-    issue: 45, run: system ? 'headed' : 'headless', at: new Date().toISOString(),
-    sourceId, targetId, cutId: cut.cutId, pastedCardId: pasted.id, originalItemId: original.item.id,
-  }, null, 2));
+  return () => {
+    mkdirSync(artifacts, { recursive: true });
+    const receipt = system ? test.info().outputPath('headed-flow.json') : artifact('headless-flow.json');
+    writeFileSync(receipt, JSON.stringify({
+      issue: 45, run: system ? 'headed' : 'headless', at: new Date().toISOString(),
+      sourceId, targetId, cutId: cut.cutId, pastedCardId: pasted.id, originalItemId: original.item.id,
+      ...(system ? { systemClipboard: 'NSPasteboard 完整核对预声明剪切信封、来源与格式' } : {}),
+    }, null, 2));
+  };
 }
 
 test.describe('跨项目剪切主流程', () => {
   test.skip(systemClipboard, '系统剪贴板验收只跑 headed 主流程');
   test('A 剪切→B 粘贴→回 A 粘贴→两边独立撤销重做→重开', async ({ page, workspace }) => {
     test.setTimeout(300000);
-    await runFlow(page, workspace, false);
+    (await runFlow(page, workspace))();
   });
 });
 
@@ -361,12 +340,9 @@ test.describe('提交成功但读取失败', () => {
 });
 
 test.describe('AC5 系统剪贴板跨项目剪切', () => {
-  test.skip(!systemClipboard, 'AC5 需真实窗口：FORKWISE_SYSTEM_CLIPBOARD=1 npx playwright test tests/canvas-cross-project-cut.spec.ts --workers=1');
+  test.skip(!systemClipboard, '系统剪贴板专项的运行参数见 frontend/playwright.config.ts');
   test('真实系统剪贴板读回同一 cut 信封并完成跨项目搬动', async ({ page, workspace }) => {
     test.setTimeout(300000);
-    await runFlow(page, workspace, true);
+    (await withNativeCanvasClipboard(page, workspace.origin, guard => runFlow(page, workspace, guard)))();
   });
 });
-
-// 供 headed 回执引用原始系统载荷路径；headless 不读取。
-export const systemArtifact = relative(repo, artifact('nspasteboard.txt'));

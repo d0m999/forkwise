@@ -7,6 +7,13 @@ import { SECRET_KEYS } from '../src/mapping/secret-keys.js';
 import { readZip } from '../src/mapping/zip-store.js';
 import { command, contentFixture, patch } from './fixtures/agent-content.js';
 
+const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==';
+const imageTask = {
+  id: 'image-task', type: 'imageTask', ticket: 'original-image-ticket',
+  name: '原图.png', mime: 'image/png', base64: png, byteLength: Buffer.from(png, 'base64').length,
+  width: 1, height: 1, status: 'queued',
+};
+
 it('AC6 按项目时间顺序撤销人类 C、Agent B，且可按顺序重做', async () => {
   const f = await contentFixture();
   expect((await f.post(command('body.edit', f.card().body.versionId, { id: 'card', text: 'A' }))).status).toBe(200);
@@ -32,6 +39,38 @@ it('AC6 按项目时间顺序撤销人类 C、Agent B，且可按顺序重做', 
     expect(result.status).toBe(200);
     expect(f.card().body.blocks[0]?.text).toBe(text);
   }
+});
+
+it('撤销删除恢复已失败的图片任务后，撤销和重做正文补丁保留该失败状态', async () => {
+  const f = await contentFixture();
+  const paragraph = f.card().body.blocks[0]!;
+  expect((await f.post(command('body.edit', f.card().body.versionId, {
+    id: 'card', blocks: [paragraph, imageTask],
+  }))).status).toBe(200);
+  const token = f.issue([f.grant()]);
+  const patchedText = '新文😀e\u0301结束';
+  expect((await f.post(patch(f.card().body.versionId), token)).status).toBe(200);
+  expect(f.card().body.blocks).toEqual([{ ...paragraph, text: patchedText }, imageTask]);
+  expect((await f.post(command('body.edit', f.card().body.versionId, {
+    id: 'card', blocks: [{ ...paragraph, text: patchedText }],
+  }))).status).toBe(200);
+
+  const history = f.history();
+  expect(history.undo.at(-1)?.label).toBe('body.edit');
+  expect((await f.post(command('history.undo', history.revision, {}))).status).toBe(200);
+  const failedImage = f.card().body.blocks[1];
+  expect(failedImage).toMatchObject({ ...imageTask, status: 'failed' });
+
+  await f.restart();
+  for (const [direction, text] of [['undo', paragraph.text], ['redo', patchedText]] as const) {
+    const current = f.history();
+    expect(current[direction].at(-1)?.label).toBe('body.patch');
+    expect((await f.post(command(`history.${direction}`, current.revision, {}))).status).toBe(200);
+    expect(f.card().body.blocks).toEqual([{ ...paragraph, text }, failedImage]);
+  }
+  expect(await f.post(command('media.fail', imageTask.ticket, {
+    id: 'card', blockId: imageTask.id, reason: '晚到结果',
+  }))).toMatchObject({ status: 409, body: { code: 'MEDIA_TASK_STALE' } });
 });
 
 it('AC6 项目包通过真实 verifier，隔离导入保全正文、对象和历史归档', async () => {
@@ -107,12 +146,6 @@ it('隔离导入后正文补丁、卡面测量及补丁撤销重做均不激活�
   expect((await source.post(command('attachment.attach', {
     attachment: null, target: { itemId: sourceCard.item.id, versionId: sourceCard.item.versionId }, containment: null,
   }, { itemId: sourceNote.item.id, targetItemId: sourceCard.item.id }))).status).toBe(200);
-  const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==';
-  const imageTask = {
-    id: 'image-task', type: 'imageTask', ticket: 'original-image-ticket',
-    name: '原图.png', mime: 'image/png', base64: png, byteLength: Buffer.from(png, 'base64').length,
-    width: 1, height: 1, status: 'queued',
-  };
   const saved = await source.post(command('body.edit', sourceCard.body.versionId, {
     id: sourceCard.id, blocks: [...sourceCard.body.blocks, imageTask],
   }));

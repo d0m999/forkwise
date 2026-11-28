@@ -73,6 +73,7 @@ test('从卡片公开查证，审阅并下载原文，明确添加后可撤销�
   expect(await readFile((await (await download).path())!)).toEqual(raw);
   const adding = page.waitForResponse(response => response.url().endsWith('/api/mapping/execute') &&
     response.request().method() === 'POST' && response.request().postDataJSON()?.type === 'organize.add');
+  await page.setViewportSize({ width: 550, height: 900 });
   await dialog.getByRole('button', { name: '添加为新卡' }).click();
   const receipt = await (await adding).json();
   expect(receipt.revision).toBe(before.project.revision + 1);
@@ -81,6 +82,9 @@ test('从卡片公开查证，审阅并下载原文，明确添加后可撤销�
   await expect(dialog.getByText('已添加为新卡', { exact: false })).toBeVisible();
   await expect(dialog.getByRole('button', { name: '添加为新卡' })).toHaveCount(0);
   await dialog.getByRole('button', { name: '关闭 公开查证' }).click();
+  await expect(page.locator('article').filter({ has: page.getByRole('button', { name: 'SEC 披露 · Assets', exact: true }) }))
+    .toBeInViewport({ ratio: 1 });
+  await page.setViewportSize({ width: 1360, height: 900 });
   const saved = await workspace.state();
   const candidate = saved.cards[1]!;
   expect(saved.cards[0]).toEqual(before.cards[0]);

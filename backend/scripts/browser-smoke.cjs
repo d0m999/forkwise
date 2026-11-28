@@ -178,12 +178,26 @@ const net = require('node:net');
     await page.locator('#transcription-blocks textarea').fill('Revenue 12');
     await page.locator('#transcription-form input[name=reason]').fill('核对测试图像文字');
     await page.locator('#transcription-form input[name=confirmed]').check();
+    const correctionSaved = page.waitForResponse(
+      (r) => r.url().endsWith('/transcription-corrections') && r.status() === 200,
+    );
     await page
       .locator('#transcription-form button')
       .filter({ hasText: '另存人工校正版本' })
       .click();
+    const { data: correction } = await (await correctionSaved).json();
+    await page.waitForResponse((r) => r.url().includes('/sync?') && r.status() === 200);
+    await page
+      .locator('#transcription-status')
+      .filter({ hasText: correction.sourceVersionId })
+      .waitFor();
+    await page
+      .locator('#transcription-impact')
+      .getByText('校正时没有引用这页的研究对象。')
+      .waitFor();
+    await page.locator('#transcription-form').waitFor({ state: 'hidden' });
+    await page.locator('#close-transcription').click();
     await page.locator('#transcription-dialog').waitFor({ state: 'hidden' });
-    await page.locator('#notice').filter({ hasText: '人工校正已另存' }).waitFor();
     // Seed legacy model output for adoption and partial-result recovery.
     const Database = require('better-sqlite3');
     const fixtureDb = new Database(join(directory, 'research.sqlite'));

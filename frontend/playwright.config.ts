@@ -1,12 +1,13 @@
 import { defineConfig } from "@playwright/test";
-// 系统剪贴板只在有真实窗口的 headed 运行里可读。默认 headless 只跑页面剪贴板四路径用例，
-// AC5 系统剪贴板用例显式 skipped（不会用绿灯掩盖未执行的系统侧检查），也不产出 AC5 正式回执。
-// 需要 AC5 系统侧证据时用 FORKWISE_SYSTEM_CLIPBOARD=1，此时只跑该 spec、以 headed 窗口执行，
-// 由该用例产出 docs/plans/evidence/ 下的回执；原始载荷一律留在 backend/artifacts/。
+// 默认 headless 路径使用浏览器内存剪贴板，三条系统剪贴板专项显式跳过。
+// 系统侧用 FORKWISE_SYSTEM_CLIPBOARD=1 和 FORKWISE_CANVAS_CLIPBOARD_GUARD 的绝对路径。
+// 专项在隔离工作区以真实窗口运行，默认串行并在首个失败后停止。
+// 原值核对或恢复成功后才在 --output 下写回执。
 const systemClipboard = process.env.FORKWISE_SYSTEM_CLIPBOARD === "1";
 export default defineConfig({
   testDir: "./tests",
-  workers: 2,
+  workers: systemClipboard ? 1 : 2,
+  maxFailures: systemClipboard ? 1 : 0,
   timeout: 90000,
   expect: { timeout: 20000 },
   use: {

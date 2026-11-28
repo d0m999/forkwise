@@ -6,6 +6,23 @@ const standardDisclosure = {
   retention: '选定文字与回复可能为滥用监测通常保留最多 30 天，例外依适用政策。',
 };
 
+test('边缘卡片新增的整理候选完整出现在视口内', async ({ page, workspace }) => {
+  await place(page, '右侧观察', 1000, 250);
+  const source = (await workspace.state()).cards[0]!;
+  await page.getByRole('button', { name: 'AI', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: 'AI 整理' });
+  await dialog.getByRole('checkbox', { name: /卡片标题/ }).check();
+  await dialog.getByRole('button', { name: '试用模拟整理' }).click();
+  await dialog.getByRole('button', { name: '添加为新卡' }).click();
+  await expect(dialog.getByText('已添加为新卡', { exact: false })).toBeVisible();
+  await dialog.getByRole('button', { name: '关闭 AI 整理' }).click();
+  const cards = (await workspace.state()).cards;
+  expect(cards).toHaveLength(2);
+  expect(cards[0]!.item.pose).toEqual(source.item.pose);
+  await expect(page.locator('article').filter({ has: page.getByRole('button', { name: '模拟整理：右侧观察', exact: true }) }))
+    .toBeInViewport({ ratio: 1, timeout: 1500 });
+});
+
 test('AI 整理从卡片菜单选择范围，审阅后添加并在重开保留归属', async ({ page, workspace }, info) => {
   await place(page, '供应链观察');
   const source = (await workspace.state()).cards[0]!;

@@ -80,3 +80,18 @@ test("A9-04 同一完整Body的预览只显示整行，放大显示更多，全�
     contentType: "application/json",
   });
 });
+test('紧凑新卡的正文写入后在写字板明确确认已保存', async ({ page, workspace }) => {
+  await place(page, '紧凑的新卡');
+  await page.getByRole('button', { name: '写字板', exact: true }).click();
+  const editor = page.getByRole('textbox', { name: '卡片正文', exact: true });
+  await expect(page.getByText('正文已保存', { exact: true })).toHaveCount(0);
+  await editor.fill('库存回落');
+  await editor.press('End');
+  await editor.press('Enter');
+  await page.keyboard.insertText('等待新财报');
+  await expect(page.getByRole('status')).toHaveText('已保存到本机');
+  await expect(page.getByText('正文已保存', { exact: true })).toBeVisible({ timeout: 1500 });
+  expect((await workspace.state()).cards[0]!.body.blocks).toMatchObject([
+    { text: '库存回落' }, { text: '等待新财报' },
+  ]);
+});

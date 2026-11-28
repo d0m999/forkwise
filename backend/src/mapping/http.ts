@@ -182,7 +182,7 @@ export function createWorkspaceApp(
       asset = mapping.read({ type: 'asset', projectId: c.req.param('id'), id: c.req.param('assetId') }, c.get('principal'));
     } catch (error) {
       if (error instanceof DomainError && error.code === 'MEDIA_NOT_PERSISTED')
-        throw new DomainError('NOT_FOUND', '资产不存在或不属于本项目', 404);
+        throw new DomainError('NOT_FOUND', '原件缺失或不属于本项目', 404);
       throw error;
     }
     const bytes = new Uint8Array(Buffer.from(asset.base64, 'base64'));

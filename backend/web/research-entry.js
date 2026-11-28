@@ -1,6 +1,7 @@
 import { RequestStore } from './request-store.js';
 import { RequestJournal, draftFingerprint } from './request-journal.js';
 import { textResearchPlan, fileImportPlan } from './research-entry-plans.js';
+import { conditionalUpdateRecoveryLabel } from './manual-updates.js';
 
 export function attachResearchEntry({
   canResearch,
@@ -123,6 +124,12 @@ export function attachResearchEntry({
     const pending = record && record.state !== 'completed';
     $('#entry-inputs').disabled = Boolean(pending);
     $('#entry-recover').hidden = !pending;
+    $('#entry-recover').textContent =
+      pending &&
+      canResearch !== false &&
+      record.steps[record.cursor]?.endpoint === '/manual-updates'
+        ? conditionalUpdateRecoveryLabel
+        : '恢复原研究请求';
     $('#entry-discard-request').hidden = record?.state !== 'rejected';
     $('#open-research-entry').textContent = pending ? '恢复研究请求' : '输入观点 / 材料';
     $('#entry-request-status').textContent = pending
@@ -193,6 +200,7 @@ export function attachResearchEntry({
       material: '文字材料已保存，可在“查看材料版本”中阅读原文。',
       file: '原文件已保存并进入解析，可在“查看材料版本”中阅读原文或手工校正转写。',
       filing: '申报正文获取请求已恢复，可在任务结果中查看正文和缺口。',
+      update: record.results.at(-1)?.message,
       research: canResearch
         ? '研究已排队，可在任务与历史中查看进度和结果。'
         : '原研究请求已恢复，可在任务与历史中查看记录。',

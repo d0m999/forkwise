@@ -1,8 +1,10 @@
 import { element, labelOf } from './condition-forms.js';
 
-export function attachTranscription({ api, run, message, getState, jobs }) {
+export function attachTranscription({ api, run, getState, jobs }) {
   const $ = (s) => document.querySelector(s),
-    dialog = $('#transcription-dialog');
+    dialog = $('#transcription-dialog'),
+    form = $('#transcription-form'),
+    impactBox = $('#transcription-impact');
   let context = null,
     image = null,
     blobUrl = null,
@@ -121,6 +123,7 @@ export function attachTranscription({ api, run, message, getState, jobs }) {
   }
   $('#close-transcription').onclick = () => dialog.close();
   dialog.addEventListener('close', () => {
+    context = null;
     if (blobUrl) URL.revokeObjectURL(blobUrl);
     image = null;
     blobUrl = null;
@@ -130,26 +133,34 @@ export function attachTranscription({ api, run, message, getState, jobs }) {
     render();
     redraw();
   };
-  $('#transcription-form').onsubmit = (event) => {
+  form.onsubmit = (event) => {
     event.preventDefault();
+    const editing = context;
     run(async () => {
-      if (getState()?.project.id !== context.projectId)
+      if (!editing || editing !== context) return;
+      if (getState()?.project.id !== editing.projectId)
         throw new Error('项目已切换，请回到原项目校正');
       const result = await api(
-        `/projects/${context.projectId}/transcription-corrections`,
+        `/projects/${editing.projectId}/transcription-corrections`,
         'POST',
         {
-          sourceVersionId: context.version.id,
-          page: context.page,
+          sourceVersionId: editing.version.id,
+          page: editing.page,
           blocks,
           reason: event.target.elements.reason.value,
           confirmedAgainstImage: event.target.elements.confirmed.checked,
         },
         crypto.randomUUID(),
       );
-      message('人工校正已另存新版本，旧转写与证据保留。');
-      showImpact($('#notice'), result.artifact);
-      dialog.close();
+      if (getState()?.project.id !== editing.projectId) return;
+      if (context === editing && dialog.hasAttribute('open')) {
+        context = null;
+        form.hidden = true;
+        $('#transcription-status').textContent =
+          `人工校正已另存为版本 ${result.sourceVersionId} · 第 ${editing.page} 页。旧转写与证据保留。`;
+        impactBox.replaceChildren();
+        showImpact(impactBox, result.artifact);
+      }
       await jobs();
     });
   };
@@ -188,12 +199,12 @@ export function attachTranscription({ api, run, message, getState, jobs }) {
           uncertain: false,
         },
       ];
-    $('#transcription-form').reset();
+    form.reset();
+    form.hidden = false;
     render();
     redraw();
     $('#transcription-status').textContent =
       `第 ${page} 页 · ${artifact.verified ? '人工已核对版本' : '文字与定位仍需对照核对'}。区域坐标以左上角为原点，0–1 表示原图宽高比例。`;
-    const impactBox = $('#transcription-impact');
     impactBox.replaceChildren();
     showImpact(impactBox, artifact);
     dialog.showModal();

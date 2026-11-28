@@ -1,3 +1,5 @@
+import { imageOriginalError } from './image-original-status';
+
 type Frame = CanvasImageSource & { duration: number | null; close(): void };
 type Decoder = {
   tracks: { ready: Promise<void>; selectedTrack: { frameCount: number } };
@@ -90,7 +92,7 @@ export function animateBodyImage(
       if (!disposed && token === generation) fail();
     }
   }
-  function fail() {
+  function fail(message = '动图加载失败，请重试') {
     if (disposed) return;
     failed = true;
     generation++;
@@ -108,7 +110,7 @@ export function animateBodyImage(
       failure = document.createElement("span");
       if (!viewerFeedback) failure.className = "image-load-error";
       failure.setAttribute("role", "alert");
-      failure.textContent = "动图加载失败，原文件仍保留";
+      failure.textContent = message;
       (viewerFeedback ?? canvas.parentElement)!.append(failure);
     }
   }
@@ -160,7 +162,10 @@ export function animateBodyImage(
       const response = await fetch(canvas.dataset.gifUrl!, {
         signal: abort.signal,
       });
-      if (!response.ok) throw new Error("图片读取失败");
+      if (!response.ok) {
+        if (!disposed && version === loadVersion) fail(imageOriginalError(response.status));
+        return;
+      }
       const data = await response.arrayBuffer();
       if (disposed || version !== loadVersion) return;
       const Constructor = (

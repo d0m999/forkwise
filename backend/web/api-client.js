@@ -22,7 +22,8 @@ export function client(token) {
   const api = async (path, method = 'GET', data, key) => {
     const response = await fetch('/api/v1' + path, {
       method,
-      signal: AbortSignal.timeout(30_000),
+      // The optional capability probe runs before the legacy workspace can open.
+      signal: AbortSignal.timeout(path === '/model-capabilities' ? 5_000 : 30_000),
       headers: {
         Authorization: `Bearer ${token}`,
         ...(data !== undefined ? { 'Content-Type': 'application/json' } : {}),

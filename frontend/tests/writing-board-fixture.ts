@@ -26,10 +26,10 @@ export type Workspace = {
   installOriginalTagColor: (id: string, color: string) => Promise<void>;
   installOriginalShapeItem: (id: string, itemId: string) => Promise<void>;
 };
-export const test = base.extend<{ workspace: Workspace; workspaceStartsEmpty: boolean; verificationTransport: boolean | 'denied-retry' | 'gaps-on-retry' }>({
-  workspaceStartsEmpty: [false, { option: true }],
+export const test = base.extend<{ workspace: Workspace; verificationTransport: boolean | 'denied-retry' | 'gaps-on-retry'; workspaceStartsEmpty: boolean }>({
   verificationTransport: [false, { option: true }],
-  workspace: async ({ page, workspaceStartsEmpty, verificationTransport }, use, testInfo) => {
+  workspaceStartsEmpty: [false, { option: true }],
+  workspace: async ({ page, verificationTransport, workspaceStartsEmpty }, use, testInfo) => {
     const directory = mkdtempSync(join(tmpdir(), "forkwise-issue10-"));
     const evidence = process.env.FORKWISE_ISSUE10_RESOURCE_LOG;
     const record = (event: Record<string, unknown>) => {

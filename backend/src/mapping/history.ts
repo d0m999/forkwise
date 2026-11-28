@@ -482,7 +482,10 @@ function restoreHistoryAction(
     ({ before, after } = restoreCard(db, project.id, {
       before: action.before && 'body' in action.before ? action.before : null,
       after: action.after && 'body' in action.after ? action.after : null,
-    }, type, action.changedIds, { reconcileMedia: shouldReconcileCardMediaTasks(action.label) }));
+    }, type, action.changedIds, {
+      reconcileMedia: shouldReconcileCardMediaTasks(action.label),
+      restorePatchedText: action.label === 'body.patch',
+    }));
   } else {
     before = project; after = desired ? { ...desired as Project, versionId: randomUUID(), revision: project.revision + 1 } : null;
     if (after) db.prepare('UPDATE mapping_projects SET name=?,version_id=? WHERE id=?').run(after.name, after.versionId, project.id);

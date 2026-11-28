@@ -25,6 +25,8 @@ await new Promise<void>((r, j) => listener.close((e) => (e ? j(e) : r())));
 const directory = mkdtempSync(join(tmpdir(), 'forkwise-manual-update-')),
   origin = `http://127.0.0.1:${port}`;
 const withoutModel = process.argv.includes('--without-model');
+const recoverCapabilities = process.argv.includes('--recover-capabilities');
+const unknownCapabilities = recoverCapabilities || process.argv.includes('--unknown-capabilities');
 const options: Parameters<typeof createApplication>[0] = {
   database: join(directory, 'test.sqlite'),
   origin,
@@ -84,6 +86,8 @@ async function run() {
   browser = await chromium.launch({ channel: 'chrome', headless: true });
   page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
   page.on('pageerror', (e: Error) => errors.push(e.message));
+  if (unknownCapabilities)
+    await page.route('**/api/v1/model-capabilities', (route: any) => route.abort());
   await page.goto(origin + '/#token=' + token);
   await page.locator('#connection').filter({ hasText: '已连接' }).waitFor();
   const open = () => page.locator('#open-manual-updates').click();
@@ -121,6 +125,46 @@ async function run() {
   assert.equal(app.jobs.list(project.id).length, 0);
   assert.equal(state().objects.filter((e) => e.kind === 'source_version').length, 0);
   assert.match(await dialog.locator('[data-preview]').innerText(), /新增分析 2 项/);
+  if (unknownCapabilities) {
+    assert.match(
+      await dialog.locator('[data-feedback]').innerText(),
+      /模型可用时.*按预览范围.*分析/,
+    );
+    // Drop the POST before it reaches the server. Recovery must authorize an actual resend.
+    await page.route('**/manual-updates', (route: any) => route.abort(), { times: 1 });
+    await dialog.getByRole('button', { name: '确认保存，模型可用时分析' }).click();
+    const recoverUpdate = dialog.getByRole('button', { name: '恢复原更新请求，模型可用时分析' });
+    await recoverUpdate.waitFor();
+    assert.equal(app.jobs.list(project.id).length, 0);
+    if (recoverCapabilities) await page.unroute('**/api/v1/model-capabilities');
+    await page.reload();
+    if (recoverCapabilities) {
+      await page.getByText('已连接本机后端', { exact: true }).waitFor();
+      await open();
+      assert.equal(
+        await dialog.locator('[data-recover]').innerText(),
+        '恢复原更新请求，模型可用时分析',
+      );
+      await dialog.getByRole('button', { name: '返回画布', exact: true }).click();
+    }
+    await page.getByRole('button', { name: '恢复研究请求', exact: true }).click();
+    await page.getByRole('button', { name: '恢复原更新请求，模型可用时分析' }).click();
+    await page.locator('#entry-feedback').filter({ hasText: '已为新增范围排队' }).waitFor();
+    await app.researchTasks.drain();
+    const jobs = app.jobs.list(project.id);
+    assert.equal(jobs.length, 1);
+    assert.equal(jobs[0]!.state, 'succeeded');
+    await page.locator('#entry-close').click();
+    await open();
+    await dialog
+      .getByText('1 批分析 · 2 条建议 · 0 批处理中 · 0 批待处理', { exact: true })
+      .waitFor();
+    assert.equal(errors.length, 0, errors.join('\n'));
+    console.log(
+      'PASS: 能力读取失败时，预览无副作用；提交与两个恢复入口均明确授权条件分析，原请求补发后合成模型生成两条建议。',
+    );
+    return;
+  }
   if (withoutModel) {
     assert.match(await dialog.locator('[data-feedback]').innerText(), /本机模型研究已停用/);
     await dialog.getByRole('button', { name: '确认范围，保存更新' }).click();
@@ -161,15 +205,19 @@ async function run() {
     await dialog.getByRole('button', { name: '确认复用已有任务' }).click();
     await dialog.locator('[data-feedback]').filter({ hasText: '未重复生成候选' }).waitFor();
     assert.equal(app.jobs.list(project.id).length, 1);
-    await page.route('**/api/v1/model-capabilities', (route: any) => route.abort());
-    await page.reload();
-    await page.locator('#connection').filter({ hasText: '已连接' }).waitFor();
+    // Keep this probe pending. Project access must recover well before the general API timeout.
+    await page.route('**/api/v1/model-capabilities', () => {});
+    await page.reload({ waitUntil: 'commit' });
+    await page
+      .locator('#connection')
+      .filter({ hasText: '已连接本机后端 · 模型状态读取失败' })
+      .waitFor({ timeout: 10_000 });
     await open();
     await dialog.locator('[name=mode]').selectOption('text');
     await dialog.locator('[name=text]').fill('能力读取失败时取得的新版披露。');
     await preview();
     assert.match(await dialog.locator('[data-feedback]').innerText(), /本机模型能力尚未确认/);
-    await dialog.getByRole('button', { name: '确认范围，保存更新' }).click();
+    await dialog.getByRole('button', { name: '确认保存，模型可用时分析' }).click();
     await dialog
       .locator('[data-feedback]')
       .filter({ hasText: /已保存.*模型研究已停用/ })
@@ -196,7 +244,7 @@ async function run() {
   await page.reload();
   await page.locator('#connection').filter({ hasText: '已连接' }).waitFor();
   await open();
-  await dialog.getByRole('button', { name: '恢复原更新请求' }).click();
+  await dialog.getByRole('button', { name: '恢复原更新请求，模型可用时分析', exact: true }).click();
   await dialog.locator('.update-event').waitFor();
   assert.equal(app.jobs.list(project.id).length, 1);
   assert.equal(state().objects.filter((e) => e.kind === 'source_version').length, 1);

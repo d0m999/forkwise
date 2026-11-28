@@ -82,7 +82,7 @@ test("加载预留与失败图保持比例和阅读位置，布局变化与大�
   const before = await relative();
   release();
   await expect(
-    page.getByText("图片加载失败，原文件仍保留", { exact: true }),
+    page.getByText("图片加载失败，原正文仍保留", { exact: true }),
   ).toBeAttached();
   expect(await relative()).toBeCloseTo(before, 0);
   expect((await image.boundingBox())!.height).toBeCloseTo(loading.height, 1);

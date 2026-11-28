@@ -9,10 +9,10 @@ import { nextPaste, pasteTranslation, type PasteSequence } from "./canvas-snapsh
 import { SnapshotMenu } from "./snapshot-menu";
 import { CanvasToolButton } from "./canvas-tool-button";
 import { ExportMenu } from "./export-menu";
-import { WorkspaceBackup } from "./workspace-backup";
 import { ImportPackage, importDialogOpen } from "./import-package";
 import { WorkspaceProjectDialog } from './workspace-project-dialog';
 import { WorkspaceGuide, type GuideAccessResult } from './workspace-guide';
+import { WorkspaceBackup } from "./workspace-backup";
 import { renderCanvasPng, type CanvasExportVisual } from "./canvas-export";
 import { useCanvasImageInput } from "./canvas-image-input";
 import { droppedFilePlan, fileAssetPayload, runDroppedFiles } from "./canvas-drop";
@@ -135,8 +135,8 @@ type ActionOptions = {
 };
 
 type CardData = {
-  verificationAvailable: boolean;
   showMenu: boolean;
+  verificationAvailable: boolean;
   tags: Tag[];
   card: Card;
   previewBody: Card["body"];
@@ -311,13 +311,13 @@ function ThoughtCard({ data, selected }: NodeProps<Node<CardData>>) {
           编辑正文
         </button>
       </header>
+      {data.card.aiOrigin && <span className="card-ai-origin">
+        {data.card.aiOrigin.mode === 'simulate' ? '模拟整理' : 'AI 候选'}
+      </span>}
       {data.card.verificationOrigin && <button type="button" className="card-ai-origin nodrag nopan"
         onClick={event => { event.stopPropagation(); data.onOpenAttachment(data.card.verificationOrigin!.assetId); }}>
         {data.card.verificationOrigin.fixture ? '模拟查证 · 下载夹具原文' : '下载查证原文'}
       </button>}
-      {data.card.aiOrigin && <span className="card-ai-origin">
-        {data.card.aiOrigin.mode === 'simulate' ? '模拟整理' : 'AI 候选'}
-      </span>}
       <CardAttachmentList card={data.card} projectCards={data.attachmentTargets} blocked={data.historyBlocked}
         writeBlocked={data.attachmentWriteBlocked} onOpen={data.onOpenAttachment} onRemove={data.onRemoveAttachment} onAdd={data.onAddAttachment} onCopy={data.onCopyAttachment} />
       <CardTagSummary card={data.card} tags={data.tags} onOpen={data.onBody} />
@@ -965,10 +965,12 @@ function Workspace() {
       if (event.isComposing || event.keyCode === 229 || composition.current)
         return;
       const target = event.target as HTMLElement;
-      if (target.closest("dialog.project-search, dialog.shape-appearance-dialog, dialog.organize-dialog, dialog.attachment-copy-dialog")) return;
+      if (backupDialog.current?.open || target.closest(
+        ".link-popover, dialog.project-search, dialog.shape-appearance-dialog, dialog.organize-dialog, dialog.attachment-copy-dialog",
+      )) return;
       // 导入和改名是模态表单：打开期间画布动作历史一律不动。
       // 这里直接返回、不 preventDefault，名称输入框的原生撤销照常生效。
-      if (importDialogOpen() || renameDialog.current?.open || backupDialog.current?.open) return;
+      if (importDialogOpen() || renameDialog.current?.open) return;
       // Text inputs and title rounds own native text undo; non-text controls
       // such as the appearance checkbox use the project's action history.
       const input = target.closest("input");
@@ -1567,10 +1569,10 @@ function Workspace() {
       if (
         event.key !== "Escape" ||
         event.defaultPrevented ||
-        backupDialog.current?.open ||
         event.isComposing ||
         event.keyCode === 229 ||
         composition.current ||
+        backupDialog.current?.open ||
         (event.target as HTMLElement).closest(
           "input, textarea, [contenteditable=true], dialog.organize-dialog, dialog.workspace-project-dialog",
         )
@@ -3447,6 +3449,7 @@ function Workspace() {
       !busy && !historyBlocked && !pose.pending && !placing && !panTool,
     data: {
       showMenu: exclusiveItemId === card.item.id,
+      verificationAvailable: canvasSelection.value.targets.length === 1,
       layer: layerProps,
       card,
       previewBody: (() => {
@@ -3469,7 +3472,6 @@ function Workspace() {
       },
       onEdit: origin => void editCard(card.id, "title", { origin }),
       onBody: () => void editCard(card.id, "body"),
-      verificationAvailable: canvasSelection.value.targets.length === 1,
       onAI: (verification) => {
         const current = authority.current;
         const source = current?.cards.find(item => item.id === card.id);
@@ -3682,7 +3684,8 @@ function Workspace() {
   );
   const pendingOrganizeCancellations = organizing
     ? [...organizeCancellations.pending.values()].filter(({ projectId, request }) =>
-      projectId === organizing.projectId && !!request.verification === !!organizing.verification && (!organizing.source || request.cardId === organizing.source.id)).map(({ request }) => request)
+      projectId === organizing.projectId && !!request.verification === !!organizing.verification &&
+      (!organizing.source || request.cardId === organizing.source.id)).map(({ request }) => request)
     : [];
   const canOpenGuide = workspaceAccess === 'ready' && (guideAccess === 'allowed' || guideAccess === 'retry');
   const projectCreationUnavailable = workspaceAccess === 'revoked' || guideAccess === 'denied';
@@ -3741,8 +3744,8 @@ function Workspace() {
       )}
       {organizing && organizing.projectId === state?.project.id &&
         <OrganizeDialog projectId={organizing.projectId} {...(organizing.source ? { source: organizing.source } : {})}
-          cards={state.cards}
           verification={!!organizing.verification}
+          cards={state.cards}
           pendingCancellations={pendingOrganizeCancellations}
           isCancellationSaved={id => organizeCancellations.saved?.has(id) ?? false}
           onPendingCancellationChange={(request, status) => {
@@ -3876,11 +3879,11 @@ function Workspace() {
           {canOpenGuide && <button type="button" aria-haspopup="dialog" data-workspace-guide aria-disabled={guideEditInProgress}
             title={guideEditInProgress ? '结束当前操作后可查看引导' : undefined}
             onMouseDown={event => event.preventDefault()} onClick={openGuide}>画布引导</button>}
-          {workspaceAccess === 'ready' && <WorkspaceBackup dialog={backupDialog} disabled={!!attachmentPick || guideEditInProgress} />}
           {state && <button onClick={() => setOrganizing({ projectId: state.project.id })}
             disabled={busy || historyBlocked} aria-haspopup="dialog">AI 整理记录</button>}
           {state && <button onClick={() => setOrganizing({ projectId: state.project.id, verification: true })}
             disabled={busy || historyBlocked} aria-haspopup="dialog">公开查证记录</button>}
+          {workspaceAccess === 'ready' && <WorkspaceBackup dialog={backupDialog} disabled={!!attachmentPick || guideEditInProgress} />}
           <div className="project-nav-list" ref={projectNavList}>
             {navigationProjects.map((project) => (
               <button

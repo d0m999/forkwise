@@ -16,7 +16,7 @@ const corrected = {
   },
 };
 
-function workbench() {
+function workbench({ beforeCorrection } = {}) {
   const { document, Event } = parseHTML(markup);
   vi.stubGlobal('document', document);
   vi.stubGlobal(
@@ -64,18 +64,20 @@ function workbench() {
       impactAnalysis: { targetIds: [], conditionIds: [], jobIds: [], gap: null },
     },
   };
-  const api = async (path, method = 'GET') => {
-    if (path === '/projects/project/transcription-corrections' && method === 'POST')
+  const api = vi.fn(async (path, method = 'GET') => {
+    if (path === '/projects/project/transcription-corrections' && method === 'POST') {
+      await beforeCorrection?.();
       return {
         sourceVersionId: 'corrected',
         artifact: corrected,
         impactAnalysis: corrected.impactAnalysis,
       };
+    }
     const match = path.match(/^\/projects\/project\/materials\/([^/]+)(\/anchors)?$/);
     if (method === 'GET' && match && artifacts[match[1]])
       return match[2] ? artifacts[match[1]] : { text: '销量 12' };
     throw new Error(`未预期的请求 ${method} ${path}`);
-  };
+  });
   api.download = async () => new Blob();
   let pending;
   const open = attachTranscription({
@@ -87,7 +89,9 @@ function workbench() {
   });
   return {
     open: (id) => open({ id }),
+    api,
     dialog,
+    form,
     notice,
     state,
     async save() {
@@ -101,18 +105,46 @@ function workbench() {
 
 afterEach(() => vi.unstubAllGlobals());
 
-it('保存校正后列出引用该页的主张、推导关系与条件，并保留模型停用说明', async () => {
+it('保存校正后同步通知可更新，新版本的复核清单仍可阅读直至关闭', async () => {
   const ui = workbench();
   await ui.open('original');
   await ui.save();
-  expect(ui.dialog.hasAttribute('open')).toBe(false);
-  const rows = [...ui.notice.querySelectorAll('li')].map((item) => item.textContent);
+  ui.notice.textContent = '已读取后台最新研究状态';
+  expect(ui.dialog.hasAttribute('open')).toBe(true);
+  expect(ui.form.hidden).toBe(true);
+  expect(ui.dialog.querySelector('#transcription-status').textContent).toMatch(
+    /corrected.*第 1 页/,
+  );
+  const rows = [...ui.dialog.querySelectorAll('li')].map((item) => item.textContent);
   expect(rows).toEqual([
     expect.stringMatching(/主张.*销量增加/),
     expect.stringMatching(/推导关系.*销量带动收入/),
     expect.stringMatching(/条件.*本季度销售达标/),
   ]);
-  expect(ui.notice.textContent).toContain('本机模型已停用');
+  expect(ui.dialog.textContent).toContain('本机模型已停用');
+  await ui.save();
+  expect(ui.api.mock.calls.filter(([, method]) => method === 'POST')).toHaveLength(1);
+  ui.dialog.close();
+  await ui.open('original');
+  expect(ui.form.hidden).toBe(false);
+  expect(ui.dialog.textContent).not.toContain('本机模型已停用');
+  ui.dialog.close();
+});
+
+it('校正请求返回前关闭并打开其他版本，旧结果不会替换当前页面', async () => {
+  const correction = Promise.withResolvers();
+  const ui = workbench({ beforeCorrection: () => correction.promise });
+  await ui.open('original');
+  const saving = ui.save();
+  ui.dialog.close();
+  await ui.open('empty');
+  correction.resolve();
+  await saving;
+  expect(ui.dialog.hasAttribute('open')).toBe(true);
+  expect(ui.form.hidden).toBe(false);
+  expect(ui.dialog.textContent).toContain('校正时没有引用这页的研究对象');
+  expect(ui.dialog.textContent).not.toContain('本机模型已停用');
+  ui.dialog.close();
 });
 
 it('重开指定版本读取校正时的清单，对象已删除仍显示其身份；切换版本后显示对应记录', async () => {

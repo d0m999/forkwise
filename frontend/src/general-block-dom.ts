@@ -1,6 +1,7 @@
 import type { Block } from '../../backend/src/mapping/contracts';
 import type { InlineMark, TableCell } from '../../backend/src/mapping/general-blocks';
 import { listDepth, previousListSibling } from '../../backend/src/mapping/list-structure';
+import { readImageOriginalError } from './image-original-status';
 
 const retainedBlocks = new WeakMap<HTMLElement, Block>();
 const tableCellOrigins = new WeakMap<HTMLElement, { value: TableCell; rendered: Block }>();
@@ -62,7 +63,8 @@ export function renderBlock(block: Block, projectId?: string): HTMLElement {
         image.onerror=()=>{
           if(failure)return;
           failure=document.createElement('span');failure.className='image-load-error';failure.setAttribute('role','alert');
-          const message=document.createElement('span');message.textContent='图片加载失败，原文件仍保留';
+          const message=document.createElement('span');message.textContent='图片加载失败，原正文仍保留';
+          void readImageOriginalError(url).then(text => { if (text) message.textContent = text; });
           const retry=document.createElement('button');retry.type='button';retry.textContent='重新加载图片';
           retry.onclick=e=>{e.stopPropagation();image.removeAttribute('src');image.src=url;};
           failure.append(message,retry);p.append(failure);

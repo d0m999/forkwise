@@ -1,6 +1,8 @@
 import { RequestStore } from './request-store.js';
 import { RequestJournal } from './request-journal.js';
 import { updateEventsView, renderUpdatePreview } from './manual-update-events.js';
+export const conditionalUpdateRecoveryLabel = '恢复原更新请求，模型可用时分析';
+
 export function attachManualUpdates({
   canResearch,
   api,
@@ -15,7 +17,11 @@ export function attachManualUpdates({
 }) {
   const journal = new RequestJournal(api, new RequestStore()),
     dialog = document.createElement('dialog');
-  const confirmLabel = canResearch ? '确认范围，保存并分析' : '确认范围，保存更新';
+  const confirmLabel = canResearch
+    ? '确认范围，保存并分析'
+    : canResearch === false
+      ? '确认范围，保存更新'
+      : '确认保存，模型可用时分析';
   dialog.id = 'manual-update-dialog';
   dialog.setAttribute('aria-label', '手动更新与复核');
   dialog.innerHTML = `<header><strong>手动更新与复核</strong><button type="button" data-close>返回画布</button></header>
@@ -203,7 +209,8 @@ export function attachManualUpdates({
       box,
     );
     const own = record.steps.every((s) => s.endpoint === '/manual-updates');
-    const b = el('button', own ? '恢复原更新请求' : '处理上次研究请求', box);
+    const recoveryLabel = canResearch === false ? '恢复原更新请求' : conditionalUpdateRecoveryLabel;
+    const b = el('button', own ? recoveryLabel : '处理上次研究请求', box);
     b.type = 'button';
     b.dataset.recover = 'true';
     b.onclick = () =>
@@ -262,7 +269,9 @@ export function attachManualUpdates({
       } else if (canResearch) {
         feedback('确认后将按预览范围保存材料并开始分析。');
       } else {
-        feedback('确认后将保存材料与所选目标。本机模型能力尚未确认，可在更新记录中查看分析状态。');
+        feedback(
+          '本机模型能力尚未确认。确认后将保存材料与所选目标，模型可用时将按预览范围开始分析。',
+        );
       }
     });
   };

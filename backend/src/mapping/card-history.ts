@@ -11,7 +11,7 @@ export function restoreCard(
   change: { before: Card | null; after: Card | null },
   type: 'history.undo' | 'history.redo',
   changedIds: string[],
-  { reconcileMedia = true } = {},
+  { reconcileMedia = true, restorePatchedText = false } = {},
 ) {
   const identity = change.after ?? change.before!, desired = type === 'history.undo' ? change.before : change.after;
   const row = db.prepare('SELECT value FROM mapping_cards WHERE id=? AND project_id=?').get(identity.id, projectId) as { value: string } | undefined;
@@ -24,6 +24,16 @@ export function restoreCard(
         after.versionId = before.versionId;
       }
       if (!changedIds.includes(after.body.id)) after.body = before.body;
+      else if (restorePatchedText && change.before && change.after) {
+        // A text patch keeps block order. Replay only its changed paragraph on the current body.
+        const opposite = type === 'history.undo' ? change.after : change.before;
+        const paragraph = after.body.blocks.find(
+          (block, index) => block.type === 'text' && block.text !== opposite.body.blocks[index]?.text,
+        );
+        after.body.blocks = before.body.blocks.map((block) =>
+          paragraph && block.id === paragraph.id ? { ...block, text: paragraph.text } : block,
+        );
+      }
       if (!changedIds.includes(after.item.id)) after.item = before.item;
       if (!changedIds.includes(`cardTags:${after.id}`)) {
         if (before.cardTags) after.cardTags = before.cardTags;

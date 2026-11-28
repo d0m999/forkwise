@@ -774,6 +774,7 @@ body:has(.workspace[data-board-full="true"]) .card-tooltip { display: none; }
 .board-tags:empty { display: none; }
 .board-tags:empty + .board-tags-trigger { margin-left: -8px; }
 .board-document .tag-manager, .board-document .tag-deleted-notice { flex-basis: 100%; min-width: 0; }
+.connector-create-hint { margin: 0; font-size: 12px; }
 .board-full { left: 0; border-left: 0; }
 .board-narrow .board-scroll { padding-left: 16px; padding-right: 16px; }
 .board-resizer { position: absolute; left: -4px; top: 0; bottom: 0; width: 8px; cursor: col-resize; touch-action: none; z-index: 2; }

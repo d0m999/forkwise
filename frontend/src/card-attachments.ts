@@ -6,7 +6,7 @@ export function attachmentContentUrl(origin: string, projectId: string, assetId:
 
 export type AttachmentOpenResult =
   | { ok: true }
-  | { ok: false; reason: 'missing' | 'forbidden' | 'server' | 'blocked' | 'rejected' | 'network' | 'download'; message: string };
+  | { ok: false; reason: 'missing' | 'corrupt' | 'forbidden' | 'server' | 'blocked' | 'rejected' | 'network' | 'download'; message: string };
 
 export async function openCardAttachment(input: {
   origin: string;
@@ -34,6 +34,7 @@ export async function openCardAttachment(input: {
   await response.body?.cancel().catch(() => {});
   const rejected =
     response.status === 404 ? { ok: false as const, reason: 'missing' as const, message: '资产不存在或不属于本项目' }
+    : response.status === 422 ? { ok: false as const, reason: 'corrupt' as const, message: '附件原件字节损坏，无法打开或下载' }
     : response.status === 403 ? { ok: false as const, reason: 'forbidden' as const, message: '没有权限打开这个附件' }
     : response.status >= 500 ? { ok: false as const, reason: 'server' as const, message: '服务端暂时无法打开这个附件' }
     : !response.ok ? { ok: false as const, reason: 'rejected' as const, message: `附件请求被拒绝（${response.status}）` }

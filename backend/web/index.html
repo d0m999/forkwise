@@ -322,21 +322,23 @@
       <div class="transcription-body">
         <div>
           <canvas id="transcription-image" aria-label="原图与转写区域"></canvas>
-          <p id="transcription-status"></p>
-          <div id="transcription-impact"></div>
         </div>
-        <form id="transcription-form">
-          <div id="transcription-blocks"></div>
-          <button id="add-transcription-block" type="button">补充一个区域</button
-          ><label>校正说明<input name="reason" required /></label
-          ><label
-            ><input
-              name="confirmed"
-              type="checkbox"
-              required
-            />我已对照原图核对本次保存的文字和区域；无法读清的部分保持标记</label
-          ><button>另存人工校正版本</button>
-        </form>
+        <div>
+          <p id="transcription-status" role="status"></p>
+          <div id="transcription-impact"></div>
+          <form id="transcription-form">
+            <div id="transcription-blocks"></div>
+            <button id="add-transcription-block" type="button">补充一个区域</button
+            ><label>校正说明<input name="reason" required /></label
+            ><label
+              ><input
+                name="confirmed"
+                type="checkbox"
+                required
+              />我已对照原图核对本次保存的文字和区域；无法读清的部分保持标记</label
+            ><button>另存人工校正版本</button>
+          </form>
+        </div>
       </div>
     </dialog>
     <dialog id="prototype-migration-dialog" aria-label="旧版研究迁移">

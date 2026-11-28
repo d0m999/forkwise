@@ -1,10 +1,10 @@
-import { execFileSync } from 'node:child_process';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname, join, relative } from 'node:path';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Page } from '@playwright/test';
 import { openMapping } from '../../backend/src/mapping/storage';
 import { expect, test, type Workspace } from './writing-board-fixture';
+import { type NativeCanvasClipboard, withNativeCanvasClipboard } from './container-copy-clipboard-fixture';
 
 const YELLOW = '#f8dfc4';
 const BLUE = '#d9e7f1';
@@ -13,50 +13,15 @@ const base64 = Buffer.from(svg).toString('base64');
 
 const repo = fileURLToPath(new URL('../..', import.meta.url));
 const artifacts = join(repo, 'backend/artifacts/issue34-20261107');
-const evidence = join(repo, 'docs/plans/evidence/issue-34-cross-project-copy-2026-11-07.json');
+const evidenceName = 'issue-34-cross-project-copy-2026-11-07.json';
 const systemClipboard = process.env.FORKWISE_SYSTEM_CLIPBOARD === '1';
 const artifact = (name: string) => join(artifacts, name);
 const artifactRef = (name: string) => relative(repo, artifact(name));
 type CheckStatus = 'EXECUTED' | 'NOT_RUN';
 
-// 只读取快照相关类型；type-0 原始字节另存 artifacts，权限拒绝路径从系统读回值构造载荷。
-const pasteboardReader = `import Cocoa
-let pasteboard = NSPasteboard.general
-let snapshotOut = CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : nil
-print("changeCount \\(pasteboard.changeCount)")
-for item in pasteboard.pasteboardItems ?? [] {
-  for type in item.types where type.rawValue == "public.utf8-plain-text" || type.rawValue.hasPrefix("org.w3.web-custom-format.") {
-    let data = item.data(forType: type)
-    print("TYPE \\(type.rawValue) BYTES \\(data?.count ?? 0)")
-    if type.rawValue == "org.w3.web-custom-format.type-0" {
-      if let bytes = data, let out = snapshotOut {
-        try? bytes.write(to: URL(fileURLWithPath: out))
-      }
-    }
-    if let data, let text = String(data: data, encoding: .utf8) {
-      print(text)
-    }
-  }
-}
-`;
-
-function buildPasteboardReader() {
-  const swift = join(artifacts, 'read-pasteboard.swift');
-  const reader = join(artifacts, 'read-pasteboard');
-  const snapshot = join(artifacts, 'system-snapshot.json');
-  writeFileSync(swift, pasteboardReader);
-  execFileSync('swiftc', ['-o', reader, swift]);
-  return { reader, snapshot };
-}
-
-function readSystemPasteboard(reader: string, snapshot: string) {
-  return {
-    pasteboard: execFileSync(reader, [snapshot], { encoding: 'utf8' }),
-    plain: execFileSync('pbpaste', { encoding: 'utf8' }),
-  };
-}
-
-async function runCopyFlow(page: Page, workspace: Workspace, system: boolean) {
+async function runCopyFlow(page: Page, workspace: Workspace, native?: NativeCanvasClipboard) {
+  const system = !!native;
+  const flowArtifact = system ? (name: string) => test.info().outputPath(name) : artifact;
   const checks: Record<string, { status: CheckStatus; via: string }> = {};
   const sourceId = (await workspace.state()).project.id;
   const execute = (projectId: string, type: string, payload: unknown, expected: unknown = null) =>
@@ -103,44 +68,27 @@ async function runCopyFlow(page: Page, workspace: Workspace, system: boolean) {
       text: await navigator.clipboard.readText(),
     };
   });
-  await page.keyboard.press('Meta+c');
-  await expect.poll(async () => (await readPageClipboard()).raw).toContain('"library"');
-  const clipboard = await readPageClipboard();
-  writeFileSync(artifact('browser-clipboard.json'), clipboard.raw);
-  expect(clipboard.text).toContain('市场观察');
-
-  let deniedLibrary: unknown = JSON.parse(clipboard.raw).library;
-  let deniedSource = '页面剪贴板（headless 无系统读回值）';
-  let systemTypes: string[] = [];
-  const sources: Record<string, string> = {
-    pageClipboard: artifactRef('browser-clipboard.json'),
-  };
-  if (system) {
-    const { reader, snapshot } = buildPasteboardReader();
-    const readSystem = () => readSystemPasteboard(reader, snapshot);
-    // headless Chromium 的页面剪贴板与系统剪贴板分离，系统侧读取只在 headed 运行里成立。
-    await expect.poll(async () => {
-      const current = readSystem();
-      if (current.plain.includes('市场观察') && current.pasteboard.includes(clipboard.raw) && current.pasteboard.includes('application/x-forkwise-canvas')) return true;
-      await page.keyboard.press('Meta+c');
-      return false;
-    }, { timeout: 30000, intervals: [1000] }).toBe(true);
-    const current = readSystem();
-    writeFileSync(artifact('nspasteboard.txt'), current.pasteboard);
-    writeFileSync(artifact('pbpaste.txt'), current.plain);
-    expect(current.plain).toContain('市场观察');
-    expect(current.pasteboard).toContain(clipboard.raw);
-    expect(current.pasteboard).toContain('application/x-forkwise-canvas');
-    systemTypes = [...new Set([...current.pasteboard.matchAll(/TYPE (\S+)/g)].map(match => match[1]))];
-    deniedLibrary = JSON.parse(readFileSync(snapshot, 'utf8')).library;
-    deniedSource = '系统剪贴板 org.w3.web-custom-format.type-0 读回快照';
-    checks.systemClipboard = { status: 'EXECUTED', via: 'NSPasteboard reader + pbpaste，原始载荷见 artifacts/' };
-    sources.systemPasteboard = artifactRef('nspasteboard.txt');
-    sources.pbpaste = artifactRef('pbpaste.txt');
-    sources.systemSnapshot = artifactRef('system-snapshot.json');
+  const copy = () => page.keyboard.press('Meta+c');
+  let clipboard;
+  if (native) {
+    const raw = await native.write(await read(sourceId), 'source-card', 'copy', copy,
+      [{ id: 'src-asset', name: '图.svg', mime: 'image/svg+xml', base64 }]);
+    clipboard = { raw, text: '市场观察' };
   } else {
-    checks.systemClipboard = { status: 'NOT_RUN', via: 'headless 无系统剪贴板，AC5 系统侧需 FORKWISE_SYSTEM_CLIPBOARD=1 的 headed 项目' };
+    await copy();
+    await expect.poll(async () => (await readPageClipboard()).raw).toContain('"library"');
+    clipboard = await readPageClipboard();
   }
+  const payloadFile = native ? 'verified-native-clipboard.json' : 'browser-clipboard.json';
+  const payloadPath = flowArtifact(payloadFile);
+  writeFileSync(payloadPath, clipboard.raw);
+  expect(clipboard.text).toContain('市场观察');
+  const deniedLibrary: unknown = JSON.parse(clipboard.raw).library;
+  const deniedSource = system ? '系统剪贴板完整字节经守卫确认' : '页面剪贴板（headless 无系统读回值）';
+  const sources = system ? { verifiedNativeClipboard: relative(repo, payloadPath) } : { pageClipboard: artifactRef(payloadFile) };
+  checks.systemClipboard = system
+    ? { status: 'EXECUTED', via: 'NSPasteboard 完整核对预声明资料包、来源与格式' }
+    : { status: 'NOT_RUN', via: 'headless 无系统剪贴板，AC5 系统侧需 FORKWISE_SYSTEM_CLIPBOARD=1 的 headed 项目' };
 
   const host = openMapping(workspace.directory);
   const agent = host.access.issue('agent', [sourceId], undefined, undefined, [sourceId]);
@@ -169,7 +117,9 @@ async function runCopyFlow(page: Page, workspace: Workspace, system: boolean) {
   await expect(page.locator('.react-flow__node')).toHaveCount(0);
   const pane = (await page.locator('.react-flow__pane').boundingBox())!;
   await page.mouse.move(pane.x + 420, pane.y + 260);
-  await page.locator('.canvas').press('Meta+v');
+  const paste = () => page.locator('.canvas').press('Meta+v');
+  if (native) await native.paste(paste);
+  else await paste();
   await expect(page.getByRole('status')).toHaveText('已保存到本机');
   await expect.poll(async () => (await read(targetId)).cards.length).toBe(1);
   target = await read(targetId);
@@ -208,31 +158,28 @@ async function runCopyFlow(page: Page, workspace: Workspace, system: boolean) {
   expect(await read(sourceId)).toEqual(frozen);
   checks.undo = { status: 'EXECUTED', via: '撤销按钮 + reload 后目标与源项目状态一致（与剪贴板通道无关）' };
 
-  // 全部断言通过后才落回执。正式 AC5 回执只由 headed 运行产出；headless 只留页面剪贴板路径结果，
-  // 不带 AC5 标记，原始载荷一律留在 artifacts/。
+  // 全部断言通过后才落回执。原生专项回执须在守卫恢复后发布到独立 Playwright 产物目录，
+  // 默认模式只在 artifacts/ 记录页面剪贴板路径。
   const receipt = system
-    ? { issue: 34, ac: 'AC5', scope: 'system-clipboard', run: 'headed', at: new Date().toISOString(), systemTypes, checks, sources }
+    ? { issue: 34, ac: 'AC5', scope: 'system-clipboard', run: 'headed', at: new Date().toISOString(), checks, sources }
     : { issue: 34, scope: 'page-clipboard-only', run: 'headless', at: new Date().toISOString(), checks, sources };
-  if (system) {
-    mkdirSync(dirname(evidence), { recursive: true });
-    writeFileSync(evidence, JSON.stringify(receipt, null, 2));
-  } else {
-    writeFileSync(artifact('headless-paths.json'), JSON.stringify(receipt, null, 2));
-  }
+  return () => {
+    writeFileSync(flowArtifact(system ? evidenceName : 'headless-paths.json'), JSON.stringify(receipt, null, 2));
+  };
 }
 
 test.describe('页面剪贴板四路径', () => {
   test.skip(systemClipboard, 'headed 项目由 AC5 系统剪贴板用例覆盖完整流程');
   test('真实键盘跨项目切换、粘贴、重开、撤销与权限拒绝', async ({ page, workspace }) => {
     test.setTimeout(180000);
-    await runCopyFlow(page, workspace, false);
+    (await runCopyFlow(page, workspace))();
   });
 });
 
 test.describe('AC5 系统剪贴板验收', () => {
-  test.skip(!systemClipboard, 'AC5 系统侧验证需真实窗口：FORKWISE_SYSTEM_CLIPBOARD=1 npx playwright test tests/canvas-cross-project-copy.spec.ts');
+  test.skip(!systemClipboard, '系统剪贴板专项的运行参数见 frontend/playwright.config.ts');
   test('真实系统剪贴板跨项目复制、粘贴、重开、撤销与权限拒绝', async ({ page, workspace }) => {
     test.setTimeout(180000);
-    await runCopyFlow(page, workspace, true);
+    (await withNativeCanvasClipboard(page, workspace.origin, guard => runCopyFlow(page, workspace, guard)))();
   });
 });

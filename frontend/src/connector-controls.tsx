@@ -84,9 +84,9 @@ export function ConnectorCreateControls({ active, allowBlank, focusFree, blocked
   const free = useRef<HTMLButtonElement>(null), instructions = useId();
   useLayoutEffect(() => { if (active && focusFree) free.current?.focus(); }, [active, focusFree]);
   return <div className="creation-tools connector-tools" role="group" aria-label="键盘创建连线" style={{ whiteSpace: 'normal', flexWrap: 'wrap' }}>
-    {!active && <strong className="connector-tool-title">从空白或圆点拖动连线</strong>}
+    {!active && <p className="connector-create-hint">从卡片边缘的圆点拖出连线，也可以从画布空白处拖动。</p>}
     {allowBlank && <button type="button" disabled={blocked} onClick={event => start(event.currentTarget)}
-      onKeyDown={event => { if (event.nativeEvent.isComposing || event.keyCode === 229 || composing()) { event.preventDefault(); event.stopPropagation(); } }}>从空白处开始连线</button>}
+      onKeyDown={event => { if (event.nativeEvent.isComposing || event.keyCode === 229 || composing()) { event.preventDefault(); event.stopPropagation(); } }}>从画布中央起线</button>}
     {active && <><button ref={free} type="button" aria-label="连线自由终点" aria-describedby={instructions} disabled={blocked}
       onFocus={() => preview()} onClick={event => { if (event.detail === 0 && !composing()) choose(); }}
       onKeyDown={event => {

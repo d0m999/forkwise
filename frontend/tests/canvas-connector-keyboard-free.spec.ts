@@ -10,7 +10,7 @@ test('键盘可创建包含自由端的普通连线', async ({ page, workspace }
   const historyUrl = workspace.origin + '/api/mapping/projects/' + encodeURIComponent(projectId) + '/history';
   const history = async () => { const response = await page.request.get(historyUrl); expect(response.status()).toBe(200); return await response.json() as ProjectHistory; };
   const initialHistory = await history(), attempts: { command: Extract<Command, { type: 'connector.create' }>; status: number; receipt: Receipt }[] = [];
-  const tool = page.getByRole('button', { name: '连线', exact: true }), blank = page.getByRole('button', { name: '从空白处开始连线', exact: true });
+  const tool = page.getByRole('button', { name: '连线', exact: true }), blank = page.getByRole('button', { name: '从画布中央起线', exact: true });
   const free = page.getByRole('button', { name: '连线自由终点', exact: true }), preview = page.getByRole('img', { name: '连线预览', exact: true });
   const instructions = page.getByText('方向键调整自由终点，Enter 确认，Escape 取消', { exact: true });
   const frame = async () => await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
@@ -74,9 +74,9 @@ test('键盘可创建包含自由端的普通连线', async ({ page, workspace }
     const anchorCount = await page.locator('.connector-entry').count(), entryCount = await blank.count();
     await unchanged(initial, initialHistory, 0);
     console.log('issue26-keyboard-free-entry', JSON.stringify({ initial, initialHistory, anchorCount, entryCount, attempts,
-      labels: { blank: '从空白处开始连线', free: '连线自由终点', instructions: '方向键调整自由终点，Enter 确认，Escape 取消' },
+      labels: { blank: '从画布中央起线', free: '连线自由终点', instructions: '方向键调整自由终点，Enter 确认，Escape 取消' },
       boundary: 'empty project, real keyboard connector activation, no anchor prerequisite; bounded actual public start-from-blank entry availability' }));
-    expect(anchorCount).toBe(0); expect(entryCount, '空项目也必须提供可由键盘到达的从空白处开始连线入口').toBe(1); expect(await blank.isEnabled()).toBe(true);
+    expect(anchorCount).toBe(0); expect(entryCount, '空项目也必须提供可由键盘到达的从画布中央起线入口').toBe(1); expect(await blank.isEnabled()).toBe(true);
     const cancelled = await beginBlank();
     await free.dispatchEvent('keydown', { key: 'ArrowRight', code: 'ArrowRight', isComposing: true, bubbles: true });
     await free.dispatchEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 229, bubbles: true }); await frame();
@@ -297,7 +297,7 @@ test('键盘未移动自由端直接确认不创建零长度连线', async ({ pa
   const historyUrl = workspace.origin + '/api/mapping/projects/' + encodeURIComponent(projectId) + '/history';
   const history = async () => { const response = await page.request.get(historyUrl); expect(response.status()).toBe(200); return await response.json() as ProjectHistory; };
   const beforeHistory = await history(), commands: Command[] = [];
-  const tool = page.getByRole('button', { name: '连线', exact: true }), blank = page.getByRole('button', { name: '从空白处开始连线', exact: true });
+  const tool = page.getByRole('button', { name: '连线', exact: true }), blank = page.getByRole('button', { name: '从画布中央起线', exact: true });
   const free = page.getByRole('button', { name: '连线自由终点', exact: true }), preview = page.getByRole('img', { name: '连线预览', exact: true });
   const frame = async () => await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
   const record = (request: import('@playwright/test').Request) => {

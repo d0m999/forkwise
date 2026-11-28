@@ -32,6 +32,7 @@ export async function startWorkspace(options: { verificationSource?: Verificatio
   // 环境校验先于工作台模块加载：缺目录时立即失败，不因新增映射模块拖慢启动。
   const { openMapping } = await import('./mapping/storage.js');
   const { createWorkspaceApp } = await import('./mapping/http.js');
+  const { SEC_UNCONFIGURED } = await import('./mapping/verification.js');
   const {
     FORKWISE_OPENAI_ORGANIZE_QUALIFICATION: qualification,
     OPENAI_API_KEY: apiKey,
@@ -101,7 +102,7 @@ export async function startWorkspace(options: { verificationSource?: Verificatio
   }
   const mapping = openMapping(directory, {
     ...organizeConfig,
-    ...(verificationSource ? { verificationSource } : {}),
+    verificationSource: verificationSource ?? { blockedReason: SEC_UNCONFIGURED },
     workspaceBackup: {
       version,
       recipient: process.env.FORKWISE_BACKUP_RECIPIENT,

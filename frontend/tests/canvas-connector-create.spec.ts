@@ -151,10 +151,12 @@ test('从一个卡片拖到另一个卡片保存两端绑定', async ({ page, wo
   const second = await seedConnectorCard(page, workspace, 'second-card', 700, 400);
   const a = await connectorSurfaceBox(page, first.item.id), b = await connectorSurfaceBox(page, second.item.id);
   const start = { x: a.x + a.width - 2, y: a.y + a.height / 2 }, end = { x: b.x + b.width - 2, y: b.y + b.height / 2 };
+  await page.getByRole('button', { name: '连线', exact: true }).click();
+  await expect(page.getByText('从卡片边缘的圆点拖出连线，也可以从画布空白处拖动。', { exact: true })).toBeVisible({ timeout: 1500 });
   await connectorGesture(page, workspace, start, end, {
     start: { kind: 'bound', itemId: first.item.id, side: 'right' }, end: { kind: 'bound', itemId: second.item.id, side: 'right' },
     screenStart: { x: a.x + a.width, y: start.y }, screenEnd: { x: b.x + b.width, y: end.y },
-  });
+  }, false);
 });
 
 test('卡片四边连接入口分别保存所选固定边', async ({ page, workspace }) => {
