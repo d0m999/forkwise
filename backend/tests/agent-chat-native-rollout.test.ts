@@ -134,6 +134,7 @@ it.skipIf(!binary).each<Scenario>([
   const directory = scenario.directory ? join(root, scenario.directory) : root;
   const executables = [binary!, process.execPath];
   const before = await Promise.all(executables.map(executableState));
+  const codexTarget = before[0]!.target;
   onTestFinished(async () => expect(await Promise.all(executables.map(executableState))).toEqual(before));
   mkdirSync(root, { mode: 0o700 });
   onTestFinished(() => rmSync(root, { recursive: true, force: true }));
@@ -154,13 +155,13 @@ it.skipIf(!binary).each<Scenario>([
   vi.stubEnv('TZ', 'UTC');
   vi.stubEnv('SHELL', scenario.parentShell === 'absent' ? undefined : scenario.parentShell === 'different' ? otherShell : shell);
   for (const [name, value] of Object.entries({ HOME: home, CODEX_HOME: native, CODEX_SQLITE_HOME: sqlite, TMPDIR: tmp,
-    FORKWISE_CODEX_BINARY: realpathSync(binary!) })) vi.stubEnv(name, value);
+    FORKWISE_CODEX_BINARY: codexTarget })) vi.stubEnv(name, value);
   for (const name of ['HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'NO_PROXY']) {
     const value = name === 'NO_PROXY' ? '127.0.0.1' : 'http://127.0.0.1:1';
     vi.stubEnv(name, value);
     vi.stubEnv(name.toLowerCase(), value);
   }
-  expect(execFileSync(binary!, ['--version'], { cwd: root, encoding: 'utf8',
+  expect(execFileSync(codexTarget, ['--version'], { cwd: root, encoding: 'utf8',
     env: { HOME: home, CODEX_HOME: native, CODEX_SQLITE_HOME: sqlite, TMPDIR: tmp } }).trim()).toBe('codex-cli 0.172.0');
 
   let requests = 0;
