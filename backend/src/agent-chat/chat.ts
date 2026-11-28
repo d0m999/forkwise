@@ -7,7 +7,7 @@ import { z } from 'zod';
 import { DomainError, requireThat } from '../domain/errors.js';
 import { CodexConnection, codexChatModel, codexModelArgs, codexStorageEnvironment } from './codex.js';
 import { bundledLunaWorld, createRolloutContextVerifier, rolloutOpenSettings, type RolloutOpenSettings } from './rollout-context.js';
-import { isTurnUsageRecord, rolloutEnvelope, turnTextPhase as phase, turnUsageNotification,
+import { isNativeTurnAbortMarker, isTurnUsageRecord, rolloutEnvelope, turnTextPhase as phase, turnUsageNotification,
   verifiedTextPayload, type TurnUsage } from './rollout-text.js';
 import { openTerminalSocket } from './terminal-socket.js';
 import { nativePermissions, requireTerminalPermissions, terminalProtocol, type TerminalTurnSettings } from './terminal-protocol.js';
@@ -230,10 +230,27 @@ const sessionHeader = z.strictObject({ ...rolloutLine, type: z.literal('session_
   }) }),
 }) });
 function parseVerifiedRolloutLine(line: Buffer): unknown {
-  let raw: unknown;
+  let raw: {
+    type?: unknown;
+    payload?: { type?: unknown; rate_limits?: { primary?: unknown; secondary?: unknown } };
+  } | null;
   try { raw = JSON.parse(line.toString('utf8')); } catch { throw blockedHistory(); }
   // The compact native encoding also rules out duplicate keys hiding content.
-  if (!line.equals(Buffer.from(JSON.stringify(raw)))) throw blockedHistory();
+  const windows = raw?.type === 'event_msg' && raw.payload?.type === 'token_count' ? raw.payload.rate_limits : undefined;
+  // The supported Node versions expose rawJSON, which is newer than the ES2023 type library.
+  const json = JSON as typeof JSON & { rawJSON(source: string): object };
+  const encodePercent = windows && function (this: unknown, key: string, value: unknown) {
+    if (key !== 'used_percent' || (this !== windows.primary && this !== windows.secondary) ||
+        typeof value !== 'number' || !Number.isFinite(value)) return value;
+    // Codex 0.172.0's Serde f64 formatter uses fixed notation at decimal
+    // exponents -5 through 15 and includes .0 for integers in that range.
+    const magnitude = Math.abs(value);
+    if (magnitude >= 1e16 || (magnitude > 0 && magnitude < 1e-5)) return json.rawJSON(value.toExponential());
+    if (Object.is(value, -0)) return json.rawJSON('-0.0');
+    return Number.isInteger(value) ? json.rawJSON(`${value}.0`) : value;
+  };
+  const expected = JSON.stringify(raw, encodePercent ?? undefined);
+  if (!line.equals(Buffer.from(expected))) throw blockedHistory();
   return raw;
 }
 
@@ -321,6 +338,9 @@ function retriedTurnCheckpoint(thread: NativeThread, turn: NonNullable<RunningCh
     if (!last && !sawMessage && (started || resumePreamble) && verifyContext(line)) continue;
     if (!verifyContext.complete()) throw blockedHistory();
     if (!last && started && sawMessage && isTurnUsageRecord(line, thread.id, turn.id, active.usageUpdates)) continue;
+    // The harness marker immediately precedes the abort event, which still has to match the confirmed turn.
+    if (!last && started && sawMessage && turn.status === 'interrupted' && isNativeTurnAbortMarker(line, turn.id) &&
+        bytes.indexOf(10, position) === bytes.length - 1) continue;
     const payload = line.type === 'response_item' ? verifiedTextPayload(line, turn.id)
       : line.type === 'event_msg' && line.metadata === undefined ? eventPayload.safeParse(line.payload).data : undefined;
     if (!payload) throw blockedHistory();

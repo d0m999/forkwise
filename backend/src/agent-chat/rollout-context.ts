@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
-import { realpathSync } from 'node:fs';
-import { basename, join } from 'node:path';
+import { accessSync, constants, realpathSync, statSync } from 'node:fs';
+import { userInfo } from 'node:os';
+import { basename, delimiter, join, resolve } from 'node:path';
 import { isDeepStrictEqual as equal } from 'node:util';
 import { z } from 'zod';
 import { codexChatModel } from './codex.js';
@@ -28,7 +29,7 @@ const openedThread = z.object({
   thread: z.object({ id: z.string(), cliVersion: z.literal('0.172.0'), path: z.string(),
     cwd: z.string(), model: z.literal(codexChatModel), modelProvider: z.string(), environments: z.unknown() }),
   model: z.literal(codexChatModel), modelProvider: z.string().min(1), cwd: z.string().min(1),
-  reasoningEffort: effortName, runtimeWorkspaceRoots: z.unknown(), instructionSources: z.tuple([]),
+  reasoningEffort: effortName.nullable(), runtimeWorkspaceRoots: z.unknown(), instructionSources: z.tuple([]),
   disabledPluginIds: z.tuple([]), approvalPolicy: z.literal('on-request'), approvalsReviewer: z.literal('user'),
   sandbox: z.strictObject({ type: z.literal('readOnly'), networkAccess: z.literal(false) }),
   activePermissionProfile: z.strictObject({ id: z.literal(':read-only'), extends: z.null() }),
@@ -64,7 +65,7 @@ const permissionProfile = {
     { path: { type: 'special', value: { kind: 'root' } }, access: 'read' },
   ] }, network: 'restricted',
 };
-const collaboration = (effort: string) => ({
+const collaboration = (effort: string | null) => ({
   mode: 'default', settings: { model: codexChatModel, reasoning_effort: effort, developer_instructions: null },
 });
 const harness = { provenance: { type: 'harness', hook: false } };
@@ -74,6 +75,38 @@ const messageKinds = [
   ['environments.environment_context'],
 ];
 const provenances = [[harness], [{ provenance: { type: 'skills' } }, harness, harness], [harness]];
+
+const fixedShellPaths = new Map([
+  ['zsh', ['/bin/zsh']], ['bash', ['/bin/bash', '/usr/bin/bash']], ['sh', ['/bin/sh']],
+  ['powershell', ['/usr/local/bin/pwsh']], ['cmd', []],
+]);
+
+// Match Codex 0.172.0's Unix passwd lookup and shell fallback order.
+function nativeUnixShell(cwd: string) {
+  // Node looks up the effective UID. Codex looks up the real UID.
+  if (process.getuid?.() !== process.geteuid?.()) return;
+  let loginShell = '';
+  try { loginShell = userInfo().shell ?? ''; } catch { /* The passwd entry is optional. */ }
+  const loginCommand = basename(loginShell).split('.', 1)[0];
+  const loginKind = loginCommand === 'pwsh' ? 'powershell' : loginCommand;
+  const pathEntries = process.env.PATH?.split(delimiter) ?? [];
+  const isFile = (path: string, executable = false) => {
+    try {
+      if (executable) accessSync(path, constants.X_OK);
+      return statSync(path).isFile();
+    } catch { return false; }
+  };
+  const fallback = process.platform === 'darwin' ? ['zsh', 'bash'] : ['bash', 'zsh'];
+  for (const kind of [...(loginKind ? [loginKind] : []), ...fallback]) {
+    const fixedPaths = fixedShellPaths.get(kind);
+    if (!fixedPaths) continue;
+    const commands = kind === 'powershell' ? ['pwsh', 'powershell'] : [kind];
+    if ((kind === loginKind && isFile(resolve(cwd, loginShell))) ||
+        commands.some(command => pathEntries.some(path => isFile(resolve(cwd, path, command), true))) ||
+        fixedPaths.some(path => isFile(path))) return kind;
+  }
+  return 'sh';
+}
 
 const unavailable = Object.assign(() => false, { complete: () => true });
 
@@ -94,22 +127,26 @@ export function createRolloutContextVerifier(open: RolloutOpenSettings, threadId
   const turnEffort = effort ?? reasoningEffort;
   const common = { cwd, model: codexChatModel, approval_policy: 'on-request', approvals_reviewer: 'user',
     permission_profile: permissionProfile, active_permission_profile: { id: ':read-only' }, disabled_plugin_ids: [] };
-  const turnContext = { ...common, turn_id: turnId, root_turn_id: turnId, effort: turnEffort, comp_hash: '3000',
+  const turnContext = { ...common, turn_id: turnId, root_turn_id: turnId,
+    ...(turnEffort === null ? {} : { effort: turnEffort }), comp_hash: '3000',
     collaboration_mode: collaboration(turnEffort), multi_agent_version: 'disabled', realtime_active: false,
     summary: 'none', sandbox_policy: { type: 'read-only' } };
-  // On resume Codex persists the settings from open before accepting turn/start.
-  const settingsEffort = firstTurn ? turnEffort : reasoningEffort;
-  const settings = { type: 'thread_settings_applied', thread_id: threadId,
+  const settings = (settingsEffort: string | null) => ({ type: 'thread_settings_applied', thread_id: threadId,
     thread_settings: { ...common, model_provider_id: modelProvider, requested_approvals_reviewer: 'user',
-      runtime_workspace_roots: roots, reasoning_effort: settingsEffort,
-      ...(instructionDigest === noPersonality ? { personality: 'none' } : {}), collaboration_mode: collaboration(settingsEffort) } };
+      runtime_workspace_roots: roots, ...(settingsEffort === null ? {} : { reasoning_effort: settingsEffort }),
+      ...(instructionDigest === noPersonality ? { personality: 'none' } : {}), collaboration_mode: collaboration(settingsEffort) } });
+  const appliedSettings = settings(turnEffort);
+  // A resumed writer can persist the opening settings or the settings applied by turn/start.
+  const resumedSettings = !firstTurn && reasoningEffort !== turnEffort ? settings(reasoningEffort) : undefined;
 
   // The no-project root and installed system-skills root are the only paths
   // permitted in the stock instructions. Derive the latter from native open.
   const sessions = thread.path.match(/^(.*)\/sessions\/\d{4}\/\d\d\/\d\d\/rollout-[^/]+\.jsonl$/);
   const skillsRoot = sessions && thread.path.endsWith(`-${threadId}.jsonl`)
     ? join(sessions[1]!, 'skills', '.system') : undefined;
-  const filesystem = `<filesystem><workspace_roots><root>${cwd}</root></workspace_roots>` +
+  const xmlCwd = cwd.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;').replaceAll("'", '&apos;');
+  const filesystem = `<filesystem><workspace_roots><root>${xmlCwd}</root></workspace_roots>` +
     '<permission_profile type="managed"><file_system type="restricted"><entry access="read">' +
     '<special>:root</special></entry></file_system></permission_profile></filesystem>';
   let skillsBody: string | undefined;
@@ -127,7 +164,8 @@ export function createRolloutContextVerifier(open: RolloutOpenSettings, threadId
       return true;
     }
     if (type === 'event_msg') {
-      if (metadata !== undefined || sawSettings || sawContext !== firstTurn || !equal(payload, settings)) return false;
+      if (metadata !== undefined || sawSettings || sawContext !== firstTurn ||
+          (!equal(payload, appliedSettings) && !(resumedSettings && equal(payload, resumedSettings)))) return false;
       sawSettings = true;
       return true;
     }
@@ -166,16 +204,16 @@ export function createRolloutContextVerifier(open: RolloutOpenSettings, threadId
         skillsBody = text.slice('<skills_instructions>'.length, -'</skills_instructions>'.length);
       }
       if (setupCount === 3) {
-        // Codex inherits SHELL but not a TZ override from the workbench.
-        const shell = basename(process.env.SHELL ?? '');
-        if (!['zsh', 'bash', 'fish', 'sh'].includes(shell)) return false;
+        const shell = nativeUnixShell(cwd);
+        if (!shell) return false;
+        // The native app-server does not inherit the workbench's TZ override.
         let zone: string | undefined;
         try { zone = realpathSync('/etc/localtime').split('/zoneinfo/')[1]; } catch { /* zoneinfo link is optional */ }
         zone ??= process.env.TZ ? undefined : Intl.DateTimeFormat().resolvedOptions().timeZone;
         if (!zone) return false;
         const date = new Intl.DateTimeFormat('en-CA', { timeZone: zone, year: 'numeric', month: '2-digit',
           day: '2-digit' }).format(new Date(timestamp));
-        const expected = ['<environment_context>', `  <cwd>${cwd}</cwd>`, `  <shell>${shell}</shell>`,
+        const expected = ['<environment_context>', `  <cwd>${xmlCwd}</cwd>`, `  <shell>${shell}</shell>`,
           `  <current_date>${date}</current_date>`, `  <timezone>${zone}</timezone>`,
           `  ${filesystem}`, '</environment_context>'].join('\n');
         if (text !== expected) return false;

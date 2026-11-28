@@ -60,6 +60,33 @@ export function verifiedTextPayload(record: RolloutRecord, turnId: string): z.in
       internal.content_item_kinds.length === payload.content.length) return payload;
 }
 
+const abortMarkerText = '<turn_aborted>\n' +
+  'The user interrupted the previous turn on purpose. Any running unified exec processes may still be running in the background. ' +
+  'If any tools/commands were aborted, they may have partially executed.\n</turn_aborted>';
+const nativeAbortMarker = z.object({
+  type: z.literal('response_item'),
+  metadata: z.strictObject({ history_sequence: count, sampled_through_sequence: count,
+    client_authored: z.literal(false), model_search_state: z.literal('unused') }),
+  payload: userText.extend({
+    id: z.templateLiteral(['msg_', z.uuidv7()]),
+    content: z.tuple([z.strictObject({ type: z.literal('input_text'), text: z.literal(abortMarkerText) })]),
+    internal_chat_message_metadata_passthrough: z.strictObject({
+      turn_id: z.string(), create_time: z.number().positive(), content_item_kinds: z.tuple([z.literal('generic.turn_aborted')]),
+      content_item_metadata: z.tuple([z.strictObject({
+        provenance: z.strictObject({ type: z.literal('harness'), hook: z.literal(false) }),
+      })]),
+    }),
+  }),
+});
+
+export function isNativeTurnAbortMarker(record: RolloutRecord, turnId: string): boolean {
+  const result = nativeAbortMarker.safeParse(record);
+  if (!result.success) return false;
+  const { payload, metadata } = result.data;
+  return payload.internal_chat_message_metadata_passthrough.turn_id === turnId &&
+    metadata.sampled_through_sequence < metadata.history_sequence;
+}
+
 const usage = z.strictObject({ input_tokens: count, cached_input_tokens: count, cache_write_input_tokens: count,
   output_tokens: count, reasoning_output_tokens: count, total_tokens: count });
 const notificationUsage = z.strictObject({ inputTokens: count, cachedInputTokens: count, cacheWriteInputTokens: count,
@@ -72,6 +99,9 @@ export const turnUsageNotification = z.strictObject({ threadId: z.string(), turn
 });
 export type TurnUsage = z.infer<typeof turnUsageNotification>['tokenUsage'];
 
+const rateLimitWindow = z.strictObject({
+  used_percent: z.number().nonnegative(), window_minutes: count.nullable(), resets_at: count.nullable(),
+}).nullable();
 const usageRecord = z.discriminatedUnion('type', [
   z.object({ type: z.literal('token_usage_record'), payload: z.strictObject({
     thread_id: z.string(), session_id: z.string(), turn_id: z.string(), root_turn_id: z.string(),
@@ -82,7 +112,7 @@ const usageRecord = z.discriminatedUnion('type', [
     type: z.literal('token_count'),
     info: z.strictObject({ total_token_usage: usage, last_token_usage: usage, last_usage_includes_reasoning: z.literal(true),
       model_context_window: z.int().positive() }).nullable(),
-    rate_limits: z.strictObject({ limit_id: z.literal('codex'), limit_name: z.null(), primary: z.null(), secondary: z.null(),
+    rate_limits: z.strictObject({ limit_id: z.literal('codex'), limit_name: z.null(), primary: rateLimitWindow, secondary: rateLimitWindow,
       credits: z.null(), individual_limit: z.null(), spend_control_reached: z.null(), plan_type: z.null(), rate_limit_reached_type: z.null() }),
   }) }),
 ]);
