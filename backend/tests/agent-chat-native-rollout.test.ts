@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { once } from 'node:events';
-import { createReadStream, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { createReadStream, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { createServer, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -16,7 +16,7 @@ const binary = process.env.FORKWISE_TEST_CODEX_BINARY;
 const apiKey = 'synthetic-local-only';
 
 async function executableState(path: string) {
-  const target = realpathSync(path);
+  const target = realpathSync.native(path);
   const hash = createHash('sha256');
   for await (const chunk of createReadStream(target)) hash.update(chunk);
   return { target, mode: statSync(target).mode & 0o7777, sha256: hash.digest('hex') };
@@ -73,17 +73,25 @@ async function connectTerminal(chat: AgentChat, id: string) {
   return { request, waitFor };
 }
 
-it('Linux 无 passwd 条目时核验 PATH 中第一个可执行的 bash', () => {
+it('Linux 无 passwd 条目时按文件系统语义选择 PATH 中第一个可执行的 bash', async () => {
+  const executables = [process.execPath, '/bin/sh'];
+  const before = await Promise.all(executables.map(executableState));
+  onTestFinished(async () => expect(await Promise.all(executables.map(executableState))).toEqual(before));
   const root = mkdtempSync(join(tmpdir(), 'fw-shell-'));
   onTestFinished(() => rmSync(root, { recursive: true, force: true }));
-  const tools = join(root, 'tools');
-  mkdirSync(tools);
+  const decoy = join(root, 'decoy');
+  const tools = join(root, 'actual', 'tools');
+  mkdirSync(decoy);
+  mkdirSync(tools, { recursive: true });
   writeFileSync(join(root, 'bash'), '', { mode: 0o600 });
-  const bash = join(tools, 'bash');
-  writeFileSync(bash, 'fixture', { mode: 0o700 });
-  vi.stubEnv('PATH', [root, 'tools'].join(delimiter));
+  symlinkSync('/bin/sh', join(decoy, 'bash'));
+  symlinkSync(process.execPath, join(tools, 'bash'));
+  symlinkSync(tools, join(root, 'linked-tools'));
+  vi.stubEnv('PATH', [root, `${root}/missing/../decoy`, 'linked-tools/../tools'].join(delimiter));
   onTestFinished(() => { vi.unstubAllEnvs(); });
-  expect(nativeUnixShell(root, '', 'linux')?.path).toBe(bash);
+  const shell = nativeUnixShell(root, '', 'linux');
+  expect(shell?.kind).toBe('bash');
+  expect(await executableState(shell!.path)).toEqual(before[0]);
 });
 
 type Scenario = {
@@ -124,15 +132,21 @@ it.skipIf(!binary).each<Scenario>([
 ])('Codex 0.172.0 延迟回读（$name）', async scenario => {
   const root = join(realpathSync(tmpdir()), `fw-native-${randomUUID()}`);
   const directory = scenario.directory ? join(root, scenario.directory) : root;
-  const selected = nativeUnixShell(join(directory, 'no-project'));
-  if (!selected) throw new Error('无法确定 Codex 原生 shell');
-  const shell = selected.path;
-  const otherShell = selected.kind === 'bash' ? '/bin/zsh' : '/bin/bash';
-  const executables = [binary!, process.execPath, shell];
+  const executables = [binary!, process.execPath];
   const before = await Promise.all(executables.map(executableState));
   onTestFinished(async () => expect(await Promise.all(executables.map(executableState))).toEqual(before));
   mkdirSync(root, { mode: 0o700 });
   onTestFinished(() => rmSync(root, { recursive: true, force: true }));
+  // Relative PATH entries must be checked from the actual child cwd.
+  const cwd = join(directory, 'no-project');
+  mkdirSync(cwd, { recursive: true, mode: 0o700 });
+  const selected = nativeUnixShell(cwd);
+  if (!selected) throw new Error('无法确定 Codex 原生 shell');
+  const shell = selected.path;
+  const otherShell = selected.kind === 'bash' ? '/bin/zsh' : '/bin/bash';
+  const shellBefore = await executableState(shell);
+  before.push(shellBefore);
+  executables.push(shellBefore.target);
   const home = join(root, 'home'), native = join(root, 'codex'), sqlite = join(root, 'sqlite'), tmp = join(root, 'tmp');
   for (const dir of [home, native, sqlite, tmp]) mkdirSync(dir, { mode: 0o700 });
   onTestFinished(() => { vi.unstubAllEnvs(); });
@@ -225,7 +239,6 @@ enabled = false
     return result;
   });
   onTestFinished(() => spy.mockRestore());
-  if (scenario.directory) mkdirSync(directory, { mode: 0o700 });
   const chat = new AgentChat(directory, '0.1.0-fixture');
   onTestFinished(async () => { release(); await chat.close(); });
   const { id } = chat.create();

@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { accessSync, constants, realpathSync, statSync } from 'node:fs';
 import { userInfo } from 'node:os';
-import { basename, delimiter, join, resolve } from 'node:path';
+import { basename, delimiter, isAbsolute, join, resolve } from 'node:path';
 import { isDeepStrictEqual as equal } from 'node:util';
 import { z } from 'zod';
 import { codexChatModel } from './codex.js';
@@ -104,7 +104,8 @@ export function nativeUnixShell(cwd: string, loginShell = loginShellPath(), plat
     if (kind === loginKind && isFile(resolve(cwd, loginShell))) return { kind, path: resolve(cwd, loginShell) };
     for (const command of kind === 'powershell' ? ['pwsh', 'powershell'] : [kind]) {
       for (const entry of pathEntries) {
-        const path = resolve(cwd, entry, command);
+        // Leave `..` and symlinks for the filesystem to resolve, as Codex's `which` does.
+        const path = isAbsolute(entry) ? `${entry}/${command}` : `${cwd}/${entry}/${command}`;
         if (isFile(path, true)) return { kind, path };
       }
       const path = fixedShellPaths.get(command)?.find(candidate => isFile(candidate));
