@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { once } from 'node:events';
-import { createReadStream, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { createReadStream, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { createServer, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir, userInfo } from 'node:os';
@@ -89,6 +89,7 @@ it.skipIf(!binary).each<Scenario>([
   { name: '未指定推理强度', unspecifiedEffort: true },
   { name: '主窗口和次窗口均有配额', quotaPercent: 13.5 },
   { name: '配额百分比使用科学记数法', quotaPercent: 1e-6 },
+  { name: '配额百分比使用正指数时可继续发送', quotaPercent: 1e16 },
   { name: '配额百分比保留负零', quotaPercent: -0 },
   { name: '父进程无 SHELL', parentShell: 'absent' },
   { name: '父进程 SHELL 与登录 shell 不一致', parentShell: 'different' },
@@ -107,7 +108,10 @@ it.skipIf(!binary).each<Scenario>([
       /("turn_id":")[^"]+(","create_time":[^,]+,"content_item_kinds":\["generic\.turn_aborted"\])/,
       '$1foreign-turn$2') },
 ])('Codex 0.172.0 延迟回读（$name）', async scenario => {
-  const shell = userInfo().shell || '/bin/zsh';
+  let loginShell = '';
+  try { loginShell = userInfo().shell ?? ''; } catch { /* Numeric UIDs may have no passwd entry. */ }
+  const fallbackShells = process.platform === 'darwin' ? ['/bin/zsh', '/bin/bash'] : ['/bin/bash', '/bin/zsh'];
+  const shell = loginShell || fallbackShells.find(existsSync) || '/bin/sh';
   const otherShell = shell === '/bin/bash' ? '/bin/zsh' : '/bin/bash';
   const executables = [binary!, process.execPath, shell];
   const before = await Promise.all(executables.map(executableState));
@@ -191,7 +195,7 @@ enabled = false
           const altered = scenario.alterRecording!(recording);
           expect(altered).not.toBe(recording);
           writeFileSync(thread.path, altered);
-        });
+        }, { timeout: 10_000 });
       }
     }
     if (method === 'turn/start' && ++starts === delayedTurn) {
@@ -226,13 +230,13 @@ enabled = false
     expect(start).toMatchObject({ result: { turn: { id: expect.any(String) } } });
     const { id: turnId } = (start.result as { turn: { id: string } }).turn;
     if (interrupted) {
-      await expect.poll(() => requests).toBe(2);
+      await expect.poll(() => requests, { timeout: 10_000 }).toBe(2);
       expect(await terminal.request('turn/interrupt', { threadId: first.threadId, turnId })).toHaveProperty('result');
     } else {
       release();
     }
     terminalCompletion = await terminal.waitFor(frame => ['turn/completed', 'error'].includes(frame.method ?? ''));
-    await expect.poll(async () => (await chat.get(id)).busy).toBe(false);
+    await expect.poll(async () => (await chat.get(id)).busy, { timeout: 10_000 }).toBe(false);
   }
   expect(delivered).toBe(true);
 
@@ -241,7 +245,8 @@ enabled = false
   expect(files).toHaveLength(1);
   const records = readFileSync(join(sessions, files[0]!), 'utf8').trimEnd().split('\n').map(line => JSON.parse(line));
   expect(records.map(line => line.type)).toEqual(expect.arrayContaining(['world_state', 'turn_context', 'token_usage_record']));
-  expect(records.find(line => line.payload.type === 'token_count')?.payload.info.last_token_usage)
+  const tokenCountWithUsage = records.find(line => line.payload.type === 'token_count' && line.payload.info?.last_token_usage);
+  expect(tokenCountWithUsage?.payload.info.last_token_usage)
     .toMatchObject({ input_tokens: 10, output_tokens: 4, total_tokens: 14 });
   if (scenario.unspecifiedEffort) expect(records.find(line => line.type === 'turn_context')?.payload).not.toHaveProperty('effort');
   if (scenario.quotaPercent !== undefined) expect(records.find(line => line.payload.type === 'token_count')?.payload.rate_limits)

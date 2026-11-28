@@ -338,9 +338,9 @@ function retriedTurnCheckpoint(thread: NativeThread, turn: NonNullable<RunningCh
     if (!last && !sawMessage && (started || resumePreamble) && verifyContext(line)) continue;
     if (!verifyContext.complete()) throw blockedHistory();
     if (!last && started && sawMessage && isTurnUsageRecord(line, thread.id, turn.id, active.usageUpdates)) continue;
-    // The harness marker immediately precedes the abort event, which still has to match the confirmed turn.
-    if (!last && started && sawMessage && turn.status === 'interrupted' && isNativeTurnAbortMarker(line, turn.id) &&
-        bytes.indexOf(10, position) === bytes.length - 1) continue;
+    // An early interrupt can leave only the marker and abort event after the turn starts.
+    if (!last && started && turn.status === 'interrupted' && bytes.indexOf(10, position) === bytes.length - 1 &&
+        isNativeTurnAbortMarker(line, turn.id)) continue;
     const payload = line.type === 'response_item' ? verifiedTextPayload(line, turn.id)
       : line.type === 'event_msg' && line.metadata === undefined ? eventPayload.safeParse(line.payload).data : undefined;
     if (!payload) throw blockedHistory();

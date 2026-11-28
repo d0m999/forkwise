@@ -18,11 +18,12 @@ export const rolloutEnvelope = z.strictObject({
 export type RolloutRecord = z.infer<typeof rolloutEnvelope>;
 
 const count = z.int().nonnegative();
+const noMcpAttribution = z.strictObject({ status: z.literal('none') }).optional();
 const nativeMessage = z.object({
   metadata: z.strictObject({
     history_sequence: count, sampled_through_sequence: count, user_input_order: count,
     client_authored: z.literal(false), model_search_state: z.literal('unused'),
-    mcp_attribution: z.strictObject({ status: z.literal('none') }).optional(),
+    mcp_attribution: noMcpAttribution,
     retained_source: z.strictObject({
       id: z.strictObject({ message_id: z.string(), turn_id: z.string(), role: z.enum(['user', 'assistant']) }),
       revision: z.templateLiteral(['retained_', z.uuidv7()]), complete: z.literal(true),
@@ -66,7 +67,7 @@ const abortMarkerText = '<turn_aborted>\n' +
 const nativeAbortMarker = z.object({
   type: z.literal('response_item'),
   metadata: z.strictObject({ history_sequence: count, sampled_through_sequence: count,
-    client_authored: z.literal(false), model_search_state: z.literal('unused') }),
+    client_authored: z.literal(false), mcp_attribution: noMcpAttribution, model_search_state: z.literal('unused') }),
   payload: userText.extend({
     id: z.templateLiteral(['msg_', z.uuidv7()]),
     content: z.tuple([z.strictObject({ type: z.literal('input_text'), text: z.literal(abortMarkerText) })]),

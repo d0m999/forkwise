@@ -44,6 +44,7 @@ function setFixtureModels(models: FixtureModel[], behavior: {
   restrictReopenedTerminal?: boolean;
   failModelAfterResume?: boolean;
   holdTurn?: boolean;
+  abortBeforeMessage?: 'native' | 'unknownMcpAttribution';
   holdResume?: boolean;
   holdStartResponse?: boolean;
   holdPreflight?: boolean;
@@ -94,7 +95,8 @@ assert.equal(process.env.OPENAI_API_KEY, undefined);
 const accountPath = join(process.env.CODEX_HOME, 'native-account.json');
 const model = ${JSON.stringify(model)};
 const { models, nextModelPage, modelListError, openedModel, reroutedModel, completedModel, interruptOutcome, holdClose, omitRecordedTurn,
-  terminalSettings, restrictReopenedTerminal, failModelAfterResume, holdTurn, holdResume, holdStartResponse, holdPreflight, holdHistoryRead,
+  terminalSettings, restrictReopenedTerminal, failModelAfterResume, holdTurn, abortBeforeMessage,
+  holdResume, holdStartResponse, holdPreflight, holdHistoryRead,
   startReplyAfterReroute, onlyUnrelatedCompletion, recordedTurnStatus, delayedRecordedTurn, externalTurnModel, failedTurn, invalidPrompt,
   rolloutMessages, lifecycleMetadata, firstSessionHeader, textRollout, expectedEffort } = JSON.parse(readFileSync(${JSON.stringify(modelSettings)}, 'utf8'));
 const nativeDefault = models.find(candidate => candidate.isDefault)?.model;
@@ -243,7 +245,7 @@ for await (const line of createInterface({input: process.stdin})) {
         }
         if (!existsSync(recording) && !firstDelayedTurn)
           writeFileSync(recording, eventLine('2026-11-27T08:00:00.111222333Z', settings(threadId)), {mode: 0o600});
-        if (firstDelayedTurn || rolloutMessages || lifecycleMetadata) {
+        if (firstDelayedTurn || rolloutMessages || lifecycleMetadata || abortBeforeMessage) {
           const started = { type: 'task_started', turn_id: turn.id, root_turn_id: turn.id,
             model_context_window: null, collaboration_mode_kind: 'default' };
           if (lifecycleMetadata) Object.assign(started, {
@@ -278,7 +280,20 @@ for await (const line of createInterface({input: process.stdin})) {
           }, revision: 'retained_01900000-0000-7000-8000-000000000002', complete: true }, client_authored: false, user_input_order: 0,
             mcp_attribution: { status: 'none' }, model_search_state: 'unused' });
         }
-        if (rolloutMessages === 'legacy') {
+        if (abortBeforeMessage) {
+          appendRecord('2026-11-27T08:00:01Z', 'response_item', {
+            type: 'message', id: 'msg_01900000-0000-7000-8000-000000000001', role: 'user',
+            content: [{ type: 'input_text', text: '<turn_aborted>\\n' +
+              'The user interrupted the previous turn on purpose. Any running unified exec processes may still be running in the background. ' +
+              'If any tools/commands were aborted, they may have partially executed.\\n</turn_aborted>' }],
+            internal_chat_message_metadata_passthrough: {
+              turn_id: turnId, create_time: 1795737601, content_item_kinds: ['generic.turn_aborted'],
+              content_item_metadata: [{ provenance: { type: 'harness', hook: false } }],
+            },
+          }, { history_sequence: 7, sampled_through_sequence: 5, client_authored: false,
+            mcp_attribution: abortBeforeMessage === 'native' ? { status: 'none' } : { status: 'none', source: '未核验材料占位' },
+            model_search_state: 'unused' });
+        } else if (rolloutMessages === 'legacy') {
           appendRecord('2026-11-27T08:00:00Z', 'event_msg', { type: 'user_message', message: params.input[0].text,
             local_images: [], local_audio: [], text_elements: [] });
           appendRecord('2026-11-27T08:00:01Z', 'event_msg', { type: 'agent_message', message: answer,
@@ -310,7 +325,7 @@ for await (const line of createInterface({input: process.stdin})) {
       writeFileSync(path, JSON.stringify({id: threadId, path: recording, turns, status: {type: 'idle'}, model: completedModel ?? model}), {mode: 0o600});
     };
     const complete = () => {
-      print(delta);
+      if (!abortBeforeMessage) print(delta);
       if (delayedRecordedTurn) pendingRecordedTurn = { threadId, turn, saveTurn };
       if (delayedRecordedTurn === 'hiddenBeforeNotice') flushSettings(load(threadId), 'unknown');
       if (['projectionOnly', 'partialFlush', 'hiddenBeforeNotice'].includes(delayedRecordedTurn))
@@ -359,7 +374,7 @@ for await (const line of createInterface({input: process.stdin})) {
       assert.deepEqual(params, { threadId: heldTurn.threadId, turnId: heldTurn.turn.id });
       clearInterval(heldTurn.waitForTest);
       heldTurn.turn.status = 'interrupted';
-      heldTurn.turn.items = heldTurn.turn.items.slice(0, 1);
+      heldTurn.turn.items = abortBeforeMessage ? [] : heldTurn.turn.items.slice(0, 1);
       respond({});
       heldTurn.complete();
       continue;
@@ -680,6 +695,39 @@ it.each([
     ]);
   }, 15_000,
 );
+
+it.each([
+  { name: '终端在首条消息落盘前中断后，重开工作台仍可续聊', abortBeforeMessage: 'native' },
+  { name: '中断标记附带未经核验的 MCP 归属时拒绝续聊', abortBeforeMessage: 'unknownMcpAttribution' },
+] as const)('$name', async ({ abortBeforeMessage }) => {
+  setFixtureModels(availableModels, { terminalSettings: 'onClose' });
+  const { chat, id, threadId, post } = await startTerminalConversation();
+  setFixtureModels(availableModels, { delayedRecordedTurn: 'inProgress', holdTurn: true, abortBeforeMessage });
+  const terminal = await connectTerminal(await post(`/${id}/terminal`), threadId);
+  expect(await terminal.request('thread/resume', { threadId })).toHaveProperty('result');
+  const start = await terminal.request('turn/start', { threadId, input: [{ type: 'text', text: '落盘前中断的问题' }] });
+  const { id: turnId } = (start.result as { turn: { id: string } }).turn;
+  expect(await terminal.request('turn/interrupt', { threadId, turnId })).toHaveProperty('result');
+  const completion = await terminal.waitFor(frame => ['turn/completed', 'error'].includes(frame.method ?? ''));
+  if (abortBeforeMessage === 'unknownMcpAttribution') {
+    expect(completion).toMatchObject({ method: 'error' });
+    await expect(chat.send(id, '来源未知后的合成问题')).rejects.toMatchObject({ code: 'CODEX_HISTORY_UNVERIFIED' });
+    return;
+  }
+  expect(completion).toMatchObject({
+    method: 'turn/completed', params: { turn: { id: turnId, status: 'interrupted', items: [] } },
+  });
+  expect(await chat.get(id)).toMatchObject({ busy: false, error: '此回合已中断。' });
+
+  await chat.close();
+  setFixtureModels(availableModels);
+  const reopened = chats = new AgentChat(directory, 'test');
+  await expect(reopened.send(id, '重开工作台后的问题')).resolves.toMatchObject({ threadId });
+  await expect.poll(async () => (await reopened.get(id)).busy, { timeout: 10_000 }).toBe(false);
+  expect((await reopened.get(id)).messages.map(message => message.text)).toEqual([
+    '见岔首轮合成问题', '合成回答', '重开工作台后的问题', '合成回答',
+  ]);
+}, 15_000);
 
 it.each([
   { status: 'interrupted', invalidPrompt: false },
