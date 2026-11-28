@@ -1,15 +1,16 @@
 import { execFileSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { once } from 'node:events';
-import { createReadStream, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { createReadStream, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { createServer, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { tmpdir, userInfo } from 'node:os';
-import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { delimiter, join } from 'node:path';
 import { expect, it, onTestFinished, vi } from 'vitest';
 import WebSocket from 'ws';
 import { AgentChat } from '../src/agent-chat/chat.js';
 import { CodexConnection } from '../src/agent-chat/codex.js';
+import { nativeUnixShell } from '../src/agent-chat/rollout-context.js';
 
 const binary = process.env.FORKWISE_TEST_CODEX_BINARY;
 const apiKey = 'synthetic-local-only';
@@ -72,6 +73,19 @@ async function connectTerminal(chat: AgentChat, id: string) {
   return { request, waitFor };
 }
 
+it('Linux 无 passwd 条目时核验 PATH 中第一个可执行的 bash', () => {
+  const root = mkdtempSync(join(tmpdir(), 'fw-shell-'));
+  onTestFinished(() => rmSync(root, { recursive: true, force: true }));
+  const tools = join(root, 'tools');
+  mkdirSync(tools);
+  writeFileSync(join(root, 'bash'), '', { mode: 0o600 });
+  const bash = join(tools, 'bash');
+  writeFileSync(bash, 'fixture', { mode: 0o700 });
+  vi.stubEnv('PATH', [root, 'tools'].join(delimiter));
+  onTestFinished(() => { vi.unstubAllEnvs(); });
+  expect(nativeUnixShell(root, '', 'linux')?.path).toBe(bash);
+});
+
 type Scenario = {
   name: string;
   personality?: 'none';
@@ -108,15 +122,16 @@ it.skipIf(!binary).each<Scenario>([
       /("turn_id":")[^"]+(","create_time":[^,]+,"content_item_kinds":\["generic\.turn_aborted"\])/,
       '$1foreign-turn$2') },
 ])('Codex 0.172.0 延迟回读（$name）', async scenario => {
-  let loginShell = '';
-  try { loginShell = userInfo().shell ?? ''; } catch { /* Numeric UIDs may have no passwd entry. */ }
-  const fallbackShells = process.platform === 'darwin' ? ['/bin/zsh', '/bin/bash'] : ['/bin/bash', '/bin/zsh'];
-  const shell = loginShell || fallbackShells.find(existsSync) || '/bin/sh';
-  const otherShell = shell === '/bin/bash' ? '/bin/zsh' : '/bin/bash';
+  const root = join(realpathSync(tmpdir()), `fw-native-${randomUUID()}`);
+  const directory = scenario.directory ? join(root, scenario.directory) : root;
+  const selected = nativeUnixShell(join(directory, 'no-project'));
+  if (!selected) throw new Error('无法确定 Codex 原生 shell');
+  const shell = selected.path;
+  const otherShell = selected.kind === 'bash' ? '/bin/zsh' : '/bin/bash';
   const executables = [binary!, process.execPath, shell];
   const before = await Promise.all(executables.map(executableState));
   onTestFinished(async () => expect(await Promise.all(executables.map(executableState))).toEqual(before));
-  const root = realpathSync(mkdtempSync(join(tmpdir(), 'fw-native-')));
+  mkdirSync(root, { mode: 0o700 });
   onTestFinished(() => rmSync(root, { recursive: true, force: true }));
   const home = join(root, 'home'), native = join(root, 'codex'), sqlite = join(root, 'sqlite'), tmp = join(root, 'tmp');
   for (const dir of [home, native, sqlite, tmp]) mkdirSync(dir, { mode: 0o700 });
@@ -210,7 +225,6 @@ enabled = false
     return result;
   });
   onTestFinished(() => spy.mockRestore());
-  const directory = scenario.directory ? join(root, scenario.directory) : root;
   if (scenario.directory) mkdirSync(directory, { mode: 0o700 });
   const chat = new AgentChat(directory, '0.1.0-fixture');
   onTestFinished(async () => { release(); await chat.close(); });

@@ -78,15 +78,17 @@ const provenances = [[harness], [{ provenance: { type: 'skills' } }, harness, ha
 
 const fixedShellPaths = new Map([
   ['zsh', ['/bin/zsh']], ['bash', ['/bin/bash', '/usr/bin/bash']], ['sh', ['/bin/sh']],
-  ['powershell', ['/usr/local/bin/pwsh']], ['cmd', []],
+  ['pwsh', ['/usr/local/bin/pwsh']], ['powershell', []], ['cmd', []],
 ]);
 
+function loginShellPath() {
+  try { return userInfo().shell ?? ''; } catch { return ''; } // Numeric UID without a passwd entry.
+}
+
 // Match Codex 0.172.0's Unix passwd lookup and shell fallback order.
-function nativeUnixShell(cwd: string) {
+export function nativeUnixShell(cwd: string, loginShell = loginShellPath(), platform = process.platform) {
   // Node looks up the effective UID. Codex looks up the real UID.
   if (process.getuid?.() !== process.geteuid?.()) return;
-  let loginShell = '';
-  try { loginShell = userInfo().shell ?? ''; } catch { /* The passwd entry is optional. */ }
   const loginCommand = basename(loginShell).split('.', 1)[0];
   const loginKind = loginCommand === 'pwsh' ? 'powershell' : loginCommand;
   const pathEntries = process.env.PATH?.split(delimiter) ?? [];
@@ -96,16 +98,20 @@ function nativeUnixShell(cwd: string) {
       return statSync(path).isFile();
     } catch { return false; }
   };
-  const fallback = process.platform === 'darwin' ? ['zsh', 'bash'] : ['bash', 'zsh'];
+  const fallback = platform === 'darwin' ? ['zsh', 'bash'] : ['bash', 'zsh'];
   for (const kind of [...(loginKind ? [loginKind] : []), ...fallback]) {
-    const fixedPaths = fixedShellPaths.get(kind);
-    if (!fixedPaths) continue;
-    const commands = kind === 'powershell' ? ['pwsh', 'powershell'] : [kind];
-    if ((kind === loginKind && isFile(resolve(cwd, loginShell))) ||
-        commands.some(command => pathEntries.some(path => isFile(resolve(cwd, path, command), true))) ||
-        fixedPaths.some(path => isFile(path))) return kind;
+    if (!fixedShellPaths.has(kind)) continue;
+    if (kind === loginKind && isFile(resolve(cwd, loginShell))) return { kind, path: resolve(cwd, loginShell) };
+    for (const command of kind === 'powershell' ? ['pwsh', 'powershell'] : [kind]) {
+      for (const entry of pathEntries) {
+        const path = resolve(cwd, entry, command);
+        if (isFile(path, true)) return { kind, path };
+      }
+      const path = fixedShellPaths.get(command)?.find(candidate => isFile(candidate));
+      if (path) return { kind, path };
+    }
   }
-  return 'sh';
+  return { kind: 'sh', path: '/bin/sh' };
 }
 
 const unavailable = Object.assign(() => false, { complete: () => true });
@@ -204,7 +210,7 @@ export function createRolloutContextVerifier(open: RolloutOpenSettings, threadId
         skillsBody = text.slice('<skills_instructions>'.length, -'</skills_instructions>'.length);
       }
       if (setupCount === 3) {
-        const shell = nativeUnixShell(cwd);
+        const shell = nativeUnixShell(cwd)?.kind;
         if (!shell) return false;
         // The native app-server does not inherit the workbench's TZ override.
         let zone: string | undefined;
