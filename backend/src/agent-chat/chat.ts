@@ -6,6 +6,9 @@ import { isDeepStrictEqual } from 'node:util';
 import { z } from 'zod';
 import { DomainError, requireThat } from '../domain/errors.js';
 import { CodexConnection, codexChatModel, codexModelArgs, codexStorageEnvironment } from './codex.js';
+import { bundledLunaWorld, createRolloutContextVerifier, rolloutOpenSettings, type RolloutOpenSettings } from './rollout-context.js';
+import { isTurnUsageRecord, rolloutEnvelope, turnTextPhase as phase, turnUsageNotification,
+  verifiedTextPayload, type TurnUsage } from './rollout-text.js';
 import { openTerminalSocket } from './terminal-socket.js';
 import { nativePermissions, requireTerminalPermissions, terminalProtocol, type TerminalTurnSettings } from './terminal-protocol.js';
 
@@ -43,7 +46,7 @@ type NativeThread = z.infer<typeof nativeThread>;
 
 type Turn = { id: string; status: string };
 type TerminalNotify = (method: string, params: unknown) => void;
-type PreparedTerminal = { connection: CodexConnection; permissions: z.infer<typeof nativePermissions> };
+type PreparedTerminal = { connection: CodexConnection; permissions: z.infer<typeof nativePermissions>; openSettings?: RolloutOpenSettings };
 type TerminalTurn = {
   owner: symbol;
   prepared: PreparedTerminal | undefined;
@@ -54,7 +57,7 @@ type TerminalTurn = {
   notify: TerminalNotify;
 };
 type TerminalLease = { owner: symbol; state: 'offered' | 'resuming' | 'idle'; close: () => Promise<void> };
-type RecordingStart = { size: number; checkpoint: string };
+type RecordingStart = { size: number; checkpoint: string; baseInstructions?: string };
 type CreatedRecording = { path: string; cwd: string; source: string; modelProvider: string;
   originator: string; cliVersion: string; historyMode: string };
 type AgentMessage = { id: string; text: string; phase?: z.infer<typeof phase> };
@@ -66,6 +69,9 @@ type RunningChat = {
   completedTurn?: z.infer<typeof completedEvent>['turn'];
   recordingStart?: RecordingStart;
   createdRecording?: CreatedRecording;
+  openSettings?: RolloutOpenSettings;
+  effort?: string;
+  usageUpdates: TurnUsage[];
   userMessageId?: string;
   agentMessages: Map<string, AgentMessage>;
 };
@@ -166,22 +172,23 @@ const finishTiming = {
   ...lifecycleTiming, completed_at: z.int().optional(), duration_ms: z.int().optional(),
   time_to_first_token_ms: z.int().optional(),
 };
-const wireErrorCode = (name: string) => name[0]!.toLowerCase() + name.slice(1);
+// The rollout uses the core protocol's snake_case tags. The app-server notification
+// uses camelCase and folds an invalid prompt into its public "other" category.
+const wireErrorCode = (name: string) => name.replace(/_([a-z])/g, (_, letter: string) => letter.toUpperCase());
 const nativeErrorCode = z.union([
-  z.enum(['ContextWindowExceeded', 'SessionBudgetExceeded', 'UsageLimitExceeded', 'ApiKeySpendLimitExceeded',
-    'ProjectSpendLimitExceeded', 'OrganizationSpendLimitExceeded', 'RateLimitExceeded', 'FlexUnavailable',
-    'ServerOverloaded', 'ModelNotFound', 'PolicyCapacityUnavailable', 'InferenceHookDenied', 'CyberPolicy',
-    'BioPolicy', 'MisalignmentPolicyViolation', 'TooManyDenials', 'InternalServerError', 'Unauthorized', 'BadRequest',
-    'InvalidPrompt', 'SandboxError', 'ThreadRollbackFailed', 'Other'])
-    .transform(name => name === 'InvalidPrompt' ? 'other' : wireErrorCode(name)),
-  z.union(['HttpConnectionFailed', 'ResponseStreamConnectionFailed', 'ResponseStreamDisconnected',
-    'ResponseTooManyFailedAttempts'].map(name => z.strictObject({ [name]: z.strictObject({
+  z.enum(['context_window_exceeded', 'session_budget_exceeded', 'usage_limit_exceeded', 'api_key_spend_limit_exceeded',
+    'project_spend_limit_exceeded', 'organization_spend_limit_exceeded', 'rate_limit_exceeded', 'flex_unavailable',
+    'server_overloaded', 'model_not_found', 'policy_capacity_unavailable', 'inference_hook_denied', 'cyber_policy',
+    'bio_policy', 'misalignment_policy_violation', 'too_many_denials', 'internal_server_error', 'unauthorized', 'bad_request',
+    'invalid_prompt', 'sandbox_error', 'thread_rollback_failed', 'other'])
+    .transform(name => name === 'invalid_prompt' ? 'other' : wireErrorCode(name)),
+  z.union(['http_connection_failed', 'response_stream_connection_failed', 'response_stream_disconnected',
+    'response_too_many_failed_attempts'].map(name => z.strictObject({ [name]: z.strictObject({
     http_status_code: z.int().min(0).max(65535).nullable(),
   }) }).transform(value => ({ [wireErrorCode(name)]: { httpStatusCode: value[name]!.http_status_code } })))),
-  z.strictObject({ ActiveTurnNotSteerable: z.strictObject({ turn_kind: z.enum(['review', 'compact']) }) })
-    .transform(({ ActiveTurnNotSteerable }) => ({ activeTurnNotSteerable: { turnKind: ActiveTurnNotSteerable.turn_kind } })),
+  z.strictObject({ active_turn_not_steerable: z.strictObject({ turn_kind: z.enum(['review', 'compact']) }) })
+    .transform(({ active_turn_not_steerable }) => ({ activeTurnNotSteerable: { turnKind: active_turn_not_steerable.turn_kind } })),
 ]);
-const phase = z.enum(['commentary', 'partial_answer', 'final_answer']).nullish();
 const completedTextItem = z.object({ threadId: z.string(), turnId: z.string(),
   item: z.discriminatedUnion('type', [
     z.object({ type: z.literal('agentMessage'), id: z.string(), text: z.string(), phase }),
@@ -211,12 +218,6 @@ const eventPayload = z.discriminatedUnion('type', [
 ]);
 const ordinal = z.int().nonnegative().optional();
 const rolloutLine = { timestamp: z.iso.datetime(), ordinal };
-// Codex rust-v0.172.0, models-manager/models.json: bundled Luna instructions,
-// rendered with the default personality and with the Personality section removed.
-const bundledLunaInstructions = new Set([
-  'e52174f354e3970ad8de5935fff8d04ddf2890a35659283d163befb56490198c',
-  '574a0b1edc53d397e0611563645e1f9b2b0ec91a84246d44fc97c124a8cf960a',
-]);
 const sessionHeader = z.strictObject({ ...rolloutLine, type: z.literal('session_meta'), payload: z.strictObject({
   id: z.uuid(), session_id: z.uuid(), timestamp: z.iso.datetime(), cwd: z.string(), source: z.enum(['vscode', 'cli', 'mcp']),
   originator: z.string(), cli_version: z.string(), model_provider: z.string(),
@@ -228,18 +229,6 @@ const sessionHeader = z.strictObject({ ...rolloutLine, type: z.literal('session_
     type: z.literal('model'), model: z.literal(codexChatModel),
   }) }),
 }) });
-const turnRecord = z.discriminatedUnion('type', [
-  z.strictObject({ ...rolloutLine, type: z.literal('event_msg'), payload: eventPayload }),
-  z.strictObject({ ...rolloutLine, type: z.literal('response_item'), payload: z.discriminatedUnion('role', [
-    z.strictObject({ type: z.literal('message'), role: z.literal('user'),
-      content: z.tuple([z.strictObject({ type: z.literal('input_text'), text: z.string() })]) }),
-    z.strictObject({ type: z.literal('message'), role: z.literal('assistant'), id: z.string().optional(), phase,
-      status: z.literal('completed').optional(), content: z.array(z.strictObject({
-        type: z.literal('output_text'), text: z.string(), annotations: emptyArray, logprobs: emptyArray,
-      })).min(1) }),
-  ]) }),
-]);
-
 function parseVerifiedRolloutLine(line: Buffer): unknown {
   let raw: unknown;
   try { raw = JSON.parse(line.toString('utf8')); } catch { throw blockedHistory(); }
@@ -262,12 +251,12 @@ function createdRecordingStart(thread: NativeThread, created: CreatedRecording) 
       payload.originator !== created.originator || payload.cli_version !== created.cliVersion || payload.history_mode !== created.historyMode ||
       (ordinal !== (payload.history_mode === 'paginated' ? 0 : undefined)) ||
       payload.runtime_workspace_roots?.some(root => root !== created.cwd) ||
-      (instructions && (created.cliVersion !== '0.172.0' || !bundledLunaInstructions.has(digest(Buffer.from(instructions))))))
+      (instructions && (created.cliVersion !== '0.172.0' || !bundledLunaWorld.has(digest(Buffer.from(instructions))))))
     throw blockedHistory();
   // The controlled thread/start identifies the new root and its file. Read only
   // that creation record while its native writer is still active.
   const prefix = bytes.subarray(0, end + 1);
-  return { size: prefix.length, checkpoint: digest(prefix) };
+  return { size: prefix.length, checkpoint: digest(prefix), baseInstructions: instructions };
 }
 
 function retriedTurnCheckpoint(thread: NativeThread, turn: NonNullable<RunningChat['completedTurn']>,
@@ -297,21 +286,47 @@ function retriedTurnCheckpoint(thread: NativeThread, turn: NonNullable<RunningCh
     const lastLine = bytes.toString('utf8', bytes.lastIndexOf(10, previous.size - 2) + 1, previous.size - 1);
     try { lastOrdinal = z.object({ ordinal }).parse(JSON.parse(lastLine)).ordinal; } catch { throw blockedHistory(); }
   }
+  // A resumed writer can repeat settings before task_started. The first-turn
+  // bootstrap is only eligible after the controlled creation header was verified.
+  const firstTurn = active.previousTurnIds.length === 0;
+  let baseInstructions = previous.baseInstructions;
+  if (!firstTurn && active.openSettings) {
+    // The full prefix hash matched above. Read its original profile to verify
+    // settings repeated on resume, including the built-in personality override.
+    const end = bytes.indexOf(10);
+    if (end >= 0 && end < previous.size) {
+      const header = sessionHeader.safeParse(parseVerifiedRolloutLine(bytes.subarray(0, end)));
+      if (header.success && header.data.payload.id === thread.id) baseInstructions = header.data.payload.base_instructions.text;
+    }
+  }
+  const verifyContext = createRolloutContextVerifier(
+    !firstTurn || (active.createdRecording && previous.size > 0) ? active.openSettings : undefined,
+    thread.id, turn.id, active.effort, firstTurn, baseInstructions);
+  let started = false;
+  let sawMessage = false;
   let position = previous.size;
   while (position < bytes.length) {
     const first = position === previous.size;
     const end = bytes.indexOf(10, position);
-    const record = turnRecord.safeParse(parseVerifiedRolloutLine(bytes.subarray(position, end)));
-    if (!record.success) throw blockedHistory();
+    const parsed = rolloutEnvelope.safeParse(parseVerifiedRolloutLine(bytes.subarray(position, end)));
+    if (!parsed.success) throw blockedHistory();
+    const line = parsed.data;
     position = end + 1;
-    const currentOrdinal = record.data.ordinal;
+    const currentOrdinal = line.ordinal;
     if (lastOrdinal !== undefined ? currentOrdinal !== lastOrdinal + 1
       : currentOrdinal !== undefined && (previous.size > 0 || !first || currentOrdinal !== 0)) throw blockedHistory();
     lastOrdinal = currentOrdinal;
-    const payload = record.data.payload;
+    const last = position === bytes.length;
+    const resumePreamble = first && !firstTurn && line.type === 'event_msg';
+    if (!last && !sawMessage && (started || resumePreamble) && verifyContext(line)) continue;
+    if (!verifyContext.complete()) throw blockedHistory();
+    if (!last && started && sawMessage && isTurnUsageRecord(line, thread.id, turn.id, active.usageUpdates)) continue;
+    const payload = line.type === 'response_item' ? verifiedTextPayload(line, turn.id)
+      : line.type === 'event_msg' && line.metadata === undefined ? eventPayload.safeParse(line.payload).data : undefined;
+    if (!payload) throw blockedHistory();
     if (('turn_id' in payload && payload.turn_id !== turn.id) ||
         ('root_turn_id' in payload && payload.root_turn_id !== undefined && payload.root_turn_id !== turn.id)) throw blockedHistory();
-    if (position === bytes.length) {
+    if (last) {
       if (payload.type === 'turn_aborted' && turn.status === 'interrupted') continue;
       if (payload.type === 'task_complete' && turn.status === (payload.error ? 'failed' : 'completed') &&
           payload.error?.message === turn.error?.message &&
@@ -319,11 +334,13 @@ function retriedTurnCheckpoint(thread: NativeThread, turn: NonNullable<RunningCh
           (payload.last_agent_message === null || payload.last_agent_message === answers.at(-1)?.text)) continue;
       throw blockedHistory();
     }
+    if (payload.type !== 'task_started') sawMessage = true;
     switch (payload.type) {
       case 'task_started': {
         const attribution = payload.turn_attribution;
-        if (!first || (attribution && (attribution.turn_id !== turn.id ||
+        if (started || sawMessage || (attribution && (attribution.turn_id !== turn.id ||
             (attribution.root_turn_id != null && attribution.root_turn_id !== turn.id)))) throw blockedHistory();
+        started = true;
         break;
       }
       case 'message':
@@ -645,7 +662,7 @@ export class AgentChat {
             requireThat(opened.success && opened.data.thread.id === threadId && opened.data.model === codexChatModel,
               'CODEX_THREAD_UNAVAILABLE', '无法核验终端接续的原生会话和模型。', 503);
             resumedHistory = opened.data.thread;
-            prepared = { connection, permissions: opened.data };
+            prepared = { connection, permissions: opened.data, openSettings: rolloutOpenSettings(result, this.cwd) };
             lease.state = 'idle';
             return terminalHistory(result, 'thread/resume', chat.rejectedModelTurnId);
           } catch (error) {
@@ -702,7 +719,7 @@ export class AgentChat {
     const lease = this.terminals.get(id);
     requireThat(!this.running.has(id), 'CODEX_TURN_ACTIVE', '请等待当前回合结束。', 409);
     requireThat(lease?.state !== 'resuming', 'CODEX_TURN_ACTIVE', '请等待终端恢复当前会话。', 409);
-    const active: RunningChat = { messages: [], previousTurnIds: [], agentMessages: new Map() };
+    const active: RunningChat = { messages: [], previousTurnIds: [], agentMessages: new Map(), usageUpdates: [] };
     this.running.set(id, active);
     this.errors.delete(id);
     let connection: CodexConnection | undefined;
@@ -741,9 +758,15 @@ export class AgentChat {
         const terminalContent = terminal && (method === 'turn/completed' ||
           method === 'item/started' || method === 'item/completed');
         if (!turn) {
-          if (terminalContent || method === 'turn/completed' || method === 'item/completed')
+          if (terminalContent || method === 'turn/completed' || method === 'item/completed' || method === 'thread/tokenUsage/updated')
             earlyEvents?.push({ method, params });
           return;
+        }
+        if (method === 'thread/tokenUsage/updated') {
+          const usage = turnUsageNotification.safeParse(params);
+          if (usage.success && usage.data.threadId === chat.threadId && usage.data.turnId === turn.id) {
+            active.usageUpdates.push(usage.data.tokenUsage);
+          }
         }
         if (terminalContent) {
           const event = z.object({ threadId: z.string(), turnId: z.string().optional(),
@@ -781,7 +804,9 @@ export class AgentChat {
       requireThat(await connection.loggedIn(), 'CODEX_LOGIN_REQUIRED', loginMessage, 401);
       const model = await connection.chatModel();
       requireThat(model, 'CODEX_MODEL_UNAVAILABLE', modelUnavailableMessage, 503);
+      active.openSettings = terminal?.prepared?.openSettings;
       const effort = terminal?.settings.effort;
+      if (effort) active.effort = effort;
       requireThat(!effort || effort === model.defaultReasoningEffort ||
         model.supportedReasoningEfforts.some(option => option.reasoningEffort === effort),
       'CODEX_TERMINAL_PARAMS', '当前 Luna 模型不支持所选推理强度。', 400);
@@ -794,10 +819,11 @@ export class AgentChat {
       }
       if (!terminal?.prepared) {
         const checkpoint = chat.checkpoint;
-        const opened = openResult.safeParse(await connection.call(previous ? 'thread/resume' : 'thread/start', {
+        const result = await connection.call(previous ? 'thread/resume' : 'thread/start', {
           ...(previous ? { threadId: previous, excludeTurns: true } : {}),
           cwd: this.cwd, model: codexChatModel,
-        }));
+        });
+        const opened = openResult.safeParse(result);
         requireThat(opened.success && (!previous || opened.data.thread.id === previous),
           'CODEX_THREAD_UNAVAILABLE', '无法启动或恢复这段原生 Codex 会话。', 503);
         requireThat(opened.data.model === codexChatModel, 'CODEX_MODEL_MISMATCH',
@@ -806,6 +832,7 @@ export class AgentChat {
           reopenedTerminal = { history: opened.data.thread, checkpoint };
           requireTerminalPermissions(terminal.settings, opened.data);
         }
+        active.openSettings = rolloutOpenSettings(result, this.cwd);
         if (!previous && opened.data.thread.turns.length === 0) {
           // The native writer may defer creating a new rollout until there is input.
           active.recordingStart = { size: 0, checkpoint: digest(Buffer.alloc(0)) };
@@ -881,7 +908,7 @@ export class AgentChat {
         if (confirmed) {
           for (let attempt = 1; attempt <= turnHistoryReadAttempts; attempt++) {
             if (attempt > 1) await delay(turnHistoryRetryMs);
-            if (active.rejectedModelTurnId) break;
+            if (active.rejectedModelTurnId && !rejectedFromHistory) break;
             const history = await this.read(connection, chat.threadId!);
             if (!hasTerminalStatus) break;
             // Attribute the thread model only to the sole new turn we can identify.
@@ -891,10 +918,14 @@ export class AgentChat {
             if (active.previousTurnIds.some((id, index) => history.turns[index]?.id !== id) ||
                 history.turns.length > count + 1 || (last && last.id !== started.id)) throw blockedHistory();
             if (!last) continue;
-            if (history.model != null && history.model !== codexChatModel) {
+            if (rejectedFromHistory || (history.model != null && history.model !== codexChatModel)) {
+              const status = last.status === confirmed.status ? confirmed.status : undefined;
+              if (!rejectedFromHistory || chat.rejectedModelTurnStatus !== status) {
+                this.saveModelRejection(chat, started.id, previousTurnId, status);
+              }
               rejectedFromHistory = true;
               active.rejectedModelTurnId = started.id;
-              this.saveModelRejection(chat, started.id, previousTurnId, last.status === confirmed.status ? confirmed.status : undefined);
+              if (last.status === 'inProgress') continue;
               break;
             }
             if (last.status !== confirmed.status) continue;
